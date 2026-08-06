@@ -24,7 +24,7 @@ import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntim
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderSessionReaper } from "../Services/ProviderSessionReaper.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
-import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import {
   makeProviderSessionReaperLive,
@@ -156,7 +156,7 @@ describe("ProviderSessionReaper", () => {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
     readonly reaperOptions?: ProviderSessionReaperLiveOptions;
-    readonly settingsOverrides?: Parameters<typeof serverSettingsLayerTest>[0];
+    readonly settingsOverrides?: Parameters<typeof ServerSettings.layerTest>[0];
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
@@ -206,7 +206,7 @@ describe("ProviderSessionReaper", () => {
         sweepIntervalMs: 60_000,
       },
     ).pipe(
-      Layer.provideMerge(serverSettingsLayerTest(input.settingsOverrides ?? {})),
+      Layer.provideMerge(ServerSettings.layerTest(input.settingsOverrides ?? {})),
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
@@ -330,7 +330,7 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "claudeAgent",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: new Date(nowMs - 5_000).toISOString(),
+        lastSeenAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - 5_000)),
         resumeCursor: {
           opaque: "resume-settings",
         },
@@ -385,7 +385,7 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "claudeAgent",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: new Date(nowMs - 5_000).toISOString(),
+        lastSeenAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - 5_000)),
         resumeCursor: {
           opaque: "resume-settings-fresh",
         },
@@ -443,7 +443,7 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "claudeAgent",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: new Date(nowMs - 5_000).toISOString(),
+        lastSeenAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - 5_000)),
         resumeCursor: {
           opaque: "resume-option-override",
         },
