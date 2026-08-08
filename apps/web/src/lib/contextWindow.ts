@@ -25,6 +25,35 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+export type ContextWindowUsageLevel = "default" | "warning" | "critical";
+
+export function getContextWindowUsageLevel(input: {
+  usedTokens: number;
+  maxTokens: number | null;
+  providerDisplayName: string | null | undefined;
+}): ContextWindowUsageLevel {
+  const { usedTokens, maxTokens, providerDisplayName } = input;
+  const isClaude = providerDisplayName?.toLowerCase().startsWith("claude") === true;
+
+  if (isClaude && maxTokens !== null && maxTokens >= 1_000_000) {
+    if (usedTokens > 350_000) return "critical";
+    if (usedTokens > 200_000) return "warning";
+    return "default";
+  }
+
+  if (isClaude && maxTokens !== null && maxTokens <= 200_000) {
+    if (usedTokens >= 175_000) return "critical";
+    if (usedTokens >= 150_000) return "warning";
+    return "default";
+  }
+
+  if (maxTokens !== null && maxTokens > 0 && usedTokens / maxTokens > 0.9) {
+    return "critical";
+  }
+
+  return "default";
+}
+
 /** Map a provider driver kind to a user-facing display name. */
 export function formatProviderDisplayName(provider: string | null | undefined): string {
   if (!provider) return "This agent";
