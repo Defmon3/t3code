@@ -1,5 +1,9 @@
 import { cn } from "~/lib/utils";
-import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import {
+  type ContextWindowSnapshot,
+  formatContextWindowTokens,
+  getContextWindowUsageLevel,
+} from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 function formatPercentage(value: number | null): string | null {
@@ -24,10 +28,17 @@ export function ContextWindowMeter(props: {
   const dashOffset = circumference * (1 - normalizedPercentage / 100);
   const totalProcessedTokens = usage.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
-  const isOverloaded = normalizedPercentage > 90;
-  const usageColor = isOverloaded
-    ? "var(--color-error)"
-    : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
+  const usageLevel = getContextWindowUsageLevel({
+    usedTokens: usage.usedTokens,
+    maxTokens: usage.maxTokens ?? null,
+    providerDisplayName,
+  });
+  const usageColor =
+    usageLevel === "critical"
+      ? "var(--color-error)"
+      : usageLevel === "warning"
+        ? "var(--color-warning)"
+        : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
 
   return (
     <Popover>

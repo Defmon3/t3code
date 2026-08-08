@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowTokens,
+  getContextWindowUsageLevel,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -80,5 +84,43 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+
+  it("uses Claude 1m context warning thresholds", () => {
+    const level = (usedTokens: number) =>
+      getContextWindowUsageLevel({
+        usedTokens,
+        maxTokens: 1_000_000,
+        providerDisplayName: "Claude",
+      });
+
+    expect(level(200_000)).toBe("default");
+    expect(level(200_001)).toBe("warning");
+    expect(level(350_000)).toBe("warning");
+    expect(level(350_001)).toBe("critical");
+  });
+
+  it("uses Claude 200k context warning thresholds", () => {
+    const level = (usedTokens: number) =>
+      getContextWindowUsageLevel({
+        usedTokens,
+        maxTokens: 200_000,
+        providerDisplayName: "Claude Code",
+      });
+
+    expect(level(149_999)).toBe("default");
+    expect(level(150_000)).toBe("warning");
+    expect(level(174_999)).toBe("warning");
+    expect(level(175_000)).toBe("critical");
+  });
+
+  it("keeps the existing percentage threshold for other providers", () => {
+    expect(
+      getContextWindowUsageLevel({
+        usedTokens: 181_000,
+        maxTokens: 200_000,
+        providerDisplayName: "Codex",
+      }),
+    ).toBe("critical");
   });
 });
