@@ -1,9 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, GitHistoryCommit } from "@t3tools/contracts";
+import type { EnvironmentId, GitCommitDetails, GitHistoryCommit } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import {
   GitBranchIcon,
   GitCommitHorizontalIcon,
+  FileIcon,
   RefreshCwIcon,
   SearchIcon,
   TagIcon,
@@ -36,6 +37,16 @@ interface GitHistoryRow {
   commit: GitHistoryCommit;
   graph: GitHistoryGraphRow;
 }
+
+const FILE_STATUS_COLORS = {
+  A: "text-emerald-500",
+  M: "text-amber-500",
+  D: "text-red-500",
+  T: "text-sky-500",
+  U: "text-red-500",
+  X: "text-muted-foreground",
+  B: "text-muted-foreground",
+} as const;
 
 function queryErrorMessage(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
@@ -87,7 +98,10 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number }) {
         const fromX = edge.kind === "parent" ? x(props.graph.lane) : x(edge.fromLane);
         const fromY = edge.kind === "parent" ? centerY : 0;
         const toX = x(edge.toLane);
-        const path = `M ${fromX} ${fromY} C ${fromX} ${centerY}, ${toX} ${centerY}, ${toX} ${ROW_HEIGHT}`;
+        const path =
+          edge.kind === "continuation"
+            ? `M ${fromX} 0 L ${toX} ${ROW_HEIGHT}`
+            : `M ${fromX} ${fromY} C ${fromX} ${centerY + 5}, ${toX} ${ROW_HEIGHT - 5}, ${toX} ${ROW_HEIGHT}`;
         return (
           <path
             key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
@@ -126,7 +140,7 @@ function CommitRow(props: {
       type="button"
       className={cn(
         "group flex h-[34px] w-full min-w-[48rem] items-stretch border-b border-border/45 text-left outline-none transition-colors hover:bg-accent/45 focus-visible:bg-accent/60",
-        props.selected && "bg-accent/70",
+        props.selected && "bg-primary/15",
       )}
       onClick={() => props.onSelect(commit.hash)}
       aria-pressed={props.selected}
@@ -156,6 +170,107 @@ function CommitRow(props: {
         <span className="truncate font-mono text-[10px] text-primary/85">{shortHash}</span>
       </div>
     </button>
+  );
+}
+
+function CommitDetailsPane(props: {
+  details: GitCommitDetails | null;
+  isPending: boolean;
+  hasError: boolean;
+  hasSelection: boolean;
+  onRetry: () => void;
+}) {
+  if (!props.hasSelection) {
+    return (
+      <aside className="hidden w-[26rem] shrink-0 items-center justify-center border-l border-border/60 px-6 text-center text-xs text-muted-foreground 2xl:flex">
+        Select a commit to inspect its files and metadata.
+      </aside>
+    );
+  }
+
+  if (props.hasError) {
+    return (
+      <aside className="hidden w-[26rem] shrink-0 flex-col items-center justify-center gap-3 border-l border-border/60 px-6 text-center text-xs text-destructive 2xl:flex">
+        Could not load commit details.
+        <Button size="xs" variant="outline" onClick={props.onRetry}>
+          Retry
+        </Button>
+      </aside>
+    );
+  }
+
+  if (props.isPending || props.details === null) {
+    return (
+      <aside className="hidden w-[26rem] shrink-0 items-center justify-center border-l border-border/60 text-xs text-muted-foreground 2xl:flex">
+        <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading commit…
+      </aside>
+    );
+  }
+
+  const details = props.details;
+  return (
+    <aside className="hidden w-[26rem] shrink-0 flex-col border-l border-border/60 bg-muted/5 2xl:flex">
+      <div className="flex min-h-0 basis-[46%] flex-col border-b border-border/60">
+        <div className="shrink-0 border-b border-border/50 px-3 py-2 text-[11px] font-medium">
+          {details.changedFiles.length} changed{" "}
+          {details.changedFiles.length === 1 ? "file" : "files"}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto py-1">
+          {details.changedFiles.map((file) => (
+            <div
+              key={`${file.status}:${file.path}`}
+              className="flex h-6 min-w-0 items-center gap-2 px-3 text-[11px] hover:bg-accent/40"
+              title={file.path}
+            >
+              <span
+                className={cn(
+                  "w-3 shrink-0 font-mono font-semibold",
+                  FILE_STATUS_COLORS[file.status],
+                )}
+              >
+                {file.status}
+              </span>
+              <FileIcon className="size-3 shrink-0 text-muted-foreground" />
+              <span className="truncate">{file.path}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 text-[11px]">
+        <h2 className="text-sm font-semibold leading-5 text-foreground">{details.subject}</h2>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {details.refs.map((ref) => (
+            <span
+              key={ref}
+              className="rounded-sm border border-primary/25 bg-primary/10 px-1 py-px font-mono text-[9px] text-primary"
+            >
+              {ref}
+            </span>
+          ))}
+        </div>
+        <dl className="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-muted-foreground">
+          <dt>Commit</dt>
+          <dd className="truncate font-mono text-foreground" title={details.hash}>
+            {details.hash}
+          </dd>
+          <dt>Author</dt>
+          <dd className="truncate text-foreground">{details.authorName}</dd>
+          <dt>Email</dt>
+          <dd className="truncate text-foreground">{details.authorEmail}</dd>
+          <dt>Date</dt>
+          <dd className="text-foreground">{formatCommitDate(details.authoredAt)}</dd>
+          <dt>Parents</dt>
+          <dd className="truncate font-mono text-foreground">
+            {details.parentHashes.map((hash) => hash.slice(0, 8)).join(", ") || "None"}
+          </dd>
+        </dl>
+        {details.body.trim().length > 0 ? (
+          <p className="mt-4 whitespace-pre-wrap border-t border-border/50 pt-3 leading-5 text-foreground/85">
+            {details.body.trim()}
+          </p>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
@@ -219,6 +334,15 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const [filter, setFilter] = useState("");
   const deferredFilter = useDeferredValue(filter.trim().toLocaleLowerCase());
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
+  const commitDetailsQuery = useEnvironmentQuery(
+    selectedHash === null
+      ? null
+      : vcsEnvironment.getCommitDetails({
+          environmentId: props.environmentId,
+          input: { cwd: props.cwd, hash: selectedHash },
+        }),
+  );
+  const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
   const localRefs = refsQuery.data?.refs.filter((ref) => !ref.isRemote) ?? [];
   const remoteRefs = refsQuery.data?.refs.filter((ref) => ref.isRemote) ?? [];
   const tags = useMemo(
@@ -425,6 +549,13 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               </div>
             ) : null}
           </div>
+          <CommitDetailsPane
+            details={selectedCommitDetails}
+            isPending={commitDetailsQuery.isPending}
+            hasError={commitDetailsQuery.error !== null}
+            hasSelection={selectedHash !== null}
+            onRetry={commitDetailsQuery.refresh}
+          />
         </div>
       )}
     </section>

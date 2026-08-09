@@ -30,16 +30,18 @@ interface Lane {
   colorIndex: number;
 }
 
-function findLaneIndex(lanes: ReadonlyArray<Lane>, hash: string): number {
-  return lanes.findIndex((lane) => lane.hash === hash);
+type LaneSlot = Lane | null;
+
+function findLaneIndex(lanes: ReadonlyArray<LaneSlot>, hash: string): number {
+  return lanes.findIndex((lane) => lane?.hash === hash);
 }
 
 function uniqueHashes(hashes: ReadonlyArray<string>): string[] {
   return Array.from(new Set(hashes));
 }
 
-function nextColorIndex(lanes: ReadonlyArray<Lane>): number {
-  const usedColors = new Set(lanes.map((lane) => lane.colorIndex));
+function nextColorIndex(lanes: ReadonlyArray<LaneSlot>): number {
+  const usedColors = new Set(lanes.flatMap((lane) => (lane === null ? [] : [lane.colorIndex])));
   let colorIndex = 0;
 
   while (usedColors.has(colorIndex)) {
@@ -49,32 +51,33 @@ function nextColorIndex(lanes: ReadonlyArray<Lane>): number {
   return colorIndex;
 }
 
-function createParentLanes(
+function placeParentLanes(
   parentHashes: ReadonlyArray<string>,
+  nodeLane: number,
   currentLane: Lane,
-  remainingLanes: ReadonlyArray<Lane>,
-): Lane[] {
-  const created: Lane[] = [];
-  const occupiedLanes = [...remainingLanes];
+  beforeLanes: ReadonlyArray<LaneSlot>,
+): LaneSlot[] {
+  const afterLanes = [...beforeLanes];
+  afterLanes[nodeLane] = null;
 
   for (const [parentIndex, parentHash] of parentHashes.entries()) {
-    if (findLaneIndex(remainingLanes, parentHash) !== -1) {
+    if (findLaneIndex(afterLanes, parentHash) !== -1) {
       continue;
     }
 
-    const colorIndex = parentIndex === 0 ? currentLane.colorIndex : nextColorIndex(occupiedLanes);
-    const lane = { hash: parentHash, colorIndex };
-    created.push(lane);
-    occupiedLanes.push(lane);
+    const emptyLane = afterLanes.findIndex((lane) => lane === null);
+    const targetLane = emptyLane === -1 ? afterLanes.length : emptyLane;
+    const colorIndex = parentIndex === 0 ? currentLane.colorIndex : nextColorIndex(afterLanes);
+    afterLanes[targetLane] = { hash: parentHash, colorIndex };
   }
 
-  return created;
+  return afterLanes;
 }
 
 function parentEdges(
   parentHashes: ReadonlyArray<string>,
   nodeLane: number,
-  lanes: ReadonlyArray<Lane>,
+  lanes: ReadonlyArray<LaneSlot>,
   knownHashes: ReadonlySet<string>,
 ): GitHistoryGraphEdge[] {
   return parentHashes.flatMap((parentHash) => {
@@ -98,12 +101,12 @@ function parentEdges(
 }
 
 function continuationEdges(
-  beforeLanes: ReadonlyArray<Lane>,
+  beforeLanes: ReadonlyArray<LaneSlot>,
   nodeLane: number,
-  afterLanes: ReadonlyArray<Lane>,
+  afterLanes: ReadonlyArray<LaneSlot>,
 ): GitHistoryGraphEdge[] {
   return beforeLanes.flatMap((lane, fromLane) => {
-    if (fromLane === nodeLane) {
+    if (fromLane === nodeLane || lane === null) {
       return [];
     }
 
@@ -128,15 +131,17 @@ export function layoutGitHistoryGraph(
 ): GitHistoryGraphLayout {
   const knownHashes = new Set(commits.map((commit) => commit.hash));
   const rows: GitHistoryGraphRow[] = [];
-  let lanes: Lane[] = [];
+  let lanes: LaneSlot[] = [];
   let laneCount = 0;
 
   for (const commit of commits) {
     let nodeLane = findLaneIndex(lanes, commit.hash);
     const hasIncoming = nodeLane !== -1;
     if (nodeLane === -1) {
-      nodeLane = lanes.length;
-      lanes = [...lanes, { hash: commit.hash, colorIndex: nextColorIndex(lanes) }];
+      const emptyLane = lanes.findIndex((lane) => lane === null);
+      nodeLane = emptyLane === -1 ? lanes.length : emptyLane;
+      lanes = [...lanes];
+      lanes[nodeLane] = { hash: commit.hash, colorIndex: nextColorIndex(lanes) };
     }
 
     const beforeLanes = lanes;
@@ -146,13 +151,7 @@ export function layoutGitHistoryGraph(
     }
 
     const parentHashes = uniqueHashes(commit.parentHashes);
-    const remainingLanes = beforeLanes.filter((_, laneIndex) => laneIndex !== nodeLane);
-    const createdParentLanes = createParentLanes(parentHashes, currentLane, remainingLanes);
-    const afterLanes = [
-      ...remainingLanes.slice(0, nodeLane),
-      ...createdParentLanes,
-      ...remainingLanes.slice(nodeLane),
-    ];
+    const afterLanes = placeParentLanes(parentHashes, nodeLane, currentLane, beforeLanes);
 
     rows.push({
       hash: commit.hash,

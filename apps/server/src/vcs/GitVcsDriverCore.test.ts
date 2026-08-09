@@ -255,6 +255,36 @@ it.effect("returns paginated commit history with author, parent, and decoration 
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("returns full commit details and root commit changed files", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "SECOND.md", "second\n");
+    yield* git(cwd, ["add", "SECOND.md"]);
+    yield* git(cwd, ["commit", "-m", "second subject", "-m", "second body\nwith another line"]);
+    yield* git(cwd, ["tag", "v2"]);
+
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+    const details = yield* driver.getCommitDetails({ cwd, hash });
+
+    assert.equal(details.isRepo, true);
+    assert.equal(details.commit?.hash, hash);
+    assert.equal(details.commit?.subject, "second subject");
+    assert.equal(details.commit?.body, "second body\nwith another line\n");
+    assert.equal(details.commit?.authorName, "Test");
+    assert.equal(details.commit?.authorEmail, "test@test.com");
+    assert.equal(details.commit?.parentHashes.length, 1);
+    assert.include(details.commit?.refs ?? [], "tag: v2");
+    assert.deepEqual(details.commit?.changedFiles, [{ status: "A", path: "SECOND.md" }]);
+
+    const initialHash = details.commit?.parentHashes[0];
+    assert.ok(initialHash);
+    const initial = yield* driver.getCommitDetails({ cwd, hash: initialHash });
+    assert.deepEqual(initial.commit?.changedFiles, [{ status: "A", path: "README.md" }]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("excludes internal refs from history while including normal branch history", () =>
   Effect.gen(function* () {
     const cwd = yield* makeTmpDir();

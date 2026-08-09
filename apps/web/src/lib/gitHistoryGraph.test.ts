@@ -145,9 +145,23 @@ describe("layoutGitHistoryGraph", () => {
     expect(layout.rows.map((row) => [row.hash, row.lane, row.colorIndex])).toEqual([
       ["octopus", 0, 0],
       ["first", 0, 0],
-      ["second", 0, 1],
-      ["third", 0, 2],
+      ["second", 1, 1],
+      ["third", 2, 2],
     ]);
+  });
+
+  it("never moves a continuation lane sideways without a commit", () => {
+    const layout = layoutGitHistoryGraph([
+      { hash: "merge", parentHashes: ["main", "side"] },
+      { hash: "main", parentHashes: ["base"] },
+      { hash: "side", parentHashes: ["base"] },
+      { hash: "base", parentHashes: [] },
+    ]);
+
+    const continuations = layout.rows.flatMap((row) =>
+      row.edges.filter((edge) => edge.kind === "continuation"),
+    );
+    expect(continuations.every((edge) => edge.fromLane === edge.toLane)).toBe(true);
   });
 
   it("keeps missing page-boundary parents visible and starts unrelated commits in a new lane", () => {

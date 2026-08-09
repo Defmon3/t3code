@@ -20,6 +20,8 @@ import {
   type VcsCreateWorktreeResult,
   type VcsGetHistoryInput,
   type VcsGetHistoryResult,
+  type VcsGetCommitDetailsInput,
+  type VcsGetCommitDetailsResult,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewResult,
   type ReviewDiffFileContentsInput,
@@ -273,6 +275,9 @@ export class GitVcsDriver extends Context.Service<
     readonly getHistory: (
       input: VcsGetHistoryInput,
     ) => Effect.Effect<VcsGetHistoryResult, GitCommandError>;
+    readonly getCommitDetails: (
+      input: VcsGetCommitDetailsInput,
+    ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
