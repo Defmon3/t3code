@@ -277,6 +277,10 @@ export function createVcsEnvironmentAtoms<R, E>(
       label: "environment-data:vcs:get-history",
       tag: WS_METHODS.vcsGetHistory,
     }),
+    getCommitDetails: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-details",
+      tag: WS_METHODS.vcsGetCommitDetails,
+    }),
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
