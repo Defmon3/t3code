@@ -5,6 +5,7 @@ import { VcsDriverKind } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
+const GIT_HISTORY_MAX_LIMIT = 200;
 
 // Domain Types
 
@@ -134,6 +135,13 @@ export const VcsListRefsInput = Schema.Struct({
 });
 export type VcsListRefsInput = typeof VcsListRefsInput.Type;
 
+export const VcsGetHistoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  cursor: Schema.optional(NonNegativeInt),
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_HISTORY_MAX_LIMIT))),
+});
+export type VcsGetHistoryInput = typeof VcsGetHistoryInput.Type;
+
 export const VcsCreateWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
@@ -261,6 +269,25 @@ export const VcsListRefsResult = Schema.Struct({
   totalCount: NonNegativeInt,
 });
 export type VcsListRefsResult = typeof VcsListRefsResult.Type;
+
+export const GitHistoryCommit = Schema.Struct({
+  hash: TrimmedNonEmptyStringSchema,
+  parentHashes: Schema.Array(TrimmedNonEmptyStringSchema),
+  subject: Schema.String,
+  authorName: TrimmedNonEmptyStringSchema,
+  authorEmail: TrimmedNonEmptyStringSchema,
+  authoredAt: Schema.String,
+  refs: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type GitHistoryCommit = typeof GitHistoryCommit.Type;
+
+export const VcsGetHistoryResult = Schema.Struct({
+  commits: Schema.Array(GitHistoryCommit),
+  isRepo: Schema.Boolean,
+  nextCursor: NonNegativeInt.pipe(Schema.NullOr),
+  hasMore: Schema.Boolean,
+});
+export type VcsGetHistoryResult = typeof VcsGetHistoryResult.Type;
 
 export const VcsCreateWorktreeResult = Schema.Struct({
   worktree: VcsWorktree,

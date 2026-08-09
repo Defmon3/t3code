@@ -21,6 +21,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  type GitHistoryCommit,
   type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
@@ -74,6 +75,9 @@ const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
 } satisfies NodeJS.ProcessEnv);
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
+const GIT_HISTORY_DEFAULT_LIMIT = 100;
+const GIT_HISTORY_MAX_OUTPUT_BYTES = 4_000_000;
+const GIT_HISTORY_RECORD_FIELD_COUNT = 7;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
   hasOriginRemote: false,
@@ -235,6 +239,46 @@ function paginateBranches(input: {
     nextCursor,
     totalCount,
   };
+}
+
+function parseGitHistory(stdout: string): ReadonlyArray<GitHistoryCommit> {
+  const fields = stdout.split("\0");
+  const commits: Array<GitHistoryCommit> = [];
+
+  for (
+    let fieldIndex = 0;
+    fieldIndex + GIT_HISTORY_RECORD_FIELD_COUNT <= fields.length - 1;
+    fieldIndex += GIT_HISTORY_RECORD_FIELD_COUNT
+  ) {
+    const hash = fields[fieldIndex] ?? "";
+    const parents = fields[fieldIndex + 1] ?? "";
+    const subject = fields[fieldIndex + 2] ?? "";
+    const authorName = fields[fieldIndex + 3] ?? "";
+    const authorEmail = fields[fieldIndex + 4] ?? "";
+    const authoredAt = fields[fieldIndex + 5] ?? "";
+    const decorations = fields[fieldIndex + 6] ?? "";
+
+    if (
+      hash.length === 0 ||
+      authorName.length === 0 ||
+      authorEmail.length === 0 ||
+      authoredAt.length === 0
+    ) {
+      continue;
+    }
+
+    commits.push({
+      hash,
+      parentHashes: parents.length === 0 ? [] : parents.split(" "),
+      subject,
+      authorName,
+      authorEmail,
+      authoredAt,
+      refs: decorations.length === 0 ? [] : decorations.split(", "),
+    });
+  }
+
+  return commits;
 }
 
 function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
@@ -2748,6 +2792,56 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const getHistory: GitVcsDriver.GitVcsDriver["Service"]["getHistory"] = Effect.fn("getHistory")(
+    function* (input) {
+      const repositoryPaths = yield* resolveRepositoryPaths(input.cwd).pipe(
+        Effect.catchTags({
+          GitCommandError: (error) =>
+            isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
+        }),
+      );
+      if (repositoryPaths === null) {
+        return {
+          commits: [],
+          isRepo: false,
+          nextCursor: null,
+          hasMore: false,
+        };
+      }
+
+      const cursor = input.cursor ?? 0;
+      const limit = input.limit ?? GIT_HISTORY_DEFAULT_LIMIT;
+      const output = yield* executeGitWithStableDiagnostics(
+        "GitVcsDriver.getHistory.log",
+        input.cwd,
+        [
+          "log",
+          "-z",
+          "--all",
+          "--topo-order",
+          "--decorate=short",
+          `--max-count=${limit + 1}`,
+          `--skip=${cursor}`,
+          "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00%D",
+        ],
+        {
+          maxOutputBytes: GIT_HISTORY_MAX_OUTPUT_BYTES,
+          fallbackErrorDetail: "git log failed",
+        },
+      );
+      const commits = parseGitHistory(output.stdout);
+      const hasMore = commits.length > limit;
+      const page = hasMore ? commits.slice(0, limit) : commits;
+
+      return {
+        commits: page,
+        isRepo: true,
+        nextCursor: hasMore ? cursor + page.length : null,
+        hasMore,
+      };
+    },
+  );
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input) {
@@ -3167,6 +3261,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffFileContents,
     readConfigValue,
     listRefs,
+    getHistory,
     createWorktree: (input) => withListRefsInvalidation(input.cwd, createWorktree(input)),
     fetchPullRequestBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),

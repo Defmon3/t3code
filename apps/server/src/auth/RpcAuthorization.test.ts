@@ -48,6 +48,10 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("allows Git history reads with the orchestration read scope", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.vcsGetHistory)).toBe(AuthOrchestrationReadScope);
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

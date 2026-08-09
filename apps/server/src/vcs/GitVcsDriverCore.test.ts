@@ -212,6 +212,49 @@ it.effect("re-reads origin remote status after cache TTL expiry and bypassed inv
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("returns paginated commit history with author, parent, and decoration details", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "SECOND.md", "second\n");
+    yield* git(cwd, ["add", "SECOND.md"]);
+    yield* git(cwd, ["commit", "-m", "second commit"], {
+      GIT_AUTHOR_NAME: "Ada Lovelace",
+      GIT_AUTHOR_EMAIL: "ada@example.com",
+      GIT_AUTHOR_DATE: "2026-08-09T12:00:00+00:00",
+      GIT_COMMITTER_NAME: "Ada Lovelace",
+      GIT_COMMITTER_EMAIL: "ada@example.com",
+      GIT_COMMITTER_DATE: "2026-08-09T12:00:00+00:00",
+    });
+    yield* git(cwd, ["tag", "v2"]);
+
+    const firstPage = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.equal(firstPage.isRepo, true);
+    assert.equal(firstPage.commits.length, 1);
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(firstPage.nextCursor, 1);
+    assert.equal(firstPage.commits[0]?.subject, "second commit");
+    assert.equal(firstPage.commits[0]?.authorName, "Ada Lovelace");
+    assert.equal(firstPage.commits[0]?.authorEmail, "ada@example.com");
+    assert.equal(firstPage.commits[0]?.authoredAt, "2026-08-09T12:00:00Z");
+    assert.equal(firstPage.commits[0]?.parentHashes.length, 1);
+    assert.equal(firstPage.commits[0]?.refs.includes(`HEAD -> ${initialBranch}`), true);
+    assert.equal(firstPage.commits[0]?.refs.includes("tag: v2"), true);
+
+    const fullPage = yield* driver.getHistory({ cwd, limit: 2 });
+    assert.equal(fullPage.commits.length, 2);
+    assert.match(fullPage.commits[1]?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(fullPage.commits[0]?.parentHashes[0], fullPage.commits[1]?.hash);
+
+    const secondPage = yield* driver.getHistory({ cwd, cursor: 1, limit: 1 });
+    assert.equal(secondPage.commits.length, 1);
+    assert.equal(secondPage.hasMore, false);
+    assert.equal(secondPage.nextCursor, null);
+    assert.equal(secondPage.commits[0]?.subject, "initial commit");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -135,6 +135,26 @@ describe("GitWorkflowService", () => {
     ),
   );
 
+  it.effect("returns an empty history when no VCS repository is detected", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const history = yield* workflow.getHistory({ cwd: "/not-a-repo" });
+
+      assert.deepStrictEqual(history, {
+        commits: [],
+        isRepo: false,
+        nextCursor: null,
+        hasMore: false,
+      });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+  );
+
   it.effect("structures workflow detection failures without exposing upstream details", () => {
     const cause = new VcsRepositoryDetectionError({
       operation: "VcsDriverRegistry.detect",
