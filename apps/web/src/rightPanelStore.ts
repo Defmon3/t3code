@@ -16,6 +16,7 @@ import { resolveStorage } from "./lib/storage";
 
 export const RIGHT_PANEL_KINDS = [
   "diff",
+  "git-history",
   "files",
   "file",
   "preview",
@@ -36,6 +37,7 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
+  | { id: "git-history"; kind: "git-history" }
   | { id: "files"; kind: "files" }
   | {
       id: `file:${string}`;
@@ -47,8 +49,9 @@ export type RightPanelSurface =
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-// v9 removed the "plan" surface kind (plans render inline in the transcript).
-const RIGHT_PANEL_STORAGE_VERSION = 9;
+// v10 adds the Git History singleton surface; v9 removed the "plan" surface
+// kind (plans render inline in the transcript).
+const RIGHT_PANEL_STORAGE_VERSION = 10;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -96,6 +99,8 @@ const singletonSurface = (
   switch (kind) {
     case "diff":
       return { id: "diff", kind };
+    case "git-history":
+      return { id: "git-history", kind };
     case "files":
       return { id: "files", kind };
     case "agents":

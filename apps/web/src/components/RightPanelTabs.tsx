@@ -1,6 +1,6 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { Bot, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+import { Bot, FileDiff, Files, GitGraph, Globe2, Plus, TerminalSquare, X } from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -43,10 +43,12 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory: () => void;
   onAddFiles: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable: boolean;
   filesAvailable: boolean;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
@@ -57,6 +59,7 @@ const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  gitHistory: "Git History is only available for server threads in Git repositories.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -93,10 +96,12 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory: () => void;
   onAddFiles: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable: boolean;
   filesAvailable: boolean;
   liveAgentCount: number;
 }) {
@@ -135,6 +140,15 @@ function RightPanelEmptyState(props: {
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
+      badgeCount: 0,
+    },
+    {
+      label: "Git History",
+      description: "Browse commits in this repository.",
+      icon: GitGraph,
+      available: props.gitHistoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
+      onClick: props.onAddGitHistory,
       badgeCount: 0,
     },
     {
@@ -222,6 +236,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "Git History";
     case "files":
       return "Files";
     case "file":
@@ -279,6 +295,8 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitGraph className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -494,6 +512,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <FileDiff />
                     Diff
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.gitHistoryAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.gitHistory}
+                    onClick={props.onAddGitHistory}
+                  >
+                    <GitGraph />
+                    Git History
+                  </SurfaceMenuItem>
                   <SurfaceMenuItem available onClick={props.onAddAgents}>
                     <Bot />
                     Agents
@@ -511,10 +537,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddGitHistory={props.onAddGitHistory}
             onAddFiles={props.onAddFiles}
             onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
+            gitHistoryAvailable={props.gitHistoryAvailable}
             filesAvailable={props.filesAvailable}
             liveAgentCount={props.liveAgentCount}
           />
