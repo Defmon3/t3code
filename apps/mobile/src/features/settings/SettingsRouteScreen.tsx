@@ -35,6 +35,7 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { useAutoSettleCompletedChangeRequests } from "../threads/use-auto-settle-completed-change-requests";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   type AppUpdateCheckState,
@@ -522,10 +523,19 @@ function ConfiguredSettingsRouteScreen() {
 }
 
 function GeneralSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const autoSettleCompletedChangeRequests = useAutoSettleCompletedChangeRequests();
+
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
+      <SettingsSwitchRow
+        icon="checkmark.circle"
+        label="Auto-settle completed pull requests"
+        value={autoSettleCompletedChangeRequests}
+        onValueChange={(value) => savePreferences({ autoSettleCompletedChangeRequests: value })}
+      />
     </SettingsSection>
   );
 }
