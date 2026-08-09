@@ -3254,9 +3254,9 @@ function ChatViewContent(props: ChatViewProps) {
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
   const addGitHistorySurface = useCallback(() => {
-    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    if (!activeThreadRef || !isGitRepo || gitCwd === null) return;
     useRightPanelStore.getState().open(activeThreadRef, "git-history");
-  }, [activeThreadRef, isGitRepo, isServerThread]);
+  }, [activeThreadRef, gitCwd, isGitRepo]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -6543,7 +6543,7 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
-          gitHistoryAvailable={isServerThread && isGitRepo}
+          gitHistoryAvailable={isGitRepo && gitCwd !== null}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
@@ -6579,7 +6579,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
-            gitHistoryAvailable={isServerThread && isGitRepo}
+            gitHistoryAvailable={isGitRepo && gitCwd !== null}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
