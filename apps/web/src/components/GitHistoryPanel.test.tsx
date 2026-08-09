@@ -133,7 +133,7 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
   const list = visitElements(
     panel,
     (element) =>
-      element.props.estimatedItemSize === 54 && typeof element.props.keyExtractor === "function",
+      element.props.estimatedItemSize === 34 && typeof element.props.keyExtractor === "function",
   );
   expect(list).not.toBeNull();
   return list as ReactElement<{

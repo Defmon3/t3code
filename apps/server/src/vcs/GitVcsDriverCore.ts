@@ -2817,7 +2817,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         [
           "log",
           "-z",
-          "--all",
+          "HEAD",
+          "--branches",
+          "--remotes",
+          "--tags",
           "--topo-order",
           "--decorate=short",
           `--max-count=${limit + 1}`,
