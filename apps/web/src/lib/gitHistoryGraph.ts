@@ -16,6 +16,7 @@ export interface GitHistoryGraphRow {
   hash: string;
   lane: number;
   colorIndex: number;
+  hasIncoming: boolean;
   edges: ReadonlyArray<GitHistoryGraphEdge>;
 }
 
@@ -132,6 +133,7 @@ export function layoutGitHistoryGraph(
 
   for (const commit of commits) {
     let nodeLane = findLaneIndex(lanes, commit.hash);
+    const hasIncoming = nodeLane !== -1;
     if (nodeLane === -1) {
       nodeLane = lanes.length;
       lanes = [...lanes, { hash: commit.hash, colorIndex: nextColorIndex(lanes) }];
@@ -156,6 +158,7 @@ export function layoutGitHistoryGraph(
       hash: commit.hash,
       lane: nodeLane,
       colorIndex: currentLane.colorIndex,
+      hasIncoming,
       edges: [
         ...parentEdges(parentHashes, nodeLane, afterLanes, knownHashes),
         ...continuationEdges(beforeLanes, nodeLane, afterLanes),

@@ -255,6 +255,51 @@ it.effect("returns paginated commit history with author, parent, and decoration 
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("excludes internal refs from history while including normal branch history", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const currentHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+    const normalBranchCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-m",
+      "normal branch history",
+    ]);
+    yield* git(cwd, ["update-ref", "refs/heads/feature/normal-history", normalBranchCommit]);
+
+    const internalCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-m",
+      "internal checkpoint history",
+    ]);
+    yield* git(cwd, ["update-ref", "refs/t3/checkpoints/test", internalCommit]);
+
+    const mergeCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-p",
+      normalBranchCommit,
+      "-m",
+      "visible merge history",
+    ]);
+    yield* git(cwd, ["update-ref", "HEAD", mergeCommit]);
+
+    const history = yield* driver.getHistory({ cwd, limit: 10 });
+    const subjects = history.commits.map((commit) => commit.subject);
+    const merge = history.commits.find((commit) => commit.hash === mergeCommit);
+
+    assert.include(subjects, "normal branch history");
+    assert.notInclude(subjects, "internal checkpoint history");
+    assert.deepEqual(merge?.parentHashes, [currentHead, normalBranchCommit]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {

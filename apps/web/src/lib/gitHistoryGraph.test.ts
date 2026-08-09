@@ -17,6 +17,7 @@ describe("layoutGitHistoryGraph", () => {
           hash: "c",
           lane: 0,
           colorIndex: 0,
+          hasIncoming: false,
           edges: [
             {
               fromLane: 0,
@@ -32,6 +33,7 @@ describe("layoutGitHistoryGraph", () => {
           hash: "b",
           lane: 0,
           colorIndex: 0,
+          hasIncoming: true,
           edges: [
             {
               fromLane: 0,
@@ -43,7 +45,7 @@ describe("layoutGitHistoryGraph", () => {
             },
           ],
         },
-        { hash: "a", lane: 0, colorIndex: 0, edges: [] },
+        { hash: "a", lane: 0, colorIndex: 0, hasIncoming: true, edges: [] },
       ],
     });
   });
@@ -161,6 +163,7 @@ describe("layoutGitHistoryGraph", () => {
           hash: "newest",
           lane: 0,
           colorIndex: 0,
+          hasIncoming: false,
           edges: [
             {
               fromLane: 0,
@@ -176,6 +179,7 @@ describe("layoutGitHistoryGraph", () => {
           hash: "unrelated",
           lane: 1,
           colorIndex: 1,
+          hasIncoming: false,
           edges: [{ fromLane: 0, toLane: 0, colorIndex: 0, kind: "continuation" }],
         },
       ],

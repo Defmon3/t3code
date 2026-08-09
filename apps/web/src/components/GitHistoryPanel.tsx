@@ -21,8 +21,9 @@ import { useEnvironmentQuery } from "../state/query";
 import { Button } from "./ui/button";
 
 const HISTORY_PAGE_SIZE = 100;
-const ROW_HEIGHT = 54;
-const LANE_WIDTH = 14;
+const ROW_HEIGHT = 34;
+const LANE_WIDTH = 18;
+const GRAPH_HORIZONTAL_PADDING = 10;
 const GRAPH_COLORS = ["#4f9cff", "#b26cff", "#f59e0b", "#22c55e", "#ec4899", "#14b8a6"] as const;
 const INITIAL_CURSORS = [undefined] as const;
 
@@ -49,13 +50,20 @@ function formatCommitDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
     year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
   }).format(date);
 }
 
+function graphColumnWidth(laneCount: number): number {
+  return Math.max(LANE_WIDTH * laneCount + GRAPH_HORIZONTAL_PADDING * 2, 48);
+}
+
 function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number }) {
-  const width = Math.max(LANE_WIDTH * props.laneCount, LANE_WIDTH * 2);
-  const x = (lane: number) => lane * LANE_WIDTH + LANE_WIDTH / 2;
+  const width = graphColumnWidth(props.laneCount);
+  const centerY = ROW_HEIGHT / 2;
+  const x = (lane: number) => lane * LANE_WIDTH + GRAPH_HORIZONTAL_PADDING + LANE_WIDTH / 2;
 
   return (
     <svg
@@ -65,24 +73,39 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number }) {
       width={width}
       height={ROW_HEIGHT}
     >
-      {props.graph.edges.map((edge, index) => (
+      {props.graph.hasIncoming ? (
         <line
-          key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
-          x1={x(edge.fromLane)}
+          x1={x(props.graph.lane)}
           y1="0"
-          x2={x(edge.toLane)}
-          y2={ROW_HEIGHT}
-          stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
-          strokeWidth="1.75"
-          strokeDasharray={edge.isMissingParent ? "3 2" : undefined}
+          x2={x(props.graph.lane)}
+          y2={centerY}
+          stroke={GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]}
+          strokeWidth="2"
         />
-      ))}
+      ) : null}
+      {props.graph.edges.map((edge, index) => {
+        const fromX = edge.kind === "parent" ? x(props.graph.lane) : x(edge.fromLane);
+        const fromY = edge.kind === "parent" ? centerY : 0;
+        const toX = x(edge.toLane);
+        const path = `M ${fromX} ${fromY} C ${fromX} ${centerY}, ${toX} ${centerY}, ${toX} ${ROW_HEIGHT}`;
+        return (
+          <path
+            key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
+            d={path}
+            fill="none"
+            stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray={edge.isMissingParent ? "3 2" : undefined}
+          />
+        );
+      })}
       <circle
         cx={x(props.graph.lane)}
-        cy="8"
-        r="4"
-        fill="var(--background)"
-        stroke={GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]}
+        cy={centerY}
+        r="4.5"
+        fill={GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]}
+        stroke="var(--background)"
         strokeWidth="2"
       />
     </svg>
@@ -102,38 +125,35 @@ function CommitRow(props: {
     <button
       type="button"
       className={cn(
-        "group flex h-[54px] w-full min-w-0 items-stretch border-b border-border/45 text-left outline-none transition-colors hover:bg-accent/45 focus-visible:bg-accent/60",
+        "group flex h-[34px] w-full min-w-[48rem] items-stretch border-b border-border/45 text-left outline-none transition-colors hover:bg-accent/45 focus-visible:bg-accent/60",
         props.selected && "bg-accent/70",
       )}
       onClick={() => props.onSelect(commit.hash)}
       aria-pressed={props.selected}
     >
       <GraphCell graph={props.row.graph} laneCount={props.laneCount} />
-      <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_7.5rem] gap-x-3 py-1.5 pr-3">
-        <div className="min-w-0">
-          <div className="truncate text-xs font-medium leading-5 text-foreground">
+      <div className="grid min-w-0 flex-1 grid-cols-[minmax(15rem,1fr)_9rem_8.5rem_5.5rem] items-center gap-x-3 pr-3 text-[11px]">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {commit.refs.slice(0, 3).map((ref) => (
+            <span
+              key={ref}
+              className="max-w-32 shrink-0 truncate rounded-sm border border-primary/25 bg-primary/10 px-1 py-px font-mono text-[9px] leading-4 text-primary"
+              title={ref}
+            >
+              {ref}
+            </span>
+          ))}
+          <span className="truncate font-medium text-foreground" title={commit.subject}>
             {commit.subject || "(no subject)"}
-          </div>
-          <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
-            <span className="shrink-0 font-mono text-[10px] text-primary/85">{shortHash}</span>
-            <span className="truncate">{commit.authorName}</span>
-          </div>
+          </span>
         </div>
-        <div className="min-w-0 text-right text-[10px] leading-4 text-muted-foreground">
-          <div className="truncate">{formatCommitDate(commit.authoredAt)}</div>
-          {commit.refs.length > 0 ? (
-            <div className="mt-0.5 flex justify-end gap-1 overflow-hidden">
-              {commit.refs.slice(0, 2).map((ref) => (
-                <span
-                  key={ref}
-                  className="truncate rounded-sm border border-primary/20 bg-primary/8 px-1 font-mono text-[9px] text-primary/90"
-                >
-                  {ref}
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </div>
+        <span className="truncate text-muted-foreground" title={commit.authorName}>
+          {commit.authorName}
+        </span>
+        <span className="truncate text-muted-foreground">
+          {formatCommitDate(commit.authoredAt)}
+        </span>
+        <span className="truncate font-mono text-[10px] text-primary/85">{shortHash}</span>
       </div>
     </button>
   );
@@ -319,12 +339,14 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             {localRefs.map((ref) => (
               <div
                 key={`local:${ref.name}`}
-                className="flex h-6 min-w-0 items-center gap-1.5 rounded px-1.5 text-[11px] text-foreground/85"
+                className={cn(
+                  "flex h-6 min-w-0 items-center gap-1.5 rounded px-1.5 text-[11px] text-foreground/85",
+                  ref.current && "bg-primary/10 font-medium text-primary",
+                )}
                 title={ref.name}
               >
                 <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
                 <span className="truncate">{ref.name}</span>
-                {ref.current ? <span className="ml-auto text-primary">●</span> : null}
               </div>
             ))}
             {remoteRefs.length > 0 ? (
@@ -371,6 +393,15 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                 </Button>
               </div>
             ) : null}
+            <div className="flex h-7 min-w-[48rem] shrink-0 items-center border-b border-border/70 bg-muted/20 text-[10px] font-medium text-muted-foreground">
+              <div className="shrink-0" style={{ width: graphColumnWidth(laneCount) }} />
+              <div className="grid min-w-0 flex-1 grid-cols-[minmax(15rem,1fr)_9rem_8.5rem_5.5rem] gap-x-3 pr-3">
+                <span>Subject</span>
+                <span>Author</span>
+                <span>Date</span>
+                <span>Hash</span>
+              </div>
+            </div>
             <LegendList<GitHistoryRow>
               data={filteredRows}
               keyExtractor={(row) => row.commit.hash}
