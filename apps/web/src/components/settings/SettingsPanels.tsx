@@ -512,6 +512,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
         : []),
+      ...(settings.sidebarAutoSettleCompletedChangeRequests !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests
+        ? ["Auto-settle completed pull requests"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
@@ -570,6 +574,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableProviderUpdateChecks,
       settings.showSlowRequestWarnings,
       settings.sidebarAutoSettleAfterDays,
+      settings.sidebarAutoSettleCompletedChangeRequests,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
@@ -651,6 +656,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+      sidebarAutoSettleCompletedChangeRequests:
+        DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       showSlowRequestWarnings: DEFAULT_UNIFIED_SETTINGS.showSlowRequestWarnings,
@@ -1854,7 +1861,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("auto-settle-inactive-threads")}
-          description="Sidebar threads with no activity for this long settle automatically. Threads on merged or closed PRs always settle."
+          description="Sidebar threads with no activity for this long settle automatically. Independent of merged or closed pull requests."
           resetAction={
             settings.sidebarAutoSettleAfterDays !==
             DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
@@ -1892,6 +1899,36 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          {...searchableSetting("auto-settle-completed-pull-requests")}
+          description="Move threads to Settled when their pull request is merged or closed. Turn this off to keep completed pull-request threads active until you settle them or the inactivity rule applies."
+          resetAction={
+            settings.sidebarAutoSettleCompletedChangeRequests !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests ? (
+              <SettingResetButton
+                label="completed pull request auto-settle"
+                onClick={() =>
+                  updateSettings({
+                    sidebarAutoSettleCompletedChangeRequests:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarAutoSettleCompletedChangeRequests}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  sidebarAutoSettleCompletedChangeRequests: Boolean(checked),
+                })
+              }
+              aria-label="Auto-settle completed pull requests"
+            />
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("time-format")}
