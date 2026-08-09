@@ -15,6 +15,8 @@ import {
   type VcsGetHistoryResult,
   type VcsGetCommitDetailsInput,
   type VcsGetCommitDetailsResult,
+  type VcsGetCommitDiffInput,
+  type VcsGetCommitDiffResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
   type GitManagerServiceError,
@@ -72,6 +74,9 @@ export class GitWorkflowService extends Context.Service<
     readonly getCommitDetails: (
       input: VcsGetCommitDetailsInput,
     ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+    readonly getCommitDiff: (
+      input: VcsGetCommitDiffInput,
+    ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
@@ -155,6 +160,10 @@ function nonRepositoryHistory(): VcsGetHistoryResult {
 
 function nonRepositoryCommitDetails(): VcsGetCommitDetailsResult {
   return { commit: null, isRepo: false };
+}
+
+function nonRepositoryCommitDiff(): VcsGetCommitDiffResult {
+  return { diff: "", truncated: false, isRepo: false };
 }
 
 export const make = Effect.gen(function* () {
@@ -334,6 +343,12 @@ export const make = Effect.gen(function* () {
           isGitRepository
             ? git.getCommitDetails(input)
             : Effect.succeed(nonRepositoryCommitDetails()),
+        ),
+      ),
+    getCommitDiff: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDiff", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getCommitDiff(input) : Effect.succeed(nonRepositoryCommitDiff()),
         ),
       ),
     createWorktree: (input) =>

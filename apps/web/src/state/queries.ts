@@ -132,11 +132,29 @@ export function useBranches(target: VcsRefTarget) {
   );
 }
 
-export function usePaginatedBranches(target: VcsRefTarget) {
+export function usePaginatedBranches(
+  target: VcsRefTarget,
+  options?: {
+    readonly limit?: number;
+    readonly includeMatchingRemoteRefs?: boolean;
+    readonly refKind?: "all" | "local" | "remote" | "tag";
+  },
+) {
   const query = target.query?.trim() ?? "";
+  const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
+  const includeMatchingRemoteRefs = options?.includeMatchingRemoteRefs === true;
+  const refKind = options?.refKind;
+  const [queryGeneration, setQueryGeneration] = useState(0);
   const targetKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([target.environmentId, target.cwd, query])
+      ? JSON.stringify([
+          target.environmentId,
+          target.cwd,
+          query,
+          limit,
+          includeMatchingRemoteRefs,
+          refKind,
+        ])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
@@ -156,12 +174,24 @@ export function usePaginatedBranches(target: VcsRefTarget) {
                 cwd: target.cwd!,
                 ...(query.length > 0 ? { query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
-                limit: VCS_REF_LIST_LIMIT,
+                limit,
+                queryGeneration,
+                ...(includeMatchingRemoteRefs ? { includeMatchingRemoteRefs: true } : {}),
+                ...(refKind === undefined ? {} : { refKind }),
               },
             }),
           )
         : [],
-    [cursors, query, target.cwd, target.environmentId],
+    [
+      cursors,
+      includeMatchingRemoteRefs,
+      limit,
+      query,
+      queryGeneration,
+      refKind,
+      target.cwd,
+      target.environmentId,
+    ],
   );
   const pagesAtom = useMemo(
     () =>
@@ -205,12 +235,16 @@ export function usePaginatedBranches(target: VcsRefTarget) {
         })()
       : null;
   const refresh = useCallback(() => {
-    const firstPage = pageAtoms[0];
+    setQueryGeneration((generation) => generation + 1);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-    if (firstPage !== undefined) {
-      appAtomRegistry.refresh(firstPage);
+  }, [targetKey]);
+  const retry = useCallback(() => {
+    const failedIndex = results.findIndex((result) => result._tag === "Failure");
+    const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
+    if (failedPageAtom !== undefined) {
+      appAtomRegistry.refresh(failedPageAtom);
     }
-  }, [pageAtoms, targetKey]);
+  }, [pageAtoms, results]);
   const loadNext = useCallback(() => {
     if (targetKey === null || data?.nextCursor === null || data?.nextCursor === undefined) {
       return;
@@ -231,6 +265,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
     isPending: results.some((result) => result.waiting),
     isFetchingNextPage,
     refresh,
+    retry,
     loadNext,
   };
 }
