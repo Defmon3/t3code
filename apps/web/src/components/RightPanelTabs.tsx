@@ -1,6 +1,6 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { Bot, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+import { Bot, FileDiff, Files, GitGraph, Globe2, Plus, TerminalSquare, X } from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -43,11 +43,15 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory: () => void;
   onAddFiles: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable: boolean;
   filesAvailable: boolean;
+  /** Running + waiting subagents; badges the Agents card in the empty state. */
+  liveAgentCount: number;
   children: ReactNode;
 }
 
@@ -55,6 +59,7 @@ const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  gitHistory: "Git History is only available when a Git repository is open.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -91,11 +96,14 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory: () => void;
   onAddFiles: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable: boolean;
   filesAvailable: boolean;
+  liveAgentCount: number;
 }) {
   const actions = [
     {
@@ -105,6 +113,7 @@ function RightPanelEmptyState(props: {
       available: props.browserAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
       onClick: props.onAddBrowser,
+      badgeCount: 0,
     },
     {
       label: "Terminal",
@@ -113,6 +122,7 @@ function RightPanelEmptyState(props: {
       available: true,
       disabledReason: null,
       onClick: props.onAddTerminal,
+      badgeCount: 0,
     },
     {
       label: "Files",
@@ -121,6 +131,7 @@ function RightPanelEmptyState(props: {
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
       onClick: props.onAddFiles,
+      badgeCount: 0,
     },
     {
       label: "Diff",
@@ -129,6 +140,16 @@ function RightPanelEmptyState(props: {
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
+      badgeCount: 0,
+    },
+    {
+      label: "Git History",
+      description: "Browse commits in this repository.",
+      icon: GitGraph,
+      available: props.gitHistoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
+      onClick: props.onAddGitHistory,
+      badgeCount: 0,
     },
     {
       label: "Agents",
@@ -137,6 +158,7 @@ function RightPanelEmptyState(props: {
       available: true,
       disabledReason: null,
       onClick: props.onAddAgents,
+      badgeCount: props.liveAgentCount,
     },
   ] as const;
 
@@ -154,7 +176,17 @@ function RightPanelEmptyState(props: {
             const Icon = action.icon;
             const content = (
               <>
-                <Icon className="mb-3 size-5" />
+                <span className="relative mb-3 inline-flex">
+                  <Icon className="size-5" />
+                  {action.badgeCount > 0 ? (
+                    <span
+                      aria-hidden
+                      className="absolute -top-1.5 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
+                    >
+                      {action.badgeCount}
+                    </span>
+                  ) : null}
+                </span>
                 <span className="text-sm font-medium">{action.label}</span>
                 <span className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   {action.description}
@@ -167,7 +199,7 @@ function RightPanelEmptyState(props: {
                   key={action.label}
                   type="button"
                   onClick={action.onClick}
-                  className="flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
+                  className="cursor-pointer flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
                 >
                   {content}
                 </button>
@@ -204,6 +236,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "Git History";
     case "files":
       return "Files";
     case "file":
@@ -261,6 +295,8 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitGraph className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -395,7 +431,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   onAuxClick={(event) => handleTabAuxClick(event, surface)}
                   onContextMenu={(event) => void handleTabContextMenu(event, surface)}
                   className={cn(
-                    "group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
+                    "cursor-pointer group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
                     active
                       ? "bg-accent text-foreground"
                       : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
@@ -403,7 +439,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 >
                   <button
                     type="button"
-                    className="group/close relative flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted"
+                    className="cursor-pointer group/close relative flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted"
                     aria-label={`Close ${title}`}
                     onClick={() => props.onCloseSurface(surface)}
                   >
@@ -427,7 +463,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       render={
                         <button
                           type="button"
-                          className="flex min-w-0 items-center"
+                          className="cursor-pointer flex min-w-0 items-center"
                           onClick={() => props.onActivate(surface)}
                         >
                           <span className="truncate">{title}</span>
@@ -442,7 +478,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             {props.surfaces.length > 0 ? (
               <Menu>
                 <MenuTrigger
-                  className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="cursor-pointer relative inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                   aria-label="Add panel surface"
                 >
                   <Plus className="size-3.5" />
@@ -476,6 +512,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <FileDiff />
                     Diff
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.gitHistoryAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.gitHistory}
+                    onClick={props.onAddGitHistory}
+                  >
+                    <GitGraph />
+                    Git History
+                  </SurfaceMenuItem>
                   <SurfaceMenuItem available onClick={props.onAddAgents}>
                     <Bot />
                     Agents
@@ -493,11 +537,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddGitHistory={props.onAddGitHistory}
             onAddFiles={props.onAddFiles}
             onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
+            gitHistoryAvailable={props.gitHistoryAvailable}
             filesAvailable={props.filesAvailable}
+            liveAgentCount={props.liveAgentCount}
           />
         ) : (
           props.children

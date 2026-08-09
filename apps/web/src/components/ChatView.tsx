@@ -416,6 +416,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
+const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -3211,6 +3212,10 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const addGitHistorySurface = useCallback(() => {
+    if (!activeThreadRef || !isGitRepo || gitCwd === null) return;
+    useRightPanelStore.getState().open(activeThreadRef, "git-history");
+  }, [activeThreadRef, gitCwd, isGitRepo]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -5913,6 +5918,11 @@ function ChatViewContent(props: ChatViewProps) {
       rightPanelAvailable={activeProject !== null}
       rightPanelOpen={rightPanelOpen}
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
+      // Suppressed while the Agents surface is visible: the roster itself is
+      // on screen, so the toggle badge would be pointing at nothing.
+      liveAgentCount={
+        rightPanelOpen && activeRightPanelSurface?.kind === "agents" ? 0 : agentPanelModel.liveCount
+      }
       onToggleTerminal={toggleTerminalVisibility}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -5975,6 +5985,10 @@ function ChatViewContent(props: ChatViewProps) {
           composerDraftTarget={composerDraftTarget}
           initialGitScope={initialDiffPanelGitScope}
         />
+      </Suspense>
+    ) : activeRightPanelSurface?.kind === "git-history" && gitCwd ? (
+      <Suspense fallback={null}>
+        <GitHistoryPanel environmentId={environmentId} cwd={gitCwd} />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
@@ -6043,6 +6057,7 @@ function ChatViewContent(props: ChatViewProps) {
             changeRequestState={activeThreadPr?.state ?? null}
             activeProjectName={activeProject?.title}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
+            activeProjectFaviconPath={activeProject?.faviconPath ?? null}
             openInCwd={gitCwd}
             activeProjectScripts={activeProject?.scripts}
             preferredScriptId={
@@ -6414,11 +6429,14 @@ function ChatViewContent(props: ChatViewProps) {
           onAddBrowser={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
+          onAddGitHistory={addGitHistorySurface}
           onAddFiles={addFilesSurface}
           onAddAgents={addAgentsSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
+          gitHistoryAvailable={isGitRepo && gitCwd !== null}
           filesAvailable={activeProject !== null}
+          liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -6442,11 +6460,14 @@ function ChatViewContent(props: ChatViewProps) {
             onAddBrowser={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
+            onAddGitHistory={addGitHistorySurface}
             onAddFiles={addFilesSurface}
             onAddAgents={addAgentsSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
+            gitHistoryAvailable={isGitRepo && gitCwd !== null}
             filesAvailable={activeProject !== null}
+            liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}
           </RightPanelTabs>

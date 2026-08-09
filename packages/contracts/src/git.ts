@@ -5,6 +5,8 @@ import { VcsDriverKind } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
+const GIT_HISTORY_MAX_LIMIT = 200;
+const GitCommitHash = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/i));
 
 // Domain Types
 
@@ -76,6 +78,7 @@ export type GitRunStackedActionToast = typeof GitRunStackedActionToast.Type;
 export const VcsRef = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
   isRemote: Schema.optional(Schema.Boolean),
+  isTag: Schema.optional(Schema.Boolean),
   remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
@@ -126,13 +129,37 @@ export const VcsListRefsInput = Schema.Struct({
   query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
   cursor: Schema.optional(NonNegativeInt),
   includeMatchingRemoteRefs: Schema.optional(Schema.Boolean),
-  refKind: Schema.optional(Schema.Literals(["all", "local", "remote"])),
+  refKind: Schema.optional(Schema.Literals(["all", "local", "remote", "tag"])),
   refresh: Schema.optional(Schema.Boolean),
+  queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
   ),
 });
 export type VcsListRefsInput = typeof VcsListRefsInput.Type;
+
+export const VcsGetHistoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  revision: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(1024))),
+  cursor: Schema.optional(NonNegativeInt),
+  queryGeneration: Schema.optional(NonNegativeInt),
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_HISTORY_MAX_LIMIT))),
+});
+export type VcsGetHistoryInput = typeof VcsGetHistoryInput.Type;
+
+export const VcsGetCommitDetailsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  hash: GitCommitHash,
+});
+export type VcsGetCommitDetailsInput = typeof VcsGetCommitDetailsInput.Type;
+
+export const VcsGetCommitDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  hash: GitCommitHash,
+  filePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
+});
+export type VcsGetCommitDiffInput = typeof VcsGetCommitDiffInput.Type;
 
 export const VcsCreateWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -261,6 +288,57 @@ export const VcsListRefsResult = Schema.Struct({
   totalCount: NonNegativeInt,
 });
 export type VcsListRefsResult = typeof VcsListRefsResult.Type;
+
+export const GitHistoryCommit = Schema.Struct({
+  hash: TrimmedNonEmptyStringSchema,
+  parentHashes: Schema.Array(TrimmedNonEmptyStringSchema),
+  subject: Schema.String,
+  authorName: TrimmedNonEmptyStringSchema,
+  authorEmail: TrimmedNonEmptyStringSchema,
+  authoredAt: Schema.String,
+  refs: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type GitHistoryCommit = typeof GitHistoryCommit.Type;
+
+export const GitCommitChangedFile = Schema.Struct({
+  status: Schema.Literals(["A", "M", "D", "T", "U", "X", "B"]),
+  path: TrimmedNonEmptyStringSchema,
+});
+export type GitCommitChangedFile = typeof GitCommitChangedFile.Type;
+
+export const GitCommitDetails = Schema.Struct({
+  hash: GitCommitHash,
+  parentHashes: Schema.Array(GitCommitHash),
+  subject: Schema.String,
+  body: Schema.String,
+  authorName: TrimmedNonEmptyStringSchema,
+  authorEmail: TrimmedNonEmptyStringSchema,
+  authoredAt: Schema.String,
+  refs: Schema.Array(TrimmedNonEmptyStringSchema),
+  changedFiles: Schema.Array(GitCommitChangedFile),
+});
+export type GitCommitDetails = typeof GitCommitDetails.Type;
+
+export const VcsGetHistoryResult = Schema.Struct({
+  commits: Schema.Array(GitHistoryCommit),
+  isRepo: Schema.Boolean,
+  nextCursor: NonNegativeInt.pipe(Schema.NullOr),
+  hasMore: Schema.Boolean,
+});
+export type VcsGetHistoryResult = typeof VcsGetHistoryResult.Type;
+
+export const VcsGetCommitDetailsResult = Schema.Struct({
+  commit: Schema.NullOr(GitCommitDetails),
+  isRepo: Schema.Boolean,
+});
+export type VcsGetCommitDetailsResult = typeof VcsGetCommitDetailsResult.Type;
+
+export const VcsGetCommitDiffResult = Schema.Struct({
+  diff: Schema.String,
+  truncated: Schema.Boolean,
+  isRepo: Schema.Boolean,
+});
+export type VcsGetCommitDiffResult = typeof VcsGetCommitDiffResult.Type;
 
 export const VcsCreateWorktreeResult = Schema.Struct({
   worktree: VcsWorktree,

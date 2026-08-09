@@ -11,6 +11,12 @@ import {
   type VcsCreateRefResult,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
+  type VcsGetHistoryInput,
+  type VcsGetHistoryResult,
+  type VcsGetCommitDetailsInput,
+  type VcsGetCommitDetailsResult,
+  type VcsGetCommitDiffInput,
+  type VcsGetCommitDiffResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
   type GitManagerServiceError,
@@ -62,6 +68,15 @@ export class GitWorkflowService extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    readonly getHistory: (
+      input: VcsGetHistoryInput,
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError>;
+    readonly getCommitDetails: (
+      input: VcsGetCommitDetailsInput,
+    ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+    readonly getCommitDiff: (
+      input: VcsGetCommitDiffInput,
+    ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
@@ -132,6 +147,23 @@ function nonRepositoryListRefs(): VcsListRefsResult {
     nextCursor: null,
     totalCount: 0,
   };
+}
+
+function nonRepositoryHistory(): VcsGetHistoryResult {
+  return {
+    commits: [],
+    isRepo: false,
+    nextCursor: null,
+    hasMore: false,
+  };
+}
+
+function nonRepositoryCommitDetails(): VcsGetCommitDetailsResult {
+  return { commit: null, isRepo: false };
+}
+
+function nonRepositoryCommitDiff(): VcsGetCommitDiffResult {
+  return { diff: "", truncated: false, isRepo: false };
 }
 
 export const make = Effect.gen(function* () {
@@ -297,6 +329,26 @@ export const make = Effect.gen(function* () {
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
+        ),
+      ),
+    getHistory: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getHistory", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getHistory(input) : Effect.succeed(nonRepositoryHistory()),
+        ),
+      ),
+    getCommitDetails: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDetails", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.getCommitDetails(input)
+            : Effect.succeed(nonRepositoryCommitDetails()),
+        ),
+      ),
+    getCommitDiff: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDiff", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getCommitDiff(input) : Effect.succeed(nonRepositoryCommitDiff()),
         ),
       ),
     createWorktree: (input) =>

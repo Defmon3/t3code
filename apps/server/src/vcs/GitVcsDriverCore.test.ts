@@ -212,6 +212,144 @@ it.effect("re-reads origin remote status after cache TTL expiry and bypassed inv
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("returns paginated commit history with author, parent, and decoration details", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "SECOND.md", "second\n");
+    yield* git(cwd, ["add", "SECOND.md"]);
+    yield* git(cwd, ["commit", "-m", "second commit"], {
+      GIT_AUTHOR_NAME: "Ada Lovelace",
+      GIT_AUTHOR_EMAIL: "ada@example.com",
+      GIT_AUTHOR_DATE: "2026-08-09T12:00:00+00:00",
+      GIT_COMMITTER_NAME: "Ada Lovelace",
+      GIT_COMMITTER_EMAIL: "ada@example.com",
+      GIT_COMMITTER_DATE: "2026-08-09T12:00:00+00:00",
+    });
+    yield* git(cwd, ["tag", "v2"]);
+
+    const firstPage = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.equal(firstPage.isRepo, true);
+    assert.equal(firstPage.commits.length, 1);
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(firstPage.nextCursor, 1);
+    assert.equal(firstPage.commits[0]?.subject, "second commit");
+    assert.equal(firstPage.commits[0]?.authorName, "Ada Lovelace");
+    assert.equal(firstPage.commits[0]?.authorEmail, "ada@example.com");
+    assert.equal(firstPage.commits[0]?.authoredAt, "2026-08-09T12:00:00Z");
+    assert.equal(firstPage.commits[0]?.parentHashes.length, 1);
+    assert.equal(firstPage.commits[0]?.refs.includes(`HEAD -> ${initialBranch}`), true);
+    assert.equal(firstPage.commits[0]?.refs.includes("tag: v2"), true);
+
+    const fullPage = yield* driver.getHistory({ cwd, limit: 2 });
+    assert.equal(fullPage.commits.length, 2);
+    assert.match(fullPage.commits[1]?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(fullPage.commits[0]?.parentHashes[0], fullPage.commits[1]?.hash);
+
+    const secondPage = yield* driver.getHistory({ cwd, cursor: 1, limit: 1 });
+    assert.equal(secondPage.commits.length, 1);
+    assert.equal(secondPage.hasMore, false);
+    assert.equal(secondPage.nextCursor, null);
+    assert.equal(secondPage.commits[0]?.subject, "initial commit");
+
+    yield* git(cwd, ["branch", "history-test", "HEAD~1"]);
+    const branchHistory = yield* driver.getHistory({
+      cwd,
+      revision: "refs/heads/history-test",
+      limit: 10,
+    });
+    assert.deepEqual(
+      branchHistory.commits.map((commit) => commit.subject),
+      ["initial commit"],
+    );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("returns full commit details and root commit changed files", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "SECOND.md", "second\n");
+    yield* git(cwd, ["add", "SECOND.md"]);
+    yield* git(cwd, ["commit", "-m", "second subject", "-m", "second body\nwith another line"]);
+    yield* git(cwd, ["tag", "v2"]);
+
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+    const details = yield* driver.getCommitDetails({ cwd, hash });
+
+    assert.equal(details.isRepo, true);
+    assert.equal(details.commit?.hash, hash);
+    assert.equal(details.commit?.subject, "second subject");
+    assert.equal(details.commit?.body, "second body\nwith another line\n");
+    assert.equal(details.commit?.authorName, "Test");
+    assert.equal(details.commit?.authorEmail, "test@test.com");
+    assert.equal(details.commit?.parentHashes.length, 1);
+    assert.include(details.commit?.refs ?? [], "tag: v2");
+    assert.deepEqual(details.commit?.changedFiles, [{ status: "A", path: "SECOND.md" }]);
+
+    const diff = yield* driver.getCommitDiff({ cwd, hash });
+    assert.equal(diff.isRepo, true);
+    assert.equal(diff.truncated, false);
+    assert.include(diff.diff, "diff --git a/SECOND.md b/SECOND.md");
+    assert.include(diff.diff, "+second");
+
+    const fileDiff = yield* driver.getCommitDiff({ cwd, hash, filePath: "SECOND.md" });
+    assert.include(fileDiff.diff, "+second");
+
+    const initialHash = details.commit?.parentHashes[0];
+    assert.ok(initialHash);
+    const initial = yield* driver.getCommitDetails({ cwd, hash: initialHash });
+    assert.deepEqual(initial.commit?.changedFiles, [{ status: "A", path: "README.md" }]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("excludes internal refs from history while including normal branch history", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const currentHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+    const normalBranchCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-m",
+      "normal branch history",
+    ]);
+    yield* git(cwd, ["update-ref", "refs/heads/feature/normal-history", normalBranchCommit]);
+
+    const internalCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-m",
+      "internal checkpoint history",
+    ]);
+    yield* git(cwd, ["update-ref", "refs/t3/checkpoints/test", internalCommit]);
+
+    const mergeCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-p",
+      normalBranchCommit,
+      "-m",
+      "visible merge history",
+    ]);
+    yield* git(cwd, ["update-ref", "HEAD", mergeCommit]);
+
+    const history = yield* driver.getHistory({ cwd, limit: 10 });
+    const subjects = history.commits.map((commit) => commit.subject);
+    const merge = history.commits.find((commit) => commit.hash === mergeCommit);
+
+    assert.include(subjects, "normal branch history");
+    assert.notInclude(subjects, "internal checkpoint history");
+    assert.deepEqual(merge?.parentHashes, [currentHead, normalBranchCommit]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1241,6 +1379,60 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(remoteOnly.refs.length, 1);
         assert.equal(remoteOnly.refs[0]?.name, `origin/${initialBranch}`);
         assert.equal(remoteOnly.refs[0]?.isRemote, true);
+      }),
+    );
+
+    it.effect("paginates and filters tags independently from branch refs", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["tag", "-a", "releases/v1.2.3", "-m", "older release"], {
+          GIT_COMMITTER_DATE: "2000-01-01T00:00:00+00:00",
+        });
+        yield* git(cwd, ["tag", "-a", "releases/v1.2.4", "-m", "newer release"], {
+          GIT_COMMITTER_DATE: "2020-01-01T00:00:00+00:00",
+        });
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const branches = yield* driver.listRefs({ cwd, refresh: true, limit: 1 });
+        assert.equal(
+          branches.refs.some((ref) => ref.name === "releases/v1.2.3"),
+          false,
+        );
+        assert.equal(branches.totalCount, 1);
+
+        const firstTagPage = yield* driver.listRefs({ cwd, refKind: "tag", limit: 1 });
+        assert.equal(firstTagPage.refs.length, 1);
+        assert.equal(firstTagPage.totalCount, 2);
+        assert.equal(firstTagPage.nextCursor, 1);
+        const tag = firstTagPage.refs[0];
+        assert.equal(tag?.name, "releases/v1.2.4");
+        assert.equal(tag?.isTag, true);
+        assert.equal(tag?.isRemote, false);
+
+        const secondTagPage = yield* driver.listRefs({
+          cwd,
+          refKind: "tag",
+          cursor: firstTagPage.nextCursor ?? undefined,
+          limit: 1,
+        });
+        assert.deepEqual(
+          secondTagPage.refs.map((ref) => ref.name),
+          ["releases/v1.2.3"],
+        );
+        assert.equal(secondTagPage.nextCursor, null);
+
+        const filteredTags = yield* driver.listRefs({
+          cwd,
+          refKind: "tag",
+          query: "1.2.4",
+          limit: 1,
+        });
+        assert.deepEqual(
+          filteredTags.refs.map((ref) => ref.name),
+          ["releases/v1.2.4"],
+        );
+        assert.equal(filteredTags.nextCursor, null);
       }),
     );
 
