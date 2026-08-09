@@ -97,13 +97,21 @@ describe("layoutGitHistoryGraph", () => {
     expect(layout.rows[2]?.edges).toEqual([
       {
         fromLane: 1,
-        toLane: 0,
-        colorIndex: 0,
+        toLane: 1,
+        colorIndex: 1,
         kind: "parent",
         parentHash: "base",
         isMissingParent: false,
       },
       { fromLane: 0, toLane: 0, colorIndex: 0, kind: "continuation" },
+    ]);
+    expect(layout.rows[3]?.edges).toEqual([
+      {
+        fromLane: 1,
+        toLane: 0,
+        colorIndex: 1,
+        kind: "incoming",
+      },
     ]);
   });
 
@@ -162,6 +170,60 @@ describe("layoutGitHistoryGraph", () => {
       row.edges.filter((edge) => edge.kind === "continuation"),
     );
     expect(continuations.every((edge) => edge.fromLane === edge.toLane)).toBe(true);
+  });
+
+  it("keeps the first-parent history in one straight primary lane", () => {
+    const layout = layoutGitHistoryGraph([
+      { hash: "head", parentHashes: ["merge"] },
+      { hash: "merge", parentHashes: ["main", "side"] },
+      { hash: "side", parentHashes: ["base"] },
+      { hash: "main", parentHashes: ["base"] },
+      { hash: "base", parentHashes: [] },
+    ]);
+
+    expect(
+      layout.rows
+        .filter((row) => ["head", "merge", "main", "base"].includes(row.hash))
+        .map((row) => row.lane),
+    ).toEqual([0, 0, 0, 0]);
+  });
+
+  it("reserves the primary lane for the decorated current HEAD ancestry", () => {
+    const layout = layoutGitHistoryGraph([
+      { hash: "other", parentHashes: [] },
+      { hash: "head", parentHashes: ["main"], refs: ["HEAD -> feature/current"] },
+      { hash: "main", parentHashes: ["base"] },
+      { hash: "base", parentHashes: [] },
+    ]);
+
+    expect(layout.rows.map((row) => [row.hash, row.lane])).toEqual([
+      ["other", 1],
+      ["head", 0],
+      ["main", 0],
+      ["base", 0],
+    ]);
+    expect(layout.rows[0]?.edges.some((edge) => edge.fromLane === 0)).toBe(false);
+    expect(layout.rows[1]?.hasIncoming).toBe(false);
+  });
+
+  it("does not create a branch edge from a continuation lane", () => {
+    const layout = layoutGitHistoryGraph([
+      { hash: "merge", parentHashes: ["main", "side"] },
+      { hash: "main", parentHashes: ["base"] },
+      { hash: "side", parentHashes: ["base"] },
+      { hash: "base", parentHashes: [] },
+    ]);
+
+    expect(
+      layout.rows.flatMap((row) =>
+        row.edges.filter((edge) => edge.kind === "parent").map((edge) => [row.lane, edge.fromLane]),
+      ),
+    ).toEqual([
+      [0, 0],
+      [0, 0],
+      [0, 0],
+      [1, 1],
+    ]);
   });
 
   it("keeps missing page-boundary parents visible and starts unrelated commits in a new lane", () => {

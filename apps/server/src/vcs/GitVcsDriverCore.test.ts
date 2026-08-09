@@ -252,6 +252,17 @@ it.effect("returns paginated commit history with author, parent, and decoration 
     assert.equal(secondPage.hasMore, false);
     assert.equal(secondPage.nextCursor, null);
     assert.equal(secondPage.commits[0]?.subject, "initial commit");
+
+    yield* git(cwd, ["branch", "history-test", "HEAD~1"]);
+    const branchHistory = yield* driver.getHistory({
+      cwd,
+      revision: "refs/heads/history-test",
+      limit: 10,
+    });
+    assert.deepEqual(
+      branchHistory.commits.map((commit) => commit.subject),
+      ["initial commit"],
+    );
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -277,6 +288,15 @@ it.effect("returns full commit details and root commit changed files", () =>
     assert.equal(details.commit?.parentHashes.length, 1);
     assert.include(details.commit?.refs ?? [], "tag: v2");
     assert.deepEqual(details.commit?.changedFiles, [{ status: "A", path: "SECOND.md" }]);
+
+    const diff = yield* driver.getCommitDiff({ cwd, hash });
+    assert.equal(diff.isRepo, true);
+    assert.equal(diff.truncated, false);
+    assert.include(diff.diff, "diff --git a/SECOND.md b/SECOND.md");
+    assert.include(diff.diff, "+second");
+
+    const fileDiff = yield* driver.getCommitDiff({ cwd, hash, filePath: "SECOND.md" });
+    assert.include(fileDiff.diff, "+second");
 
     const initialHash = details.commit?.parentHashes[0];
     assert.ok(initialHash);
@@ -1359,6 +1379,60 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(remoteOnly.refs.length, 1);
         assert.equal(remoteOnly.refs[0]?.name, `origin/${initialBranch}`);
         assert.equal(remoteOnly.refs[0]?.isRemote, true);
+      }),
+    );
+
+    it.effect("paginates and filters tags independently from branch refs", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["tag", "-a", "releases/v1.2.3", "-m", "older release"], {
+          GIT_COMMITTER_DATE: "2000-01-01T00:00:00+00:00",
+        });
+        yield* git(cwd, ["tag", "-a", "releases/v1.2.4", "-m", "newer release"], {
+          GIT_COMMITTER_DATE: "2020-01-01T00:00:00+00:00",
+        });
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const branches = yield* driver.listRefs({ cwd, refresh: true, limit: 1 });
+        assert.equal(
+          branches.refs.some((ref) => ref.name === "releases/v1.2.3"),
+          false,
+        );
+        assert.equal(branches.totalCount, 1);
+
+        const firstTagPage = yield* driver.listRefs({ cwd, refKind: "tag", limit: 1 });
+        assert.equal(firstTagPage.refs.length, 1);
+        assert.equal(firstTagPage.totalCount, 2);
+        assert.equal(firstTagPage.nextCursor, 1);
+        const tag = firstTagPage.refs[0];
+        assert.equal(tag?.name, "releases/v1.2.4");
+        assert.equal(tag?.isTag, true);
+        assert.equal(tag?.isRemote, false);
+
+        const secondTagPage = yield* driver.listRefs({
+          cwd,
+          refKind: "tag",
+          cursor: firstTagPage.nextCursor ?? undefined,
+          limit: 1,
+        });
+        assert.deepEqual(
+          secondTagPage.refs.map((ref) => ref.name),
+          ["releases/v1.2.3"],
+        );
+        assert.equal(secondTagPage.nextCursor, null);
+
+        const filteredTags = yield* driver.listRefs({
+          cwd,
+          refKind: "tag",
+          query: "1.2.4",
+          limit: 1,
+        });
+        assert.deepEqual(
+          filteredTags.refs.map((ref) => ref.name),
+          ["releases/v1.2.4"],
+        );
+        assert.equal(filteredTags.nextCursor, null);
       }),
     );
 
