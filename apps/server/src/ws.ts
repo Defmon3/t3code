@@ -1906,6 +1906,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.vcsGetHistory, gitWorkflow.getHistory(input), {
             "rpc.aggregate": "vcs",
           }),
+        [WS_METHODS.vcsGetCommitDetails]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsGetCommitDetails, gitWorkflow.getCommitDetails(input), {
+            "rpc.aggregate": "vcs",
+          }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateWorktree,
