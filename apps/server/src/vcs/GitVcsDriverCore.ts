@@ -94,6 +94,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetail
   hasUpstream: false,
   aheadCount: 0,
   behindCount: 0,
+  branchCommitCount: 0,
   aheadOfDefaultCount: 0,
 });
 const NON_REPOSITORY_REMOTE_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitRemoteStatusDetails>({
@@ -104,6 +105,7 @@ const NON_REPOSITORY_REMOTE_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitRemot
   hasUpstream: false,
   aheadCount: 0,
   behindCount: 0,
+  branchCommitCount: 0,
   aheadOfDefaultCount: 0,
 });
 
@@ -1576,6 +1578,36 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
   });
 
+  const computeBranchCommitCount = Effect.fn("computeBranchCommitCount")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const reflog = yield* executeGit(
+      "GitVcsDriver.computeBranchCommitCount.reflog",
+      cwd,
+      ["reflog", "show", "--format=%H%x00%gs", `refs/heads/${refName}`],
+      { allowNonZeroExit: true },
+    );
+    if (reflog.exitCode !== 0) return 0;
+
+    const creationCommit = reflog.stdout
+      .split(/\r?\n/g)
+      .map((entry) => entry.split("\0", 2))
+      .findLast(([, subject]) => subject?.toLowerCase().startsWith("branch: created from"))?.[0];
+    if (!creationCommit) return 0;
+
+    const count = yield* executeGit(
+      "GitVcsDriver.computeBranchCommitCount.count",
+      cwd,
+      ["rev-list", "--count", `${creationCommit}..${refName}`],
+      { allowNonZeroExit: true },
+    );
+    if (count.exitCode !== 0) return 0;
+
+    const parsed = Number.parseInt(count.stdout.trim(), 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  });
+
   const readStatusDetailsRemote = Effect.fn("readStatusDetailsRemote")(function* (cwd: string) {
     const branchResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetailsRemote.branch",
@@ -1657,6 +1689,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ? aheadCount
           : yield* computeAheadCountAgainstBase(cwd, branch).pipe(Effect.orElseSucceed(() => 0))
         : 0;
+    const branchCommitCount =
+      branch && !isDefaultBranch
+        ? yield* computeBranchCommitCount(cwd, branch).pipe(Effect.orElseSucceed(() => 0))
+        : 0;
 
     return {
       isRepo: true,
@@ -1666,6 +1702,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       hasUpstream: upstreamRef !== null,
       aheadCount,
       behindCount,
+      branchCommitCount,
       aheadOfDefaultCount,
     };
   });
@@ -1782,6 +1819,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     let upstreamRef: string | null = null;
     let aheadCount = 0;
     let behindCount = 0;
+    let branchCommitCount = 0;
     let aheadOfDefaultCount = 0;
     let hasWorkingTreeChanges = false;
     const changedFilesWithoutNumstat = new Set<string>();
@@ -1830,6 +1868,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         fallbackAheadCount !== null
           ? fallbackAheadCount
           : yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0));
+      branchCommitCount = yield* computeBranchCommitCount(cwd, refName).pipe(
+        Effect.orElseSucceed(() => 0),
+      );
     }
 
     const numstatEntries = parseNumstatEntries(numstatStdout);
@@ -1869,6 +1910,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       hasUpstream: upstreamRef !== null,
       aheadCount,
       behindCount,
+      branchCommitCount,
       aheadOfDefaultCount,
     };
   });
@@ -1918,6 +1960,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         hasUpstream: details.hasUpstream,
         aheadCount: details.aheadCount,
         behindCount: details.behindCount,
+        branchCommitCount: details.branchCommitCount ?? 0,
         aheadOfDefaultCount: details.aheadOfDefaultCount,
         pr: null,
       })),

@@ -11,8 +11,7 @@ export interface RefTreeProps {
   filterActive: boolean;
   expanded: ReadonlySet<string>;
   selectedRevision: string | null;
-  currentAheadCount: number;
-  currentBehindCount: number;
+  currentBranchCommitCount: number;
   onToggle: (key: string) => void;
   onSelect: (label: string, revision: string) => void;
 }

@@ -1309,6 +1309,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(status.hasUpstream, false);
         assert.equal(status.aheadCount, 1);
         assert.equal(status.behindCount, 0);
+        assert.equal(status.branchCommitCount, 1);
         assert.equal(status.aheadOfDefaultCount, 1);
       }),
     );

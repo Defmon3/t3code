@@ -146,8 +146,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         }),
   );
   const {
-    currentAheadCount,
-    currentBehindCount,
+    currentBranchCommitCount,
     currentRef,
     expandedRefKeys,
     hasMoreRefs,
@@ -190,8 +189,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     filterActive: normalizedRefFilter.length > 0,
     expanded: expandedRefKeys,
     selectedRevision: selectedRevision?.revision ?? null,
-    currentAheadCount,
-    currentBehindCount,
+    currentBranchCommitCount,
     onToggle: toggleRefKey,
     onSelect: selectRef,
   } satisfies Omit<RefTreeProps, "nodes" | "namespace" | "section">;
