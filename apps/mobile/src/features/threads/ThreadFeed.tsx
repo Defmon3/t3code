@@ -90,6 +90,10 @@ import {
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
+  resolveThreadFeedLiveFollow,
+  type ThreadFeedLiveFollowEvent,
+} from "./thread-feed-live-follow";
+import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
   ThreadWorkLog,
@@ -1349,6 +1353,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     endFollowEnabledRef.current = enabled;
     setEndFollowEnabled(enabled);
   }, []);
+  const transitionEndFollow = useCallback(
+    (event: ThreadFeedLiveFollowEvent) => {
+      setEndFollow(resolveThreadFeedLiveFollow(endFollowEnabledRef.current, event));
+    },
+    [setEndFollow],
+  );
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
@@ -1460,26 +1470,27 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      // Latch bookkeeping. LegendList recomputes its inset-aware end distance
-      // before invoking this handler, so getState() is current. Returning to
-      // the end re-arms follow no matter who scrolled (the user, or our own
-      // scroll-to-end); moving away breaks it only during a user-initiated
-      // scroll session, so MVCP compensations and programmatic repositioning
-      // can never strand a follower.
+      // LegendList recomputes its inset-aware end distance before invoking
+      // this handler, so getState() is current. Only the actual end re-arms
+      // follow: its broader maintain-scroll threshold is large enough for a
+      // streaming chunk to pull a user back before their upward drag escapes.
       const listState = props.listRef.current?.getState();
       if (listState) {
-        if (listState.isWithinMaintainScrollAtEndThreshold) {
-          setEndFollow(true);
-        } else if (userScrollSessionRef.current) {
-          setEndFollow(false);
-        }
+        transitionEndFollow({
+          type: "scroll",
+          isAtEnd: listState.isAtEnd,
+          userScrollSessionActive: userScrollSessionRef.current,
+        });
       }
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, setEndFollow],
+    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, transitionEndFollow],
   );
   const handleScrollBeginDrag = useCallback(() => {
     userScrollSessionRef.current = true;
-  }, []);
+    // Pause before the first scroll event. Otherwise a stream update can run
+    // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
+    transitionEndFollow({ type: "user-scroll-begin" });
+  }, [transitionEndFollow]);
   // The session must survive past finger-lift so momentum that carries the
   // user away from the end still breaks follow; a drag released with no
   // momentum ends its session at the release itself, otherwise at momentum
@@ -1511,14 +1522,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // re-arm follow regardless of where the user had scrolled before.
   useEffect(() => {
     userScrollSessionRef.current = false;
-    setEndFollow(true);
-  }, [props.threadId, setEndFollow]);
+    transitionEndFollow({ type: "reset" });
+  }, [props.threadId, transitionEndFollow]);
   useEffect(() => {
     if (props.anchorMessageId !== null) {
       userScrollSessionRef.current = false;
-      setEndFollow(true);
+      transitionEndFollow({ type: "reset" });
     }
-  }, [props.anchorMessageId, setEndFollow]);
+  }, [props.anchorMessageId, transitionEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
