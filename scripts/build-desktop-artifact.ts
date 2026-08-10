@@ -23,6 +23,7 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -145,6 +146,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
+  readonly resourceMonitorPrebuild: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -606,6 +608,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
+  readonly resourceMonitorPrebuild: string | undefined;
 }
 
 interface StagePackageJson {
@@ -1040,6 +1043,9 @@ const BuildEnvConfig = Config.all({
   // into the staged node-pty so the WSL backend ships a ready binary and never
   // compiles on the user's machine.
   wslPrebuild: Config.string("T3CODE_DESKTOP_WSL_PREBUILD").pipe(Config.option),
+  resourceMonitorPrebuild: Config.string("T3CODE_DESKTOP_RESOURCE_MONITOR_PREBUILD").pipe(
+    Config.option,
+  ),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1133,6 +1139,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslPrebuild =
     Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
+  const resourceMonitorPrebuild =
+    Option.getOrUndefined(input.resourceMonitorPrebuild) ??
+    Option.getOrUndefined(env.resourceMonitorPrebuild);
 
   return {
     platform,
@@ -1147,6 +1156,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
+    resourceMonitorPrebuild,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -1184,6 +1194,7 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   readonly platform: typeof BuildPlatform.Type;
   readonly arch: typeof BuildArch.Type;
   readonly verbose: boolean;
+  readonly prebuild: string | undefined;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1191,6 +1202,15 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   const executableName = resourceMonitorExecutableName(input.platform);
   const rustTargets = resolveResourceMonitorRustTargets(input.platform, input.arch);
   const builtBinaries: string[] = [];
+
+  if (input.prebuild) {
+    const destinationDirectory = path.join(input.stageResourcesDir, "resource-monitor");
+    const destinationPath = path.join(destinationDirectory, executableName);
+    yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+    yield* fs.copyFile(path.resolve(input.prebuild), destinationPath);
+    return;
+  }
 
   for (const rustTarget of rustTargets) {
     const spawnCommand = yield* resolveSpawnCommand("cargo", [
@@ -1777,6 +1797,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
+  const buildTime = DateTime.formatIso(yield* DateTime.now);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
     prefix: `t3code-desktop-${options.platform}-stage-`,
@@ -1797,6 +1818,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
+        env: {
+          ...process.env,
+          APP_VERSION: appVersion,
+          T3CODE_COMMIT_HASH: commitHash,
+          T3CODE_BUILD_TIME: buildTime,
+        },
         shell: spawnCommand.shell,
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
@@ -1843,6 +1870,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     platform: options.platform,
     arch: options.arch,
     verbose: options.verbose,
+    prebuild: options.resourceMonitorPrebuild,
   });
 
   yield* assertPlatformBuildResources(
@@ -2138,6 +2166,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   wslPrebuild: Flag.string("wsl-prebuild").pipe(
     Flag.withDescription(
       "Path to a prebuilt Linux node-pty (pty.node) for the target arch, staged for the WSL backend (env: T3CODE_DESKTOP_WSL_PREBUILD).",
+    ),
+    Flag.optional,
+  ),
+  resourceMonitorPrebuild: Flag.string("resource-monitor-prebuild").pipe(
+    Flag.withDescription(
+      "Path to a prebuilt resource monitor executable for the selected platform and architecture (env: T3CODE_DESKTOP_RESOURCE_MONITOR_PREBUILD).",
     ),
     Flag.optional,
   ),

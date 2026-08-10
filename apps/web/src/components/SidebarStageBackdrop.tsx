@@ -8,6 +8,19 @@ import { primaryServerConfigAtom } from "../state/server";
 export type SidebarStageBackdropVariant = "nightly" | "dev";
 export type EnvironmentIdentificationPillLabel = "Custom" | "Dev";
 
+export function formatBuildIdentityLabel(input: {
+  readonly stageLabel: EnvironmentIdentificationPillLabel;
+  readonly version: string;
+  readonly commitHash: string | null;
+  readonly buildTime: string | null;
+}): string {
+  const nightlyBuild = input.version.match(/-nightly\.\d{8}\.(\d+)$/)?.[1];
+  const versionLabel = nightlyBuild ? `n${nightlyBuild}` : input.version;
+  const commitLabel = input.commitHash?.slice(0, 8);
+  const dateLabel = input.buildTime?.slice(0, 10);
+  return [input.stageLabel, dateLabel, versionLabel, commitLabel].filter(Boolean).join(" · ");
+}
+
 // A wide viewBox keeps the 96-unit art height at a fixed scale while sidebar resizing reveals
 // more horizontal canvas instead of zooming the scene.
 const STAGE_BACKDROP_VIEW_BOX = "0 0 8192 96";

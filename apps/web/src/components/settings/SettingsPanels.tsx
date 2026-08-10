@@ -38,7 +38,13 @@ import { createModelSelection } from "@t3tools/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
-import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import {
+  APP_BUILD_TIME,
+  APP_COMMIT_HASH,
+  APP_VERSION,
+  HOSTED_APP_CHANNEL,
+  HOSTED_APP_CHANNEL_LABEL,
+} from "../../branding";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -213,6 +219,19 @@ function AboutVersionTitle() {
     <span className="inline-flex items-center gap-2">
       <span>Version</span>
       <code className="text-[11px] font-medium text-muted-foreground">{APP_VERSION}</code>
+      {APP_COMMIT_HASH ? (
+        <code
+          className="text-[11px] font-medium text-muted-foreground"
+          title={`Commit ${APP_COMMIT_HASH}`}
+        >
+          {APP_COMMIT_HASH.slice(0, 12)}
+        </code>
+      ) : null}
+      {APP_BUILD_TIME ? (
+        <time className="text-[11px] font-medium text-muted-foreground" dateTime={APP_BUILD_TIME}>
+          built {APP_BUILD_TIME}
+        </time>
+      ) : null}
     </span>
   );
 }

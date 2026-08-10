@@ -2,12 +2,24 @@ import { describe, expect, it } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  formatBuildIdentityLabel,
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
   StageBackdropArt,
 } from "./SidebarStageBackdrop";
 
 describe("SidebarStageBackdrop", () => {
+  it("formats an identifiable custom nightly build", () => {
+    expect(
+      formatBuildIdentityLabel({
+        stageLabel: "Custom",
+        version: "0.0.34-nightly.20260810.1059",
+        commitHash: "f0a8937d8d41cafe",
+        buildTime: "2026-08-10T17:20:31.000Z",
+      }),
+    ).toBe("Custom · 2026-08-10 · n1059 · f0a8937d");
+  });
+
   it("resolves stage artwork only when enabled", () => {
     expect(resolveSidebarStageBackdropVariant("Dev")).toBe("dev");
     expect(resolveSidebarStageBackdropVariant("Nightly")).toBe("nightly");
