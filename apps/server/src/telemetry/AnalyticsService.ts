@@ -18,7 +18,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import packageJson from "../../package.json" with { type: "json" };
+import { SERVER_VERSION } from "../buildVersion.ts";
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentifier } from "./Identify.ts";
 
@@ -119,7 +119,7 @@ export const make = Effect.gen(function* () {
           platform: hostPlatform,
           wsl: Option.getOrUndefined(telemetryConfig.wslDistroName),
           arch: hostArchitecture,
-          t3CodeVersion: packageJson.version,
+          t3CodeVersion: SERVER_VERSION,
           clientType,
         },
         timestamp: event.capturedAt,
