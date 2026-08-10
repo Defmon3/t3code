@@ -4,6 +4,41 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 // Inline Lucide-style icon paths (stroke-based, viewBox 0 0 24 24, strokeWidth 2).
 const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<string, string> }>> = {
+  "message-square-plus": [
+    { tag: "path", attrs: { d: "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h6" } },
+    { tag: "path", attrs: { d: "M19 3v6" } },
+    { tag: "path", attrs: { d: "M16 6h6" } },
+  ],
+  pin: [
+    { tag: "path", attrs: { d: "M12 17v5" } },
+    { tag: "path", attrs: { d: "M5 17h14" } },
+    { tag: "path", attrs: { d: "m15 3-1 5 4 4H6l4-4-1-5z" } },
+  ],
+  "pin-off": [
+    { tag: "path", attrs: { d: "m2 2 20 20" } },
+    { tag: "path", attrs: { d: "M12 17v5" } },
+    { tag: "path", attrs: { d: "M5 17h12" } },
+    { tag: "path", attrs: { d: "m9 3 1 5-1 1" } },
+    { tag: "path", attrs: { d: "m14 8 4 4h-4" } },
+  ],
+  "circle-check": [
+    { tag: "circle", attrs: { cx: "12", cy: "12", r: "9" } },
+    { tag: "path", attrs: { d: "m8 12 2.5 2.5L16 9" } },
+  ],
+  undo: [
+    { tag: "path", attrs: { d: "M9 14 4 9l5-5" } },
+    { tag: "path", attrs: { d: "M4 9h10a6 6 0 0 1 6 6v1" } },
+  ],
+  clock: [
+    { tag: "circle", attrs: { cx: "12", cy: "12", r: "9" } },
+    { tag: "path", attrs: { d: "M12 7v5l3 2" } },
+  ],
+  "alarm-clock": [
+    { tag: "circle", attrs: { cx: "12", cy: "13", r: "8" } },
+    { tag: "path", attrs: { d: "M12 9v4l2 2" } },
+    { tag: "path", attrs: { d: "m5 3-3 3" } },
+    { tag: "path", attrs: { d: "m19 3 3 3" } },
+  ],
   pencil: [
     {
       tag: "path",
@@ -16,6 +51,22 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
   copy: [
     { tag: "rect", attrs: { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2" } },
     { tag: "path", attrs: { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" } },
+  ],
+  sparkles: [
+    { tag: "path", attrs: { d: "m12 3-1.4 3.6L7 8l3.6 1.4L12 13l1.4-3.6L17 8l-3.6-1.4z" } },
+    { tag: "path", attrs: { d: "m19 14-.8 2.2L16 17l2.2.8L19 20l.8-2.2L22 17l-2.2-.8z" } },
+    { tag: "path", attrs: { d: "m5 14-.8 2.2L2 17l2.2.8L5 20l.8-2.2L8 17l-2.2-.8z" } },
+  ],
+  mail: [
+    { tag: "rect", attrs: { x: "3", y: "5", width: "18", height: "14", rx: "2" } },
+    { tag: "path", attrs: { d: "m3 7 9 6 9-6" } },
+  ],
+  "git-branch": [
+    { tag: "circle", attrs: { cx: "6", cy: "5", r: "2" } },
+    { tag: "circle", attrs: { cx: "6", cy: "19", r: "2" } },
+    { tag: "circle", attrs: { cx: "18", cy: "7", r: "2" } },
+    { tag: "path", attrs: { d: "M6 7v10" } },
+    { tag: "path", attrs: { d: "M8 17c5 0 8-3 8-8" } },
   ],
   "folder-tree": [
     {
@@ -55,9 +106,23 @@ function createIconElement(name: string, tone: "neutral" | "destructive"): SVGSV
   svg.setAttribute("stroke-width", "2");
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
+  const iconToneClass: Record<string, string> = {
+    "message-square-plus": "text-sky-400",
+    pin: "text-amber-400",
+    "pin-off": "text-amber-400",
+    "circle-check": "text-emerald-400",
+    undo: "text-emerald-400",
+    clock: "text-violet-400",
+    "alarm-clock": "text-violet-400",
+    sparkles: "text-fuchsia-400",
+    mail: "text-blue-400",
+    "git-branch": "text-teal-400",
+  };
   svg.setAttribute(
     "class",
-    tone === "destructive" ? "size-3.5 shrink-0" : "size-3.5 shrink-0 text-muted-foreground",
+    tone === "destructive"
+      ? "size-3.5 shrink-0"
+      : `size-3.5 shrink-0 ${iconToneClass[name] ?? "text-muted-foreground"}`,
   );
   for (const node of paths) {
     const child = document.createElementNS(SVG_NS, node.tag);

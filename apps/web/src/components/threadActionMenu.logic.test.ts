@@ -88,4 +88,20 @@ describe("buildThreadActionMenuItems", () => {
     );
     expect(archiveItem?.disabled).toBe(true);
   });
+
+  it("assigns distinct icons to the primary thread actions", () => {
+    const items = buildThreadActionMenuItems({ ...baseState, branch: "main" });
+    expect(Object.fromEntries(items.map((item) => [item.id, item.icon]))).toMatchObject({
+      "new-thread-on-branch": "message-square-plus",
+      pin: "pin",
+      settle: "circle-check",
+      snooze: "clock",
+      rename: "pencil",
+      "regenerate-title": "sparkles",
+      "mark-unread": "mail",
+      "copy-path": "copy",
+      "copy-branch": "git-branch",
+      delete: "trash",
+    });
+  });
 });
