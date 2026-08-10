@@ -9,7 +9,7 @@ import type * as Types from "effect/Types";
 import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import packageJson from "../../package.json" with { type: "json" };
+import { SERVER_VERSION } from "../buildVersion.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -218,7 +218,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
-  version: packageJson.version,
+  version: SERVER_VERSION,
   path: "/mcp",
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));

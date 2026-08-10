@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 
 import { HostProcessArguments } from "@t3tools/shared/hostProcess";
 
-import packageJson from "../../package.json" with { type: "json" };
+import { SERVER_VERSION } from "../buildVersion.ts";
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
@@ -70,6 +70,6 @@ export const resolveCliCommand = (subcommand: string) =>
     formatCliCommand({
       subcommand,
       entryPath: processArguments[1] ?? "",
-      version: packageJson.version,
+      version: SERVER_VERSION,
     }),
   );
