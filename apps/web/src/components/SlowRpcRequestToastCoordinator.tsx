@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { type SlowRpcAckRequest, useSlowRpcAckRequests } from "../rpc/requestLatencyState";
+import { useClientSettings } from "../hooks/useSettings";
 import { toastManager } from "./ui/toast";
 
 function describeSlowRequests(requests: ReadonlyArray<SlowRpcAckRequest>): string {
@@ -31,12 +32,20 @@ function SlowRequestDetails({ requests }: { requests: ReadonlyArray<SlowRpcAckRe
   );
 }
 
+export function shouldShowSlowRequestWarning(
+  enabled: boolean,
+  requests: ReadonlyArray<SlowRpcAckRequest>,
+): boolean {
+  return enabled && requests.length > 0;
+}
+
 export function SlowRpcRequestToastCoordinator() {
   const slowRequests = useSlowRpcAckRequests();
+  const showSlowRequestWarnings = useClientSettings((settings) => settings.showSlowRequestWarnings);
   const toastIdRef = useRef<ReturnType<typeof toastManager.add> | null>(null);
 
   useEffect(() => {
-    if (slowRequests.length === 0) {
+    if (!shouldShowSlowRequestWarning(showSlowRequestWarnings, slowRequests)) {
       if (toastIdRef.current !== null) {
         toastManager.close(toastIdRef.current);
         toastIdRef.current = null;
@@ -61,7 +70,7 @@ export function SlowRpcRequestToastCoordinator() {
     } else {
       toastManager.update(toastIdRef.current, nextToast);
     }
-  }, [slowRequests]);
+  }, [showSlowRequestWarnings, slowRequests]);
 
   useEffect(
     () => () => {
