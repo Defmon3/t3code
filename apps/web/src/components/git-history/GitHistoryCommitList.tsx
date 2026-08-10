@@ -209,7 +209,7 @@ export function CommitRow(props: {
       aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
     >
       <GraphCell graph={props.row.graph} laneCount={props.laneCount} selected={props.selected} />
-      <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 pr-3 text-[11px] @max-[720px]:grid-cols-[minmax(10rem,1fr)_8.5rem]">
+      <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] items-center gap-x-3 pr-3 text-[11px] @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
         <div className="min-w-0">
           <span
             className={cn(
@@ -248,8 +248,14 @@ export function CommitRow(props: {
         >
           {commit.authorName}
         </span>
-        <span className="truncate text-muted-foreground">
+        <span className="truncate text-muted-foreground @max-[720px]:hidden">
           {formatCommitDate(commit.authoredAt)}
+        </span>
+        <span
+          className="truncate font-mono text-[10px] text-sky-500/85 tabular-nums dark:text-sky-300/75"
+          title={commit.hash}
+        >
+          {commit.hash.slice(0, 8)}
         </span>
       </div>
     </button>
