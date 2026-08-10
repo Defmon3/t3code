@@ -1501,16 +1501,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
     transitionEndFollow({ type: "user-scroll-begin" });
   }, [clearUserScrollSettle, transitionEndFollow]);
-  const finishUserScroll = useCallback(() => {
-    clearUserScrollSettle();
-    const userScrollSessionActive = userScrollSessionRef.current;
-    userScrollSessionRef.current = false;
-    transitionEndFollow({
-      type: "user-scroll-end",
-      isAtEnd: props.listRef.current?.getState().isAtEnd ?? false,
-      userScrollSessionActive,
-    });
-  }, [clearUserScrollSettle, props.listRef, transitionEndFollow]);
+  const finishUserScroll = useCallback(
+    (releaseIsAtEnd?: boolean) => {
+      clearUserScrollSettle();
+      const userScrollSessionActive = userScrollSessionRef.current;
+      userScrollSessionRef.current = false;
+      transitionEndFollow({
+        type: "user-scroll-end",
+        // With no momentum, preserve the finger-release position. Streaming
+        // growth during the native momentum-detection window must not turn a
+        // release at the live edge into an opt-out from follow.
+        isAtEnd: releaseIsAtEnd ?? props.listRef.current?.getState().isAtEnd ?? false,
+        userScrollSessionActive,
+      });
+    },
+    [clearUserScrollSettle, props.listRef, transitionEndFollow],
+  );
   // Finger-lift velocity is not a reliable momentum signal: a gentle fling
   // can report zero and still decelerate. Give native momentum a short window
   // to announce itself; if it does, onMomentumScrollBegin cancels this fallback
@@ -1518,14 +1524,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // mirrors the native-event handoff used by the home thread list's scroll gate.
   const handleScrollEndDrag = useCallback(() => {
     clearUserScrollSettle();
-    userScrollSettleTimerRef.current = setTimeout(finishUserScroll, 160);
-  }, [clearUserScrollSettle, finishUserScroll]);
+    const releaseIsAtEnd = props.listRef.current?.getState().isAtEnd ?? false;
+    userScrollSettleTimerRef.current = setTimeout(() => finishUserScroll(releaseIsAtEnd), 160);
+  }, [clearUserScrollSettle, finishUserScroll, props.listRef]);
   const handleMomentumScrollBegin = useCallback(() => {
     if (userScrollSessionRef.current) {
       clearUserScrollSettle();
     }
   }, [clearUserScrollSettle]);
-  const handleMomentumScrollEnd = finishUserScroll;
+  const handleMomentumScrollEnd = useCallback(() => {
+    finishUserScroll();
+  }, [finishUserScroll]);
 
   useEffect(() => clearUserScrollSettle, [clearUserScrollSettle]);
 
