@@ -8,10 +8,12 @@ import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_VERSION } from "../../branding";
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
+  formatBuildIdentityLabel,
   resolveSidebarStageBackdropVariant,
   resolveSidebarStageFocusRingOffsetClass,
   SidebarStageBackdrop,
@@ -41,10 +43,19 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     stageLabel,
     environmentIdentificationMode === "artwork",
   );
+  const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel);
   const pillLabel =
-    environmentIdentificationMode === "pill"
-      ? resolveEnvironmentIdentificationPillLabel(stageLabel)
+    resolvedPillLabel === "Custom" || environmentIdentificationMode === "pill"
+      ? resolvedPillLabel
       : null;
+  const buildIdentityLabel = pillLabel
+    ? formatBuildIdentityLabel({
+        stageLabel: pillLabel,
+        version: APP_VERSION,
+        commitHash: APP_COMMIT_HASH,
+        buildTime: APP_BUILD_TIME,
+      })
+    : null;
 
   return (
     <SidebarHeader
@@ -63,14 +74,15 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         )}
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
-      {pillLabel ? (
+      {buildIdentityLabel ? (
         <Badge
-          className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+          className="relative z-10 ml-1 min-w-0 rounded-full px-1.5 text-muted-foreground"
           data-environment-identification="pill"
           size="sm"
+          title={`${pillLabel} build\nVersion ${APP_VERSION}${APP_BUILD_TIME ? `\nBuilt ${APP_BUILD_TIME}` : ""}${APP_COMMIT_HASH ? `\nCommit ${APP_COMMIT_HASH}` : ""}`}
           variant="secondary"
         >
-          {pillLabel}
+          <span className="truncate">{buildIdentityLabel}</span>
         </Badge>
       ) : null}
     </SidebarHeader>

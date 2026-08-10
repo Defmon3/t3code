@@ -14,6 +14,8 @@ interface ImportMetaEnv {
   readonly VITE_RELAY_OTLP_TRACES_DATASET: string;
   readonly VITE_RELAY_OTLP_TRACES_TOKEN: string;
   readonly APP_VERSION: string;
+  readonly T3CODE_COMMIT_HASH: string;
+  readonly T3CODE_BUILD_TIME: string;
 }
 
 interface ImportMeta {
