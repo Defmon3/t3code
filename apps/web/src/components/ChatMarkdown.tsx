@@ -38,7 +38,6 @@ import React, {
 } from "react";
 import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
 import ReactMarkdown from "react-markdown";
-import { defaultUrlTransform } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
@@ -73,6 +72,7 @@ import {
   serializeTableElementToMarkdown,
 } from "../markdown-clipboard";
 import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
+import { transformMarkdownUrl } from "../markdown-url-transform";
 import {
   normalizeMarkdownLinkDestination,
   resolveInlineCodeFileLinkMeta,
@@ -1376,9 +1376,12 @@ function ChatMarkdown({
     ];
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
-  const markdownUrlTransform = useCallback((href: string) => {
-    return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
-  }, []);
+  const markdownUrlTransform = useCallback(
+    (href: string) => {
+      return transformMarkdownUrl(href, cwd);
+    },
+    [cwd],
+  );
   // Re-emit highlighted content as markdown so copying out of the rendered
   // view keeps links, emphasis, lists, and code fences intact.
   const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
