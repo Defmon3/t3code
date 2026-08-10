@@ -191,6 +191,51 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
     );
   });
 
+  describe("resolveFile", () => {
+    it.effect(
+      "returns a workspace-relative path for a file addressed through a junction root",
+      () =>
+        Effect.gen(function* () {
+          const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const canonicalWorkspace = yield* makeTempDir;
+          const linkedWorkspace = yield* makeTempDir;
+          const targetPath = path.join(canonicalWorkspace, "link-tests", "test.md");
+          yield* writeTextFile(canonicalWorkspace, "link-tests/test.md", "# linked\n");
+          yield* fileSystem.remove(linkedWorkspace, { recursive: true });
+          yield* fileSystem.symlink(canonicalWorkspace, linkedWorkspace);
+
+          const result = yield* workspaceFileSystem.resolveFile({
+            cwd: linkedWorkspace,
+            path: targetPath,
+          });
+
+          expect(result).toEqual({ relativePath: "link-tests/test.md" });
+        }),
+    );
+
+    it.effect("rejects a symlinked target outside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        const outsideFile = path.join(outsideDir, "secret.txt");
+        yield* writeTextFile(outsideDir, "secret.txt", "outside\n");
+        const linkedPath = path.join(cwd, "linked-secret.txt");
+        yield* fileSystem.symlink(outsideFile, linkedPath);
+
+        const error = yield* workspaceFileSystem
+          .resolveFile({ cwd, path: linkedPath })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+      }),
+    );
+  });
+
   describe("writeFile", () => {
     it.effect("writes files relative to the workspace root", () =>
       Effect.gen(function* () {

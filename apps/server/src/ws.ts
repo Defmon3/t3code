@@ -37,6 +37,7 @@ import {
   type ProjectFileOperation,
   ProjectListEntriesError,
   ProjectReadFileError,
+  ProjectResolveFileError,
   ProjectSearchContentsError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
@@ -1716,6 +1717,21 @@ const makeWsRpcLayer = (
               Effect.mapError(
                 (cause) =>
                   new ProjectReadFileError({
+                    ...input,
+                    ...projectFileFailureContext(cause),
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsResolveFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsResolveFile,
+            workspaceFileSystem.resolveFile(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectResolveFileError({
                     ...input,
                     ...projectFileFailureContext(cause),
                     cause,
