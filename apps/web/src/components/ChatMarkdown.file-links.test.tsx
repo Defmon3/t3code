@@ -112,6 +112,7 @@ function renderChatMarkdownLink(
       text={`[Open the file](${path})`}
       cwd="G:/t3-code/t3code-terminal"
       threadRef={threadRef}
+      lineBreaks
     />,
   );
   expect(markup).toContain("chat-markdown-file-link");

@@ -205,6 +205,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkBreaks,
+  remarkPreserveWindowsFileLinks,
   remarkPreserveCodeMeta,
   remarkTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
