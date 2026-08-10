@@ -17,7 +17,7 @@ describe("SidebarStageBackdrop", () => {
         commitHash: "f0a8937d8d41cafe",
         buildTime: "2026-08-10T17:20:31.000Z",
       }),
-    ).toBe("Custom · 2026-08-10 · n1059 · f0a8937d");
+    ).toBe("Custom · 2026-08-10 17:20Z · n1059 · f0a8937d");
   });
 
   it("resolves stage artwork only when enabled", () => {
