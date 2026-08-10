@@ -440,11 +440,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               ) : null}
               <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/20 text-[10px] font-medium text-muted-foreground">
                 <div className="shrink-0" style={{ width: graphColumnWidth(laneCount) }} />
-                <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] gap-x-3 pr-3 @max-[720px]:grid-cols-[minmax(10rem,1fr)_8.5rem]">
+                <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] gap-x-3 pr-3 @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
                   <span>Subject</span>
                   <span className="@max-[720px]:hidden" />
                   <span className="@max-[720px]:hidden">Author</span>
-                  <span>Date</span>
+                  <span className="@max-[720px]:hidden">Date</span>
+                  <span>Hash</span>
                 </div>
               </div>
               <LegendList<GitHistoryRow>
