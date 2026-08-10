@@ -29,7 +29,7 @@ const historyState = vi.hoisted(() => ({
   refresh: vi.fn(),
   refs: [] as ReadonlyArray<VcsRef>,
   tags: [] as ReadonlyArray<VcsRef>,
-  status: { aheadCount: 0, behindCount: 0 },
+  status: { aheadCount: 0, behindCount: 0, branchCommitCount: 0 },
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -260,7 +260,7 @@ describe("GitHistoryPanel", () => {
     historyState.refresh.mockReset();
     historyState.refs = [];
     historyState.tags = [];
-    historyState.status = { aheadCount: 0, behindCount: 0 };
+    historyState.status = { aheadCount: 0, behindCount: 0, branchCommitCount: 0 };
   });
 
   it("renders populated history rows through the virtualized list", () => {
@@ -383,7 +383,7 @@ describe("GitHistoryPanel", () => {
     });
   });
 
-  it("filters, expands, and selects nested branches while showing current divergence", () => {
+  it("filters, expands, and selects nested branches while showing the branch commit count", () => {
     historyState.pages.set(
       undefined,
       page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
@@ -393,7 +393,7 @@ describe("GitHistoryPanel", () => {
       gitRef("feature/ui", { current: true }),
       gitRef("main"),
     ];
-    historyState.status = { aheadCount: 3, behindCount: 2 };
+    historyState.status = { aheadCount: 3, behindCount: 2, branchCommitCount: 10 };
 
     const initial = renderPanel();
     const initialPane = componentTree(initial, "GitRefsPane");
@@ -414,10 +414,7 @@ describe("GitHistoryPanel", () => {
     const uiBranch = visitElements(nestedTree, (element) => element.props.title === "feature/ui");
     expect(uiBranch).not.toBeNull();
     expect(
-      visitElements(nestedTree, (element) => element.props.title === "2 to pull"),
-    ).not.toBeNull();
-    expect(
-      visitElements(nestedTree, (element) => element.props.title === "3 to push"),
+      visitElements(nestedTree, (element) => element.props.title === "10 commits on this branch"),
     ).not.toBeNull();
     (uiBranch?.props.onClick as (() => void) | undefined)?.();
 
