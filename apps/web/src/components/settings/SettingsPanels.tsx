@@ -509,6 +509,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
+      ...(settings.showSlowRequestWarnings !== DEFAULT_UNIFIED_SETTINGS.showSlowRequestWarnings
+        ? ["Slow request warnings"]
+        : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -562,6 +565,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
+      settings.showSlowRequestWarnings,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
@@ -648,6 +652,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      showSlowRequestWarnings: DEFAULT_UNIFIED_SETTINGS.showSlowRequestWarnings,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -2014,6 +2019,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
               }
               aria-label="Check provider versions"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("slow-request-warnings")}
+          description="Show a warning when a server request takes unusually long. Turn this off for noisy test or development environments."
+          resetAction={
+            settings.showSlowRequestWarnings !==
+            DEFAULT_UNIFIED_SETTINGS.showSlowRequestWarnings ? (
+              <SettingResetButton
+                label="slow request warnings"
+                onClick={() =>
+                  updateSettings({
+                    showSlowRequestWarnings: DEFAULT_UNIFIED_SETTINGS.showSlowRequestWarnings,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.showSlowRequestWarnings}
+              onCheckedChange={(checked) =>
+                updateSettings({ showSlowRequestWarnings: Boolean(checked) })
+              }
+              aria-label="Show slow request warnings"
             />
           }
         />
