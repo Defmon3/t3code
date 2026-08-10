@@ -1,7 +1,11 @@
 export type ThreadFeedLiveFollowEvent =
   | { readonly type: "reset" }
   | { readonly type: "user-scroll-begin" }
-  | { readonly type: "user-scroll-end"; readonly isAtEnd: boolean }
+  | {
+      readonly type: "user-scroll-end";
+      readonly isAtEnd: boolean;
+      readonly userScrollSessionActive: boolean;
+    }
   | {
       readonly type: "scroll";
       readonly isAtEnd: boolean;
@@ -18,7 +22,7 @@ export function resolveThreadFeedLiveFollow(
     case "user-scroll-begin":
       return false;
     case "user-scroll-end":
-      return event.isAtEnd;
+      return event.userScrollSessionActive ? event.isAtEnd : current;
     case "scroll":
       if (event.userScrollSessionActive) {
         return false;

@@ -42,14 +42,26 @@ describe("resolveThreadFeedLiveFollow", () => {
       resolveThreadFeedLiveFollow(false, {
         type: "user-scroll-end",
         isAtEnd: true,
+        userScrollSessionActive: true,
       }),
     ).toBe(true);
     expect(
       resolveThreadFeedLiveFollow(false, {
         type: "user-scroll-end",
         isAtEnd: false,
+        userScrollSessionActive: true,
       }),
     ).toBe(false);
+  });
+
+  it("ignores momentum-end events from programmatic scrolling", () => {
+    expect(
+      resolveThreadFeedLiveFollow(true, {
+        type: "user-scroll-end",
+        isAtEnd: false,
+        userScrollSessionActive: false,
+      }),
+    ).toBe(true);
   });
 
   it("re-arms after an explicit reset", () => {

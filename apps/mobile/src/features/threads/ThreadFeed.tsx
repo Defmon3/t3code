@@ -1494,10 +1494,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     transitionEndFollow({ type: "user-scroll-begin" });
   }, [transitionEndFollow]);
   const finishUserScroll = useCallback(() => {
+    const userScrollSessionActive = userScrollSessionRef.current;
     userScrollSessionRef.current = false;
     transitionEndFollow({
       type: "user-scroll-end",
       isAtEnd: props.listRef.current?.getState().isAtEnd ?? false,
+      userScrollSessionActive,
     });
   }, [props.listRef, transitionEndFollow]);
   // The session must survive past finger-lift so momentum that carries the
