@@ -507,6 +507,18 @@ describe("GitHistoryPanel", () => {
     });
   });
 
+  it("shows the short commit hash in every history row", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const shortHash = visitElements(historyRow, (element) => element.props.children === "aaaaaaaa");
+
+    expect(shortHash).not.toBeNull();
+    expect(shortHash?.props.title).toBe(historyCommit.hash);
+  });
+
   it("opens a changed file diff from selected commit details", () => {
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
