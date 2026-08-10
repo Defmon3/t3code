@@ -1182,4 +1182,57 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
   });
+
+  it("replaces stale commentary with an explicit marker when tools outlive the final text", () => {
+    const turnId = "turn-without-final" as never;
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-waiting-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-waiting" as never,
+            role: "assistant",
+            text: "The verifier is still running.",
+            turnId,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "trailing-file-change-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:20Z",
+          entry: {
+            id: "trailing-file-change",
+            createdAt: "2026-01-01T00:00:20Z",
+            turnId,
+            label: "File change",
+            tone: "tool",
+          },
+        },
+      ],
+      latestTurn: {
+        turnId,
+        state: "completed",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:22Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["turn-fold", "turn-ended-without-response"]);
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        kind: "turn-ended-without-response",
+        turnId,
+        state: "completed",
+      }),
+    );
+  });
 });
