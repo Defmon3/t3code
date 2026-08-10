@@ -106,4 +106,12 @@ describe("buildThreadActionMenuItems", () => {
     );
     expect(archiveItem?.disabled).toBe(true);
   });
+
+  it("uses reverse-state icons for settled and snoozed threads", () => {
+    const items = buildThreadActionMenuItems({ ...baseState, isSettled: true, isSnoozed: true });
+    expect(Object.fromEntries(items.map((item) => [item.id, item.icon]))).toMatchObject({
+      unsettle: "undo",
+      unsnooze: "alarm-clock",
+    });
+  });
 });

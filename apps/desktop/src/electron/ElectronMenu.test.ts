@@ -7,9 +7,10 @@ import * as Option from "effect/Option";
 import type * as Electron from "electron";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { buildFromTemplateMock, createFromNamedImageMock, setApplicationMenuMock } = vi.hoisted(
+const { buildFromTemplateMock, createFromDataURLMock, createFromNamedImageMock, setApplicationMenuMock } = vi.hoisted(
   () => ({
     buildFromTemplateMock: vi.fn(),
+    createFromDataURLMock: vi.fn(() => ({ isEmpty: () => false, setTemplateImage: vi.fn() })),
     createFromNamedImageMock: vi.fn(),
     setApplicationMenuMock: vi.fn(),
   }),
@@ -21,6 +22,7 @@ vi.mock("electron", () => ({
     setApplicationMenu: setApplicationMenuMock,
   },
   nativeImage: {
+    createFromDataURL: createFromDataURLMock,
     createFromNamedImage: createFromNamedImageMock,
   },
 }));
@@ -40,6 +42,7 @@ const makeWindow = (zoomFactor = 1): Electron.BrowserWindow =>
 describe("ElectronMenu", () => {
   beforeEach(() => {
     buildFromTemplateMock.mockReset();
+    createFromDataURLMock.mockClear();
     createFromNamedImageMock.mockReset();
     setApplicationMenuMock.mockReset();
   });
@@ -145,6 +148,32 @@ describe("ElectronMenu", () => {
         ),
         ["Copy", "separator", "Archive", "Delete"],
       );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("renders distinct native icons for reverse lifecycle actions", () =>
+    Effect.gen(function* () {
+      buildFromTemplateMock.mockImplementation(() => ({
+        popup: (options: Electron.PopupOptions) => options.callback?.(),
+      }));
+
+      const electronMenu = yield* ElectronMenu.ElectronMenu;
+      yield* electronMenu.showContextMenu({
+        window: makeWindow(),
+        items: [
+          { id: "unsettle", label: "Un-settle thread", icon: "undo" },
+          { id: "unsnooze", label: "Wake thread", icon: "alarm-clock" },
+        ],
+        position: Option.none(),
+      });
+
+      const generatedIcons = createFromDataURLMock.mock.calls.map(([dataUrl]) =>
+        Buffer.from((dataUrl as string).split(",")[1]!, "base64").toString(),
+      );
+      assert.isTrue(generatedIcons.some((svg) => svg.includes("M9 14 4 9l5-5")));
+      assert.isTrue(generatedIcons.some((svg) => svg.includes("m5 3-3 3")));
+      assert.isDefined(buildFromTemplateMock.mock.calls[0]?.[0][0]?.icon);
+      assert.isDefined(buildFromTemplateMock.mock.calls[0]?.[0][1]?.icon);
     }).pipe(Effect.provide(TestLayer)),
   );
 

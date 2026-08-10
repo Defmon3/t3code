@@ -79,6 +79,7 @@ function normalizeContextMenuItems(source: readonly ContextMenuItem[]): ContextM
       destructive: sourceItem.destructive === true,
       disabled: sourceItem.disabled === true,
       ...(sourceItem.separatorBefore === true ? { separatorBefore: true } : {}),
+      ...(sourceItem.icon ? { icon: sourceItem.icon } : {}),
     };
 
     if (sourceItem.children) {
@@ -113,6 +114,42 @@ const normalizePosition = (
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
   let destructiveMenuIconCache: Option.Option<Electron.NativeImage> | undefined;
+  const menuIconCache = new Map<string, Option.Option<Electron.NativeImage>>();
+
+  const menuIconDefinitions: Record<string, { readonly color: string; readonly body: string }> = {
+    "circle-check": {
+      color: "#22c55e",
+      body: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',
+    },
+    undo: {
+      color: "#22c55e",
+      body: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v1"/>',
+    },
+    clock: {
+      color: "#a78bfa",
+      body: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    },
+    "alarm-clock": {
+      color: "#a78bfa",
+      body: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="m5 3-3 3"/><path d="m19 3 3 3"/>',
+    },
+  };
+
+  const getMenuIcon = (name: string): Option.Option<Electron.NativeImage> => {
+    const cached = menuIconCache.get(name);
+    if (cached !== undefined) return cached;
+    const definition = menuIconDefinitions[name];
+    if (!definition) return Option.none();
+    const color = platform === "darwin" ? "#000000" : definition.color;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${definition.body}</svg>`;
+    const icon = Electron.nativeImage.createFromDataURL(
+      `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    );
+    if (platform === "darwin") icon.setTemplateImage(true);
+    const result = icon.isEmpty() ? Option.none() : Option.some(icon);
+    menuIconCache.set(name, result);
+    return result;
+  };
 
   const getDestructiveMenuIcon = (): Option.Option<Electron.NativeImage> => {
     if (platform !== "darwin") {
@@ -171,6 +208,10 @@ export const make = Effect.gen(function* () {
         itemOption.submenu = buildTemplate(item.children, complete);
       } else {
         itemOption.click = () => complete(Option.some(item.id));
+      }
+      if (item.icon) {
+        const icon = getMenuIcon(item.icon);
+        if (Option.isSome(icon)) itemOption.icon = icon.value;
       }
       if (item.destructive && (!item.children || item.children.length === 0)) {
         const destructiveIcon = getDestructiveMenuIcon();
