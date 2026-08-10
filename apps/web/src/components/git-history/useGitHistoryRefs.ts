@@ -67,8 +67,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   }, [cwd, environmentId]);
 
   return {
-    currentAheadCount: statusQuery.data?.aheadCount ?? 0,
-    currentBehindCount: statusQuery.data?.behindCount ?? 0,
+    currentBranchCommitCount: statusQuery.data?.branchCommitCount ?? 0,
     currentRef,
     expandedRefKeys,
     hasMoreRefs:

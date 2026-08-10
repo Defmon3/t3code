@@ -73,6 +73,7 @@ export interface GitStatusDetails {
   hasUpstream: boolean;
   aheadCount: number;
   behindCount: number;
+  branchCommitCount?: number;
   aheadOfDefaultCount: number;
 }
 
@@ -84,6 +85,7 @@ export interface GitRemoteStatusDetails {
   hasUpstream: boolean;
   aheadCount: number;
   behindCount: number;
+  branchCommitCount?: number;
   aheadOfDefaultCount: number;
 }
 

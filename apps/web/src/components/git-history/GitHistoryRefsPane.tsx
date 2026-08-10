@@ -1,6 +1,5 @@
 import type { VcsRef } from "@t3tools/contracts";
 import {
-  ArrowDownIcon,
   ArrowUpIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -75,26 +74,15 @@ function RefTree(props: RefTreeProps) {
           <GitBranchIcon className={cn("size-3 shrink-0", node.ref.current && "text-primary")} />
         )}
         <span className="truncate">{node.name}</span>
-        {node.ref.current ? (
+        {node.ref.current && props.currentBranchCommitCount > 0 ? (
           <span className="ml-auto flex shrink-0 items-center gap-1 text-[9px]">
-            {props.currentBehindCount > 0 ? (
-              <span
-                className="flex items-center text-sky-400"
-                title={`${props.currentBehindCount} to pull`}
-              >
-                <ArrowDownIcon className="size-2.5" />
-                {props.currentBehindCount}
-              </span>
-            ) : null}
-            {props.currentAheadCount > 0 ? (
-              <span
-                className="flex items-center text-emerald-400"
-                title={`${props.currentAheadCount} to push`}
-              >
-                <ArrowUpIcon className="size-2.5" />
-                {props.currentAheadCount}
-              </span>
-            ) : null}
+            <span
+              className="flex items-center text-emerald-400"
+              title={`${props.currentBranchCommitCount} commits on this branch`}
+            >
+              <ArrowUpIcon className="size-2.5" />
+              {props.currentBranchCommitCount}
+            </span>
           </span>
         ) : null}
       </button>
