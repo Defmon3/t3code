@@ -22,7 +22,15 @@ vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({ availableEditors: 
 
 vi.mock("../state/assets", () => ({ assetEnvironment: { createUrl: "asset-url" } }));
 
-vi.mock("../state/entities", () => ({ useActiveEnvironmentId: () => "active-environment" }));
+vi.mock("../state/entities", () => ({
+  useActiveEnvironmentId: () => "active-environment",
+  useProjects: () => [],
+  useServerConfigs: () => new Map(),
+}));
+
+vi.mock("../state/environments", () => ({ usePrimaryEnvironmentId: () => null }));
+
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: "preview-open" } }));
 
