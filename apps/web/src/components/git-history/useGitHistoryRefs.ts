@@ -29,8 +29,15 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   );
   const mergedRefs = refs.refs;
   const tagRefs = tags.refs;
-  const localRefs = mergedRefs.filter((ref) => !ref.isRemote && !ref.isTag);
-  const remoteRefs = mergedRefs.filter((ref) => ref.isRemote);
+  const { localRefs, remoteRefs } = useMemo(() => {
+    const local: VcsRef[] = [];
+    const remote: VcsRef[] = [];
+    for (const ref of mergedRefs) {
+      if (ref.isRemote) remote.push(ref);
+      else if (!ref.isTag) local.push(ref);
+    }
+    return { localRefs: local, remoteRefs: remote };
+  }, [mergedRefs]);
   const localRefTree = useMemo(
     () => filterGitRefTree(buildGitRefTree(localRefs), normalizedRefFilter),
     [localRefs, normalizedRefFilter],
@@ -43,7 +50,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
     () => filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter),
     [normalizedRefFilter, tagRefs],
   );
-  const currentRef = localRefs.find((ref) => ref.current) ?? null;
+  const currentRef = useMemo(() => localRefs.find((ref) => ref.current) ?? null, [localRefs]);
   const selectedRevision =
     selectedRevisionState === undefined
       ? currentRef === null
@@ -84,6 +91,10 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
     onLoadMoreRefs: () => {
       refs.loadNext();
       tags.loadNext();
+    },
+    refreshRefs: () => {
+      refs.refresh();
+      tags.refresh();
     },
     onRetryRefs: () => {
       if (refs.error) refs.retry();
