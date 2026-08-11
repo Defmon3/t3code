@@ -36,6 +36,14 @@ describe("rewriteMarkdownFileUriHref", () => {
 });
 
 describe("resolveMarkdownFileLinkTarget", () => {
+  it("resolves windows drive paths", () => {
+    expect(
+      resolveMarkdownFileLinkTarget(
+        "C:/Users/mike/dev-stuff/t3code/apps/web/src/markdown-links.ts",
+      ),
+    ).toBe("C:/Users/mike/dev-stuff/t3code/apps/web/src/markdown-links.ts");
+  });
+
   it("resolves absolute posix file paths", () => {
     expect(resolveMarkdownFileLinkTarget("/Users/julius/project/AGENTS.md")).toBe(
       "/Users/julius/project/AGENTS.md",

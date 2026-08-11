@@ -108,6 +108,34 @@ export function rewriteMarkdownFileUriHref(href: string | undefined): string | n
   return `${target.path}${target.hash}`;
 }
 
+interface MarkdownLinkNode {
+  type?: string;
+  url?: unknown;
+  children?: MarkdownLinkNode[];
+}
+
+/**
+ * rehype-sanitize reads the drive letter in `C:/path` as a URL scheme and
+ * removes the href before react-markdown's URL transform can normalize it.
+ * Convert only Windows drive-path destinations into the already-allowed file
+ * URI form while the document is still mdast.
+ */
+export function remarkRewriteWindowsFileLinks() {
+  return (tree: MarkdownLinkNode) => {
+    const visit = (node: MarkdownLinkNode) => {
+      if ((node.type === "link" || node.type === "definition") && typeof node.url === "string") {
+        const normalizedUrl = normalizeMarkdownLinkDestination(node.url);
+        if (WINDOWS_DRIVE_PATH_PATTERN.test(normalizedUrl)) {
+          node.url = `file:///${normalizedUrl.replaceAll("\\", "/")}`;
+        }
+      }
+      node.children?.forEach(visit);
+    };
+
+    visit(tree);
+  };
+}
+
 function looksLikePosixFilesystemPath(path: string): boolean {
   if (!path.startsWith("/")) return false;
   if (POSIX_FILE_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
