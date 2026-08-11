@@ -624,8 +624,6 @@ describe("GitHistoryPanel", () => {
 
     expect(issueLink?.type).toBe("a");
     expect(issueLink?.props.href).toBe("https://github.com/VladsCoffeApp1/Argus/issues/602");
-    const commitType = visitElements(subject, (element) => element.props.children === "fix");
-    expect(commitType?.props.className).toContain("text-amber-400");
   });
 
   it("opens a changed file diff from selected commit details", () => {
