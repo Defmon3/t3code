@@ -497,6 +497,32 @@ export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyle
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
+export const MIN_PROVIDER_SESSION_INACTIVITY_THRESHOLD = Duration.minutes(1);
+export const MAX_PROVIDER_SESSION_INACTIVITY_THRESHOLD = Duration.hours(24);
+export const DEFAULT_PROVIDER_SESSION_INACTIVITY_THRESHOLD = Duration.minutes(30);
+export const MIN_PROVIDER_SESSION_SWEEP_INTERVAL = Duration.seconds(15);
+export const MAX_PROVIDER_SESSION_SWEEP_INTERVAL = Duration.hours(1);
+export const DEFAULT_PROVIDER_SESSION_SWEEP_INTERVAL = Duration.minutes(5);
+
+const ProviderSessionInactivityThreshold = Schema.DurationFromMillis.check(
+  Schema.makeFilter(
+    Duration.between({
+      minimum: MIN_PROVIDER_SESSION_INACTIVITY_THRESHOLD,
+      maximum: MAX_PROVIDER_SESSION_INACTIVITY_THRESHOLD,
+    }),
+    { expected: "an inactivity threshold between 1 minute and 24 hours" },
+  ),
+);
+
+const ProviderSessionSweepInterval = Schema.DurationFromMillis.check(
+  Schema.makeFilter(
+    Duration.between({
+      minimum: MIN_PROVIDER_SESSION_SWEEP_INTERVAL,
+      maximum: MAX_PROVIDER_SESSION_SWEEP_INTERVAL,
+    }),
+    { expected: "a sweep interval between 15 seconds and 1 hour" },
+  ),
+);
 
 export const BackgroundActivityProfile = Schema.Literals([
   "balanced",
@@ -546,6 +572,16 @@ export const ServerSettings = Schema.Struct({
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
+  providerSessionInactivityThreshold: ProviderSessionInactivityThreshold.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(Duration.toMillis(DEFAULT_PROVIDER_SESSION_INACTIVITY_THRESHOLD)),
+    ),
+  ),
+  providerSessionSweepInterval: ProviderSessionSweepInterval.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(Duration.toMillis(DEFAULT_PROVIDER_SESSION_SWEEP_INTERVAL)),
+    ),
+  ),
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
@@ -718,6 +754,8 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
+  providerSessionInactivityThreshold: Schema.optionalKey(ProviderSessionInactivityThreshold),
+  providerSessionSweepInterval: Schema.optionalKey(ProviderSessionSweepInterval),
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
