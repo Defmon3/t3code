@@ -65,6 +65,19 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
+  it("requests callbacks for T3 hooks without reducing full-access sandboxing", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        interceptApprovals: true,
+      }),
+    );
+
+    NodeAssert.equal(params.approvalPolicy, "untrusted");
+    NodeAssert.deepStrictEqual(params.sandboxPolicy, { type: "dangerFullAccess" });
+  });
+
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";
     const error = Effect.runSync(

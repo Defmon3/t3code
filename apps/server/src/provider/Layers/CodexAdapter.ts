@@ -42,6 +42,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import type { T3HookRunner } from "../../hooks/T3HookRunner.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -85,6 +86,7 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly hookRunner?: T3HookRunner["Service"];
 }
 
 interface CodexAdapterSessionContext {
@@ -1663,10 +1665,24 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const cwd = input.cwd ?? process.cwd();
+        const hookPlan =
+          input.runtimeMode === "full-access" && options?.hookRunner
+            ? yield* options.hookRunner.prepare(cwd).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterValidationError({
+                      provider: PROVIDER,
+                      operation: "startSession",
+                      issue: `Unable to load T3 hooks: ${String(cause)}`,
+                    }),
+                ),
+              )
+            : undefined;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
-          cwd: input.cwd ?? process.cwd(),
+          cwd,
           binaryPath: codexConfig.binaryPath,
           launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
           ...(options?.environment ? { environment: options.environment } : {}),
@@ -1679,6 +1695,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { model: input.modelSelection.model }
             : {}),
           ...(serviceTier ? { serviceTier } : {}),
+          ...(hookPlan ? { hookPlan } : {}),
           ...(mcpSession
             ? {
                 environment: {
