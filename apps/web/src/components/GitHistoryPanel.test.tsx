@@ -312,6 +312,47 @@ describe("GitHistoryPanel", () => {
     expect(filtered.props.data.map((row) => row.commit.subject)).toEqual(["Prepare release"]);
   });
 
+  it("clears a hash search from the clear button or Escape key", () => {
+    historyState.pages.set(
+      undefined,
+      page([
+        commit("0acf007c21111111111111111111111111111111", "Matching commit"),
+        commit("bbbbbbbb22222222222222222222222222222222", "Other commit"),
+      ]),
+    );
+
+    const search = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    const changeSearch = search?.props.onChange as
+      | ((event: { readonly target: { readonly value: string } }) => void)
+      | undefined;
+    changeSearch?.({ target: { value: "0acf007c2" } });
+    expect(historyList(renderPanel()).props.data).toHaveLength(1);
+
+    const clear = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Clear Git history search",
+    );
+    (clear?.props.onClick as (() => void) | undefined)?.();
+    expect(historyList(renderPanel()).props.data).toHaveLength(2);
+
+    changeSearch?.({ target: { value: "0acf007c2" } });
+    const filteredSearch = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    const preventDefault = vi.fn();
+    (
+      filteredSearch?.props.onKeyDown as
+        | ((event: { readonly key: string; readonly preventDefault: () => void }) => void)
+        | undefined
+    )?.({ key: "Escape", preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(historyList(renderPanel()).props.data).toHaveLength(2);
+  });
+
   it("rebuilds the graph from the text-filtered commits", () => {
     historyState.pages.set(
       undefined,
