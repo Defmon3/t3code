@@ -4733,7 +4733,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 
-  it.effect("routes websocket rpc projects.listEntries and projects.readFile", () =>
+  it.effect("routes websocket rpc projects.listEntries, projects.readFile, and projects.resolveFile", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -4755,17 +4755,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               cwd: workspaceDir,
               relativePath: "src/index.ts",
             }),
+            resolved: client[WS_METHODS.projectsResolveFile]({
+              cwd: workspaceDir,
+              path: path.join(workspaceDir, "src", "index.ts"),
+            }),
           }),
         ),
       );
 
       assert.isTrue(response.listing.entries.some((entry) => entry.path === "src/index.ts"));
-      assert.deepEqual(response.file, {
+        assert.deepEqual(response.file, {
         relativePath: "src/index.ts",
         contents: "export const answer = 42;\n",
         byteLength: 26,
-        truncated: false,
-      });
+          truncated: false,
+        });
+        assert.deepEqual(response.resolved, { relativePath: "src/index.ts" });
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 

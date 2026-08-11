@@ -88,6 +88,7 @@ import { serverEnvironment } from "../state/server";
 import { assetEnvironment } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
 import { previewEnvironment } from "../state/preview";
+import { projectEnvironment } from "../state/projects";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
@@ -791,7 +792,10 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
-  onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
+  resolveWorkspaceRelativePath?: (() => Promise<string | null>) | undefined;
+  onOpenInBrowser?:
+    | ((relativePath: string) => Promise<AtomCommandResult<unknown, unknown>>)
+    | undefined;
   className?: string | undefined;
 }
 
@@ -1081,7 +1085,7 @@ function MarkdownExternalLinkContent({
   );
 }
 
-const MarkdownFileLink = memo(function MarkdownFileLink({
+export const MarkdownFileLink = memo(function MarkdownFileLink({
   href,
   targetPath,
   iconPath,
@@ -1093,6 +1097,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   theme,
   threadRef,
   onOpen,
+  resolveWorkspaceRelativePath,
   onOpenInBrowser,
   className,
 }: MarkdownFileLinkProps) {
@@ -1132,12 +1137,22 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   }, [onOpen, targetPath]);
 
   const handleOpenInFilePreview = useCallback(() => {
-    if (!threadRef || !workspaceRelativePath) {
-      handleOpenInEditor();
-      return;
-    }
-    useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
-  }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
+    void (async () => {
+      const relativePath =
+        workspaceRelativePath ?? (await resolveWorkspaceRelativePath?.()) ?? null;
+      if (!threadRef || !relativePath) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file",
+            description: "The file is outside this project or is no longer available.",
+          }),
+        );
+        return;
+      }
+      useRightPanelStore.getState().openFile(threadRef, relativePath, line);
+    })();
+  }, [line, resolveWorkspaceRelativePath, threadRef, workspaceRelativePath]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!onOpenInBrowser) {
@@ -1145,7 +1160,19 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     void (async () => {
       try {
-        const result = await onOpenInBrowser();
+        const relativePath =
+          workspaceRelativePath ?? (await resolveWorkspaceRelativePath?.()) ?? null;
+        if (!relativePath) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Unable to open file in browser",
+              description: "The file is outside this project or is no longer available.",
+            }),
+          );
+          return;
+        }
+        const result = await onOpenInBrowser(relativePath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1175,7 +1202,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpenInBrowser, targetPath]);
+  }, [onOpenInBrowser, resolveWorkspaceRelativePath, targetPath, workspaceRelativePath]);
 
   const handleCopy = useCallback(
     (value: string, title: string) => {
@@ -1313,6 +1340,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
+    previous.resolveWorkspaceRelativePath === next.resolveWorkspaceRelativePath &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
   );
@@ -1336,11 +1364,26 @@ function ChatMarkdown({
     reportFailure: false,
   });
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
-  const environmentId = useActiveEnvironmentId();
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const fileLinkEnvironmentId = threadRef?.environmentId ?? activeEnvironmentId;
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(fileLinkEnvironmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
-    environmentId,
+    fileLinkEnvironmentId,
     serverConfig?.availableEditors ?? [],
+  );
+  const resolveProjectFile = useAtomQueryRunner(projectEnvironment.resolveFile, {
+    reportFailure: false,
+  });
+  const resolveMarkdownFileWorkspaceRelativePath = useCallback(
+    async (filePath: string): Promise<string | null> => {
+      if (!threadRef || !cwd) return null;
+      const result = await resolveProjectFile({
+        environmentId: threadRef.environmentId,
+        input: { cwd, path: filePath },
+      });
+      return result._tag === "Success" ? result.value.relativePath : null;
+    },
+    [cwd, resolveProjectFile, threadRef],
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
@@ -1467,11 +1510,14 @@ function ChatMarkdown({
           theme={resolvedTheme}
           threadRef={threadRef}
           onOpen={openInPreferredEditor}
+          resolveWorkspaceRelativePath={() =>
+            resolveMarkdownFileWorkspaceRelativePath(fileLinkMeta.filePath)
+          }
           onOpenInBrowser={
             threadRef &&
             isPreviewSupportedInRuntime() &&
             isBrowserPreviewFile(fileLinkMeta.filePath)
-              ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+              ? openMarkdownFileInPreview
               : undefined
           }
           className={className}
@@ -1686,6 +1732,7 @@ function ChatMarkdown({
     markdownFileLinkMetaByHref,
     onTaskListChange,
     openInPreferredEditor,
+    resolveMarkdownFileWorkspaceRelativePath,
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
     resolvedTheme,
