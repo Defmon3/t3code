@@ -20,6 +20,7 @@ export type ThreadActionMenuId =
   | "mark-unread"
   | "copy-path"
   | "copy-branch"
+  | "copy-thread-id"
   | "delete";
 
 export interface ThreadActionMenuState {
@@ -105,6 +106,7 @@ export function buildThreadActionMenuItems(
     ...(state.branch
       ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "git-branch" }]
       : []),
+    { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }
