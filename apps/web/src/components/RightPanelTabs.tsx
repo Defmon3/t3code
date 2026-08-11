@@ -90,6 +90,7 @@ const SURFACE_DISABLED_REASONS = {
   gitHistory: "Git History is only available when a Git repository is open.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
+  gitHistory: "Git History is only available when a Git repository is open.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -192,6 +193,15 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
       onClick: props.onAddPullRequest,
+      badgeCount: 0,
+    },
+    {
+      label: "Git History",
+      description: "Browse commits in this repository.",
+      icon: GitGraph,
+      available: props.gitHistoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
+      onClick: props.onAddGitHistory,
       badgeCount: 0,
     },
     {
@@ -595,6 +605,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   >
                     <GitPullRequest />
                     Pull request
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.gitHistoryAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.gitHistory}
+                    onClick={props.onAddGitHistory}
+                  >
+                    <GitGraph />
+                    Git History
                   </SurfaceMenuItem>
                   <SurfaceMenuItem
                     available={props.agentsAvailable}

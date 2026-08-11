@@ -298,7 +298,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             <span className="truncate">{selectedRevision?.label ?? "All refs"}</span>
           </Badge>
           {history.length > 0 ? (
-            <span className="hidden text-[11px] tabular-nums text-muted-foreground min-[440px]:inline">
+            <span className="hidden text-[0.6875rem] tabular-nums text-muted-foreground min-[440px]:inline">
               {history.length} commits
             </span>
           ) : null}
@@ -423,7 +423,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   ref={searchInputRef}
-                  className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-[11px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+                  className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-[0.6875rem] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
                   onKeyDown={(event) => {
@@ -451,14 +451,14 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                 ) : null}
               </div>
               {error ? (
-                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive">
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[0.6875rem] text-destructive">
                   <span className="truncate">{error}</span>
                   <Button size="xs" variant="ghost" className="shrink-0" onClick={refresh}>
                     Retry
                   </Button>
                 </div>
               ) : null}
-              <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/20 text-[10px] font-medium text-muted-foreground">
+              <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/20 text-[0.625rem] font-medium text-muted-foreground">
                 <div className="shrink-0" style={{ width: graphColumnWidth(laneCount) }} />
                 <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] gap-x-3 pr-3 @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
                   <span>Subject</span>
