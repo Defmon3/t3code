@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  normalizeMarkdownLinkDestination,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   resolveMarkdownFileLinkTarget,
   rewriteMarkdownFileUriHref,
 } from "./markdown-links";
+
+describe("normalizeMarkdownLinkDestination", () => {
+  it("canonicalizes backslashes in windows drive paths", () => {
+    expect(
+      normalizeMarkdownLinkDestination(
+        "C:\\Users\\mike\\dev-stuff\\t3code\\apps\\web\\src\\markdown-links.ts",
+      ),
+    ).toBe("C:/Users/mike/dev-stuff/t3code/apps/web/src/markdown-links.ts");
+  });
+});
 
 describe("rewriteMarkdownFileUriHref", () => {
   it("rewrites file uri hrefs into direct path hrefs", () => {

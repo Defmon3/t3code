@@ -34,6 +34,14 @@ describe("Windows markdown file link rendering", () => {
     );
   });
 
+  it("canonicalizes a backslash drive-path href through HTML sanitization", () => {
+    const path = "C:\\Users\\mike\\dev-stuff\\t3code\\apps\\web\\src\\markdown-links.ts";
+
+    expect(renderMarkdown(`[markdown-links.ts](${path}) is open above.`)).toContain(
+      '<a href="C:/Users/mike/dev-stuff/t3code/apps/web/src/markdown-links.ts">markdown-links.ts</a>',
+    );
+  });
+
   it("still removes unsafe schemes", () => {
     expect(renderMarkdown("[unsafe](javascript:alert(1))")).not.toContain("href=");
   });
