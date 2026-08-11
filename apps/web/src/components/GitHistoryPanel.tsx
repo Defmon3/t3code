@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, GitHistoryCommit } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import { FileIcon, GitBranchIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
@@ -47,6 +48,16 @@ const MAX_HISTORY_PAGES = 10;
 const INITIAL_CURSORS = [undefined] as const;
 const WIDE_HISTORY_LAYOUT_MIN_WIDTH = 1120;
 
+function isHistorySnapshotExpired(cause: Cause.Cause<unknown>): boolean {
+  const error = Option.getOrNull(Cause.findErrorOption(cause));
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    error._tag === "VcsSnapshotExpiredError"
+  );
+}
+
 interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
@@ -85,7 +96,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
-    cursors: ReadonlyArray<number | undefined>;
+    cursors: ReadonlyArray<string | undefined>;
   }>({ targetKey, cursors: INITIAL_CURSORS });
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_CURSORS;
   const pageAtoms = useMemo(
@@ -118,6 +129,18 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   });
   const failed = results.find((result) => result._tag === "Failure");
   const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
+  const recoveredSnapshotTarget = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      failed?._tag === "Failure" &&
+      isHistorySnapshotExpired(failed.cause) &&
+      recoveredSnapshotTarget.current !== targetKey
+    ) {
+      recoveredSnapshotTarget.current = targetKey;
+      setPagination({ targetKey, cursors: INITIAL_CURSORS });
+      setHistoryQueryGeneration((generation) => generation + 1);
+    }
+  }, [failed, targetKey]);
   const isPending = results.some((result) => result.waiting);
   const isInitialLoad = values.length === 0 && isPending;
   const history = useMemo(() => {
