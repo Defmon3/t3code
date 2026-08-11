@@ -205,11 +205,13 @@ function gitRef(
   };
 }
 
-function renderPanel(): ReactElement<Record<string, unknown>> {
+function renderPanel(issueUrlPrefix?: string): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
-  return GitHistoryPanel({ environmentId, cwd: "C:/workspace" }) as ReactElement<
-    Record<string, unknown>
-  >;
+  return GitHistoryPanel({
+    environmentId,
+    cwd: "C:/workspace",
+    ...(issueUrlPrefix ? { issueUrlPrefix } : {}),
+  }) as ReactElement<Record<string, unknown>>;
 }
 
 function historyList(panel: ReactElement<Record<string, unknown>>) {
@@ -606,6 +608,24 @@ describe("GitHistoryPanel", () => {
     expect(shortHash).not.toBeNull();
     expect(shortHash?.props.title).toBe(`Copy full commit hash ${historyCommit.hash}`);
     expect(shortHash?.props["aria-label"]).toBe(`Copy commit hash ${historyCommit.hash}`);
+  });
+
+  it("links issue references to the active GitHub repository", () => {
+    const historyCommit = commit(
+      "aaaaaaaa11111111111111111111111111111111",
+      "fix(repository): view (#602)",
+    );
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel("https://github.com/VladsCoffeApp1/Argus/issues/"));
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const subject = componentTree(historyRow, "CommitSubject");
+    const issueLink = visitElements(subject, (element) => element.props.children === "#602");
+
+    expect(issueLink?.type).toBe("a");
+    expect(issueLink?.props.href).toBe("https://github.com/VladsCoffeApp1/Argus/issues/602");
+    const commitType = visitElements(subject, (element) => element.props.children === "fix");
+    expect(commitType?.props.className).toContain("text-amber-400");
   });
 
   it("opens a changed file diff from selected commit details", () => {

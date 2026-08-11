@@ -127,6 +127,50 @@ export function firstParentHashes(
   return hashes;
 }
 
+function CommitSubject({ subject, issueUrlPrefix }: { subject: string; issueUrlPrefix?: string }) {
+  const parts = subject.split(/(#[0-9]+)/g);
+  return parts.map((part, index) => {
+    if (!/^#[0-9]+$/.test(part)) {
+      if (index !== 0) return part;
+      const typeMatch = /^(feat|fix|chore)(?=(?:\([^)]*\))?!?:)/i.exec(part);
+      if (!typeMatch) return part;
+      const type = typeMatch[1]?.toLowerCase();
+      return (
+        <span key={`type:${type}`}>
+          <span
+            className={cn(
+              "font-semibold",
+              type === "feat" && "text-emerald-400",
+              type === "fix" && "text-amber-400",
+              type === "chore" && "text-sky-400",
+            )}
+          >
+            {part.slice(0, typeMatch[0].length)}
+          </span>
+          {part.slice(typeMatch[0].length)}
+        </span>
+      );
+    }
+    const className = "font-semibold text-violet-400 hover:text-violet-300 hover:underline";
+    return issueUrlPrefix ? (
+      <a
+        key={`${part}:${index}`}
+        className={`${className} pointer-events-auto`}
+        href={`${issueUrlPrefix}${part.slice(1)}`}
+        target="_blank"
+        rel="noreferrer"
+        title={`Open ${part} on GitHub`}
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={`${part}:${index}`} className={className}>
+        {part}
+      </span>
+    );
+  });
+}
+
 function GraphCell(props: {
   graph: GitHistoryGraphRow;
   laneCount: number;
@@ -211,6 +255,7 @@ export function CommitRow(props: {
   row: GitHistoryRow;
   laneCount: number;
   refKinds: ReadonlyMap<string, CommitRefKind>;
+  issueUrlPrefix?: string;
   selected: boolean;
   onSelect: (hash: string) => void;
 }) {
@@ -221,7 +266,7 @@ export function CommitRow(props: {
   return (
     <div
       className={cn(
-        "group flex w-full min-w-0 items-stretch border-b border-border/45 text-left transition-colors hover:bg-accent/45",
+        "group relative flex w-full min-w-0 items-stretch border-b border-border/45 text-left transition-colors hover:bg-accent/45",
         props.selected && "bg-accent/70",
       )}
       style={{ height: GIT_HISTORY_ROW_HEIGHT }}
@@ -229,11 +274,12 @@ export function CommitRow(props: {
       <button
         type="button"
         data-commit-hash={commit.hash}
-        className="flex min-w-0 flex-1 items-stretch text-left outline-none focus-visible:bg-accent/60"
+        className="absolute inset-0 z-0 outline-none focus-visible:bg-accent/60"
         onClick={() => props.onSelect(commit.hash)}
         aria-pressed={props.selected}
         aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
-      >
+      />
+      <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-stretch">
         <GraphCell
           graph={props.row.graph}
           laneCount={props.laneCount}
@@ -249,7 +295,14 @@ export function CommitRow(props: {
               )}
               title={commit.subject}
             >
-              {commit.subject || "(no subject)"}
+              {commit.subject ? (
+                <CommitSubject
+                  subject={commit.subject}
+                  {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
+                />
+              ) : (
+                "(no subject)"
+              )}
             </span>
           </div>
           <div className="flex min-w-0 justify-end gap-2 overflow-hidden @max-[720px]:hidden">
@@ -283,10 +336,10 @@ export function CommitRow(props: {
             {formatCommitDate(commit.authoredAt)}
           </span>
         </div>
-      </button>
+      </div>
       <button
         type="button"
-        className="flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
+        className="relative z-20 flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
         onClick={() => copyToClipboard(commit.hash, undefined)}
         aria-label={`Copy commit hash ${commit.hash}`}
         title={isCopied ? "Commit hash copied" : `Copy full commit hash ${commit.hash}`}

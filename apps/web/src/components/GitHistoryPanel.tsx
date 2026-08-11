@@ -46,6 +46,7 @@ const INITIAL_CURSORS = [undefined] as const;
 interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
+  issueUrlPrefix?: string;
 }
 
 export default function GitHistoryPanel(props: GitHistoryPanelProps) {
@@ -475,6 +476,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                     row={item}
                     laneCount={laneCount}
                     refKinds={commitRefKinds}
+                    {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
                     selected={item.commit.hash === selectedHash}
                     onSelect={setSelectedHash}
                   />
