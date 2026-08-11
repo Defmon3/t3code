@@ -11,6 +11,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  VcsSnapshotExpiredError,
   VcsProcessExitError,
   type VcsSwitchRefInput,
   type VcsSwitchRefResult,
@@ -278,7 +279,7 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
     readonly getHistory: (
       input: VcsGetHistoryInput,
-    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError>;
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly getCommitDetails: (
       input: VcsGetCommitDetailsInput,
     ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;

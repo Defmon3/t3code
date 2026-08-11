@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import {
   GitManagerError,
   GitCommandError,
+  VcsSnapshotExpiredError,
   type VcsSwitchRefInput,
   type VcsSwitchRefResult,
   type VcsCreateRefInput,
@@ -70,7 +71,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
     readonly getHistory: (
       input: VcsGetHistoryInput,
-    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError>;
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly getCommitDetails: (
       input: VcsGetCommitDetailsInput,
     ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
