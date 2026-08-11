@@ -1,14 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, GitHistoryCommit } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
-import {
-  FileIcon,
-  GitBranchIcon,
-  GitCommitHorizontalIcon,
-  RefreshCwIcon,
-  SearchIcon,
-  XIcon,
-} from "lucide-react";
+import { FileIcon, GitBranchIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
@@ -295,14 +288,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         inert={mobilePane !== null ? true : undefined}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <GitCommitHorizontalIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="text-xs font-medium">Git History</span>
           <Badge
-            variant="secondary"
+            variant="outline"
             className="min-w-0 max-w-64"
             title={selectedRevision?.label ?? "All refs"}
           >
-            <GitBranchIcon className="size-3 shrink-0 text-primary" />
+            <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
             <span className="truncate">{selectedRevision?.label ?? "All refs"}</span>
           </Badge>
           {history.length > 0 ? (
