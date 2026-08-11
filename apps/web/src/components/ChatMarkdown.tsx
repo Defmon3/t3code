@@ -791,7 +791,9 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
-  onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
+  onOpenInBrowser?:
+    | ((filePath: string) => Promise<AtomCommandResult<unknown, unknown>>)
+    | undefined;
   className?: string | undefined;
 }
 
@@ -1145,7 +1147,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     void (async () => {
       try {
-        const result = await onOpenInBrowser();
+        const result = await onOpenInBrowser(workspaceRelativePath ?? targetPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1175,7 +1177,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpenInBrowser, targetPath]);
+  }, [onOpenInBrowser, targetPath, workspaceRelativePath]);
 
   const handleCopy = useCallback(
     (value: string, title: string) => {
@@ -1471,7 +1473,7 @@ function ChatMarkdown({
             threadRef &&
             isPreviewSupportedInRuntime() &&
             isBrowserPreviewFile(fileLinkMeta.filePath)
-              ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+              ? openMarkdownFileInPreview
               : undefined
           }
           className={className}
