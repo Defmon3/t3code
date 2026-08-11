@@ -11,7 +11,6 @@ export interface RefTreeProps {
   filterActive: boolean;
   expanded: ReadonlySet<string>;
   selectedRevision: string | null;
-  currentBranchCommitCount: number;
   onToggle: (key: string) => void;
   onSelect: (label: string, revision: string) => void;
 }

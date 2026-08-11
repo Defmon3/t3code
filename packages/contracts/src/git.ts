@@ -80,9 +80,12 @@ export const VcsRef = Schema.Struct({
   isRemote: Schema.optional(Schema.Boolean),
   isTag: Schema.optional(Schema.Boolean),
   remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
+  upstreamName: Schema.optional(TrimmedNonEmptyStringSchema),
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  aheadCount: Schema.optional(NonNegativeInt),
+  behindCount: Schema.optional(NonNegativeInt),
 });
 export type VcsRef = typeof VcsRef.Type;
 

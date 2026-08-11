@@ -50,6 +50,18 @@ function uniqueHashes(hashes: ReadonlyArray<string>): string[] {
   return Array.from(new Set(hashes));
 }
 
+function hasBranchDecoration(commit: GitHistoryGraphCommit): boolean {
+  return (
+    commit.refs?.some(
+      (ref) =>
+        ref !== "HEAD" &&
+        !ref.startsWith("HEAD -> ") &&
+        !ref.startsWith("tag: ") &&
+        !ref.includes("HEAD ->"),
+    ) === true
+  );
+}
+
 function nextColorIndex(lanes: ReadonlyArray<LaneSlot>): number {
   const usedColors = new Set(lanes.flatMap((lane) => (lane === null ? [] : [lane.colorIndex])));
   let colorIndex = 1;
@@ -119,7 +131,16 @@ export function layoutGitHistoryGraph(
           ? emptyLane
           : Math.max(1, lanes.length);
     const existingNodeLane = lanes[nodeLane];
-    const nodeColorIndex = isPrimary ? 0 : (existingNodeLane?.colorIndex ?? nextColorIndex(lanes));
+    const startsDecoratedSegment =
+      commit.hash !== currentHeadHash &&
+      existingNodeLane?.started === true &&
+      hasBranchDecoration(commit);
+    const nodeColorIndex = startsDecoratedSegment
+      ? nextColorIndex(lanes)
+      : isPrimary
+        ? (existingNodeLane?.colorIndex ?? 0)
+        : (existingNodeLane?.colorIndex ?? nextColorIndex(lanes));
+    const incomingColorIndex = startsDecoratedSegment ? existingNodeLane?.colorIndex : undefined;
     const beforeLanes = [...lanes];
     while (beforeLanes.length <= nodeLane) beforeLanes.push(null);
     if (beforeLanes[nodeLane] === null || beforeLanes[nodeLane] === undefined) {
@@ -178,6 +199,7 @@ export function layoutGitHistoryGraph(
       hash: commit.hash,
       lane: nodeLane,
       colorIndex: nodeColorIndex,
+      ...(incomingColorIndex === undefined ? {} : { incomingColorIndex }),
       hasIncoming: activeMatchingLanes.includes(nodeLane),
       edges: [...incomingEdges, ...parentEdges, ...continuationEdges(beforeLanes, endingLanes)],
     });
