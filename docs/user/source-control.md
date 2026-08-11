@@ -44,6 +44,17 @@ T3 Code works with the platforms your team already uses:
 - Open the review directly in your browser with one click
 - Check out a teammate's branch to review code locally
 
+### Browse Git History
+
+Open the right panel menu and choose **Git History** to explore the repository without leaving your thread. The history view shows a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository.
+
+- Search by commit subject, author, ref, or hash. Use the clear control or `Escape` to reset a search.
+- Select a commit to view its metadata and changed files, then open the same diff view used elsewhere in T3 Code. History diffs use Git's normal patch output, so they match the familiar command-line review view.
+- Copy a full commit hash from a row. When a GitHub repository is connected, issue references in commit subjects open the matching issue.
+- Branch rows show ahead and behind counts when an upstream is configured.
+
+For large repositories, history is loaded in pages and the commit list is virtualized. The initial browsing window is intentionally bounded so the right panel remains responsive; select a branch or search to narrow the result.
+
 ### Know Your Setup at a Glance
 
 The **Source Control settings** page shows you exactly what's connected:

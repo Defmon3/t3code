@@ -3087,7 +3087,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "--no-ext-diff",
         "--no-textconv",
         "--no-renames",
-        "--minimal",
         ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
         input.hash,
         "--",
