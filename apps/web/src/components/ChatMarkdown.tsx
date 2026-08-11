@@ -75,6 +75,7 @@ import {
 import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
 import {
   normalizeMarkdownLinkDestination,
+  remarkRewriteWindowsFileLinks,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
@@ -162,6 +163,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
+  remarkRewriteWindowsFileLinks,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkPreserveCodeMeta,
@@ -170,6 +172,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
+  remarkRewriteWindowsFileLinks,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkBreaks,
