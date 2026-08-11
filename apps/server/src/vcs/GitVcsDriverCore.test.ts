@@ -57,6 +57,13 @@ const makeSuccessfulHandle = (stdout: string) =>
     getOutputFd: () => Stream.empty,
   });
 
+const makeGitHistoryOutput = (count: number): string =>
+  Array.from(
+    { length: count },
+    (_, index) =>
+      `${index.toString(16).padStart(40, "0")}\x00\x00commit ${index}\x00Test\x00test@example.com\x002026-08-12T00:00:00Z\x00\x00`,
+  ).join("");
+
 const makeTmpDir = (
   prefix = "git-vcs-driver-test-",
 ): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> =>
@@ -254,6 +261,11 @@ it.effect("returns paginated commit history with author, parent, and decoration 
     assert.equal(secondPage.nextCursor, null);
     assert.equal(secondPage.commits[0]?.subject, "initial commit");
 
+    const reusedCursor = yield* driver
+      .getHistory({ cwd, cursor: firstPage.nextCursor, limit: 1 })
+      .pipe(Effect.flip);
+    assert.equal(reusedCursor._tag, "VcsSnapshotExpiredError");
+
     yield* git(cwd, ["branch", "history-test", "HEAD~1"]);
     const branchHistory = yield* driver.getHistory({
       cwd,
@@ -284,7 +296,10 @@ it.effect("keeps a history page stable after refs move", () =>
     yield* git(cwd, ["commit", "-m", "new"]);
     yield* git(cwd, ["branch", "moved-after-snapshot"]);
     const second = yield* driver.getHistory({ cwd, cursor: first.nextCursor, limit: 2 });
-    assert.deepEqual(second.commits.map((commit) => commit.subject), ["second", "initial commit"]);
+    assert.deepEqual(
+      second.commits.map((commit) => commit.subject),
+      ["second", "initial commit"],
+    );
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -293,7 +308,9 @@ it.effect("rejects an unknown history cursor with the typed expiry error", () =>
     const cwd = yield* makeTmpDir();
     yield* initRepoWithCommit(cwd);
     const driver = yield* GitVcsDriver.GitVcsDriver;
-    const error = yield* driver.getHistory({ cwd, cursor: "not-a-history-snapshot" }).pipe(Effect.flip);
+    const error = yield* driver
+      .getHistory({ cwd, cursor: "not-a-history-snapshot" })
+      .pipe(Effect.flip);
     assert.equal(error._tag, "VcsSnapshotExpiredError");
   }).pipe(Effect.provide(TestLayer)),
 );
@@ -313,6 +330,184 @@ it.effect("rejects a history cursor reused for another revision", () =>
       .pipe(Effect.flip);
     assert.equal(error._tag, "VcsSnapshotExpiredError");
   }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("expires a history cursor after its TestClock TTL", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "second"]);
+
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    yield* TestClock.adjust("5 minutes");
+    const error = yield* driver.getHistory({ cwd, cursor: first.nextCursor }).pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects a history cursor from another linked worktree", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const worktreesRoot = yield* makeTmpDir("git-vcs-driver-worktrees-");
+    const pathService = yield* Path.Path;
+    const linkedWorktree = pathService.join(worktreesRoot, "linked");
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "second"]);
+    yield* git(cwd, ["worktree", "add", "-b", "history-linked", linkedWorktree]);
+
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    const error = yield* driver
+      .getHistory({ cwd: linkedWorktree, cursor: first.nextCursor })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("fails history output larger than its dedicated retained-byte ceiling", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Effect.succeed(makeSuccessfulHandle("x".repeat(512 * 1024 + 1)))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const error = yield* driver.getHistory({ cwd }).pipe(Effect.flip);
+      assert.deepInclude(error, {
+        _tag: "GitCommandError",
+        operation: "GitVcsDriver.getHistory.log",
+        outputLength: 512 * 1024 + 1,
+      });
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("caps history snapshots at 1001 commits while preserving the final-page boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const logCommands = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Ref.update(logCommands, (commands) => [...commands, command.args]).pipe(
+              Effect.as(makeSuccessfulHandle(makeGitHistoryOutput(1_002))),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      let page = yield* driver.getHistory({ cwd, limit: 200 });
+      assert.equal(page.commits.length, 200);
+      assert.equal(page.hasMore, true);
+      for (let index = 0; index < 4; index += 1) {
+        assert.ok(page.nextCursor);
+        page = yield* driver.getHistory({ cwd, cursor: page.nextCursor, limit: 200 });
+        assert.equal(page.commits.length, 200);
+        assert.equal(page.hasMore, true);
+      }
+      assert.ok(page.nextCursor);
+      const finalPage = yield* driver.getHistory({ cwd, cursor: page.nextCursor, limit: 200 });
+      assert.equal(finalPage.commits.length, 1);
+      assert.equal(finalPage.hasMore, false);
+      assert.equal(finalPage.nextCursor, null);
+      assert.deepEqual(yield* Ref.get(logCommands), [
+        [
+          "log",
+          "-z",
+          "--date-order",
+          "--decorate=short",
+          "--max-count=1001",
+          "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00%D",
+          "HEAD",
+          "--branches",
+          "--remotes",
+          "--tags",
+        ],
+      ]);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("evicts the oldest history snapshot and invalidates only its cursor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Effect.succeed(makeSuccessfulHandle(makeGitHistoryOutput(2)))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+      const cursors: Array<string> = [];
+      for (let index = 0; index < 65; index += 1) {
+        const page = yield* driver.getHistory({ cwd, limit: 1 });
+        assert.ok(page.nextCursor);
+        cursors.push(page.nextCursor);
+      }
+
+      const expired = yield* driver.getHistory({ cwd, cursor: cursors[0] }).pipe(Effect.flip);
+      assert.equal(expired._tag, "VcsSnapshotExpiredError");
+      const retained = yield* driver.getHistory({ cwd, cursor: cursors[1], limit: 1 });
+      assert.equal(retained.commits.length, 1);
+      assert.equal(retained.hasMore, false);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("does not retain completed history snapshots in the session cap", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const logCalls = yield* Ref.make(0);
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Ref.updateAndGet(logCalls, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                makeSuccessfulHandle(makeGitHistoryOutput(count === 1 ? 2 : 1)),
+              ),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const first = yield* driver.getHistory({ cwd, limit: 1 });
+      assert.ok(first.nextCursor);
+      for (let index = 0; index < 64; index += 1) {
+        const completed = yield* driver.getHistory({ cwd, limit: 1 });
+        assert.equal(completed.hasMore, false);
+      }
+
+      const retained = yield* driver.getHistory({ cwd, cursor: first.nextCursor, limit: 1 });
+      assert.equal(retained.commits.length, 1);
+      assert.equal(retained.hasMore, false);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect("returns full commit details and root commit changed files", () =>

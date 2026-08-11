@@ -129,18 +129,30 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   });
   const failed = results.find((result) => result._tag === "Failure");
   const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
-  const recoveredSnapshotTarget = useRef<string | null>(null);
+  const recoveredSnapshot = useRef<{
+    readonly targetKey: string;
+    readonly generation: number;
+  } | null>(null);
   useEffect(() => {
+    if (recoveredSnapshot.current?.targetKey !== targetKey) recoveredSnapshot.current = null;
+    if (
+      recoveredSnapshot.current?.generation === historyQueryGeneration &&
+      failed === undefined &&
+      values.length > 0
+    ) {
+      recoveredSnapshot.current = null;
+      return;
+    }
     if (
       failed?._tag === "Failure" &&
       isHistorySnapshotExpired(failed.cause) &&
-      recoveredSnapshotTarget.current !== targetKey
+      recoveredSnapshot.current?.generation !== historyQueryGeneration
     ) {
-      recoveredSnapshotTarget.current = targetKey;
+      recoveredSnapshot.current = { targetKey, generation: historyQueryGeneration + 1 };
       setPagination({ targetKey, cursors: INITIAL_CURSORS });
       setHistoryQueryGeneration((generation) => generation + 1);
     }
-  }, [failed, targetKey]);
+  }, [failed, historyQueryGeneration, targetKey, values.length]);
   const isPending = results.some((result) => result.waiting);
   const isInitialLoad = values.length === 0 && isPending;
   const history = useMemo(() => {
