@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -838,7 +839,10 @@ const collectOutput = Effect.fnUntraced(function* (
 
 export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* () {
   const historySnapshots = new Map<string, GitHistorySnapshot>();
-  const historyCursors = new Map<string, { readonly snapshotId: string; readonly offset: number }>();
+  const historyCursors = new Map<
+    string,
+    { readonly snapshotId: string; readonly offset: number }
+  >();
   const newHistoryCursor = (snapshotId: string, offset: number): string => {
     const cursor = randomBytes(18).toString("base64url");
     historyCursors.set(cursor, { snapshotId, offset });
@@ -2996,20 +3000,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       let snapshot: GitHistorySnapshot;
       if (input.cursor) {
         const continuation = historyCursors.get(input.cursor);
-        const existingSnapshot = continuation ? historySnapshots.get(continuation.snapshotId) : undefined;
+        const existingSnapshot = continuation
+          ? historySnapshots.get(continuation.snapshotId)
+          : undefined;
+        const now = yield* Clock.currentTimeMillis;
         if (
           continuation === undefined ||
           existingSnapshot === undefined ||
-          existingSnapshot.expiresAt <= Date.now() ||
+          existingSnapshot.expiresAt <= now ||
           existingSnapshot.gitCommonDir !== repositoryPaths.gitCommonDir ||
           existingSnapshot.revision !== revision
         ) {
-          return yield* new VcsSnapshotExpiredError({ operation: "GitVcsDriver.getHistory", cursor: input.cursor });
+          return yield* new VcsSnapshotExpiredError({
+            operation: "GitVcsDriver.getHistory",
+            cursor: input.cursor,
+          });
         }
         snapshot = existingSnapshot;
         historyCursors.delete(input.cursor);
         historySnapshots.delete(continuation.snapshotId);
-        snapshot.expiresAt = Date.now() + GIT_HISTORY_SNAPSHOT_TTL_MS;
+        snapshot.expiresAt = now + GIT_HISTORY_SNAPSHOT_TTL_MS;
         historySnapshots.set(continuation.snapshotId, snapshot);
         snapshotId = continuation.snapshotId;
         offset = continuation.offset;
@@ -3032,7 +3042,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           gitCommonDir: repositoryPaths.gitCommonDir,
           revision,
           commits: parseGitHistory(output.stdout).slice(0, GIT_HISTORY_SNAPSHOT_MAX_COMMITS),
-          expiresAt: Date.now() + GIT_HISTORY_SNAPSHOT_TTL_MS,
+          expiresAt: (yield* Clock.currentTimeMillis) + GIT_HISTORY_SNAPSHOT_TTL_MS,
         };
         snapshotId = storeHistorySnapshot(snapshot);
         offset = 0;
