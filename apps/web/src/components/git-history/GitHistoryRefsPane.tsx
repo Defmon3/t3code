@@ -62,7 +62,7 @@ function RefTree(props: RefTreeProps) {
         key={revision}
         className={cn(
           "flex h-6 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[11px] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-          selected && "bg-primary/12 font-medium text-primary",
+          selected && "bg-accent/70 font-medium text-foreground",
         )}
         style={{ paddingLeft: `${depth * 14 + 20}px` }}
         title={node.ref.name}
@@ -74,7 +74,7 @@ function RefTree(props: RefTreeProps) {
         ) : props.namespace === "tags" ? (
           <TagIcon className="size-3 shrink-0 text-amber-400" />
         ) : (
-          <GitBranchIcon className={cn("size-3 shrink-0", node.ref.current && "text-primary")} />
+          <GitBranchIcon className={cn("size-3 shrink-0", node.ref.current && "text-foreground")} />
         )}
         <span className="truncate">{node.name}</span>
         {aheadCount > 0 || behindCount > 0 ? (
@@ -214,7 +214,7 @@ export function GitRefsPane(props: {
           type="button"
           className={cn(
             "flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[11px] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-            props.selectedRevision === null && "bg-primary/12 font-medium text-primary",
+            props.selectedRevision === null && "bg-accent/70 font-medium text-foreground",
           )}
           onClick={props.onSelectAll}
           aria-pressed={props.selectedRevision === null}
@@ -231,7 +231,7 @@ export function GitRefsPane(props: {
               props.onSelectRef(props.currentRef.name, `refs/heads/${props.currentRef.name}`);
           }}
         >
-          <GitBranchIcon className="size-3.5 shrink-0 text-primary" />
+          <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">HEAD (Current Branch)</span>
         </button>
         <RefSection

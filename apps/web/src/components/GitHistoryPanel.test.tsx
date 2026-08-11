@@ -572,7 +572,11 @@ describe("GitHistoryPanel", () => {
 
     const list = historyList(renderPanel());
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
-    (historyRow.props.onClick as (() => void) | undefined)?.();
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
 
     const detailsPane = componentTree(renderPanel(), "CommitDetailsPane");
     const showDiff = visitElements(
@@ -600,7 +604,8 @@ describe("GitHistoryPanel", () => {
     const shortHash = visitElements(historyRow, (element) => element.props.children === "aaaaaaaa");
 
     expect(shortHash).not.toBeNull();
-    expect(shortHash?.props.title).toBe(historyCommit.hash);
+    expect(shortHash?.props.title).toBe(`Copy full commit hash ${historyCommit.hash}`);
+    expect(shortHash?.props["aria-label"]).toBe(`Copy commit hash ${historyCommit.hash}`);
   });
 
   it("opens a changed file diff from selected commit details", () => {
@@ -620,7 +625,11 @@ describe("GitHistoryPanel", () => {
     const initial = renderPanel();
     const list = historyList(initial);
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
-    (historyRow.props.onClick as (() => void) | undefined)?.();
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
 
     const details = renderPanel();
     const detailsPane = componentTree(details, "CommitDetailsPane");
