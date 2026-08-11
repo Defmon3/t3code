@@ -130,27 +130,7 @@ export function firstParentHashes(
 function CommitSubject({ subject, issueUrlPrefix }: { subject: string; issueUrlPrefix?: string }) {
   const parts = subject.split(/(#[0-9]+)/g);
   return parts.map((part, index) => {
-    if (!/^#[0-9]+$/.test(part)) {
-      if (index !== 0) return part;
-      const typeMatch = /^(feat|fix|chore)(?=(?:\([^)]*\))?!?:)/i.exec(part);
-      if (!typeMatch) return part;
-      const type = typeMatch[1]?.toLowerCase();
-      return (
-        <span key={`type:${type}`}>
-          <span
-            className={cn(
-              "font-semibold",
-              type === "feat" && "text-emerald-400",
-              type === "fix" && "text-amber-400",
-              type === "chore" && "text-sky-400",
-            )}
-          >
-            {part.slice(0, typeMatch[0].length)}
-          </span>
-          {part.slice(typeMatch[0].length)}
-        </span>
-      );
-    }
+    if (!/^#[0-9]+$/.test(part)) return part;
     const className = "font-semibold text-violet-400 hover:text-violet-300 hover:underline";
     return issueUrlPrefix ? (
       <a
