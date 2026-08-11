@@ -359,6 +359,26 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   return fields;
 }
 
+function approvalActivityFields(args: unknown): Record<string, string> {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+    return {};
+  }
+  const record = args as Record<string, unknown>;
+  const fields: Record<string, string> = {};
+  for (const key of [
+    "approvalSource",
+    "approvalTitle",
+    "approvalDescription",
+    "approvalReason",
+  ] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
   taskTitle?: string,
@@ -394,6 +414,7 @@ export function runtimeEventToActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: event.payload.detail } : {}),
+            ...approvalActivityFields(event.payload.args),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
