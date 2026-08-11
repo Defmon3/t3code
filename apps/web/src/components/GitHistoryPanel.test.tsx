@@ -5,19 +5,21 @@ import {
   type VcsGetHistoryResult,
   type VcsRef,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
 import { visitElements } from "../test/reactElementTree";
 
-type PageAtom = {
-  readonly result: {
-    readonly _tag: "Success";
-    readonly waiting: false;
-    readonly value: VcsGetHistoryResult;
-  };
-};
+type PageResult =
+  | { readonly _tag: "Failure"; readonly cause: Cause.Cause<unknown> }
+  | { readonly _tag: "Success"; readonly waiting: false; readonly value: VcsGetHistoryResult };
+
+type PageAtom = { readonly result: PageResult };
+
+const effectQueue = vi.hoisted(() => ({ effects: [] as Array<() => void> }));
 
 const historyState = vi.hoisted(() => ({
   commitDetails: null as GitCommitDetails | null,
@@ -25,7 +27,7 @@ const historyState = vi.hoisted(() => ({
   getCommitDetails: vi.fn(),
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
-  pages: new Map<number | undefined, VcsGetHistoryResult>(),
+  pages: new Map<string | undefined, PageResult>(),
   refresh: vi.fn(),
   refreshRefs: vi.fn(),
   refreshTags: vi.fn(),
@@ -54,7 +56,9 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useCallback: reactHookHarness.useCallback,
     useDeferredValue: <Value,>(value: Value) => value,
-    useEffect: () => {},
+    useEffect: (effect: () => void) => {
+      effectQueue.effects.push(effect);
+    },
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
@@ -76,7 +80,8 @@ vi.mock("effect/unstable/reactivity", async (importOriginal) => {
     ...actual,
     AsyncResult: {
       ...actual.AsyncResult,
-      value: (result: PageAtom["result"]) => ({ _tag: "Some", value: result.value }),
+      value: (result: PageAtom["result"]) =>
+        result._tag === "Success" ? Option.some(result.value) : Option.none(),
     },
     Atom: {
       ...actual.Atom,
@@ -149,11 +154,11 @@ vi.mock("../state/query", () => ({
 
 vi.mock("../state/vcs", () => ({
   vcsEnvironment: {
-    getHistory: (target: { readonly input: { readonly cursor?: number } }) => {
+    getHistory: (target: { readonly input: { readonly cursor?: string } }) => {
       historyState.getHistory(target);
       const value = historyState.pages.get(target.input.cursor);
       if (!value) throw new Error(`Missing history page for cursor ${target.input.cursor}`);
-      return { result: { _tag: "Success", waiting: false, value } } satisfies PageAtom;
+      return { result: value } satisfies PageAtom;
     },
     getCommitDetails: (target: unknown) => {
       historyState.getCommitDetails(target);
@@ -186,15 +191,24 @@ function commit(hash: string, subject: string, authorName = "Ada Lovelace"): Git
 
 function page(
   commits: ReadonlyArray<GitHistoryCommit>,
-  options?: { readonly hasMore?: boolean; readonly nextCursor?: number | null },
-): VcsGetHistoryResult {
+  options?: { readonly hasMore?: boolean; readonly nextCursor?: string | null },
+): PageResult {
   return {
-    commits,
-    isRepo: true,
-    hasMore: options?.hasMore ?? false,
-    nextCursor: options?.nextCursor ?? null,
+    _tag: "Success",
+    waiting: false,
+    value: {
+      commits,
+      isRepo: true,
+      hasMore: options?.hasMore ?? false,
+      nextCursor: options?.nextCursor ?? null,
+    },
   };
 }
+
+const expiredHistoryPage = (): PageResult => ({
+  _tag: "Failure",
+  cause: Cause.fail({ _tag: "VcsSnapshotExpiredError" }),
+});
 
 function gitRef(
   name: string,
@@ -227,6 +241,11 @@ function renderPanel(issueUrlPrefix?: string): ReactElement<Record<string, unkno
     cwd: "C:/workspace",
     ...(issueUrlPrefix ? { issueUrlPrefix } : {}),
   }) as ReactElement<Record<string, unknown>>;
+}
+
+function flushEffects(): void {
+  const effects = effectQueue.effects.splice(0);
+  for (const effect of effects) effect();
 }
 
 function historyList(panel: ReactElement<Record<string, unknown>>) {
@@ -278,6 +297,7 @@ function componentTree(
 describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
+    effectQueue.effects.length = 0;
     historyState.commitDetails = null;
     historyState.diff = { diff: "", isRepo: true, truncated: false };
     historyState.getCommitDetails.mockReset();
@@ -291,6 +311,34 @@ describe("GitHistoryPanel", () => {
     historyState.refs = [];
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0, branchCommitCount: 0 };
+  });
+
+  it("recovers separate snapshot expiries while limiting each recovery generation to one retry", () => {
+    historyState.pages.set(undefined, expiredHistoryPage());
+
+    renderPanel();
+    flushEffects();
+    renderPanel();
+    flushEffects();
+    expect(
+      historyState.getHistory.mock.calls.map(([target]) => target.input.queryGeneration),
+    ).toEqual([0, 1]);
+
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Recovered")]),
+    );
+    renderPanel();
+    flushEffects();
+
+    historyState.pages.set(undefined, expiredHistoryPage());
+    renderPanel();
+    flushEffects();
+    renderPanel();
+    flushEffects();
+    expect(
+      historyState.getHistory.mock.calls.map(([target]) => target.input.queryGeneration),
+    ).toEqual([0, 1, 1, 1, 2]);
   });
 
   it("renders populated history rows through the virtualized list", () => {
@@ -457,9 +505,12 @@ describe("GitHistoryPanel", () => {
 
   it("deduplicates overlapping pages and keeps Load more in the scrolling column footer", () => {
     const duplicate = commit("aaaaaaaa11111111111111111111111111111111", "Initial commit");
-    historyState.pages.set(undefined, page([duplicate], { hasMore: true, nextCursor: 1 }));
     historyState.pages.set(
-      1,
+      undefined,
+      page([duplicate], { hasMore: true, nextCursor: "next-page" }),
+    );
+    historyState.pages.set(
+      "next-page",
       page([duplicate, commit("bbbbbbbb22222222222222222222222222222222", "Second page commit")]),
     );
 
@@ -486,7 +537,7 @@ describe("GitHistoryPanel", () => {
     ]);
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", cursor: 1, limit: 100, queryGeneration: 0 },
+      input: { cwd: "C:/workspace", cursor: "next-page", limit: 100, queryGeneration: 0 },
     });
   });
 
