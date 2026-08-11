@@ -1388,6 +1388,19 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           true,
         );
 
+        yield* writeTextFile(cwd, "ahead.txt", "ahead\n");
+        yield* git(cwd, ["add", "ahead.txt"]);
+        yield* git(cwd, ["commit", "-m", "ahead"]);
+        const refreshed = yield* driver.listRefs({
+          cwd,
+          includeMatchingRemoteRefs: true,
+          refresh: true,
+        });
+        const localBranch = refreshed.refs.find((ref) => ref.name === initialBranch);
+        assert.equal(localBranch?.aheadCount, 1);
+        assert.equal(localBranch?.behindCount, undefined);
+        assert.equal(localBranch?.upstreamName, `origin/${initialBranch}`);
+
         const remoteOnly = yield* driver.listRefs({
           cwd,
           includeMatchingRemoteRefs: true,
