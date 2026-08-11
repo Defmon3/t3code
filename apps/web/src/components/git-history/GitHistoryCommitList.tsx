@@ -12,6 +12,7 @@ import * as Cause from "effect/Cause";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { type GitHistoryGraphRow } from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
+import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
 export const GIT_HISTORY_ROW_HEIGHT = 30;
@@ -240,7 +241,10 @@ export function CommitRow(props: {
   onSelect: (hash: string) => void;
 }) {
   const { commit } = props.row;
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "commit hash" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: "commit hash",
+    onError: reportCommitHashCopyFailure,
+  });
   const pullRequestNumber = pullRequestNumberFromSubject(commit.subject);
   const isMergeCommit = commit.parentHashes.length > 1 || /^Merge\b/i.test(commit.subject);
   return (

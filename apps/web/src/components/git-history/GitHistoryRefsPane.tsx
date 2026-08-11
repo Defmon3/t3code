@@ -56,6 +56,13 @@ function RefTree(props: RefTreeProps) {
     const selected = props.selectedRevision === revision;
     const aheadCount = node.ref.aheadCount ?? 0;
     const behindCount = node.ref.behindCount ?? 0;
+    const upstreamName = node.ref.upstreamName ?? "the configured upstream";
+    const syncDescription = [
+      aheadCount > 0 ? `${aheadCount} commits ahead of upstream ${upstreamName}` : null,
+      behindCount > 0 ? `${behindCount} commits behind upstream ${upstreamName}` : null,
+    ]
+      .filter((description): description is string => description !== null)
+      .join(". ");
     return (
       <button
         type="button"
@@ -68,6 +75,7 @@ function RefTree(props: RefTreeProps) {
         title={node.ref.name}
         onClick={() => props.onSelect(node.ref.name, revision)}
         aria-pressed={selected}
+        aria-label={syncDescription ? `${node.ref.name}. ${syncDescription}.` : node.ref.name}
       >
         {node.ref.isDefault ? (
           <StarIcon className="size-3 shrink-0 fill-amber-400 text-amber-400" />
@@ -82,7 +90,7 @@ function RefTree(props: RefTreeProps) {
             {aheadCount > 0 ? (
               <span
                 className="flex items-center text-emerald-400"
-                title={`${aheadCount} commits ahead of ${node.ref.upstreamName ?? "the configured upstream"}`}
+                title={`${aheadCount} commits ahead of ${upstreamName}`}
               >
                 <ArrowUpIcon className="size-2.5" />
                 {aheadCount > 99 ? "99+" : aheadCount}
@@ -91,7 +99,7 @@ function RefTree(props: RefTreeProps) {
             {behindCount > 0 ? (
               <span
                 className="flex items-center text-sky-400"
-                title={`${behindCount} commits behind ${node.ref.upstreamName ?? "the configured upstream"}`}
+                title={`${behindCount} commits behind ${upstreamName}`}
               >
                 <ArrowDownIcon className="size-2.5" />
                 {behindCount > 99 ? "99+" : behindCount}

@@ -16,6 +16,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { Button } from "../ui/button";
+import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import { formatCommitDate } from "./GitHistoryCommitList";
 
 const FILE_STATUS_COLORS = {
@@ -137,7 +138,10 @@ export function CommitDetailsPane(props: {
   onRetry: () => void;
   onShowDiff: (hash: string, filePath?: string) => void;
 }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "commit hash" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: "commit hash",
+    onError: reportCommitHashCopyFailure,
+  });
   if (!props.hasSelection)
     return (
       <aside
