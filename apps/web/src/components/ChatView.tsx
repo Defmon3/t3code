@@ -2595,6 +2595,12 @@ function ChatViewContent(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const gitHistoryIssueUrlPrefix =
+    activeProject?.repositoryIdentity?.provider === "github" &&
+    activeProject.repositoryIdentity.owner &&
+    activeProject.repositoryIdentity.name
+      ? `https://github.com/${activeProject.repositoryIdentity.owner}/${activeProject.repositoryIdentity.name}/issues/`
+      : undefined;
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -6055,6 +6061,14 @@ function ChatViewContent(props: ChatViewProps) {
           mode="embedded"
           composerDraftTarget={composerDraftTarget}
           initialGitScope={initialDiffPanelGitScope}
+        />
+      </Suspense>
+    ) : activeRightPanelSurface?.kind === "git-history" && gitCwd ? (
+      <Suspense fallback={null}>
+        <GitHistoryPanel
+          environmentId={environmentId}
+          cwd={gitCwd}
+          {...(gitHistoryIssueUrlPrefix ? { issueUrlPrefix: gitHistoryIssueUrlPrefix } : {})}
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
