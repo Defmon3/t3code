@@ -365,6 +365,37 @@ describe("GitHistoryPanel", () => {
     expect(historyList(renderPanel()).props.data).toHaveLength(2);
   });
 
+  it("keeps a no-match search visible and clearable", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Add Git history panel")]),
+    );
+
+    const search = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    const changeSearch = search?.props.onChange as
+      | ((event: { readonly target: { readonly value: string } }) => void)
+      | undefined;
+    changeSearch?.({ target: { value: "fix " } });
+
+    const filteredPanel = renderPanel();
+    expect(
+      visitElements(
+        filteredPanel,
+        (element) => element.props["aria-label"] === "Filter Git history",
+      ),
+    ).not.toBeNull();
+    const clear = visitElements(
+      filteredPanel,
+      (element) => element.props["aria-label"] === "Clear Git history search",
+    );
+    expect(clear).not.toBeNull();
+    (clear?.props.onClick as (() => void) | undefined)?.();
+    expect(historyList(renderPanel()).props.data).toHaveLength(1);
+  });
+
   it("rebuilds the graph from the text-filtered commits", () => {
     historyState.pages.set(
       undefined,
