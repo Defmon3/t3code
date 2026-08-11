@@ -62,7 +62,7 @@ function CommitFilesTree(props: {
         <div key={`directory:${node.path}`}>
           <button
             type="button"
-            className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[11px] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             style={{ paddingLeft }}
             onClick={() =>
               setCollapsed((current) => {
@@ -85,7 +85,7 @@ function CommitFilesTree(props: {
               <FolderOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
             )}
             <span className="truncate">{node.name}</span>
-            <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">
+            <span className="ml-auto shrink-0 text-[0.5625rem] text-muted-foreground">
               {countTreeFiles(node)} files
             </span>
           </button>
@@ -98,7 +98,7 @@ function CommitFilesTree(props: {
       <button
         type="button"
         key={`file:${node.path}`}
-        className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-[11px] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         style={{ paddingLeft: paddingLeft + 17 }}
         onClick={() => props.onShowDiff(node.path)}
         title={`Show diff for ${node.path}`}
@@ -187,7 +187,7 @@ export function CommitDetailsPane(props: {
         props.className,
       )}
     >
-      <div className="shrink-0 border-b border-border/60 p-3 text-[11px]">
+      <div className="shrink-0 border-b border-border/60 p-3 text-[0.6875rem]">
         <h2 className="text-sm font-semibold leading-5 text-foreground">{details.subject}</h2>
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
           <span>{details.authorName}</span>
@@ -199,7 +199,7 @@ export function CommitDetailsPane(props: {
         {details.refs.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-2">
             {details.refs.map((ref) => (
-              <span key={ref} className="text-[10px] text-primary">
+              <span key={ref} className="text-[0.625rem] text-primary">
                 {ref}
               </span>
             ))}
@@ -207,7 +207,7 @@ export function CommitDetailsPane(props: {
         ) : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col border-b border-border/60">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-[11px] font-medium">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-[0.6875rem] font-medium">
           <span>
             {details.changedFiles.length} changed{" "}
             {details.changedFiles.length === 1 ? "file" : "files"}
@@ -223,7 +223,7 @@ export function CommitDetailsPane(props: {
           />
         </div>
       </div>
-      <div className="max-h-[34%] shrink-0 overflow-y-auto p-3 text-[11px]">
+      <div className="max-h-[34%] shrink-0 overflow-y-auto p-3 text-[0.6875rem]">
         <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-muted-foreground">
           <dt>Commit</dt>
           <dd className="truncate font-mono text-foreground" title={details.hash}>
