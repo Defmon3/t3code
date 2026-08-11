@@ -17,10 +17,12 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { randomBytes } from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  VcsSnapshotExpiredError,
   type GitCommitChangedFile,
   type GitCommitDetails,
   type GitHistoryCommit,
@@ -79,10 +81,20 @@ const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
 const GIT_HISTORY_DEFAULT_LIMIT = 100;
+const GIT_HISTORY_SNAPSHOT_MAX_COMMITS = 1001;
+const GIT_HISTORY_SNAPSHOT_MAX_SESSIONS = 64;
+const GIT_HISTORY_SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 const GIT_HISTORY_MAX_OUTPUT_BYTES = 4_000_000;
 const GIT_HISTORY_RECORD_FIELD_COUNT = 7;
 const GIT_COMMIT_DETAILS_RECORD_FIELD_COUNT = 8;
 const GIT_COMMIT_DETAILS_MAX_OUTPUT_BYTES = 4_000_000;
+
+interface GitHistorySnapshot {
+  readonly gitCommonDir: string;
+  readonly revision: string | null;
+  readonly commits: ReadonlyArray<GitHistoryCommit>;
+  expiresAt: number;
+}
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
   hasOriginRemote: false,
@@ -825,6 +837,26 @@ const collectOutput = Effect.fnUntraced(function* (
 });
 
 export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* () {
+  const historySnapshots = new Map<string, GitHistorySnapshot>();
+  const historyCursors = new Map<string, { readonly snapshotId: string; readonly offset: number }>();
+  const newHistoryCursor = (snapshotId: string, offset: number): string => {
+    const cursor = randomBytes(18).toString("base64url");
+    historyCursors.set(cursor, { snapshotId, offset });
+    return cursor;
+  };
+  const storeHistorySnapshot = (snapshot: GitHistorySnapshot): string => {
+    const snapshotId = randomBytes(18).toString("base64url");
+    historySnapshots.set(snapshotId, snapshot);
+    while (historySnapshots.size > GIT_HISTORY_SNAPSHOT_MAX_SESSIONS) {
+      const oldest = historySnapshots.keys().next().value;
+      if (oldest === undefined) break;
+      historySnapshots.delete(oldest);
+      for (const [cursor, value] of historyCursors) {
+        if (value.snapshotId === oldest) historyCursors.delete(cursor);
+      }
+    }
+    return snapshotId;
+  };
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -2954,37 +2986,64 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         };
       }
 
-      const cursor = input.cursor ?? 0;
       const limit = input.limit ?? GIT_HISTORY_DEFAULT_LIMIT;
       const revisions = input.revision
         ? ["--end-of-options", input.revision]
         : ["HEAD", "--branches", "--remotes", "--tags"];
-      const output = yield* executeGitWithStableDiagnostics(
-        "GitVcsDriver.getHistory.log",
-        input.cwd,
-        [
-          "log",
-          "-z",
-          "--date-order",
-          "--decorate=short",
-          `--max-count=${limit + 1}`,
-          `--skip=${cursor}`,
-          "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00%D",
-          ...revisions,
-        ],
-        {
-          maxOutputBytes: GIT_HISTORY_MAX_OUTPUT_BYTES,
-          fallbackErrorDetail: "git log failed",
-        },
-      );
-      const commits = parseGitHistory(output.stdout);
-      const hasMore = commits.length > limit;
-      const page = hasMore ? commits.slice(0, limit) : commits;
+      const revision = input.revision ?? null;
+      let snapshotId: string;
+      let offset: number;
+      let snapshot: GitHistorySnapshot;
+      if (input.cursor) {
+        const continuation = historyCursors.get(input.cursor);
+        const existingSnapshot = continuation ? historySnapshots.get(continuation.snapshotId) : undefined;
+        if (
+          continuation === undefined ||
+          existingSnapshot === undefined ||
+          existingSnapshot.expiresAt <= Date.now() ||
+          existingSnapshot.gitCommonDir !== repositoryPaths.gitCommonDir ||
+          existingSnapshot.revision !== revision
+        ) {
+          return yield* new VcsSnapshotExpiredError({ operation: "GitVcsDriver.getHistory", cursor: input.cursor });
+        }
+        snapshot = existingSnapshot;
+        historyCursors.delete(input.cursor);
+        historySnapshots.delete(continuation.snapshotId);
+        snapshot.expiresAt = Date.now() + GIT_HISTORY_SNAPSHOT_TTL_MS;
+        historySnapshots.set(continuation.snapshotId, snapshot);
+        snapshotId = continuation.snapshotId;
+        offset = continuation.offset;
+      } else {
+        const output = yield* executeGitWithStableDiagnostics(
+          "GitVcsDriver.getHistory.log",
+          input.cwd,
+          [
+            "log",
+            "-z",
+            "--date-order",
+            "--decorate=short",
+            `--max-count=${GIT_HISTORY_SNAPSHOT_MAX_COMMITS}`,
+            "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00%D",
+            ...revisions,
+          ],
+          { maxOutputBytes: GIT_HISTORY_MAX_OUTPUT_BYTES, fallbackErrorDetail: "git log failed" },
+        );
+        snapshot = {
+          gitCommonDir: repositoryPaths.gitCommonDir,
+          revision,
+          commits: parseGitHistory(output.stdout).slice(0, GIT_HISTORY_SNAPSHOT_MAX_COMMITS),
+          expiresAt: Date.now() + GIT_HISTORY_SNAPSHOT_TTL_MS,
+        };
+        snapshotId = storeHistorySnapshot(snapshot);
+        offset = 0;
+      }
+      const page = snapshot.commits.slice(offset, offset + limit);
+      const hasMore = offset + page.length < snapshot.commits.length;
 
       return {
         commits: page,
         isRepo: true,
-        nextCursor: hasMore ? cursor + page.length : null,
+        nextCursor: hasMore ? newHistoryCursor(snapshotId, offset + page.length) : null,
         hasMore,
       };
     },

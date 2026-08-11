@@ -233,7 +233,7 @@ it.effect("returns paginated commit history with author, parent, and decoration 
     assert.equal(firstPage.isRepo, true);
     assert.equal(firstPage.commits.length, 1);
     assert.equal(firstPage.hasMore, true);
-    assert.equal(firstPage.nextCursor, 1);
+    assert.equal(typeof firstPage.nextCursor, "string");
     assert.equal(firstPage.commits[0]?.subject, "second commit");
     assert.equal(firstPage.commits[0]?.authorName, "Ada Lovelace");
     assert.equal(firstPage.commits[0]?.authorEmail, "ada@example.com");
@@ -247,7 +247,8 @@ it.effect("returns paginated commit history with author, parent, and decoration 
     assert.match(fullPage.commits[1]?.hash ?? "", /^[0-9a-f]{40}$/);
     assert.equal(fullPage.commits[0]?.parentHashes[0], fullPage.commits[1]?.hash);
 
-    const secondPage = yield* driver.getHistory({ cwd, cursor: 1, limit: 1 });
+    assert.ok(firstPage.nextCursor);
+    const secondPage = yield* driver.getHistory({ cwd, cursor: firstPage.nextCursor, limit: 1 });
     assert.equal(secondPage.commits.length, 1);
     assert.equal(secondPage.hasMore, false);
     assert.equal(secondPage.nextCursor, null);
@@ -263,6 +264,54 @@ it.effect("returns paginated commit history with author, parent, and decoration 
       branchHistory.commits.map((commit) => commit.subject),
       ["initial commit"],
     );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("keeps a history page stable after refs move", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    for (const name of ["second", "third"]) {
+      yield* writeTextFile(cwd, `${name}.md`, `${name}\n`);
+      yield* git(cwd, ["add", "."]);
+      yield* git(cwd, ["commit", "-m", name]);
+    }
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    yield* writeTextFile(cwd, "new.md", "new\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "new"]);
+    yield* git(cwd, ["branch", "moved-after-snapshot"]);
+    const second = yield* driver.getHistory({ cwd, cursor: first.nextCursor, limit: 2 });
+    assert.deepEqual(second.commits.map((commit) => commit.subject), ["second", "initial commit"]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects an unknown history cursor with the typed expiry error", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const error = yield* driver.getHistory({ cwd, cursor: "not-a-history-snapshot" }).pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects a history cursor reused for another revision", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "second"]);
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    const error = yield* driver
+      .getHistory({ cwd, revision: `refs/heads/${initialBranch}`, cursor: first.nextCursor })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
   }).pipe(Effect.provide(TestLayer)),
 );
 

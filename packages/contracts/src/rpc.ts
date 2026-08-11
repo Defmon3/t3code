@@ -24,6 +24,7 @@ import {
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
+  VcsSnapshotExpiredError,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
@@ -687,7 +688,7 @@ export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
 export const WsVcsGetHistoryRpc = Rpc.make(WS_METHODS.vcsGetHistory, {
   payload: VcsGetHistoryInput,
   success: VcsGetHistoryResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
 });
 
 export const WsVcsGetCommitDetailsRpc = Rpc.make(WS_METHODS.vcsGetCommitDetails, {
