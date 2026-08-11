@@ -201,28 +201,30 @@ export function usePaginatedBranches(
     [pageAtoms, targetKey],
   );
   const results = useAtomValue(pagesAtom);
-  const values = results.flatMap((result) => {
-    const value = Option.getOrNull(AsyncResult.value(result));
-    return value === null ? [] : [value];
-  });
-  const refs = new Map<string, VcsRef>();
-  for (const value of values) {
-    for (const ref of value.refs) {
-      refs.set(ref.name, ref);
+  const values = useMemo(
+    () =>
+      results.flatMap((result) => {
+        const value = Option.getOrNull(AsyncResult.value(result));
+        return value === null ? [] : [value];
+      }),
+    [results],
+  );
+  const data = useMemo<VcsListRefsResult | null>(() => {
+    const first = values[0] ?? null;
+    const last = values.at(-1) ?? null;
+    if (first === null || last === null) return null;
+    const refs = new Map<string, VcsRef>();
+    for (const value of values) {
+      for (const ref of value.refs) refs.set(ref.name, ref);
     }
-  }
-  const first = values[0] ?? null;
-  const last = values.at(-1) ?? null;
-  const data: VcsListRefsResult | null =
-    first === null || last === null
-      ? null
-      : {
-          refs: [...refs.values()],
-          isRepo: first.isRepo,
-          hasPrimaryRemote: first.hasPrimaryRemote,
-          nextCursor: last.nextCursor,
-          totalCount: Math.max(...values.map((value) => value.totalCount)),
-        };
+    return {
+      refs: [...refs.values()],
+      isRepo: first.isRepo,
+      hasPrimaryRemote: first.hasPrimaryRemote,
+      nextCursor: last.nextCursor,
+      totalCount: Math.max(...values.map((value) => value.totalCount)),
+    };
+  }, [values]);
   const failed = results.find((result) => result._tag === "Failure");
   const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
   const error =

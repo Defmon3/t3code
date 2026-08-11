@@ -256,7 +256,7 @@ export function CommitRow(props: {
         className="absolute inset-0 z-0 outline-none focus-visible:bg-accent/60"
         onClick={() => props.onSelect(commit.hash)}
         aria-pressed={props.selected}
-        aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
+        aria-label={`${commit.subject || "No subject"}. Author ${commit.authorName}, ${formatCommitDate(commit.authoredAt)}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : commit.parentHashes.length === 1 ? "One parent." : "Root commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
       />
       <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-stretch">
         <GraphCell
@@ -332,6 +332,9 @@ export function CommitRow(props: {
           commit.hash.slice(0, 8)
         )}
       </button>
+      <span className="sr-only" aria-live="polite">
+        {isCopied ? `Copied commit hash ${commit.hash}` : ""}
+      </span>
     </div>
   );
 }

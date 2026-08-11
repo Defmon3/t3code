@@ -1,5 +1,6 @@
 import type { GitCommitChangedFile, GitCommitDetails } from "@t3tools/contracts";
 import {
+  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   FileDiffIcon,
@@ -12,6 +13,7 @@ import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { Button } from "../ui/button";
 import { formatCommitDate } from "./GitHistoryCommitList";
@@ -135,6 +137,7 @@ export function CommitDetailsPane(props: {
   onRetry: () => void;
   onShowDiff: (hash: string, filePath?: string) => void;
 }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "commit hash" });
   if (!props.hasSelection)
     return (
       <aside
@@ -192,9 +195,19 @@ export function CommitDetailsPane(props: {
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
           <span>{details.authorName}</span>
           <span>{formatCommitDate(details.authoredAt)}</span>
-          <span className="font-mono" title={details.hash}>
-            {details.hash.slice(0, 8)}
-          </span>
+          <button
+            type="button"
+            className="font-mono text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            onClick={() => copyToClipboard(details.hash, undefined)}
+            aria-label={`Copy commit hash ${details.hash}`}
+            title={isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
+          >
+            {isCopied ? (
+              <CheckIcon className="inline size-3 text-success-foreground" />
+            ) : (
+              details.hash.slice(0, 8)
+            )}
+          </button>
         </div>
         {details.refs.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-2">
@@ -226,8 +239,16 @@ export function CommitDetailsPane(props: {
       <div className="max-h-[34%] shrink-0 overflow-y-auto p-3 text-[0.6875rem]">
         <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-muted-foreground">
           <dt>Commit</dt>
-          <dd className="truncate font-mono text-foreground" title={details.hash}>
-            {details.hash}
+          <dd className="truncate font-mono text-foreground">
+            <button
+              type="button"
+              className="max-w-full truncate text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              onClick={() => copyToClipboard(details.hash, undefined)}
+              aria-label={`Copy commit hash ${details.hash}`}
+              title={isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
+            >
+              {details.hash}
+            </button>
           </dd>
           <dt>Email</dt>
           <dd className="truncate text-foreground">{details.authorEmail}</dd>
@@ -244,6 +265,9 @@ export function CommitDetailsPane(props: {
           </p>
         ) : null}
       </div>
+      <span className="sr-only" aria-live="polite">
+        {isCopied ? `Copied commit hash ${details.hash}` : ""}
+      </span>
     </aside>
   );
 }

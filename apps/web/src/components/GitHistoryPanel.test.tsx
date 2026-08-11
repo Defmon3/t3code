@@ -27,6 +27,8 @@ const historyState = vi.hoisted(() => ({
   getHistory: vi.fn(),
   pages: new Map<number | undefined, VcsGetHistoryResult>(),
   refresh: vi.fn(),
+  refreshRefs: vi.fn(),
+  refreshTags: vi.fn(),
   refs: [] as ReadonlyArray<VcsRef>,
   tags: [] as ReadonlyArray<VcsRef>,
   status: { aheadCount: 0, behindCount: 0, branchCommitCount: 0 },
@@ -103,7 +105,7 @@ vi.mock("../state/queries", () => ({
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
-      refresh: vi.fn(),
+      refresh: options?.refKind === "tag" ? historyState.refreshTags : historyState.refreshRefs,
     };
   },
 }));
@@ -153,7 +155,7 @@ vi.mock("../state/vcs", () => ({
   },
 }));
 
-import GitHistoryPanel from "./GitHistoryPanel";
+import GitHistoryPanel, { isWideHistoryLayout } from "./GitHistoryPanel";
 
 const environmentId = EnvironmentId.make("environment-local");
 
@@ -270,6 +272,8 @@ describe("GitHistoryPanel", () => {
     historyState.getHistory.mockReset();
     historyState.pages.clear();
     historyState.refresh.mockReset();
+    historyState.refreshRefs.mockReset();
+    historyState.refreshTags.mockReset();
     historyState.refs = [];
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0, branchCommitCount: 0 };
@@ -295,6 +299,11 @@ describe("GitHistoryPanel", () => {
       environmentId,
       input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
     });
+  });
+
+  it("keeps the desktop refs and details workflow available at ordinary desktop widths", () => {
+    expect(isWideHistoryLayout(1119)).toBe(false);
+    expect(isWideHistoryLayout(1120)).toBe(true);
   });
 
   it("filters history by commit message", () => {
@@ -639,6 +648,40 @@ describe("GitHistoryPanel", () => {
     expect(shortHash).not.toBeNull();
     expect(shortHash?.props.title).toBe(`Copy full commit hash ${historyCommit.hash}`);
     expect(shortHash?.props["aria-label"]).toBe(`Copy commit hash ${historyCommit.hash}`);
+  });
+
+  it("gives every selectable commit its author, date, and parent topology", () => {
+    const historyCommit = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Merge release", "Grace Hopper"),
+      parentHashes: ["parent-one", "parent-two"],
+    };
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectableRow = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+
+    expect(selectableRow?.props["aria-label"]).toContain("Author Grace Hopper");
+    expect(selectableRow?.props["aria-label"]).toContain("2-parent merge commit");
+  });
+
+  it("refreshes both history and loaded refs", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const refresh = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Refresh Git history",
+    );
+    (refresh?.props.onClick as (() => void) | undefined)?.();
+
+    expect(historyState.refreshRefs).toHaveBeenCalledOnce();
+    expect(historyState.refreshTags).toHaveBeenCalledOnce();
   });
 
   it("links issue references to the active GitHub repository", () => {

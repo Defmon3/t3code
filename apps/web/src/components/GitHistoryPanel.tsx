@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type RefObject,
 } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -39,10 +40,12 @@ import type {
 import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Sheet, SheetPopup, SheetTitle } from "./ui/sheet";
 
 const HISTORY_PAGE_SIZE = 100;
 const MAX_HISTORY_PAGES = 10;
 const INITIAL_CURSORS = [undefined] as const;
+const WIDE_HISTORY_LAYOUT_MIN_WIDTH = 1120;
 
 interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
@@ -50,7 +53,29 @@ interface GitHistoryPanelProps {
   issueUrlPrefix?: string;
 }
 
+export function isWideHistoryLayout(width: number): boolean {
+  return width >= WIDE_HISTORY_LAYOUT_MIN_WIDTH;
+}
+
+function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
+  const [isWide, setIsWide] = useState(true);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      setIsWide(isWideHistoryLayout(entry?.contentRect.width ?? 0));
+    });
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [panelRef]);
+
+  return isWide;
+}
+
 export default function GitHistoryPanel(props: GitHistoryPanelProps) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const isWideLayout = useWideHistoryLayout(panelRef);
   const baseTargetKey = `${props.environmentId}:${props.cwd}`;
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
   const [detailsPaneWidth, setDetailsPaneWidth] = useState(384);
@@ -156,6 +181,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     normalizedRefFilter,
     onLoadMoreRefs,
     onRetryRefs,
+    refreshRefs,
     refPaginationError,
     refFilter,
     remoteRefTree,
@@ -221,6 +247,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setMobilePane(null);
   }, [targetKey]);
 
+  useEffect(() => {
+    if (isWideLayout) setMobilePane(null);
+  }, [isWideLayout]);
+
   const headHash = useMemo(() => currentHeadHash(history), [history]);
   const primaryHashes = useMemo(() => firstParentHashes(history, headHash), [headHash, history]);
   const filteredHistory = useMemo(() => {
@@ -266,7 +296,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const refresh = useCallback(() => {
     setHistoryQueryGeneration((generation) => generation + 1);
     setPagination({ targetKey, cursors: INITIAL_CURSORS });
-  }, [targetKey]);
+    refreshRefs();
+  }, [refreshRefs, targetKey]);
   const loadNext = useCallback(() => {
     if (!hasMore || nextCursor === null) return;
     setPagination((current) => {
@@ -284,6 +315,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
 
   return (
     <section
+      ref={panelRef}
       className="@container/history-list flex size-full min-h-0 min-w-0 flex-col bg-background"
       aria-label="Git history"
     >
@@ -306,29 +338,31 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             </span>
           ) : null}
         </div>
-        <Button
-          ref={branchesButtonRef}
-          variant="ghost"
-          size="xs"
-          className="@min-[1380px]/history-list:hidden"
-          onClick={() => setMobilePane((pane) => (pane === "refs" ? null : "refs"))}
-          aria-controls="git-history-refs-panel"
-          aria-expanded={mobilePane === "refs"}
-        >
-          <GitBranchIcon className="size-3.5" /> Branches
-        </Button>
-        <Button
-          ref={detailsButtonRef}
-          variant="ghost"
-          size="xs"
-          className="@min-[1380px]/history-list:hidden"
-          onClick={() => setMobilePane((pane) => (pane === "details" ? null : "details"))}
-          disabled={selectedHash === null}
-          aria-controls="git-history-details-panel"
-          aria-expanded={mobilePane === "details"}
-        >
-          <FileIcon className="size-3.5" /> Details
-        </Button>
+        {!isWideLayout ? (
+          <>
+            <Button
+              ref={branchesButtonRef}
+              variant="ghost"
+              size="xs"
+              onClick={() => setMobilePane((pane) => (pane === "refs" ? null : "refs"))}
+              aria-controls="git-history-refs-panel"
+              aria-expanded={mobilePane === "refs"}
+            >
+              <GitBranchIcon className="size-3.5" /> Branches
+            </Button>
+            <Button
+              ref={detailsButtonRef}
+              variant="ghost"
+              size="xs"
+              onClick={() => setMobilePane((pane) => (pane === "details" ? null : "details"))}
+              disabled={selectedHash === null}
+              aria-controls="git-history-details-panel"
+              aria-expanded={mobilePane === "details"}
+            >
+              <FileIcon className="size-3.5" /> Details
+            </Button>
+          </>
+        ) : null}
         <Button
           variant="ghost"
           size="icon-xs"
@@ -379,24 +413,28 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
-          <GitRefsPane
-            className="hidden !border-r-0 @min-[1380px]/history-list:flex"
-            style={{
-              width: refsPaneWidth,
-              minWidth: refsPaneWidth,
-              maxWidth: refsPaneWidth,
-              flexBasis: refsPaneWidth,
-            }}
-            {...refPaneProps}
-          />
-          <PaneResizeHandle
-            label="Resize branches pane"
-            value={refsPaneWidth}
-            onMove={(delta) =>
-              setRefsPaneWidth((width) => Math.min(480, Math.max(176, width + delta)))
-            }
-            onReset={() => setRefsPaneWidth(256)}
-          />
+          {isWideLayout ? (
+            <GitRefsPane
+              className="!border-r-0"
+              style={{
+                width: refsPaneWidth,
+                minWidth: refsPaneWidth,
+                maxWidth: refsPaneWidth,
+                flexBasis: refsPaneWidth,
+              }}
+              {...refPaneProps}
+            />
+          ) : null}
+          {isWideLayout ? (
+            <PaneResizeHandle
+              label="Resize branches pane"
+              value={refsPaneWidth}
+              onMove={(delta) =>
+                setRefsPaneWidth((width) => Math.min(480, Math.max(176, width + delta)))
+              }
+              onReset={() => setRefsPaneWidth(256)}
+            />
+          ) : null}
           <div
             className="@container min-h-0 min-w-0 flex-1 overflow-hidden"
             inert={mobilePane !== null ? true : undefined}
@@ -510,84 +548,72 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               ) : null}
             </div>
           </div>
-          <PaneResizeHandle
-            label="Resize commit details pane"
-            value={detailsPaneWidth}
-            onMove={(delta) =>
-              setDetailsPaneWidth((width) => Math.min(720, Math.max(256, width - delta)))
-            }
-            onReset={() => setDetailsPaneWidth(384)}
-          />
-          <CommitDetailsPane
-            className="hidden !border-l-0 @min-[1380px]/history-list:flex"
-            style={{
-              width: detailsPaneWidth,
-              minWidth: detailsPaneWidth,
-              maxWidth: detailsPaneWidth,
-              flexBasis: detailsPaneWidth,
-            }}
-            details={selectedCommitDetails}
-            isPending={commitDetailsQuery.isPending}
-            hasError={commitDetailsQuery.error !== null}
-            hasSelection={selectedHash !== null}
-            onRetry={commitDetailsQuery.refresh}
-            onShowDiff={(hash, filePath) =>
-              setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-            }
-          />
-          {mobilePane === "refs" ? (
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Branches and tags"
-              className="absolute inset-0 z-30 flex bg-background @min-[1380px]/history-list:hidden"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setMobilePane(null);
-              }}
-            >
-              <GitRefsPane
-                id="git-history-refs-panel"
-                className="!w-full !min-w-0 !max-w-none !border-r-0 !bg-background"
-                {...refPaneProps}
-                onClose={() => setMobilePane(null)}
-              />
-            </div>
+          {isWideLayout ? (
+            <PaneResizeHandle
+              label="Resize commit details pane"
+              value={detailsPaneWidth}
+              onMove={(delta) =>
+                setDetailsPaneWidth((width) => Math.min(720, Math.max(256, width - delta)))
+              }
+              onReset={() => setDetailsPaneWidth(384)}
+            />
           ) : null}
-          {mobilePane === "details" ? (
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Commit details"
-              className="absolute inset-0 z-30 flex flex-col bg-background @min-[1380px]/history-list:hidden"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setMobilePane(null);
+          {isWideLayout ? (
+            <CommitDetailsPane
+              className="!border-l-0"
+              style={{
+                width: detailsPaneWidth,
+                minWidth: detailsPaneWidth,
+                maxWidth: detailsPaneWidth,
+                flexBasis: detailsPaneWidth,
               }}
+              details={selectedCommitDetails}
+              isPending={commitDetailsQuery.isPending}
+              hasError={commitDetailsQuery.error !== null}
+              hasSelection={selectedHash !== null}
+              onRetry={commitDetailsQuery.refresh}
+              onShowDiff={(hash, filePath) =>
+                setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+              }
+            />
+          ) : null}
+          {!isWideLayout && mobilePane === "refs" ? (
+            <Sheet
+              open={mobilePane === "refs"}
+              onOpenChange={(open) => !open && setMobilePane(null)}
             >
-              <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/60 px-3">
-                <span className="text-xs font-medium">Commit details</span>
-                <Button
-                  autoFocus
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={() => setMobilePane(null)}
-                  aria-label="Close commit details"
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
-              </div>
-              <CommitDetailsPane
-                id="git-history-details-panel"
-                className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
-                details={selectedCommitDetails}
-                isPending={commitDetailsQuery.isPending}
-                hasError={commitDetailsQuery.error !== null}
-                hasSelection={selectedHash !== null}
-                onRetry={commitDetailsQuery.refresh}
-                onShowDiff={(hash, filePath) =>
-                  setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-                }
-              />
-            </div>
+              <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none p-0">
+                <SheetTitle className="sr-only">Branches and tags</SheetTitle>
+                <GitRefsPane
+                  id="git-history-refs-panel"
+                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
+                  {...refPaneProps}
+                  onClose={() => setMobilePane(null)}
+                />
+              </SheetPopup>
+            </Sheet>
+          ) : null}
+          {!isWideLayout && mobilePane === "details" ? (
+            <Sheet
+              open={mobilePane === "details"}
+              onOpenChange={(open) => !open && setMobilePane(null)}
+            >
+              <SheetPopup side="right" showCloseButton className="w-full max-w-none p-0">
+                <SheetTitle className="sr-only">Commit details</SheetTitle>
+                <CommitDetailsPane
+                  id="git-history-details-panel"
+                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
+                  details={selectedCommitDetails}
+                  isPending={commitDetailsQuery.isPending}
+                  hasError={commitDetailsQuery.error !== null}
+                  hasSelection={selectedHash !== null}
+                  onRetry={commitDetailsQuery.refresh}
+                  onShowDiff={(hash, filePath) =>
+                    setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+                  }
+                />
+              </SheetPopup>
+            </Sheet>
           ) : null}
         </div>
       )}
