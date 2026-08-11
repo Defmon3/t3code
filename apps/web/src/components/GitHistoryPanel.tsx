@@ -114,7 +114,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const hasMore = lastPage?.hasMore === true && nextCursor !== null;
   const isFetchingNextPage = results.at(-1)?.waiting === true && values.length > 0;
   const [filter, setFilter] = useState("");
-  const deferredFilter = useDeferredValue(filter.trim().toLocaleLowerCase());
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const deferredFilter = useDeferredValue(normalizedFilter);
+  const activeFilter = normalizedFilter.length === 0 ? "" : deferredFilter;
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<"refs" | "details" | null>(null);
   const previousMobilePane = useRef<typeof mobilePane>(null);
@@ -225,7 +228,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const headHash = useMemo(() => currentHeadHash(history), [history]);
   const primaryHashes = useMemo(() => firstParentHashes(history, headHash), [headHash, history]);
   const filteredHistory = useMemo(() => {
-    const query = deferredFilter;
+    const query = activeFilter;
     return history.filter(
       (commit) =>
         query.length === 0 ||
@@ -233,15 +236,15 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           .toLocaleLowerCase()
           .includes(query),
     );
-  }, [deferredFilter, history]);
+  }, [activeFilter, history]);
   const { laneCount, rows: graphRows } = useMemo(
     () =>
       layoutGitHistoryGraph(filteredHistory, {
-        includeMissingParents: deferredFilter.length === 0,
+        includeMissingParents: activeFilter.length === 0,
         ...(headHash ? { primaryHash: headHash } : {}),
         primaryHashes,
       }),
-    [deferredFilter, filteredHistory, headHash, primaryHashes],
+    [activeFilter, filteredHistory, headHash, primaryHashes],
   );
   const graphByHash = useMemo(() => new Map(graphRows.map((row) => [row.hash, row])), [graphRows]);
   const filteredRows = useMemo(() => {
@@ -423,12 +426,33 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               <div className="relative shrink-0 border-b border-border/60 p-2">
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
-                  className="h-7 w-full rounded border border-input bg-background/30 pr-2 pl-7 text-[11px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+                  ref={searchInputRef}
+                  className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-[11px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape" || filter.length === 0) return;
+                    event.preventDefault();
+                    setFilter("");
+                  }}
                   placeholder="Text or hash"
                   aria-label="Filter Git history"
                 />
+                {filter.length > 0 ? (
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    className="absolute top-1/2 right-3 size-5 -translate-y-1/2 rounded-sm text-muted-foreground"
+                    aria-label="Clear Git history search"
+                    onClick={() => {
+                      setFilter("");
+                      searchInputRef.current?.focus();
+                    }}
+                  >
+                    <XIcon className="size-3" />
+                  </Button>
+                ) : null}
               </div>
               {error ? (
                 <div className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive">
