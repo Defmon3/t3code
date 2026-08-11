@@ -1187,8 +1187,8 @@ describe("resolveProjectStatusIndicator", () => {
         },
         {
           label: "Pending Approval",
-          colorClass: "text-amber-600",
-          dotClass: "bg-amber-500",
+          colorClass: "text-red-600",
+          dotClass: "bg-red-500",
           pulse: false,
         },
         {
@@ -1198,7 +1198,7 @@ describe("resolveProjectStatusIndicator", () => {
           pulse: true,
         },
       ]),
-    ).toMatchObject({ label: "Pending Approval", dotClass: "bg-amber-500" });
+    ).toMatchObject({ label: "Pending Approval", dotClass: "bg-red-500" });
   });
 
   it("prefers plan-ready over completed when no stronger action is needed", () => {

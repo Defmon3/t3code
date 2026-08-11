@@ -110,6 +110,10 @@ export interface PendingApproval {
   requestKind: "command" | "file-read" | "file-change";
   createdAt: string;
   detail?: string;
+  source?: "hook";
+  title?: string;
+  description?: string;
+  reason?: string;
 }
 
 export interface PendingUserInput {
@@ -408,6 +412,15 @@ export function derivePendingApprovals(
           ? requestKindFromRequestType(payload.requestType)
           : null;
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+    const source = payload?.approvalSource === "hook" ? "hook" : undefined;
+    const title =
+      payload && typeof payload.approvalTitle === "string" ? payload.approvalTitle : undefined;
+    const description =
+      payload && typeof payload.approvalDescription === "string"
+        ? payload.approvalDescription
+        : undefined;
+    const reason =
+      payload && typeof payload.approvalReason === "string" ? payload.approvalReason : undefined;
 
     if (activity.kind === "approval.requested" && requestId && requestKind) {
       openByRequestId.set(requestId, {
@@ -415,6 +428,10 @@ export function derivePendingApprovals(
         requestKind,
         createdAt: activity.createdAt,
         ...(detail ? { detail } : {}),
+        ...(source ? { source } : {}),
+        ...(title ? { title } : {}),
+        ...(description ? { description } : {}),
+        ...(reason ? { reason } : {}),
       });
       continue;
     }
