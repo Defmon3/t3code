@@ -34,6 +34,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import type { T3HookRunner } from "../../hooks/T3HookRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
@@ -161,6 +162,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly hookRunner?: T3HookRunner["Service"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -186,6 +188,7 @@ function makeHarness(config?: {
           nativeEventLogPath: config.nativeEventLogPath,
         }
       : {}),
+    ...(config?.hookRunner ? { hookRunner: config.hookRunner } : {}),
   };
 
   return {
@@ -3282,6 +3285,202 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("surfaces hook-requested approval in full-access mode", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const permissionPromise = canUseTool(
+        "Bash",
+        { command: "git push origin main" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "hook-tool-use-1",
+          title: "Push protected branch?",
+          description: "This command updates the shared remote branch.",
+          decisionReason: "Argus policy requires confirmation for git push.",
+        },
+      );
+
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(requested._tag, "Some");
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+        return;
+      }
+      assert.deepEqual(requested.value.payload, {
+        requestType: "command_execution_approval",
+        detail: "Bash: git push origin main",
+        args: {
+          toolName: "Bash",
+          input: { command: "git push origin main" },
+          toolUseId: "hook-tool-use-1",
+          approvalSource: "hook",
+          approvalTitle: "Push protected branch?",
+          approvalDescription: "This command updates the shared remote branch.",
+          approvalReason: "Argus policy requires confirmation for git push.",
+        },
+      });
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.make(String(requested.value.requestId)),
+        "accept",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("runs T3 project hooks before full-access Claude tools", () => {
+    let evaluationCount = 0;
+    const hookRunner = {
+      prepare: (cwd: string) => {
+        assert.equal(cwd, "/tmp/hooked-project");
+        return Effect.succeed({
+          configPath: "/tmp/hooked-project/.t3code/hooks.json",
+          hasPreToolUseHooks: true,
+          evaluatePreToolUse: (input: {
+            readonly provider: string;
+            readonly threadId: string;
+            readonly toolName: string;
+            readonly toolInput: unknown;
+          }) => {
+            evaluationCount += 1;
+            assert.equal(input.provider, "claudeAgent");
+            assert.equal(input.threadId, THREAD_ID);
+            assert.equal(input.toolName, "Bash");
+            assert.deepEqual(input.toolInput, { command: "git push origin main" });
+            return Effect.succeed({
+              decision: "ask" as const,
+              reason: "T3 policy requires confirmation for git push.",
+              title: "Push protected branch?",
+              description: "This command updates a shared remote branch.",
+            });
+          },
+        });
+      },
+    } satisfies T3HookRunner["Service"];
+    const harness = makeHarness({ hookRunner });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        cwd: "/tmp/hooked-project",
+        runtimeMode: "full-access",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const permissionPromise = canUseTool(
+        "Bash",
+        { command: "git push origin main" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "t3-hook-tool-use-1",
+        },
+      );
+
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(requested._tag, "Some");
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+        return;
+      }
+      assert.deepEqual(requested.value.payload.args, {
+        toolName: "Bash",
+        input: { command: "git push origin main" },
+        toolUseId: "t3-hook-tool-use-1",
+        approvalSource: "hook",
+        approvalTitle: "Push protected branch?",
+        approvalDescription: "This command updates a shared remote branch.",
+        approvalReason: "T3 policy requires confirmation for git push.",
+      });
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.make(String(requested.value.requestId)),
+        "acceptForSession",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+
+      const secondPermissionResult = yield* Effect.promise(() =>
+        canUseTool(
+          "Bash",
+          { command: "git push origin main" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "t3-hook-tool-use-2",
+          },
+        ),
+      );
+      assert.equal((secondPermissionResult as PermissionResult).behavior, "allow");
+      assert.equal(evaluationCount, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps ordinary full-access tool callbacks automatic", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const permissionResult = yield* Effect.promise(() =>
+        canUseTool(
+          "Bash",
+          { command: "pwd" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "ordinary-tool-use-1",
+          },
+        ),
+      );
       assert.equal((permissionResult as PermissionResult).behavior, "allow");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

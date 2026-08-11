@@ -46,3 +46,53 @@ change.
 
 Mobile offers the same four modes. It labels the first one **Approve actions** rather than
 **Supervised**.
+
+## Project Hooks
+
+Claude and Codex threads can add project-specific checks to **Full access** with
+`.t3code/hooks.json`. T3 Code searches from the thread working directory toward the filesystem
+root and uses the first configuration it finds.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${T3_PROJECT_DIR}/.t3code/check-tool.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The matcher is a regular expression over T3's normalized tool names, such as `Bash`, `Read`,
+`Edit`, and `Write`. Each command receives JSON on standard input with `provider`, `thread_id`,
+`cwd`, `tool_name`, and `tool_input`. T3 Code also sets `T3_PROJECT_DIR` and
+`CLAUDE_PROJECT_DIR` to the directory that contains `.t3code`.
+
+A hook can return a small T3 response:
+
+```json
+{
+  "decision": "ask",
+  "title": "Push protected branch?",
+  "description": "This command updates a shared remote branch.",
+  "reason": "Project policy requires confirmation for git push."
+}
+```
+
+`decision` can be `allow`, `ask`, or `deny`. Claude-compatible `hookSpecificOutput` responses are
+also accepted. Empty output with exit code 0 allows the tool; exit code 2 denies it and uses
+standard error as the reason. Other script failures are shown as an approval instead of being
+silently ignored.
+
+Hook approvals appear only in the thread that triggered them. **Always allow this session** skips
+later hook prompts for that provider session. Other permission modes keep their provider's built-in
+protections and do not run T3 project hooks.
