@@ -41,6 +41,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
 const HISTORY_PAGE_SIZE = 100;
+const MAX_HISTORY_PAGES = 10;
 const INITIAL_CURSORS = [undefined] as const;
 
 interface GitHistoryPanelProps {
@@ -106,7 +107,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const isRepo = values[0]?.isRepo ?? true;
   const lastPage = values.at(-1) ?? null;
   const nextCursor = lastPage?.nextCursor ?? null;
-  const hasMore = lastPage?.hasMore === true && nextCursor !== null;
+  const hasMoreFromServer = lastPage?.hasMore === true && nextCursor !== null;
+  const historyLimitReached = cursors.length >= MAX_HISTORY_PAGES;
+  const hasMore = hasMoreFromServer && !historyLimitReached;
   const isFetchingNextPage = results.at(-1)?.waiting === true && values.length > 0;
   const [filter, setFilter] = useState("");
   const normalizedFilter = filter.trim().toLocaleLowerCase();
@@ -497,6 +500,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                   >
                     {isFetchingNextPage ? "Loading more…" : "Load more"}
                   </Button>
+                </div>
+              ) : null}
+              {filteredRows.length > 0 && historyLimitReached && hasMoreFromServer ? (
+                <div className="shrink-0 border-t border-border/50 px-3 py-2 text-center text-[0.6875rem] text-muted-foreground">
+                  Showing the first {HISTORY_PAGE_SIZE * MAX_HISTORY_PAGES} commits. Choose a branch
+                  or refine the search to keep history responsive.
                 </div>
               ) : null}
             </div>
