@@ -26,6 +26,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import * as T3HookRunner from "../../hooks/T3HookRunner.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
@@ -125,6 +127,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const processRunner = yield* ProcessRunner.make();
+      const hookRunner = yield* T3HookRunner.make().pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+      );
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -146,6 +152,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const adapterOptions = {
         instanceId,
         environment: processEnv,
+        hookRunner,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       };
       const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);
