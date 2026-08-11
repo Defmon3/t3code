@@ -183,7 +183,14 @@ function page(
 
 function gitRef(
   name: string,
-  options?: { readonly current?: boolean; readonly isRemote?: boolean; readonly isTag?: boolean },
+  options?: {
+    readonly aheadCount?: number;
+    readonly behindCount?: number;
+    readonly current?: boolean;
+    readonly isRemote?: boolean;
+    readonly isTag?: boolean;
+    readonly upstreamName?: string;
+  },
 ): VcsRef {
   return {
     name,
@@ -191,6 +198,9 @@ function gitRef(
     isDefault: false,
     isRemote: options?.isRemote ?? false,
     ...(options?.isTag ? { isTag: true } : {}),
+    ...(options?.aheadCount === undefined ? {} : { aheadCount: options.aheadCount }),
+    ...(options?.behindCount === undefined ? {} : { behindCount: options.behindCount }),
+    ...(options?.upstreamName === undefined ? {} : { upstreamName: options.upstreamName }),
     worktreePath: null,
   };
 }
@@ -206,7 +216,7 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
   const list = visitElements(
     panel,
     (element) =>
-      element.props.estimatedItemSize === 26 && typeof element.props.keyExtractor === "function",
+      element.props.estimatedItemSize === 30 && typeof element.props.keyExtractor === "function",
   );
   expect(list).not.toBeNull();
   return list as ReactElement<{
@@ -431,12 +441,30 @@ describe("GitHistoryPanel", () => {
     );
     historyState.refs = [
       gitRef("feature/api"),
-      gitRef("feature/ui", { current: true }),
+      gitRef("feature/ui", {
+        aheadCount: 10,
+        current: true,
+        upstreamName: "origin/feature/ui",
+      }),
+      gitRef("development", {
+        aheadCount: 3,
+        behindCount: 2,
+        upstreamName: "origin/development",
+      }),
       gitRef("main"),
     ];
     historyState.status = { aheadCount: 3, behindCount: 2, branchCommitCount: 10 };
 
     const initial = renderPanel();
+    expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      environmentId,
+      input: {
+        cwd: "C:/workspace",
+        limit: 100,
+        queryGeneration: 0,
+        revision: "refs/heads/feature/ui",
+      },
+    });
     const initialPane = componentTree(initial, "GitRefsPane");
     const initialSection = componentTree(initialPane, "RefSection", { section: "local" });
     const initialTree = componentTree(initialSection, "RefTree");
@@ -455,7 +483,22 @@ describe("GitHistoryPanel", () => {
     const uiBranch = visitElements(nestedTree, (element) => element.props.title === "feature/ui");
     expect(uiBranch).not.toBeNull();
     expect(
-      visitElements(nestedTree, (element) => element.props.title === "10 commits on this branch"),
+      visitElements(
+        nestedTree,
+        (element) => element.props.title === "10 commits ahead of origin/feature/ui",
+      ),
+    ).not.toBeNull();
+    expect(
+      visitElements(
+        initialTree,
+        (element) => element.props.title === "3 commits ahead of origin/development",
+      ),
+    ).not.toBeNull();
+    expect(
+      visitElements(
+        initialTree,
+        (element) => element.props.title === "2 commits behind origin/development",
+      ),
     ).not.toBeNull();
     (uiBranch?.props.onClick as (() => void) | undefined)?.();
 

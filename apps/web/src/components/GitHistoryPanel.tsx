@@ -30,6 +30,7 @@ import { CommitDetailsPane } from "./git-history/GitHistoryCommitDetails";
 import { CommitDiffView } from "./git-history/GitHistoryCommitDiff";
 import {
   CommitRow,
+  GIT_HISTORY_ROW_HEIGHT,
   currentHeadHash,
   firstParentHashes,
   graphColumnWidth,
@@ -43,10 +44,10 @@ import type {
   RefTreeProps,
 } from "./git-history/GitHistoryVisualTypes";
 import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
 const HISTORY_PAGE_SIZE = 100;
-const ROW_HEIGHT = 26;
 const INITIAL_CURSORS = [undefined] as const;
 
 interface GitHistoryPanelProps {
@@ -149,7 +150,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         }),
   );
   const {
-    currentBranchCommitCount,
     currentRef,
     expandedRefKeys,
     hasMoreRefs,
@@ -192,7 +192,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     filterActive: normalizedRefFilter.length > 0,
     expanded: expandedRefKeys,
     selectedRevision: selectedRevision?.revision ?? null,
-    currentBranchCommitCount,
     onToggle: toggleRefKey,
     onSelect: selectRef,
   } satisfies Omit<RefTreeProps, "nodes" | "namespace" | "section">;
@@ -298,11 +297,16 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <GitCommitHorizontalIcon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="text-xs font-medium">Git History</span>
-          <span className="truncate text-[10px] text-primary">
-            {selectedRevision?.label ?? "All refs"}
-          </span>
+          <Badge
+            variant="secondary"
+            className="min-w-0 max-w-64"
+            title={selectedRevision?.label ?? "All refs"}
+          >
+            <GitBranchIcon className="size-3 shrink-0 text-primary" />
+            <span className="truncate">{selectedRevision?.label ?? "All refs"}</span>
+          </Badge>
           {history.length > 0 ? (
-            <span className="hidden text-[10px] text-muted-foreground min-[440px]:inline">
+            <span className="hidden text-[11px] tabular-nums text-muted-foreground min-[440px]:inline">
               {history.length} commits
             </span>
           ) : null}
@@ -484,8 +488,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                     onSelect={setSelectedHash}
                   />
                 )}
-                estimatedItemSize={ROW_HEIGHT}
-                drawDistance={ROW_HEIGHT * 8}
+                estimatedItemSize={GIT_HISTORY_ROW_HEIGHT}
+                drawDistance={GIT_HISTORY_ROW_HEIGHT * 8}
                 className="min-h-0 flex-1 overscroll-y-contain"
               />
               {hasMore || isFetchingNextPage ? (

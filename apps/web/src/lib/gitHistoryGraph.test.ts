@@ -50,6 +50,26 @@ describe("layoutGitHistoryGraph", () => {
     });
   });
 
+  it("starts a new color segment at a branch decoration without breaking the lane", () => {
+    const layout = layoutGitHistoryGraph([
+      { hash: "head", parentHashes: ["tip"], refs: ["HEAD -> merge-wt", "origin/merge-wt"] },
+      { hash: "tip", parentHashes: ["base"] },
+      { hash: "base", parentHashes: ["root"], refs: ["fix/602-pr-integration"] },
+      { hash: "root", parentHashes: [] },
+    ]);
+
+    expect(layout.rows.map((row) => [row.hash, row.lane, row.colorIndex])).toEqual([
+      ["head", 0, 0],
+      ["tip", 0, 0],
+      ["base", 0, 1],
+      ["root", 0, 1],
+    ]);
+    expect(layout.rows[2]?.incomingColorIndex).toBe(0);
+    expect(layout.rows[2]?.edges).toContainEqual(
+      expect.objectContaining({ kind: "parent", colorIndex: 1, fromLane: 0, toLane: 0 }),
+    );
+  });
+
   it("keeps branch lanes and colors stable through a merge", () => {
     const layout = layoutGitHistoryGraph([
       { hash: "merge", parentHashes: ["main", "side"] },

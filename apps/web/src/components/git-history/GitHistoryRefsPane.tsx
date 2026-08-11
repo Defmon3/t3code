@@ -1,5 +1,6 @@
 import type { VcsRef } from "@t3tools/contracts";
 import {
+  ArrowDownIcon,
   ArrowUpIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -53,6 +54,8 @@ function RefTree(props: RefTreeProps) {
     }
     const revision = `refs/${props.namespace}/${node.ref.name}`;
     const selected = props.selectedRevision === revision;
+    const aheadCount = node.ref.aheadCount ?? 0;
+    const behindCount = node.ref.behindCount ?? 0;
     return (
       <button
         type="button"
@@ -74,15 +77,26 @@ function RefTree(props: RefTreeProps) {
           <GitBranchIcon className={cn("size-3 shrink-0", node.ref.current && "text-primary")} />
         )}
         <span className="truncate">{node.name}</span>
-        {node.ref.current && props.currentBranchCommitCount > 0 ? (
+        {aheadCount > 0 || behindCount > 0 ? (
           <span className="ml-auto flex shrink-0 items-center gap-1 text-[9px]">
-            <span
-              className="flex items-center text-emerald-400"
-              title={`${props.currentBranchCommitCount} commits on this branch`}
-            >
-              <ArrowUpIcon className="size-2.5" />
-              {props.currentBranchCommitCount}
-            </span>
+            {aheadCount > 0 ? (
+              <span
+                className="flex items-center text-emerald-400"
+                title={`${aheadCount} commits ahead of ${node.ref.upstreamName ?? "the configured upstream"}`}
+              >
+                <ArrowUpIcon className="size-2.5" />
+                {aheadCount > 99 ? "99+" : aheadCount}
+              </span>
+            ) : null}
+            {behindCount > 0 ? (
+              <span
+                className="flex items-center text-sky-400"
+                title={`${behindCount} commits behind ${node.ref.upstreamName ?? "the configured upstream"}`}
+              >
+                <ArrowDownIcon className="size-2.5" />
+                {behindCount > 99 ? "99+" : behindCount}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </button>

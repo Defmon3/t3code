@@ -3,8 +3,6 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "rea
 
 import { buildGitRefTree, filterGitRefTree } from "../../lib/gitRefTree";
 import { usePaginatedBranches } from "../../state/queries";
-import { vcsEnvironment } from "../../state/vcs";
-import { useEnvironmentQuery } from "../../state/query";
 
 export interface GitHistoryRevision {
   readonly label: string;
@@ -13,7 +11,9 @@ export interface GitHistoryRevision {
 
 export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   const [refFilter, setRefFilter] = useState("");
-  const [selectedRevision, setSelectedRevision] = useState<GitHistoryRevision | null>(null);
+  const [selectedRevisionState, setSelectedRevision] = useState<
+    GitHistoryRevision | null | undefined
+  >(undefined);
   const [expandedRefKeys, setExpandedRefKeys] = useState<ReadonlySet<string>>(
     () => new Set(["section:local"]),
   );
@@ -27,7 +27,6 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
     { environmentId, cwd, query: deferredRefFilter },
     { limit: 200, refKind: "tag" },
   );
-  const statusQuery = useEnvironmentQuery(vcsEnvironment.status({ environmentId, input: { cwd } }));
   const mergedRefs = refs.refs;
   const tagRefs = tags.refs;
   const localRefs = mergedRefs.filter((ref) => !ref.isRemote && !ref.isTag);
@@ -45,6 +44,12 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
     [normalizedRefFilter, tagRefs],
   );
   const currentRef = localRefs.find((ref) => ref.current) ?? null;
+  const selectedRevision =
+    selectedRevisionState === undefined
+      ? currentRef === null
+        ? null
+        : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` }
+      : selectedRevisionState;
   const toggleRefKey = useCallback((key: string) => {
     setExpandedRefKeys((current) => {
       const next = new Set(current);
@@ -61,13 +66,12 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   }, []);
 
   useEffect(() => {
-    setSelectedRevision(null);
+    setSelectedRevision(undefined);
     setRefFilter("");
     setExpandedRefKeys(new Set(["section:local"]));
   }, [cwd, environmentId]);
 
   return {
-    currentBranchCommitCount: statusQuery.data?.branchCommitCount ?? 0,
     currentRef,
     expandedRefKeys,
     hasMoreRefs:

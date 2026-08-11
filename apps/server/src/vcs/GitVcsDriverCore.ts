@@ -169,6 +169,15 @@ function parseBranchAb(value: string): { ahead: number; behind: number } {
   };
 }
 
+function parseRefUpstreamTrack(value: string): { aheadCount?: number; behindCount?: number } {
+  const aheadMatch = value.match(/ahead (\d+)/);
+  const behindMatch = value.match(/behind (\d+)/);
+  return {
+    ...(aheadMatch ? { aheadCount: Number.parseInt(aheadMatch[1] ?? "0", 10) } : {}),
+    ...(behindMatch ? { behindCount: Number.parseInt(behindMatch[1] ?? "0", 10) } : {}),
+  };
+}
+
 function parseNumstatEntries(
   stdout: string,
 ): Array<{ path: string; insertions: number; deletions: number }> {
@@ -2618,7 +2627,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           [
             ...gitDirArgs,
             "for-each-ref",
-            "--format=%(refname)%09%(creatordate:unix)%09%(symref)",
+            "--format=%(refname)%09%(creatordate:unix)%09%(symref)%09%(upstream:short)%09%(upstream:track)",
             "refs/heads",
             "refs/remotes",
             "refs/tags",
@@ -2690,7 +2699,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     for (const line of refsResult.stdout.split("\n")) {
       if (line.length === 0) continue;
-      const [fullRefName, lastCommitRaw, symbolicTarget] = line.split("\t");
+      const [fullRefName, lastCommitRaw, symbolicTarget, upstreamName = "", upstreamTrack = ""] =
+        line.split("\t");
       if (!fullRefName || symbolicTarget) continue;
       const parsedLastCommit = Number.parseInt(lastCommitRaw ?? "0", 10);
       const lastCommit = Number.isFinite(parsedLastCommit) ? parsedLastCommit : 0;
@@ -2704,6 +2714,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             isRemote: false,
             isDefault: name === defaultBranch,
             worktreePath: worktreeMap.get(name) ?? null,
+            ...(upstreamName.length > 0 ? { upstreamName } : {}),
+            ...parseRefUpstreamTrack(upstreamTrack),
           },
           lastCommit,
         });
@@ -2915,7 +2927,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         cursor: input.cursor,
         limit: input.limit,
       });
-
       return {
         refs: [...refs.refs],
         isRepo: true,
