@@ -30,7 +30,7 @@ function RefTree(props: RefTreeProps) {
         <div key={key}>
           <button
             type="button"
-            className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[11px] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             style={{ paddingLeft: `${depth * 14 + 4}px` }}
             onClick={() => props.onToggle(key)}
             aria-expanded={isExpanded}
@@ -61,7 +61,7 @@ function RefTree(props: RefTreeProps) {
         type="button"
         key={revision}
         className={cn(
-          "flex h-6 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[11px] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+          "flex h-6 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
           selected && "bg-accent/70 font-medium text-foreground",
         )}
         style={{ paddingLeft: `${depth * 14 + 20}px` }}
@@ -78,7 +78,7 @@ function RefTree(props: RefTreeProps) {
         )}
         <span className="truncate">{node.name}</span>
         {aheadCount > 0 || behindCount > 0 ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1 text-[9px]">
+          <span className="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem]">
             {aheadCount > 0 ? (
               <span
                 className="flex items-center text-emerald-400"
@@ -125,7 +125,7 @@ function RefSection(props: {
     <div>
       <button
         type="button"
-        className="flex h-7 w-full items-center gap-1 px-1 text-left text-[10px] font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
+        className="flex h-7 w-full items-center gap-1 px-1 text-left text-[0.625rem] font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
         onClick={props.onToggle}
         aria-expanded={props.open}
       >
@@ -202,7 +202,7 @@ export function GitRefsPane(props: {
         <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <input
           autoFocus={props.onClose ? true : undefined}
-          className="h-7 w-full rounded border border-input bg-background/30 pr-2 pl-7 text-[11px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+          className="h-7 w-full rounded border border-input bg-background/30 pr-2 pl-7 text-[0.6875rem] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
           value={props.refFilter}
           onChange={(event) => props.onRefFilterChange(event.target.value)}
           placeholder="Branch or tag"
@@ -213,7 +213,7 @@ export function GitRefsPane(props: {
         <button
           type="button"
           className={cn(
-            "flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[11px] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+            "flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
             props.selectedRevision === null && "bg-accent/70 font-medium text-foreground",
           )}
           onClick={props.onSelectAll}
@@ -224,7 +224,7 @@ export function GitRefsPane(props: {
         </button>
         <button
           type="button"
-          className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[11px] text-foreground/90 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+          className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/90 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
           disabled={props.currentRef === null}
           onClick={() => {
             if (props.currentRef)
@@ -263,12 +263,12 @@ export function GitRefsPane(props: {
         />
         {props.normalizedRefFilter.length > 0 &&
         props.localRefTree.length + props.remoteRefTree.length + props.tagRefTree.length === 0 ? (
-          <p className="px-2 py-4 text-center text-[11px] text-muted-foreground">
+          <p className="px-2 py-4 text-center text-[0.6875rem] text-muted-foreground">
             No matching branches or tags.
           </p>
         ) : null}
         {props.refPaginationError ? (
-          <div className="mt-2 flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
+          <div className="mt-2 flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[0.6875rem] text-destructive">
             <span className="min-w-0 truncate" title={props.refPaginationError}>
               {props.refPaginationError}
             </span>
