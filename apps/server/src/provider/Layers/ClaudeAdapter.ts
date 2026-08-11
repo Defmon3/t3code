@@ -3939,7 +3939,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }
 
         const runtimeMode = input.runtimeMode ?? "full-access";
-        if (runtimeMode === "full-access") {
+        const hookApprovalReason = callbackOptions.decisionReason?.trim();
+        const isHookApproval = runtimeMode === "full-access" && Boolean(hookApprovalReason);
+        if (runtimeMode === "full-access" && !isHookApproval) {
           return {
             behavior: "allow",
             updatedInput: toolInput,
@@ -3973,6 +3975,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               toolName,
               input: toolInput,
               ...(callbackOptions.toolUseID ? { toolUseId: callbackOptions.toolUseID } : {}),
+              ...(isHookApproval ? { approvalSource: "hook" } : {}),
+              ...(callbackOptions.title?.trim()
+                ? { approvalTitle: callbackOptions.title.trim() }
+                : {}),
+              ...(callbackOptions.description?.trim()
+                ? { approvalDescription: callbackOptions.description.trim() }
+                : {}),
+              ...(hookApprovalReason ? { approvalReason: hookApprovalReason } : {}),
             },
           },
           providerRefs: nativeProviderRefs(context, {

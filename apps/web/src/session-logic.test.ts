@@ -74,6 +74,10 @@ describe("derivePendingApprovals", () => {
           requestId: "req-1",
           requestKind: "command",
           detail: "bun run lint",
+          approvalSource: "hook",
+          approvalTitle: "Run project checks?",
+          approvalDescription: "The hook protects expensive commands.",
+          approvalReason: "This command runs the full test suite.",
         },
       }),
       makeActivity({
@@ -100,6 +104,10 @@ describe("derivePendingApprovals", () => {
         requestKind: "command",
         createdAt: "2026-02-23T00:00:01.000Z",
         detail: "bun run lint",
+        source: "hook",
+        title: "Run project checks?",
+        description: "The hook protects expensive commands.",
+        reason: "This command runs the full test suite.",
       },
     ]);
   });
