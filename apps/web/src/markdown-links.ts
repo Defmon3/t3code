@@ -61,7 +61,10 @@ function unwrapMarkdownLinkDestination(value: string): string {
 }
 
 export function normalizeMarkdownLinkDestination(value: string): string {
-  return unwrapMarkdownLinkDestination(value.trim());
+  const normalizedValue = unwrapMarkdownLinkDestination(value.trim());
+  return WINDOWS_DRIVE_PATH_PATTERN.test(normalizedValue)
+    ? normalizedValue.replaceAll("\\", "/")
+    : normalizedValue;
 }
 
 function stripSearchAndHash(value: string): { path: string; hash: string } {
@@ -126,7 +129,7 @@ export function remarkRewriteWindowsFileLinks() {
       if ((node.type === "link" || node.type === "definition") && typeof node.url === "string") {
         const normalizedUrl = normalizeMarkdownLinkDestination(node.url);
         if (WINDOWS_DRIVE_PATH_PATTERN.test(normalizedUrl)) {
-          node.url = `file:///${normalizedUrl.replaceAll("\\", "/")}`;
+          node.url = `file:///${normalizedUrl}`;
         }
       }
       node.children?.forEach(visit);
