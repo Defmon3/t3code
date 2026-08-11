@@ -6,7 +6,7 @@ import { type GitHistoryGraphRow } from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
-const ROW_HEIGHT = 26;
+export const GIT_HISTORY_ROW_HEIGHT = 30;
 const LANE_WIDTH = 11;
 const GRAPH_HORIZONTAL_PADDING = 6;
 const MAX_GRAPH_WIDTH = 104;
@@ -119,9 +119,14 @@ export function firstParentHashes(
   return hashes;
 }
 
-function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number; selected: boolean }) {
+function GraphCell(props: {
+  graph: GitHistoryGraphRow;
+  laneCount: number;
+  selected: boolean;
+  current: boolean;
+}) {
   const width = graphColumnWidth(props.laneCount);
-  const centerY = ROW_HEIGHT / 2;
+  const centerY = GIT_HISTORY_ROW_HEIGHT / 2;
   const laneWidth = Math.min(
     LANE_WIDTH,
     (width - GRAPH_HORIZONTAL_PADDING * 2) / Math.max(props.laneCount, 1),
@@ -132,9 +137,9 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number; select
       aria-hidden="true"
       data-git-graph={props.graph.hash}
       className="h-full shrink-0 overflow-visible"
-      viewBox={`0 0 ${width} ${ROW_HEIGHT}`}
+      viewBox={`0 0 ${width} ${GIT_HISTORY_ROW_HEIGHT}`}
       width={width}
-      height={ROW_HEIGHT}
+      height={GIT_HISTORY_ROW_HEIGHT}
     >
       {props.graph.hasIncoming ? (
         <line
@@ -147,7 +152,7 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number; select
               (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
             ]
           }
-          strokeWidth="1.35"
+          strokeWidth="1.1"
         />
       ) : null}
       {props.graph.edges.map((edge, index) => {
@@ -156,10 +161,10 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number; select
         const toX = x(edge.toLane);
         const path =
           edge.kind === "continuation"
-            ? `M ${fromX} -1 L ${toX} ${ROW_HEIGHT + 1}`
+            ? `M ${fromX} -1 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
             : edge.kind === "incoming"
               ? `M ${fromX} -1 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
-              : `M ${fromX} ${fromY} L ${fromX} ${centerY * 1.55} L ${toX} ${ROW_HEIGHT + 1}`;
+              : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`;
         return (
           <path
             data-edge-kind={edge.kind}
@@ -167,7 +172,7 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number; select
             d={path}
             fill="none"
             stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
-            strokeWidth="1.35"
+            strokeWidth="1.1"
             strokeLinecap="round"
             strokeDasharray={edge.isMissingParent ? "3 2" : undefined}
           />
@@ -175,10 +180,19 @@ function GraphCell(props: { graph: GitHistoryGraphRow; laneCount: number; select
       })}
       <circle
         data-commit-node={props.graph.hash}
+        data-current-head={props.current || undefined}
         cx={x(props.graph.lane)}
         cy={centerY}
-        r={props.selected ? 4.4 : 3.35}
-        fill={GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]}
+        r={props.selected ? 5 : 4}
+        fill={
+          props.current
+            ? "var(--background)"
+            : GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]
+        }
+        stroke={
+          props.current ? GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length] : undefined
+        }
+        strokeWidth={props.current ? 1.6 : undefined}
         className="transition-[r]"
       />
     </svg>
@@ -203,13 +217,18 @@ export function CommitRow(props: {
         "group flex w-full min-w-0 items-stretch border-b border-border/45 text-left outline-none transition-colors hover:bg-accent/45 focus-visible:bg-accent/60",
         props.selected && "bg-primary/15",
       )}
-      style={{ height: ROW_HEIGHT }}
+      style={{ height: GIT_HISTORY_ROW_HEIGHT }}
       onClick={() => props.onSelect(commit.hash)}
       aria-pressed={props.selected}
       aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
     >
-      <GraphCell graph={props.row.graph} laneCount={props.laneCount} selected={props.selected} />
-      <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] items-center gap-x-3 pr-3 text-[11px] @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
+      <GraphCell
+        graph={props.row.graph}
+        laneCount={props.laneCount}
+        selected={props.selected}
+        current={commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))}
+      />
+      <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] items-center gap-x-3 pr-3 text-[12px] @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
         <div className="min-w-0">
           <span
             className={cn(
