@@ -81,7 +81,7 @@ function CommitRefDecoration(props: {
           : GitBranchIcon;
   return (
     <span
-      className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground"
+      className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground"
       title={`${kind === "head" ? "HEAD" : kind === "remote" ? "Remote branch" : kind === "tag" ? "Tag" : "Local branch"}: ${label}`}
     >
       <Icon
@@ -171,7 +171,7 @@ function GraphCell(props: {
       className="h-full shrink-0 overflow-visible"
       viewBox={`0 0 ${width} ${GIT_HISTORY_ROW_HEIGHT}`}
       width={width}
-      height={GIT_HISTORY_ROW_HEIGHT}
+      height="100%"
     >
       {props.graph.hasIncoming ? (
         <line
@@ -246,10 +246,9 @@ export function CommitRow(props: {
   return (
     <div
       className={cn(
-        "group relative flex w-full min-w-0 items-stretch border-b border-border/45 text-left transition-colors hover:bg-accent/45",
+        "group relative flex h-[1.875rem] w-full min-w-0 items-stretch border-b border-border/45 text-left transition-colors hover:bg-accent/45",
         props.selected && "bg-accent/70",
       )}
-      style={{ height: GIT_HISTORY_ROW_HEIGHT }}
     >
       <button
         type="button"
@@ -266,7 +265,7 @@ export function CommitRow(props: {
           selected={props.selected}
           current={commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))}
         />
-        <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 pr-3 text-[12px] @max-[720px]:grid-cols-[minmax(10rem,1fr)]">
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 pr-3 text-xs @max-[720px]:grid-cols-[minmax(10rem,1fr)]">
           <div className="min-w-0">
             <span
               className={cn(
@@ -288,7 +287,7 @@ export function CommitRow(props: {
           <div className="flex min-w-0 justify-end gap-2 overflow-hidden @max-[720px]:hidden">
             {pullRequestNumber ? (
               <span
-                className="flex shrink-0 items-center gap-1 text-[10px] text-violet-400"
+                className="flex shrink-0 items-center gap-1 text-[0.625rem] text-violet-400"
                 title={`Pull request #${pullRequestNumber}`}
               >
                 <GitPullRequestIcon className="size-3" />#{pullRequestNumber}
@@ -299,7 +298,7 @@ export function CommitRow(props: {
             ))}
             {commit.refs.length > 3 ? (
               <span
-                className="shrink-0 text-[10px] text-muted-foreground"
+                className="shrink-0 text-[0.625rem] text-muted-foreground"
                 title={commit.refs.slice(3).join("\n")}
               >
                 +{commit.refs.length - 3}
@@ -319,7 +318,7 @@ export function CommitRow(props: {
       </div>
       <button
         type="button"
-        className="relative z-20 flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
+        className="relative z-20 flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[0.625rem] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
         onClick={() => copyToClipboard(commit.hash, undefined)}
         aria-label={`Copy commit hash ${commit.hash}`}
         title={isCopied ? "Commit hash copied" : `Copy full commit hash ${commit.hash}`}

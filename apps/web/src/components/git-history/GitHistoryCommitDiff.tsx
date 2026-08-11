@@ -44,7 +44,7 @@ export function CommitDiffView(props: {
         <span className="truncate text-xs font-medium">
           {props.filePath ?? `Commit ${props.hash.slice(0, 8)}`}
         </span>
-        <label className="ml-auto flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
+        <label className="ml-auto flex min-w-0 items-center gap-2 text-[0.625rem] text-muted-foreground">
           <span className="shrink-0">
             {props.filePath
               ? `${Math.max(1, props.files.findIndex((file) => file.path === props.filePath) + 1)} of ${props.files.length}`
@@ -67,7 +67,7 @@ export function CommitDiffView(props: {
             </SelectPopup>
           </Select>
         </label>
-        {props.truncated ? <span className="text-[10px] text-amber-400">truncated</span> : null}
+        {props.truncated ? <span className="text-[0.625rem] text-amber-400">truncated</span> : null}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {props.isPending ? (
