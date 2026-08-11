@@ -90,7 +90,6 @@ const SURFACE_DISABLED_REASONS = {
   gitHistory: "Git History is only available when a Git repository is open.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
-  gitHistory: "Git History is only available when a Git repository is open.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
