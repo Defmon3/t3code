@@ -374,26 +374,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
           This repository has no commits yet.
         </div>
-      ) : filteredRows.length === 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground">
-          <span className={error ? "text-destructive" : undefined}>
-            {error ?? "No loaded commits match this filter."}
-          </span>
-          {error || hasMore ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={error ? retryFailedPage : loadNext}
-              disabled={isFetchingNextPage}
-            >
-              {isFetchingNextPage
-                ? "Searching older commits…"
-                : error
-                  ? "Retry older commits"
-                  : "Search older commits"}
-            </Button>
-          ) : null}
-        </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
           <GitRefsPane
@@ -468,24 +448,46 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                   <span>Hash</span>
                 </div>
               </div>
-              <LegendList<GitHistoryRow>
-                data={filteredRows}
-                keyExtractor={(row) => row.commit.hash}
-                renderItem={({ item }) => (
-                  <CommitRow
-                    row={item}
-                    laneCount={laneCount}
-                    refKinds={commitRefKinds}
-                    {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
-                    selected={item.commit.hash === selectedHash}
-                    onSelect={setSelectedHash}
-                  />
-                )}
-                estimatedItemSize={GIT_HISTORY_ROW_HEIGHT}
-                drawDistance={GIT_HISTORY_ROW_HEIGHT * 8}
-                className="min-h-0 flex-1 overscroll-y-contain"
-              />
-              {hasMore || isFetchingNextPage ? (
+              {filteredRows.length === 0 ? (
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground">
+                  <span className={error ? "text-destructive" : undefined}>
+                    {error ?? "No loaded commits match this filter."}
+                  </span>
+                  {error || hasMore ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={error ? retryFailedPage : loadNext}
+                      disabled={isFetchingNextPage}
+                    >
+                      {isFetchingNextPage
+                        ? "Searching older commits…"
+                        : error
+                          ? "Retry older commits"
+                          : "Search older commits"}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <LegendList<GitHistoryRow>
+                  data={filteredRows}
+                  keyExtractor={(row) => row.commit.hash}
+                  renderItem={({ item }) => (
+                    <CommitRow
+                      row={item}
+                      laneCount={laneCount}
+                      refKinds={commitRefKinds}
+                      {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
+                      selected={item.commit.hash === selectedHash}
+                      onSelect={setSelectedHash}
+                    />
+                  )}
+                  estimatedItemSize={GIT_HISTORY_ROW_HEIGHT}
+                  drawDistance={GIT_HISTORY_ROW_HEIGHT * 8}
+                  className="min-h-0 flex-1 overscroll-y-contain"
+                />
+              )}
+              {filteredRows.length > 0 && (hasMore || isFetchingNextPage) ? (
                 <div className="flex shrink-0 justify-center border-t border-border/50 p-2">
                   <Button
                     size="xs"
