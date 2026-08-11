@@ -1,7 +1,15 @@
 import type { GitHistoryCommit } from "@t3tools/contracts";
-import { CircleDotIcon, CloudIcon, GitBranchIcon, GitPullRequestIcon, TagIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CircleDotIcon,
+  CloudIcon,
+  GitBranchIcon,
+  GitPullRequestIcon,
+  TagIcon,
+} from "lucide-react";
 import * as Cause from "effect/Cause";
 
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { type GitHistoryGraphRow } from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
@@ -207,76 +215,91 @@ export function CommitRow(props: {
   onSelect: (hash: string) => void;
 }) {
   const { commit } = props.row;
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "commit hash" });
   const pullRequestNumber = pullRequestNumberFromSubject(commit.subject);
   const isMergeCommit = commit.parentHashes.length > 1 || /^Merge\b/i.test(commit.subject);
   return (
-    <button
-      type="button"
-      data-commit-hash={commit.hash}
+    <div
       className={cn(
-        "group flex w-full min-w-0 items-stretch border-b border-border/45 text-left outline-none transition-colors hover:bg-accent/45 focus-visible:bg-accent/60",
-        props.selected && "bg-primary/15",
+        "group flex w-full min-w-0 items-stretch border-b border-border/45 text-left transition-colors hover:bg-accent/45",
+        props.selected && "bg-accent/70",
       )}
       style={{ height: GIT_HISTORY_ROW_HEIGHT }}
-      onClick={() => props.onSelect(commit.hash)}
-      aria-pressed={props.selected}
-      aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
     >
-      <GraphCell
-        graph={props.row.graph}
-        laneCount={props.laneCount}
-        selected={props.selected}
-        current={commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))}
-      />
-      <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] items-center gap-x-3 pr-3 text-[12px] @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
-        <div className="min-w-0">
+      <button
+        type="button"
+        data-commit-hash={commit.hash}
+        className="flex min-w-0 flex-1 items-stretch text-left outline-none focus-visible:bg-accent/60"
+        onClick={() => props.onSelect(commit.hash)}
+        aria-pressed={props.selected}
+        aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
+      >
+        <GraphCell
+          graph={props.row.graph}
+          laneCount={props.laneCount}
+          selected={props.selected}
+          current={commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))}
+        />
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 pr-3 text-[12px] @max-[720px]:grid-cols-[minmax(10rem,1fr)]">
+          <div className="min-w-0">
+            <span
+              className={cn(
+                "block truncate font-medium",
+                isMergeCommit ? "text-muted-foreground" : "text-foreground",
+              )}
+              title={commit.subject}
+            >
+              {commit.subject || "(no subject)"}
+            </span>
+          </div>
+          <div className="flex min-w-0 justify-end gap-2 overflow-hidden @max-[720px]:hidden">
+            {pullRequestNumber ? (
+              <span
+                className="flex shrink-0 items-center gap-1 text-[10px] text-violet-400"
+                title={`Pull request #${pullRequestNumber}`}
+              >
+                <GitPullRequestIcon className="size-3" />#{pullRequestNumber}
+              </span>
+            ) : null}
+            {commit.refs.slice(0, 3).map((ref) => (
+              <CommitRefDecoration key={ref} refName={ref} refKinds={props.refKinds} />
+            ))}
+            {commit.refs.length > 3 ? (
+              <span
+                className="shrink-0 text-[10px] text-muted-foreground"
+                title={commit.refs.slice(3).join("\n")}
+              >
+                +{commit.refs.length - 3}
+              </span>
+            ) : null}
+          </div>
           <span
-            className={cn(
-              "block truncate font-medium",
-              isMergeCommit ? "text-muted-foreground" : "text-foreground",
-            )}
-            title={commit.subject}
+            className="truncate text-muted-foreground @max-[720px]:hidden"
+            title={commit.authorName}
           >
-            {commit.subject || "(no subject)"}
+            {commit.authorName}
+          </span>
+          <span className="truncate text-muted-foreground @max-[720px]:hidden">
+            {formatCommitDate(commit.authoredAt)}
           </span>
         </div>
-        <div className="flex min-w-0 justify-end gap-2 overflow-hidden @max-[720px]:hidden">
-          {pullRequestNumber ? (
-            <span
-              className="flex shrink-0 items-center gap-1 text-[10px] text-violet-400"
-              title={`Pull request #${pullRequestNumber}`}
-            >
-              <GitPullRequestIcon className="size-3" />#{pullRequestNumber}
-            </span>
-          ) : null}
-          {commit.refs.slice(0, 3).map((ref) => (
-            <CommitRefDecoration key={ref} refName={ref} refKinds={props.refKinds} />
-          ))}
-          {commit.refs.length > 3 ? (
-            <span
-              className="shrink-0 text-[10px] text-muted-foreground"
-              title={commit.refs.slice(3).join("\n")}
-            >
-              +{commit.refs.length - 3}
-            </span>
-          ) : null}
-        </div>
-        <span
-          className="truncate text-muted-foreground @max-[720px]:hidden"
-          title={commit.authorName}
-        >
-          {commit.authorName}
-        </span>
-        <span className="truncate text-muted-foreground @max-[720px]:hidden">
-          {formatCommitDate(commit.authoredAt)}
-        </span>
-        <span
-          className="truncate font-mono text-[10px] text-sky-500/85 tabular-nums dark:text-sky-300/75"
-          title={commit.hash}
-        >
-          {commit.hash.slice(0, 8)}
-        </span>
-      </div>
-    </button>
+      </button>
+      <button
+        type="button"
+        className="flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[10px] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
+        onClick={() => copyToClipboard(commit.hash, undefined)}
+        aria-label={`Copy commit hash ${commit.hash}`}
+        title={isCopied ? "Commit hash copied" : `Copy full commit hash ${commit.hash}`}
+      >
+        {isCopied ? (
+          <>
+            <CheckIcon className="size-3 text-success-foreground" />
+            Copied
+          </>
+        ) : (
+          commit.hash.slice(0, 8)
+        )}
+      </button>
+    </div>
   );
 }
