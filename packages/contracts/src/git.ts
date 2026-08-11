@@ -144,7 +144,7 @@ export type VcsListRefsInput = typeof VcsListRefsInput.Type;
 export const VcsGetHistoryInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   revision: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(1024))),
-  cursor: Schema.optional(NonNegativeInt),
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
   queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_HISTORY_MAX_LIMIT))),
 });
@@ -326,7 +326,7 @@ export type GitCommitDetails = typeof GitCommitDetails.Type;
 export const VcsGetHistoryResult = Schema.Struct({
   commits: Schema.Array(GitHistoryCommit),
   isRepo: Schema.Boolean,
-  nextCursor: NonNegativeInt.pipe(Schema.NullOr),
+  nextCursor: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
   hasMore: Schema.Boolean,
 });
 export type VcsGetHistoryResult = typeof VcsGetHistoryResult.Type;
@@ -423,6 +423,15 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
 }) {
   override get message(): string {
     return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}`;
+  }
+}
+
+export class VcsSnapshotExpiredError extends Schema.TaggedErrorClass<VcsSnapshotExpiredError>()(
+  "VcsSnapshotExpiredError",
+  { operation: Schema.String, cursor: TrimmedNonEmptyStringSchema },
+) {
+  override get message(): string {
+    return `Git browsing snapshot expired for ${this.operation}.`;
   }
 }
 
