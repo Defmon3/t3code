@@ -29,9 +29,22 @@ const historyState = vi.hoisted(() => ({
   refresh: vi.fn(),
   refreshRefs: vi.fn(),
   refreshTags: vi.fn(),
+  toastAdd: vi.fn(),
   refs: [] as ReadonlyArray<VcsRef>,
   tags: [] as ReadonlyArray<VcsRef>,
   status: { aheadCount: 0, behindCount: 0, branchCommitCount: 0 },
+}));
+
+vi.mock("../hooks/useCopyToClipboard", () => ({
+  useCopyToClipboard: (options?: { readonly onError?: (error: Error) => void }) => ({
+    copyToClipboard: () => options?.onError?.(new Error("Clipboard permission was denied.")),
+    isCopied: false,
+  }),
+}));
+
+vi.mock("./ui/toast", () => ({
+  stackedThreadToast: (toast: unknown) => toast,
+  toastManager: { add: historyState.toastAdd },
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -274,6 +287,7 @@ describe("GitHistoryPanel", () => {
     historyState.refresh.mockReset();
     historyState.refreshRefs.mockReset();
     historyState.refreshTags.mockReset();
+    historyState.toastAdd.mockReset();
     historyState.refs = [];
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0, branchCommitCount: 0 };
@@ -536,6 +550,13 @@ describe("GitHistoryPanel", () => {
         (element) => element.props.title === "3 commits ahead of origin/development",
       ),
     ).not.toBeNull();
+    const developmentBranch = visitElements(
+      initialTree,
+      (element) => element.props.title === "development",
+    );
+    expect(developmentBranch?.props["aria-label"]).toBe(
+      "development. 3 commits ahead of upstream origin/development. 2 commits behind upstream origin/development.",
+    );
     expect(
       visitElements(
         initialTree,
@@ -648,6 +669,25 @@ describe("GitHistoryPanel", () => {
     expect(shortHash).not.toBeNull();
     expect(shortHash?.props.title).toBe(`Copy full commit hash ${historyCommit.hash}`);
     expect(shortHash?.props["aria-label"]).toBe(`Copy commit hash ${historyCommit.hash}`);
+  });
+
+  it("shows an error toast when copying a history hash is rejected", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const copyHash = visitElements(
+      historyRow,
+      (element) => element.props["aria-label"] === `Copy commit hash ${historyCommit.hash}`,
+    );
+    (copyHash?.props.onClick as (() => void) | undefined)?.();
+
+    expect(historyState.toastAdd).toHaveBeenCalledWith({
+      type: "error",
+      title: "Could not copy commit hash",
+      description: "Clipboard permission was denied.",
+    });
   });
 
   it("gives every selectable commit its author, date, and parent topology", () => {
