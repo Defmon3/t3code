@@ -205,17 +205,6 @@ export const ProjectReadFileResult = Schema.Struct({
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
-export const ProjectResolveFileInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-});
-export type ProjectResolveFileInput = typeof ProjectResolveFileInput.Type;
-
-export const ProjectResolveFileResult = Schema.Struct({
-  relativePath: TrimmedNonEmptyString,
-});
-export type ProjectResolveFileResult = typeof ProjectResolveFileResult.Type;
-
 export const ProjectFileFailure = Schema.Literals([
   "workspace_path_outside_root",
   "resolved_path_outside_root",
@@ -269,31 +258,6 @@ export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFil
       message:
         decodedProjectErrorMessage(props) ??
         `Failed to read workspace file '${props.relativePath}' in '${props.cwd}'.`,
-    } as any);
-  }
-}
-
-export class ProjectResolveFileError extends Schema.TaggedErrorClass<ProjectResolveFileError>()(
-  "ProjectResolveFileError",
-  {
-    cwd: Schema.optional(TrimmedNonEmptyString),
-    path: Schema.optional(TrimmedNonEmptyString),
-    failure: Schema.optional(ProjectFileFailure),
-    resolvedPath: Schema.optional(TrimmedNonEmptyString),
-    resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
-    operation: Schema.optional(ProjectFileOperation),
-    operationPath: Schema.optional(TrimmedNonEmptyString),
-    message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
-  constructor(props: Omit<ProjectFileFailureContext, "relativePath"> & { readonly path: string }) {
-    super({
-      ...props,
-      message:
-        decodedProjectErrorMessage({ ...props, relativePath: props.path }) ??
-        `Failed to resolve workspace file '${props.path}' in '${props.cwd}'.`,
     } as any);
   }
 }

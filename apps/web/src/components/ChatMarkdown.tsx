@@ -38,6 +38,7 @@ import React, {
 } from "react";
 import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
 import ReactMarkdown from "react-markdown";
+import { defaultUrlTransform } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
@@ -72,9 +73,9 @@ import {
   serializeTableElementToMarkdown,
 } from "../markdown-clipboard";
 import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
-import { transformMarkdownUrl } from "../markdown-url-transform";
 import {
-  normalizeMarkdownLinkDestination,
+  normalizeMarkdownFileLinkHrefKey,
+  remarkRewriteWindowsFileLinks,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
@@ -88,7 +89,6 @@ import { serverEnvironment } from "../state/server";
 import { assetEnvironment } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
 import { previewEnvironment } from "../state/preview";
-import { projectEnvironment } from "../state/projects";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
@@ -147,65 +147,35 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
   if (!match?.[1]) return null;
   return listItemStart + firstLine.indexOf(match[1]);
 }
-const WINDOWS_DRIVE_PROTOCOLS = [
-  "a",
-  "b",
-  "c",
-  "d",
-  "e",
-  "f",
-  "g",
-  "h",
-  "i",
-  "j",
-  "k",
-  "l",
-  "m",
-  "n",
-  "o",
-  "p",
-  "q",
-  "r",
-  "s",
-  "t",
-  "u",
-  "v",
-  "w",
-  "x",
-  "y",
-  "z",
-] as const;
-
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
-    a: [...(defaultSchema.attributes?.a ?? []), "dataMarkdownFileHref"],
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file", ...WINDOWS_DRIVE_PROTOCOLS],
+    href: [...(defaultSchema.protocols?.href ?? []), "file"],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
+  remarkRewriteWindowsFileLinks,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
-  remarkPreserveWindowsFileLinks,
   remarkPreserveCodeMeta,
   remarkTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
+  remarkRewriteWindowsFileLinks,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkBreaks,
-  remarkPreserveWindowsFileLinks,
   remarkPreserveCodeMeta,
   remarkTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
@@ -295,7 +265,6 @@ type MarkdownAstNode = {
   data?: {
     hProperties?: Record<string, unknown>;
   };
-  url?: unknown;
   children?: MarkdownAstNode[];
 };
 
@@ -308,29 +277,6 @@ function remarkPreserveCodeMeta() {
           hProperties: {
             ...node.data?.hProperties,
             dataCodeMeta: node.meta.trim(),
-          },
-        };
-      }
-      node.children?.forEach(visit);
-    };
-
-    visit(tree);
-  };
-}
-
-function remarkPreserveWindowsFileLinks() {
-  return (tree: MarkdownAstNode) => {
-    const visit = (node: MarkdownAstNode) => {
-      if (
-        node.type === "link" &&
-        typeof node.url === "string" &&
-        /^[A-Za-z]:[\\/]/.test(node.url)
-      ) {
-        node.data = {
-          ...node.data,
-          hProperties: {
-            ...node.data?.hProperties,
-            dataMarkdownFileHref: node.url,
           },
         };
       }
@@ -848,44 +794,10 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
-  resolveWorkspaceRelativePath?: (() => Promise<string | null>) | undefined;
   onOpenInBrowser?:
-    | ((relativePath: string) => Promise<AtomCommandResult<unknown, unknown>>)
+    | ((filePath: string) => Promise<AtomCommandResult<unknown, unknown>>)
     | undefined;
   className?: string | undefined;
-}
-
-export async function openMarkdownFileInT3({
-  threadRef,
-  line,
-  workspaceRelativePath,
-  resolveWorkspaceRelativePath,
-  openFile,
-}: {
-  readonly threadRef: ScopedThreadRef | undefined;
-  readonly line: number | undefined;
-  readonly workspaceRelativePath: string | null;
-  readonly resolveWorkspaceRelativePath: (() => Promise<string | null>) | undefined;
-  readonly openFile: (threadRef: ScopedThreadRef, relativePath: string, line?: number) => void;
-}): Promise<boolean> {
-  if (!threadRef) return false;
-  const relativePath = workspaceRelativePath ?? (await resolveWorkspaceRelativePath?.()) ?? null;
-  if (!relativePath) return false;
-  openFile(threadRef, relativePath, line);
-  return true;
-}
-
-export async function openMarkdownBrowserFileInT3({
-  workspaceRelativePath,
-  resolveWorkspaceRelativePath,
-  openInBrowser,
-}: {
-  readonly workspaceRelativePath: string | null;
-  readonly resolveWorkspaceRelativePath: (() => Promise<string | null>) | undefined;
-  readonly openInBrowser: (relativePath: string) => Promise<AtomCommandResult<unknown, unknown>>;
-}): Promise<AtomCommandResult<unknown, unknown> | null> {
-  const relativePath = workspaceRelativePath ?? (await resolveWorkspaceRelativePath?.()) ?? null;
-  return relativePath ? openInBrowser(relativePath) : null;
 }
 
 const MARKDOWN_LINK_HREF_PATTERN = /\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
@@ -975,12 +887,6 @@ function extractMarkdownLinkHrefs(text: string): string[] {
     hrefs.push(href);
   }
   return hrefs;
-}
-
-function normalizeMarkdownLinkHrefKey(href: string): string {
-  const normalizedHref = normalizeMarkdownLinkDestination(href);
-  const target = rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
-  return /^[A-Za-z]:[\\/]/.test(target) ? `${target[0]?.toLowerCase()}${target.slice(1)}` : target;
 }
 
 const MARKDOWN_LINK_FAVICON_CLASS_NAME = "block size-full shrink-0 select-none";
@@ -1175,7 +1081,7 @@ function MarkdownExternalLinkContent({
   );
 }
 
-export const MarkdownFileLink = memo(function MarkdownFileLink({
+const MarkdownFileLink = memo(function MarkdownFileLink({
   href,
   targetPath,
   iconPath,
@@ -1187,7 +1093,6 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   theme,
   threadRef,
   onOpen,
-  resolveWorkspaceRelativePath,
   onOpenInBrowser,
   className,
 }: MarkdownFileLinkProps) {
@@ -1227,25 +1132,12 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   }, [onOpen, targetPath]);
 
   const handleOpenInFilePreview = useCallback(() => {
-    void openMarkdownFileInT3({
-      threadRef,
-      line,
-      workspaceRelativePath,
-      resolveWorkspaceRelativePath,
-      openFile: (targetThreadRef, relativePath, targetLine) =>
-        useRightPanelStore.getState().openFile(targetThreadRef, relativePath, targetLine),
-    }).then((opened) => {
-      if (!opened) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to open file",
-            description: "The file is outside this project or is no longer available.",
-          }),
-        );
-      }
-    });
-  }, [line, resolveWorkspaceRelativePath, threadRef, workspaceRelativePath]);
+    if (!threadRef || !workspaceRelativePath) {
+      handleOpenInEditor();
+      return;
+    }
+    useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
+  }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!onOpenInBrowser) {
@@ -1253,21 +1145,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     void (async () => {
       try {
-        const result = await openMarkdownBrowserFileInT3({
-          workspaceRelativePath,
-          resolveWorkspaceRelativePath,
-          openInBrowser: onOpenInBrowser,
-        });
-        if (result === null) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Unable to open file in browser",
-              description: "The file is outside this project or is no longer available.",
-            }),
-          );
-          return;
-        }
+        const result = await onOpenInBrowser(workspaceRelativePath ?? targetPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1297,7 +1175,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpenInBrowser, resolveWorkspaceRelativePath, targetPath, workspaceRelativePath]);
+  }, [onOpenInBrowser, targetPath, workspaceRelativePath]);
 
   const handleCopy = useCallback(
     (value: string, title: string) => {
@@ -1435,7 +1313,6 @@ function areMarkdownFileLinkPropsEqual(
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
-    previous.resolveWorkspaceRelativePath === next.resolveWorkspaceRelativePath &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
   );
@@ -1459,26 +1336,11 @@ function ChatMarkdown({
     reportFailure: false,
   });
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
-  const activeEnvironmentId = useActiveEnvironmentId();
-  const fileLinkEnvironmentId = threadRef?.environmentId ?? activeEnvironmentId;
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(fileLinkEnvironmentId));
+  const environmentId = useActiveEnvironmentId();
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
-    fileLinkEnvironmentId,
+    environmentId,
     serverConfig?.availableEditors ?? [],
-  );
-  const resolveProjectFile = useAtomQueryRunner(projectEnvironment.resolveFile, {
-    reportFailure: false,
-  });
-  const resolveMarkdownFileWorkspaceRelativePath = useCallback(
-    async (filePath: string): Promise<string | null> => {
-      if (!threadRef || !cwd) return null;
-      const result = await resolveProjectFile({
-        environmentId: threadRef.environmentId,
-        input: { cwd, path: filePath },
-      });
-      return result._tag === "Success" ? result.value.relativePath : null;
-    },
-    [cwd, resolveProjectFile, threadRef],
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
@@ -1487,7 +1349,7 @@ function ChatMarkdown({
       NonNullable<ReturnType<typeof resolveMarkdownFileLinkMeta>>
     >();
     for (const href of extractMarkdownLinkHrefs(text)) {
-      const normalizedHref = normalizeMarkdownLinkHrefKey(href);
+      const normalizedHref = normalizeMarkdownFileLinkHrefKey(href);
       if (metaByHref.has(normalizedHref)) continue;
       const meta = resolveMarkdownFileLinkMeta(normalizedHref, cwd);
       if (meta) {
@@ -1514,12 +1376,9 @@ function ChatMarkdown({
     ];
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
-  const markdownUrlTransform = useCallback(
-    (href: string) => {
-      return transformMarkdownUrl(href, cwd);
-    },
-    [cwd],
-  );
+  const markdownUrlTransform = useCallback((href: string) => {
+    return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
+  }, []);
   // Re-emit highlighted content as markdown so copying out of the rendered
   // view keeps links, emphasis, lists, and code fences intact.
   const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -1608,9 +1467,6 @@ function ChatMarkdown({
           theme={resolvedTheme}
           threadRef={threadRef}
           onOpen={openInPreferredEditor}
-          resolveWorkspaceRelativePath={() =>
-            resolveMarkdownFileWorkspaceRelativePath(fileLinkMeta.filePath)
-          }
           onOpenInBrowser={
             threadRef &&
             isPreviewSupportedInRuntime() &&
@@ -1687,19 +1543,7 @@ function ChatMarkdown({
         );
       },
       a({ node, href, children, ...props }) {
-        const preservedFileHref =
-          node &&
-          typeof node === "object" &&
-          "properties" in node &&
-          node.properties &&
-          typeof node.properties === "object" &&
-          "dataMarkdownFileHref" in node.properties &&
-          typeof node.properties.dataMarkdownFileHref === "string"
-            ? node.properties.dataMarkdownFileHref
-            : href;
-        const normalizedHref = preservedFileHref
-          ? normalizeMarkdownLinkHrefKey(preservedFileHref)
-          : "";
+        const normalizedHref = href ? normalizeMarkdownFileLinkHrefKey(href) : "";
         const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
         if (!fileLinkMeta) {
           const faviconHost = resolveExternalWebLinkHost(href);
@@ -1842,7 +1686,6 @@ function ChatMarkdown({
     markdownFileLinkMetaByHref,
     onTaskListChange,
     openInPreferredEditor,
-    resolveMarkdownFileWorkspaceRelativePath,
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
     resolvedTheme,

@@ -12,8 +12,6 @@ import * as NodeFSP from "node:fs/promises";
 import type {
   ProjectReadFileInput,
   ProjectReadFileResult,
-  ProjectResolveFileInput,
-  ProjectResolveFileResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "@t3tools/contracts";
@@ -113,10 +111,6 @@ export class WorkspaceFileSystem extends Context.Service<
       ProjectReadFileResult,
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
-    /** Resolve an existing workspace file to its canonical relative path. */
-    readonly resolveFile: (
-      input: ProjectResolveFileInput,
-    ) => Effect.Effect<ProjectResolveFileResult, WorkspaceFileSystemError>;
     /**
      * Write a file relative to the workspace root.
      *
@@ -137,72 +131,6 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
-
-  const resolveFile: WorkspaceFileSystem["Service"]["resolveFile"] = Effect.fn(
-    "WorkspaceFileSystem.resolveFile",
-  )(function* (input) {
-    const requestedPath = path.isAbsolute(input.path)
-      ? input.path
-      : path.resolve(input.cwd, input.path);
-    const realWorkspaceRoot = yield* Effect.tryPromise({
-      try: () => NodeFSP.realpath(input.cwd),
-      catch: (cause) =>
-        new WorkspaceFileSystemOperationError({
-          workspaceRoot: input.cwd,
-          relativePath: input.path,
-          resolvedPath: requestedPath,
-          operationPath: input.cwd,
-          operation: "realpath-workspace-root",
-          cause,
-        }),
-    });
-    const realTargetPath = yield* Effect.tryPromise({
-      try: () => NodeFSP.realpath(requestedPath),
-      catch: (cause) =>
-        new WorkspaceFileSystemOperationError({
-          workspaceRoot: input.cwd,
-          relativePath: input.path,
-          resolvedPath: requestedPath,
-          operationPath: requestedPath,
-          operation: "realpath-target",
-          cause,
-        }),
-    });
-    const relativePath = path.relative(realWorkspaceRoot, realTargetPath);
-    if (
-      relativePath.length === 0 ||
-      relativePath.startsWith(`..${path.sep}`) ||
-      relativePath === ".." ||
-      path.isAbsolute(relativePath)
-    ) {
-      return yield* new WorkspaceFilePathEscapeError({
-        workspaceRoot: input.cwd,
-        relativePath: input.path,
-        resolvedWorkspaceRoot: realWorkspaceRoot,
-        resolvedPath: realTargetPath,
-      });
-    }
-    const stat = yield* Effect.tryPromise({
-      try: () => NodeFSP.stat(realTargetPath),
-      catch: (cause) =>
-        new WorkspaceFileSystemOperationError({
-          workspaceRoot: input.cwd,
-          relativePath: input.path,
-          resolvedPath: realTargetPath,
-          operationPath: realTargetPath,
-          operation: "stat",
-          cause,
-        }),
-    });
-    if (!stat.isFile()) {
-      return yield* new WorkspacePathNotFileError({
-        workspaceRoot: input.cwd,
-        relativePath: input.path,
-        resolvedPath: realTargetPath,
-      });
-    }
-    return { relativePath: relativePath.replaceAll(path.sep, "/") };
-  });
 
   const readFile: WorkspaceFileSystem["Service"]["readFile"] = Effect.fn(
     "WorkspaceFileSystem.readFile",
@@ -369,7 +297,7 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ readFile, resolveFile, writeFile });
+  return WorkspaceFileSystem.of({ readFile, writeFile });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);
