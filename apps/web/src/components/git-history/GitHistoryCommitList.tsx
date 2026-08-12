@@ -169,72 +169,79 @@ function GraphCell(props: {
   );
   const x = (lane: number) => lane * laneWidth + GRAPH_HORIZONTAL_PADDING + laneWidth / 2;
   return (
-    <svg
+    <div
       aria-hidden="true"
       data-git-graph={props.graph.hash}
-      className="-my-px h-[calc(100%+2px)] shrink-0 overflow-visible"
-      viewBox={`0 -1 ${width} ${GIT_HISTORY_ROW_HEIGHT + 2}`}
-      width={width}
-      height={GIT_HISTORY_ROW_HEIGHT + 2}
+      className="relative h-full shrink-0 overflow-visible"
+      style={{ width }}
     >
-      {props.graph.hasIncoming ? (
-        <line
-          x1={x(props.graph.lane)}
-          y1="-2"
-          x2={x(props.graph.lane)}
-          y2={centerY}
-          stroke={
-            GRAPH_COLORS[
-              (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
-            ]
-          }
-          strokeWidth="1.1"
-        />
-      ) : null}
-      {props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW).map((edge, index) => {
-        const fromX =
-          edge.kind === "parent" || edge.kind === "elided" ? x(props.graph.lane) : x(edge.fromLane);
-        const fromY = edge.kind === "parent" || edge.kind === "elided" ? centerY : 0;
-        const toX = x(edge.toLane);
-        const path =
-          edge.kind === "continuation"
-            ? `M ${fromX} -2 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
-            : edge.kind === "incoming"
-              ? `M ${fromX} -2 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
-              : edge.kind === "elided"
-                ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
-                : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`;
-        return (
-          <path
-            data-edge-kind={edge.kind}
-            key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
-            d={path}
-            fill="none"
-            stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
+      <svg
+        className="absolute -top-px left-0 overflow-visible"
+        viewBox={`0 -1 ${width} ${GIT_HISTORY_ROW_HEIGHT + 2}`}
+        width={width}
+        height={GIT_HISTORY_ROW_HEIGHT + 2}
+      >
+        {props.graph.hasIncoming ? (
+          <line
+            x1={x(props.graph.lane)}
+            y1="-2"
+            x2={x(props.graph.lane)}
+            y2={centerY}
+            stroke={
+              GRAPH_COLORS[
+                (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
+              ]
+            }
             strokeWidth="1.1"
-            strokeLinecap="round"
-            strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
           />
-        );
-      })}
-      <circle
-        data-commit-node={props.graph.hash}
-        data-current-head={props.current || undefined}
-        cx={x(props.graph.lane)}
-        cy={centerY}
-        r={props.selected ? 5 : 4}
-        fill={
-          props.current
-            ? "var(--background)"
-            : GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]
-        }
-        stroke={
-          props.current ? GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length] : undefined
-        }
-        strokeWidth={props.current ? 1.6 : undefined}
-        className="transition-[r]"
-      />
-    </svg>
+        ) : null}
+        {props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW).map((edge, index) => {
+          const fromX =
+            edge.kind === "parent" || edge.kind === "elided"
+              ? x(props.graph.lane)
+              : x(edge.fromLane);
+          const fromY = edge.kind === "parent" || edge.kind === "elided" ? centerY : 0;
+          const toX = x(edge.toLane);
+          const path =
+            edge.kind === "continuation"
+              ? `M ${fromX} -2 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
+              : edge.kind === "incoming"
+                ? `M ${fromX} -2 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
+                : edge.kind === "elided"
+                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
+                  : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`;
+          return (
+            <path
+              data-edge-kind={edge.kind}
+              key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
+              d={path}
+              fill="none"
+              stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
+              strokeWidth="1.1"
+              strokeLinecap="round"
+              strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
+            />
+          );
+        })}
+        <circle
+          data-commit-node={props.graph.hash}
+          data-current-head={props.current || undefined}
+          cx={x(props.graph.lane)}
+          cy={centerY}
+          r={props.selected ? 5 : 4}
+          fill={
+            props.current
+              ? "var(--background)"
+              : GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]
+          }
+          stroke={
+            props.current ? GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length] : undefined
+          }
+          strokeWidth={props.current ? 1.6 : undefined}
+          className="transition-[r]"
+        />
+      </svg>
+    </div>
   );
 }
 

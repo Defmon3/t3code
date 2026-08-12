@@ -543,10 +543,13 @@ describe("GitHistoryPanel", () => {
     expect(graph).not.toBeNull();
     expect(content).not.toBeNull();
 
-    const graphSvg = renderComponent(graph!);
-    expect(graphSvg.props.className).toContain("-my-px");
-    expect(graphSvg.props.height).toBe(32);
-    expect(graphSvg.props.viewBox).toBe("0 -1 44 32");
+    const graphRoot = renderComponent(graph!);
+    const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
+    expect(graphRoot.props.className).toContain("overflow-visible");
+    expect(graphSvg).not.toBeNull();
+    expect(graphSvg!.props.className).toContain("-top-px");
+    expect(graphSvg!.props.height).toBe(32);
+    expect(graphSvg!.props.viewBox).toBe("0 -1 44 32");
   });
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
