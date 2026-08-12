@@ -4,6 +4,7 @@ import {
   Bot,
   FileDiff,
   Files,
+  GitGraph,
   GitPullRequest,
   Globe2,
   Plus,
@@ -58,12 +59,14 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
@@ -88,6 +91,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
+  gitHistory: "Git History is only available when a Git repository is open.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -153,12 +157,14 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
@@ -216,6 +222,16 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
       onClick: props.onAddPullRequest,
+      badgeCount: 0,
+    },
+    {
+      label: "Git History",
+      description: "Browse commits in this repository.",
+      icon: GitGraph,
+      shortcut: "G",
+      available: props.gitHistoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
+      onClick: props.onAddGitHistory,
       badgeCount: 0,
     },
     {
@@ -409,6 +425,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "Git History";
     case "files":
       return "Files";
     case "file":
@@ -470,6 +488,8 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitGraph className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -715,6 +735,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     Pull request
                   </SurfaceMenuItem>
                   <SurfaceMenuItem
+                    available={props.gitHistoryAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.gitHistory}
+                    onClick={props.onAddGitHistory}
+                  >
+                    <GitGraph />
+                    Git History
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
                     available={props.agentsAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.agents}
                     onClick={props.onAddAgents}
@@ -735,12 +763,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddGitHistory={props.onAddGitHistory}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
+            gitHistoryAvailable={props.gitHistoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}

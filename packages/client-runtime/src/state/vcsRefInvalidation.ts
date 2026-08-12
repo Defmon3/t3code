@@ -16,14 +16,21 @@ export interface CachedVcsRefsInvalidationTarget extends VcsRefsInvalidationTarg
 
 export interface VcsRefsCacheState {
   readonly revision: number;
+  readonly historyRevision: number;
   readonly persistedCacheReadable: boolean;
 }
 
 const stateByEnvironment = Atom.family((environmentId: EnvironmentId) =>
   Atom.make<VcsRefsCacheState>({
     revision: 0,
+    historyRevision: 0,
     persistedCacheReadable: true,
   }).pipe(Atom.keepAlive, Atom.withLabel(`environment-data:vcs:list-refs-state:${environmentId}`)),
+);
+const historyRevisionByEnvironment = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => get(stateByEnvironment(environmentId)).historyRevision).pipe(
+    Atom.withLabel(`environment-data:vcs:history-revision:${environmentId}`),
+  ),
 );
 const persistenceLock = PartitionedSemaphore.makeUnsafe<EnvironmentId>({ permits: 1 });
 
@@ -31,13 +38,19 @@ export function vcsRefsCacheStateAtom(target: VcsRefsInvalidationTarget) {
   return stateByEnvironment(target.environmentId);
 }
 
+export function vcsHistoryRevisionAtom(target: VcsRefsInvalidationTarget): Atom.Atom<number> {
+  return historyRevisionByEnvironment(target.environmentId);
+}
+
 export function invalidateVcsRefs(
   registry: AtomRegistry.AtomRegistry,
   target: VcsRefsInvalidationTarget,
   persistedCacheReadable?: boolean,
+  invalidateHistory = true,
 ): void {
   registry.update(vcsRefsCacheStateAtom(target), (state) => ({
     revision: state.revision + 1,
+    historyRevision: state.historyRevision + (invalidateHistory ? 1 : 0),
     persistedCacheReadable: persistedCacheReadable ?? state.persistedCacheReadable,
   }));
 }
@@ -59,6 +72,7 @@ export function withVcsRefsPersistenceLock<A, E, R>(
 export const invalidateCachedVcsRefs = Effect.fn("VcsRefsState.invalidateCached")(function* (
   registry: AtomRegistry.AtomRegistry,
   target: CachedVcsRefsInvalidationTarget,
+  invalidateHistory = true,
 ) {
   const cache = yield* EnvironmentCacheStore;
   yield* withVcsRefsPersistenceLock(
@@ -77,7 +91,7 @@ export const invalidateCachedVcsRefs = Effect.fn("VcsRefsState.invalidateCached"
           ),
         ),
       );
-      invalidateVcsRefs(registry, target, persistedCacheReadable);
+      invalidateVcsRefs(registry, target, persistedCacheReadable, invalidateHistory);
     }),
   );
 });
