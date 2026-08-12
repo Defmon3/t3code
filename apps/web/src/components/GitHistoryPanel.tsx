@@ -68,6 +68,17 @@ export function isWideHistoryLayout(width: number): boolean {
   return width >= WIDE_HISTORY_LAYOUT_MIN_WIDTH;
 }
 
+export function appendCommitFilesPage(
+  current: ReadonlyArray<GitCommitChangedFile>,
+  page: ReadonlyArray<GitCommitChangedFile>,
+): ReadonlyArray<GitCommitChangedFile> {
+  return [...current, ...page].slice(0, 2_000);
+}
+
+export function nextCommitFilesCursor(nextCursor: string | null): string | undefined {
+  return nextCursor ?? undefined;
+}
+
 function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
   const [isWide, setIsWide] = useState(true);
 
@@ -229,7 +240,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     const pageKey = `${selectedHash}:${commitFilesCursor ?? "first"}:${page.nextCursor ?? "last"}`;
     if (receivedCommitFilesPages.current.has(pageKey)) return;
     receivedCommitFilesPages.current.add(pageKey);
-    setCommitFiles((current) => [...current, ...page.files].slice(0, 2_000));
+    setCommitFiles((current) => appendCommitFilesPage(current, page.files));
     setCommitFilesHasMore(page.hasMore);
     setCommitFilesCapped(page.capped);
     setCommitFilesNextCursor(page.nextCursor);
@@ -252,8 +263,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   }, [commitFilesQuery]);
   const selectedCommitFiles = commitFiles;
   const loadMoreCommitFiles = () => {
-    const nextCursor = commitFilesNextCursor;
-    if (nextCursor) setCommitFilesCursor(nextCursor);
+    const cursor = nextCommitFilesCursor(commitFilesNextCursor);
+    if (cursor) setCommitFilesCursor(cursor);
   };
   const commitDiffQuery = useEnvironmentQuery(
     commitDiffRequest === null

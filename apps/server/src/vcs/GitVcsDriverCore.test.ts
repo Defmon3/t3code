@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, describe } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -51,6 +52,21 @@ const makeSuccessfulHandle = (stdout: string) =>
     unref: Effect.succeed(Effect.void),
     stdin: Sink.drain,
     stdout: Stream.encodeText(Stream.make(stdout)),
+    stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+
+const makeHangingHandle = () =>
+  ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.never,
+    isRunning: Effect.succeed(true),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: Stream.empty,
     stderr: Stream.empty,
     all: Stream.empty,
     getInputFd: () => Sink.drain,
@@ -176,6 +192,35 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     ]);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("times out getCommitDiff.show after its explicit 10-second command timeout", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const showSpawned = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "show"
+          ? Deferred.succeed(showSpawned, undefined).pipe(Effect.as(makeHangingHandle()))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const diff = yield* Effect.forkChild(
+        driver.getCommitDiff({ cwd, hash: "HEAD" }).pipe(Effect.exit),
+      );
+      yield* Deferred.await(showSpawned);
+      yield* TestClock.adjust("10 seconds");
+      const result = yield* Fiber.join(diff);
+      if (result._tag !== "Failure") return assert.fail("Expected getCommitDiff to time out.");
+      assert.match(Cause.pretty(result.cause), /GitVcsDriver\.getCommitDiff\.show/);
+      assert.match(Cause.pretty(result.cause), /Git command timed out\./);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
 
 it.effect("invalidates origin remote cache when a driver mutation adds origin", () =>
   Effect.gen(function* () {
