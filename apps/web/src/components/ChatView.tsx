@@ -398,6 +398,7 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { hasGitHistoryCapability } from "../gitHistoryCapability";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -481,6 +482,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
+const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -2123,6 +2125,7 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsAttachmentUploads =
     attachmentEnvironmentConfig?.environment.capabilities.attachmentUploads === true;
+  const supportsGitHistory = hasGitHistoryCapability(serverConfig?.environment.capabilities);
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -2758,6 +2761,12 @@ function ChatViewContent(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const gitHistoryIssueUrlPrefix =
+    activeProject?.repositoryIdentity?.provider === "github" &&
+    activeProject.repositoryIdentity.owner &&
+    activeProject.repositoryIdentity.name
+      ? `https://github.com/${activeProject.repositoryIdentity.owner}/${activeProject.repositoryIdentity.name}/issues/`
+      : undefined;
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -3458,6 +3467,10 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const addGitHistorySurface = useCallback(() => {
+    if (!activeThreadRef || !supportsGitHistory || !isGitRepo || gitCwd === null) return;
+    useRightPanelStore.getState().open(activeThreadRef, "git-history");
+  }, [activeThreadRef, gitCwd, isGitRepo, supportsGitHistory]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -6741,6 +6754,19 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
+    ) : activeRightPanelSurface?.kind === "git-history" && !supportsGitHistory ? (
+      <PullRequestsUnavailableState
+        title="Git History unavailable"
+        error="Update this environment's T3 Code server to browse Git History."
+      />
+    ) : activeRightPanelSurface?.kind === "git-history" && gitCwd ? (
+      <Suspense fallback={null}>
+        <GitHistoryPanel
+          environmentId={environmentId}
+          cwd={gitCwd}
+          {...(gitHistoryIssueUrlPrefix ? { issueUrlPrefix: gitHistoryIssueUrlPrefix } : {})}
+        />
+      </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <PullRequestDetailGhost />
     ) : activeRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
@@ -7257,12 +7283,14 @@ function ChatViewContent(props: ChatViewProps) {
           onAddBrowser={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
+          onAddGitHistory={addGitHistorySurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddAgents={addAgentsSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
+          gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
@@ -7297,12 +7325,14 @@ function ChatViewContent(props: ChatViewProps) {
             onAddBrowser={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
+            onAddGitHistory={addGitHistorySurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
+            gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable

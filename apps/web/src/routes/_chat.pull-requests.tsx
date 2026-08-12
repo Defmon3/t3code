@@ -1585,12 +1585,14 @@ function PullRequestsRouteView() {
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
+            onAddGitHistory={() => undefined}
             onAddPullRequest={() => undefined}
             onAddAgents={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
+            gitHistoryAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}

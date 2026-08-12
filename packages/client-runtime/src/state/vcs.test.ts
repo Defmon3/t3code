@@ -125,10 +125,12 @@ describe("cached VCS refs", () => {
 
     expect(registry.get(vcsRefsCacheStateAtom(environment))).toEqual({
       revision: 0,
+      historyRevision: 0,
       persistedCacheReadable: true,
     });
     expect(registry.get(vcsRefsCacheStateAtom(otherEnvironment))).toEqual({
       revision: 0,
+      historyRevision: 0,
       persistedCacheReadable: true,
     });
 
@@ -136,10 +138,12 @@ describe("cached VCS refs", () => {
 
     expect(registry.get(vcsRefsCacheStateAtom(environment))).toEqual({
       revision: 1,
+      historyRevision: 1,
       persistedCacheReadable: true,
     });
     expect(registry.get(vcsRefsCacheStateAtom(otherEnvironment))).toEqual({
       revision: 0,
+      historyRevision: 0,
       persistedCacheReadable: true,
     });
     registry.dispose();
@@ -258,6 +262,7 @@ describe("cached VCS refs", () => {
         expect(yield* Ref.get(revisionsObservedDuringClear)).toEqual([0]);
         expect(registry.get(vcsRefsCacheStateAtom(TARGET))).toEqual({
           revision: 1,
+          historyRevision: 1,
           persistedCacheReadable: true,
         });
 
@@ -382,6 +387,7 @@ describe("cached VCS refs", () => {
         const state = registry.get(vcsRefsCacheStateAtom(TARGET));
         expect(state).toEqual({
           revision: 1,
+          historyRevision: 1,
           persistedCacheReadable: false,
         });
 
@@ -423,6 +429,7 @@ describe("cached VCS refs", () => {
         const recoveredState = registry.get(vcsRefsCacheStateAtom(TARGET));
         expect(recoveredState).toEqual({
           revision: 1,
+          historyRevision: 1,
           persistedCacheReadable: true,
         });
         expect(yield* Ref.get(clearAttempts)).toBe(2);
