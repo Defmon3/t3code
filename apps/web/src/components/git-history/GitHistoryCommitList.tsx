@@ -172,15 +172,15 @@ function GraphCell(props: {
     <svg
       aria-hidden="true"
       data-git-graph={props.graph.hash}
-      className="h-full shrink-0 overflow-visible"
-      viewBox={`0 0 ${width} ${GIT_HISTORY_ROW_HEIGHT}`}
+      className="-my-px h-[calc(100%+2px)] shrink-0 overflow-visible"
+      viewBox={`0 -1 ${width} ${GIT_HISTORY_ROW_HEIGHT + 2}`}
       width={width}
-      height="100%"
+      height={GIT_HISTORY_ROW_HEIGHT + 2}
     >
       {props.graph.hasIncoming ? (
         <line
           x1={x(props.graph.lane)}
-          y1="-1"
+          y1="-2"
           x2={x(props.graph.lane)}
           y2={centerY}
           stroke={
@@ -198,12 +198,12 @@ function GraphCell(props: {
         const toX = x(edge.toLane);
         const path =
           edge.kind === "continuation"
-            ? `M ${fromX} -1 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
+            ? `M ${fromX} -2 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
             : edge.kind === "incoming"
-              ? `M ${fromX} -1 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
+              ? `M ${fromX} -2 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
               : edge.kind === "elided"
-                ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
-                : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`;
+                ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
+                : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`;
         return (
           <path
             data-edge-kind={edge.kind}

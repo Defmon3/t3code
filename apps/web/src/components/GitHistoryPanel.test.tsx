@@ -542,6 +542,11 @@ describe("GitHistoryPanel", () => {
     expect(historyRow.props.className).not.toContain("border-b");
     expect(graph).not.toBeNull();
     expect(content).not.toBeNull();
+
+    const graphSvg = renderComponent(graph!);
+    expect(graphSvg.props.className).toContain("-my-px");
+    expect(graphSvg.props.height).toBe(32);
+    expect(graphSvg.props.viewBox).toBe("0 -1 44 32");
   });
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
