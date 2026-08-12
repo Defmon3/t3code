@@ -42,6 +42,14 @@ describe("Windows markdown file link rendering", () => {
     );
   });
 
+  it("percent-encodes a unicode drive-path href through HTML sanitization", () => {
+    const path = "C:/Users/mike/dev-stuff/文档/apps/web/src/markdown-links.ts";
+
+    expect(renderMarkdown(`[markdown-links.ts](${path}) is open above.`)).toContain(
+      '<a href="C:/Users/mike/dev-stuff/%E6%96%87%E6%A1%A3/apps/web/src/markdown-links.ts">markdown-links.ts</a>',
+    );
+  });
+
   it("still removes unsafe schemes", () => {
     expect(renderMarkdown("[unsafe](javascript:alert(1))")).not.toContain("href=");
   });

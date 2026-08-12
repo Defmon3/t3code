@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  normalizeMarkdownFileLinkHrefKey,
   normalizeMarkdownLinkDestination,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
@@ -15,6 +16,27 @@ describe("normalizeMarkdownLinkDestination", () => {
         "C:\\Users\\mike\\dev-stuff\\t3code\\apps\\web\\src\\markdown-links.ts",
       ),
     ).toBe("C:/Users/mike/dev-stuff/t3code/apps/web/src/markdown-links.ts");
+  });
+});
+
+describe("normalizeMarkdownFileLinkHrefKey", () => {
+  it("uses the same key for raw and encoded unicode drive paths", () => {
+    const encodedPath = "C:/Users/mike/dev-stuff/%E6%96%87%E6%A1%A3/apps/web/src/markdown-links.ts";
+
+    expect(
+      normalizeMarkdownFileLinkHrefKey(
+        "C:\\Users\\mike\\dev-stuff\\文档\\apps\\web\\src\\markdown-links.ts",
+      ),
+    ).toBe(encodedPath);
+    expect(normalizeMarkdownFileLinkHrefKey(encodedPath)).toBe(encodedPath);
+  });
+
+  it("preserves existing encoded octets", () => {
+    expect(
+      normalizeMarkdownFileLinkHrefKey(
+        "C:/Users/mike/dev-stuff/t3code/apps/web/src/file%2520name.ts",
+      ),
+    ).toBe("C:/Users/mike/dev-stuff/t3code/apps/web/src/file%2520name.ts");
   });
 });
 
