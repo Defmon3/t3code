@@ -146,13 +146,8 @@ export class ServerSettingsService extends Context.Service<
 
 const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
   Effect.gen(function* () {
-    const {
-      automaticGitFetchInterval,
-      providerHealthRefreshInterval,
-      providerSessionInactivityThreshold,
-      providerSessionSweepInterval,
-      ...overridesForMerge
-    } = overrides;
+    const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
+      overrides;
     const merged = deepMerge(DEFAULT_SERVER_SETTINGS, overridesForMerge);
     const initialSettings = yield* normalizeServerSettings({
       ...merged,
@@ -161,15 +156,6 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
         : {}),
       ...(providerHealthRefreshInterval !== undefined
         ? { providerHealthRefreshInterval: providerHealthRefreshInterval as Duration.Duration }
-        : {}),
-      ...(providerSessionInactivityThreshold !== undefined
-        ? {
-            providerSessionInactivityThreshold:
-              providerSessionInactivityThreshold as Duration.Duration,
-          }
-        : {}),
-      ...(providerSessionSweepInterval !== undefined
-        ? { providerSessionSweepInterval: providerSessionSweepInterval as Duration.Duration }
         : {}),
     });
     const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
@@ -226,8 +212,6 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "backgroundActivity",
   "automaticGitFetchInterval",
   "providerHealthRefreshInterval",
-  "providerSessionInactivityThreshold",
-  "providerSessionSweepInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
 ]);
