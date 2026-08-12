@@ -150,6 +150,7 @@ import {
 } from "../previewMiniPlayerStore";
 import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
+import { IssuePickerDialog } from "./issue/IssuePickerDialog";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
@@ -3349,8 +3350,9 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProject, activeThreadRef, supportsPullRequests, threadRepository],
   );
   /**
-   * An issue a pull request in this panel references, opened as a peer tab beside it. Only this
-   * view knows which thread's panel that is, which is why the panel is told rather than asking.
+   * An issue opened as a tab in this thread's panel — picked from the surface chooser, or
+   * referenced by a pull request already open beside it. Only this view knows which thread's
+   * panel that is, which is why the panel is told rather than asking.
    */
   const openLinkedIssue = useCallback(
     (link: { repository: string; number: number }) => {
@@ -4190,6 +4192,11 @@ function ChatViewContent(props: ChatViewProps) {
         : { state: activeThreadPrState, updatedAt: activeThreadPrUpdatedAt },
     [activeThreadPrState, activeThreadPrUpdatedAt],
   );
+  // Which issue is not something this panel can know, so the chooser asks before it opens one.
+  const [issuePickerOpen, setIssuePickerOpen] = useState(false);
+  const addIssueSurface = useCallback(() => setIssuePickerOpen(true), []);
+  const issueSurfaceAvailable =
+    supportsIssues && activeProject !== null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -6720,12 +6727,14 @@ function ChatViewContent(props: ChatViewProps) {
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
+          onAddIssue={addIssueSurface}
           onAddAgents={addAgentsSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
+          issueAvailable={issueSurfaceAvailable}
           agentsAvailable
           pullRequestStatuses={pullRequestTabStatuses}
           issueStatuses={issueTabStatuses}
@@ -6761,12 +6770,14 @@ function ChatViewContent(props: ChatViewProps) {
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
+            onAddIssue={addIssueSurface}
             onAddAgents={addAgentsSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
+            issueAvailable={issueSurfaceAvailable}
             agentsAvailable
             pullRequestStatuses={pullRequestTabStatuses}
             issueStatuses={issueTabStatuses}
@@ -6775,6 +6786,18 @@ function ChatViewContent(props: ChatViewProps) {
             {rightPanelContent}
           </RightPanelTabs>
         </RightPanelSheet>
+      ) : null}
+
+      {/* Mounted once for the thread rather than with the chooser, so opening it is a state
+          change and not a fresh subscription; it reads nothing while it is closed. */}
+      {activeThread && activeProject && issueSurfaceAvailable ? (
+        <IssuePickerDialog
+          open={issuePickerOpen}
+          onOpenChange={setIssuePickerOpen}
+          environmentId={activeThread.environmentId}
+          projectId={activeProject.id}
+          onSelect={openLinkedIssue}
+        />
       ) : null}
 
       {expandedImage && (

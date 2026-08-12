@@ -82,6 +82,12 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  /**
+   * Picking an issue needs a project to pick from, which only a thread has: the list pages reuse
+   * these tabs to hold surfaces they opened themselves, so for them this card stays out.
+   */
+  onAddIssue: () => void;
+  issueAvailable: boolean;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -117,6 +123,7 @@ const SURFACE_DISABLED_REASONS = {
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
+  issue: "Issues are only available from a project checked out from a host.",
   agents: "Agents are only available from a thread.",
 } as const;
 
@@ -139,6 +146,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   files: "Available when a project is open.",
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
+  issue: "Available for projects with a host.",
   agents: "Available from a thread.",
 } as const;
 
@@ -207,6 +215,9 @@ export function surfaceShortcutActionForKey<
   );
 }
 
+/** Stands in for a surface this panel does not offer, which is never reachable to press. */
+const noSurface = () => undefined;
+
 function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement }) {
   return (
     <Tooltip>
@@ -251,12 +262,14 @@ function RightPanelEmptyState(props: {
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
+  onAddIssue: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
+  issueAvailable: boolean;
   agentsAvailable: boolean;
   liveAgentCount: number;
 }) {
@@ -312,6 +325,16 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
       onClick: props.onAddPullRequest,
+      badgeCount: 0,
+    },
+    {
+      label: "Issue",
+      description: "Pick an issue from this project.",
+      icon: CircleDot,
+      shortcut: "I",
+      available: props.issueAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.issue,
+      onClick: props.onAddIssue,
       badgeCount: 0,
     },
     {
@@ -665,6 +688,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddPullRequest,
     },
     {
+      label: "Issue",
+      icon: CircleDot,
+      shortcut: "I",
+      available: props.issueAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.issue,
+      onClick: props.onAddIssue,
+    },
+    {
       label: "Agents",
       icon: Bot,
       shortcut: "A",
@@ -967,12 +998,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
+            onAddIssue={props.onAddIssue}
             onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
+            issueAvailable={props.issueAvailable}
             agentsAvailable={props.agentsAvailable}
             liveAgentCount={props.liveAgentCount}
           />
