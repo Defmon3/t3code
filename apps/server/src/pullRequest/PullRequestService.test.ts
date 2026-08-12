@@ -2760,6 +2760,7 @@ it.effect(
                   verdicts: ["comment", "approve", "request-changes"],
                   requestReviewers: true,
                 },
+                linkedIssues: [],
               });
             },
             getChangeRequestActivity: () => {

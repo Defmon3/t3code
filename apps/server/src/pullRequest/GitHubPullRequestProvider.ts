@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type {
+  IssueLink,
   PullRequestActor,
   PullRequestCapabilities,
   PullRequestReaction,
@@ -252,12 +253,17 @@ export const make = Effect.gen(function* () {
           // A small permissions query replaces the deeply paginated review-thread walk on the
           // core path. Writes ask again immediately before mutating, so this is presentation.
           cli.getViewerAccess(input),
+          // A section of links is worth less than the pull request it hangs off: an install that
+          // answers nothing useful here leaves the section empty rather than blanking the detail.
+          cli
+            .listLinkedIssues(input)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => [])),
         ],
-        { concurrency: 3 },
+        { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
-          ([detail, repository, viewerAccess]): ProviderChangeRequestDetail => ({
+          ([detail, repository, viewerAccess, linkedIssues]): ProviderChangeRequestDetail => ({
             ...detail.pullRequest,
             reviewers: detail.pullRequest.reviewRequestLogins.map((login) => ({
               login,
@@ -278,6 +284,7 @@ export const make = Effect.gen(function* () {
             ...(detail.comparison?.behindBy == null
               ? {}
               : { behindBy: detail.comparison.behindBy }),
+            linkedIssues,
           }),
         ),
       ),

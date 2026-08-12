@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
+  IssueLink,
   PullRequestAction,
   PullRequestComment,
   PullRequestCommit,
@@ -24,6 +25,7 @@ import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
   AWARD_EMOJI_GRAPHQL_QUERY,
   decodeAwardEmojiJson,
+  decodeClosesIssuesJson,
   decodeCommitDiffRefsJson,
   decodeCommitsJson,
   decodeDiffRefsJson,
@@ -248,6 +250,13 @@ export class GitLabPullRequestCli extends Context.Service<
       { readonly comments: ReadonlyArray<PullRequestComment>; readonly truncated: boolean },
       GitLabPullRequestCliError
     >;
+
+    /** The issues merging this merge request closes; GitLab reports no other kind of link. */
+    readonly listLinkedIssues: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitLabPullRequestCliError>;
 
     readonly listCommits: (input: {
       readonly cwd: string;
@@ -1096,6 +1105,28 @@ export const make = Effect.gen(function* () {
           method: "DELETE",
         });
       }),
+
+    listLinkedIssues: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/closes_issues?${query(
+          [["per_page", String(MAX_PAGE_SIZE)]],
+        )}`,
+      }).pipe(
+        Effect.flatMap((result) => {
+          const decoded = decodeClosesIssuesJson(result.stdout.trim());
+          return Result.isSuccess(decoded)
+            ? Effect.succeed(decoded.success)
+            : Effect.fail(
+                new GitLabMergeRequestReadError({
+                  command: "glab",
+                  cwd: input.cwd,
+                  operation: "listLinkedIssues",
+                  cause: decoded.failure,
+                }),
+              );
+        }),
+      ),
 
     listCommits: (input) =>
       api({
