@@ -79,14 +79,14 @@ describe("ChatMarkdown file link routing", () => {
     mocks.openInEditor.mockResolvedValue({ _tag: "Success" });
   });
 
-  it("opens workspace HTML with the relative path required by browser preview", async () => {
+  it("opens workspace HTML with the absolute path validated by the browser preview server", async () => {
     const click = renderChatLink("G:/workspace/previews/report.html");
 
     click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
 
     await vi.waitFor(() => {
       expect(mocks.openInBrowser).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ filePath: "previews/report.html" }),
+        expect.objectContaining({ filePath: "G:/workspace/previews/report.html" }),
       );
     });
     expect(mocks.openFile).not.toHaveBeenCalled();
