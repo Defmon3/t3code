@@ -521,6 +521,29 @@ describe("GitHistoryPanel", () => {
     });
   });
 
+  it("keeps row separators out of the graph column", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const graph = visitElements(
+      historyRow,
+      (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+    );
+    const content = visitElements(
+      historyRow,
+      (element) =>
+        typeof element.props.className === "string" &&
+        element.props.className.includes("grid-cols-") &&
+        element.props.className.includes("border-b"),
+    );
+
+    expect(historyRow.props.className).not.toContain("border-b");
+    expect(graph).not.toBeNull();
+    expect(content).not.toBeNull();
+  });
+
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
     const errorCause = expiredSnapshotCause();
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
