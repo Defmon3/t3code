@@ -8,6 +8,11 @@ import type {
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
+  mergeIssueLinks,
+  parseIssueReferences,
+  unlinkedIssueReferences,
+} from "./issueReferences.ts";
+import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
   type ProviderChangeRequestActivity,
@@ -113,6 +118,40 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
+  /**
+   * The issues the merge request's own words name, resolved before any of them is shown: a number
+   * in a description is not proof that an issue exists, and a dead row in this section is worse
+   * than an absent one.
+   *
+   * Weaker than what GitLab itself reported, so a lookup that fails leaves the section with the
+   * host's own links rather than taking the detail down with it. A reference into another project
+   * is left out because the issues endpoint is per project, and one read is the whole budget here.
+   */
+  const citedIssues = (
+    input: { readonly cwd: string; readonly repository: string; readonly host: string },
+    mergeRequest: { readonly title: string; readonly body: string },
+    hostLinks: ReadonlyArray<IssueLink>,
+  ): Effect.Effect<ReadonlyArray<IssueLink>> => {
+    const project = input.repository.trim().toLowerCase();
+    const numbers = unlinkedIssueReferences(
+      parseIssueReferences({
+        kind: "gitlab",
+        host: input.host,
+        repository: input.repository,
+        title: mergeRequest.title,
+        body: mergeRequest.body,
+      }),
+      hostLinks,
+    )
+      .filter((reference) => reference.repository.trim().toLowerCase() === project)
+      .map((reference) => reference.number);
+    return numbers.length === 0
+      ? Effect.succeed([])
+      : cli
+          .listCitedIssues({ cwd: input.cwd, repository: input.repository, numbers })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => []));
+  };
+
   const provider: PullRequestProviderApi = {
     kind: "gitlab",
     capabilities: CAPABILITIES,
@@ -153,24 +192,28 @@ export const make = Effect.gen(function* () {
         { concurrency: 3 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
-        Effect.map(
-          ([mergeRequest, mergeCapabilities, linkedIssues]): ProviderChangeRequestDetail => ({
-            ...mergeRequest,
-            mergeCapabilities,
-            viewerPermissions: gitLabViewerPermissions(mergeRequest),
-            // A GitLab too old to count the divergence says nothing here rather than "up to
-            // date": the banner is worth missing, and a wrong all-clear is not worth showing.
-            baseComparison:
-              mergeRequest.divergedCommits === undefined
-                ? "unknown"
-                : mergeRequest.divergedCommits > 0
-                  ? "behind"
-                  : "up-to-date",
-            ...(mergeRequest.divergedCommits === undefined
-              ? {}
-              : { behindBy: mergeRequest.divergedCommits }),
-            linkedIssues,
-          }),
+        Effect.flatMap(([mergeRequest, mergeCapabilities, linkedIssues]) =>
+          citedIssues(input, mergeRequest, linkedIssues).pipe(
+            Effect.map(
+              (cited): ProviderChangeRequestDetail => ({
+                ...mergeRequest,
+                mergeCapabilities,
+                viewerPermissions: gitLabViewerPermissions(mergeRequest),
+                // A GitLab too old to count the divergence says nothing here rather than "up to
+                // date": the banner is worth missing, and a wrong all-clear is not worth showing.
+                baseComparison:
+                  mergeRequest.divergedCommits === undefined
+                    ? "unknown"
+                    : mergeRequest.divergedCommits > 0
+                      ? "behind"
+                      : "up-to-date",
+                ...(mergeRequest.divergedCommits === undefined
+                  ? {}
+                  : { behindBy: mergeRequest.divergedCommits }),
+                linkedIssues: mergeIssueLinks(linkedIssues, cited),
+              }),
+            ),
+          ),
         ),
       ),
 
