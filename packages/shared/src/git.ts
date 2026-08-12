@@ -109,15 +109,17 @@ export function isTemporaryWorktreeBranch(refName: string): boolean {
 }
 
 /**
- * Live per-keystroke sanitizer for a user-typed worktree branch name. Same
- * character policy as `sanitizeBranchFragment`, but keeps edge separators so
- * slashes and dashes can still be typed mid-name.
+ * Live per-keystroke sanitizer for a user-typed worktree branch name. Unlike
+ * `sanitizeBranchFragment` this preserves case — a hand-typed name is used
+ * verbatim — and only blocks what git itself refuses in a ref, while keeping
+ * edge separators so slashes and dashes can still be typed mid-name.
  */
 export function sanitizeWorktreeBranchNameInput(raw: string): string {
   return raw
-    .toLowerCase()
     .replace(/['"`]/g, "")
-    .replace(/[^a-z0-9/_-]+/g, "-")
+    .replace(/[^A-Za-z0-9./_-]+/g, "-")
+    .replace(/(^|\/)\.+/g, "$1")
+    .replace(/\.{2,}/g, ".")
     .replace(/\/+/g, "/")
     .replace(/-+/g, "-")
     .slice(0, 64);
