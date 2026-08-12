@@ -334,31 +334,13 @@ function deriveTurnEndedWithoutFinalResponse(
     return null;
   }
 
-  let lastAssistantIndex = -1;
-  let lastMeaningfulEntryIndex = -1;
-  for (let index = 0; index < timelineEntries.length; index += 1) {
-    const entry = timelineEntries[index];
-    if (!entry) continue;
-    if (
+  const hasAssistantMessage = timelineEntries.some(
+    (entry) =>
       entry.kind === "message" &&
       entry.message.role === "assistant" &&
-      entry.message.turnId === latestTurn.turnId
-    ) {
-      lastAssistantIndex = index;
-      lastMeaningfulEntryIndex = index;
-      continue;
-    }
-    if (
-      entry.kind === "work" &&
-      entry.entry.turnId === latestTurn.turnId &&
-      entry.entry.agentSpawn === undefined &&
-      !workEntryIndicatesToolNeutralStatus(entry.entry)
-    ) {
-      lastMeaningfulEntryIndex = index;
-    }
-  }
-
-  if (lastMeaningfulEntryIndex < 0 || lastMeaningfulEntryIndex <= lastAssistantIndex) {
+      entry.message.turnId === latestTurn.turnId,
+  );
+  if (hasAssistantMessage) {
     return null;
   }
 
