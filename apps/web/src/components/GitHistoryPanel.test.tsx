@@ -523,6 +523,40 @@ describe("GitHistoryPanel", () => {
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
     const errorCause = expiredSnapshotCause();
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+    historyState.commitDetails = { ...historyCommit, body: "" };
+    historyState.commitFiles = {
+      files: [{ status: "M", path: "stale.ts" }],
+      isRepo: true,
+      nextCursor: "stale-cursor",
+      hasMore: true,
+      capped: true,
+    };
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
+    renderPanel();
+    flushEffects();
+    expect(componentElement(renderPanel(), "CommitDetailsPane").props).toMatchObject({
+      files: [{ status: "M", path: "stale.ts" }],
+      filesCapped: true,
+      filesHasMore: true,
+    });
+
+    historyState.commitFilesErrorCause = errorCause;
+    renderPanel();
+    flushEffects();
+    expect(componentElement(renderPanel(), "CommitDetailsPane").props).toMatchObject({
+      files: [],
+      filesCapped: false,
+      filesHasMore: false,
+    });
 
     expect(
       nextCommitFilesRecoveryGeneration({ errorCause, generation: 0, recoveryInFlight: false }),

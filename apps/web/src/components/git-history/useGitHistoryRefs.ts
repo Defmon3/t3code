@@ -37,7 +37,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "tag" },
   );
-  const mergedRefs = [...refs.refs, ...remote.refs];
+  const mergedRefs = useMemo(() => [...refs.refs, ...remote.refs], [refs.refs, remote.refs]);
   const tagRefs = tags.refs;
   const { localRefs, remoteRefs } = useMemo(() => {
     const local: VcsRef[] = [];

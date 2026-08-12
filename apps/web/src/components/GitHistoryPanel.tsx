@@ -289,7 +289,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       receivedCommitFilesPages.current.clear();
       setCommitFiles([]);
       setCommitFilesCursor(undefined);
+      setCommitFilesNextCursor(null);
       setCommitFilesHasMore(false);
+      setCommitFilesCapped(false);
       commitFilesRecoveryInFlight.current = true;
       setCommitFilesQueryGeneration(recoveryGeneration);
     }
