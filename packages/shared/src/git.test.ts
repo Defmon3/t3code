@@ -6,7 +6,9 @@ import {
   buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
   normalizeGitRemoteUrl,
+  normalizeWorktreeBranchName,
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
+  sanitizeWorktreeBranchNameInput,
   WORKTREE_BRANCH_PREFIX,
 } from "./git.ts";
 
@@ -170,5 +172,42 @@ describe("applyGitStatusStreamEvent", () => {
       behindCount: 1,
       pr: null,
     });
+  });
+});
+
+describe("sanitizeWorktreeBranchNameInput", () => {
+  it("lowercases and dashes invalid characters while typing", () => {
+    expect(sanitizeWorktreeBranchNameInput("Feat/My Fix!")).toBe("feat/my-fix-");
+  });
+
+  it("keeps edge separators so slashes and dashes can be typed mid-name", () => {
+    expect(sanitizeWorktreeBranchNameInput("feat/")).toBe("feat/");
+    expect(sanitizeWorktreeBranchNameInput("feat-")).toBe("feat-");
+  });
+
+  it("collapses repeated separators and strips quotes", () => {
+    expect(sanitizeWorktreeBranchNameInput(`fe"at//my--fix`)).toBe("feat/my-fix");
+  });
+
+  it("caps the length at 64 characters", () => {
+    expect(sanitizeWorktreeBranchNameInput("a".repeat(80))).toHaveLength(64);
+  });
+});
+
+describe("normalizeWorktreeBranchName", () => {
+  it("trims edge separators from the final name", () => {
+    expect(normalizeWorktreeBranchName("feat/my-fix-")).toBe("feat/my-fix");
+    expect(normalizeWorktreeBranchName("/feat/my-fix")).toBe("feat/my-fix");
+  });
+
+  it("returns null when nothing usable remains", () => {
+    expect(normalizeWorktreeBranchName("")).toBeNull();
+    expect(normalizeWorktreeBranchName("  -/- ")).toBeNull();
+  });
+
+  it("passes through an already-valid name unchanged", () => {
+    expect(normalizeWorktreeBranchName("feat/custom-worktree-location")).toBe(
+      "feat/custom-worktree-location",
+    );
   });
 });

@@ -109,6 +109,30 @@ export function isTemporaryWorktreeBranch(refName: string): boolean {
 }
 
 /**
+ * Live per-keystroke sanitizer for a user-typed worktree branch name. Same
+ * character policy as `sanitizeBranchFragment`, but keeps edge separators so
+ * slashes and dashes can still be typed mid-name.
+ */
+export function sanitizeWorktreeBranchNameInput(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/['"`]/g, "")
+    .replace(/[^a-z0-9/_-]+/g, "-")
+    .replace(/\/+/g, "/")
+    .replace(/-+/g, "-")
+    .slice(0, 64);
+}
+
+/**
+ * Final form of a user-typed worktree branch name: live sanitization plus
+ * edge trimming. Null when nothing usable remains.
+ */
+export function normalizeWorktreeBranchName(raw: string): string | null {
+  const trimmed = sanitizeWorktreeBranchNameInput(raw).replace(/^[./_-]+|[./_-]+$/g, "");
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * Normalize a git remote URL into a stable comparison key.
  */
 export function normalizeGitRemoteUrl(value: string): string {
