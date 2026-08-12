@@ -20,7 +20,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   const deferredRefFilter = useDeferredValue(refFilter.trim());
   const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
   const shouldLoadRemote = deferredRefFilter.length > 0 || expandedRefKeys.has("section:remote");
-  const shouldLoadTags = deferredRefFilter.length > 0 || expandedRefKeys.has("section:tag");
+  const shouldLoadTags = deferredRefFilter.length > 0 || expandedRefKeys.has("section:tags");
   const refs = usePaginatedBranches(
     { environmentId, cwd, query: deferredRefFilter },
     { limit: 200, namespace: "local" },

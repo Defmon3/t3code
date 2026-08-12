@@ -1,4 +1,5 @@
 import type { VcsRef } from "@t3tools/contracts";
+import { LegendList } from "@legendapp/list/react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -13,103 +14,74 @@ import {
   TagIcon,
   XIcon,
 } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useMemo } from "react";
 
 import type { GitRefTreeNode } from "../../lib/gitRefTree";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import type { RefTreeProps } from "./GitHistoryVisualTypes";
 
-function RefTree(props: RefTreeProps) {
-  const depth = props.depth ?? 0;
-  return props.nodes.map((node) => {
-    if (node.kind === "folder") {
-      const key = `${props.section}:${node.path}`;
-      const isExpanded = props.filterActive || props.expanded.has(key);
-      return (
-        <div key={key}>
-          <button
-            type="button"
-            className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            style={{ paddingLeft: `${depth * 14 + 4}px` }}
-            onClick={() => props.onToggle(key)}
-            aria-expanded={isExpanded}
-            title={node.path}
-          >
-            {isExpanded ? (
-              <ChevronDownIcon className="size-3 shrink-0" />
-            ) : (
-              <ChevronRightIcon className="size-3 shrink-0" />
-            )}
-            {isExpanded ? (
-              <FolderOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <span className="truncate">{node.name}</span>
-          </button>
-          {isExpanded ? <RefTree {...props} nodes={node.children} depth={depth + 1} /> : null}
-        </div>
-      );
+type RefPaneRow =
+  | { readonly kind: "all"; readonly key: "all" }
+  | { readonly kind: "current"; readonly key: "current" }
+  | {
+      readonly kind: "section";
+      readonly key: string;
+      readonly label: string;
+      readonly count: number;
+      readonly open: boolean;
     }
-    const revision = `refs/${props.namespace}/${node.ref.name}`;
-    const selected = props.selectedRevision === revision;
-    const aheadCount = node.ref.aheadCount ?? 0;
-    const behindCount = node.ref.behindCount ?? 0;
-    const upstreamName = node.ref.upstreamName ?? "the configured upstream";
-    const syncDescription = [
-      aheadCount > 0 ? `${aheadCount} commits ahead of upstream ${upstreamName}` : null,
-      behindCount > 0 ? `${behindCount} commits behind upstream ${upstreamName}` : null,
-    ]
-      .filter((description): description is string => description !== null)
-      .join(". ");
-    return (
-      <button
-        type="button"
-        key={revision}
-        className={cn(
-          "flex h-6 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-          selected && "bg-accent/70 font-medium text-foreground",
-        )}
-        style={{ paddingLeft: `${depth * 14 + 20}px` }}
-        title={node.ref.name}
-        onClick={() => props.onSelect(node.ref.name, revision)}
-        aria-pressed={selected}
-        aria-label={syncDescription ? `${node.ref.name}. ${syncDescription}.` : node.ref.name}
-      >
-        {node.ref.isDefault ? (
-          <StarIcon className="size-3 shrink-0 fill-amber-400 text-amber-400" />
-        ) : props.namespace === "tags" ? (
-          <TagIcon className="size-3 shrink-0 text-amber-400" />
-        ) : (
-          <GitBranchIcon className={cn("size-3 shrink-0", node.ref.current && "text-foreground")} />
-        )}
-        <span className="truncate">{node.name}</span>
-        {aheadCount > 0 || behindCount > 0 ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem]">
-            {aheadCount > 0 ? (
-              <span
-                className="flex items-center text-emerald-400"
-                title={`${aheadCount} commits ahead of ${upstreamName}`}
-              >
-                <ArrowUpIcon className="size-2.5" />
-                {aheadCount > 99 ? "99+" : aheadCount}
-              </span>
-            ) : null}
-            {behindCount > 0 ? (
-              <span
-                className="flex items-center text-sky-400"
-                title={`${behindCount} commits behind ${upstreamName}`}
-              >
-                <ArrowDownIcon className="size-2.5" />
-                {behindCount > 99 ? "99+" : behindCount}
-              </span>
-            ) : null}
-          </span>
-        ) : null}
-      </button>
-    );
-  });
+  | {
+      readonly kind: "folder";
+      readonly key: string;
+      readonly label: string;
+      readonly path: string;
+      readonly depth: number;
+      readonly open: boolean;
+    }
+  | {
+      readonly kind: "ref";
+      readonly key: string;
+      readonly node: Extract<GitRefTreeNode, { readonly kind: "ref" }>;
+      readonly namespace: RefTreeProps["namespace"];
+      readonly depth: number;
+    }
+  | { readonly kind: "empty"; readonly key: "empty" }
+  | { readonly kind: "error"; readonly key: "error"; readonly message: string }
+  | { readonly kind: "load-more"; readonly key: "load-more" };
+
+function appendRefTreeRows(
+  rows: RefPaneRow[],
+  nodes: ReadonlyArray<GitRefTreeNode>,
+  section: string,
+  namespace: RefTreeProps["namespace"],
+  expanded: ReadonlySet<string>,
+  filterActive: boolean,
+  depth = 0,
+): number {
+  let count = 0;
+  for (const node of nodes) {
+    if (node.kind === "ref") {
+      count += 1;
+      rows.push({ kind: "ref", key: `refs/${namespace}/${node.ref.name}`, node, namespace, depth });
+      continue;
+    }
+    const key = `${section}:${node.path}`;
+    const open = filterActive || expanded.has(key);
+    rows.push({ kind: "folder", key, label: node.name, path: node.path, depth, open });
+    if (open)
+      count += appendRefTreeRows(
+        rows,
+        node.children,
+        section,
+        namespace,
+        expanded,
+        filterActive,
+        depth + 1,
+      );
+    else count += countRefTreeRefs(node.children);
+  }
+  return count;
 }
 
 function countRefTreeRefs(nodes: ReadonlyArray<GitRefTreeNode>): number {
@@ -119,44 +91,59 @@ function countRefTreeRefs(nodes: ReadonlyArray<GitRefTreeNode>): number {
   );
 }
 
-function RefSection(props: {
-  label: string;
-  section: string;
-  nodes: ReadonlyArray<GitRefTreeNode>;
-  namespace: RefTreeProps["namespace"];
-  open: boolean;
-  treeProps: Omit<RefTreeProps, "nodes" | "namespace" | "section">;
-  onToggle: () => void;
-}) {
-  const refCount = countRefTreeRefs(props.nodes);
-  return (
-    <div>
-      <button
-        type="button"
-        className="flex h-7 w-full items-center gap-1 px-1 text-left text-[0.625rem] font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
-        onClick={props.onToggle}
-        aria-expanded={props.open}
-      >
-        {props.open ? (
-          <ChevronDownIcon className="size-3" />
-        ) : (
-          <ChevronRightIcon className="size-3" />
-        )}
-        {props.label}
-        <span className="ml-auto font-normal tabular-nums text-muted-foreground/70">
-          {refCount}
-        </span>
-      </button>
-      {props.open ? (
-        <RefTree
-          {...props.treeProps}
-          nodes={props.nodes}
-          namespace={props.namespace}
-          section={props.section}
-        />
-      ) : null}
-    </div>
-  );
+export function buildRefPaneRows(props: {
+  readonly localRefTree: ReadonlyArray<GitRefTreeNode>;
+  readonly remoteRefTree: ReadonlyArray<GitRefTreeNode>;
+  readonly tagRefTree: ReadonlyArray<GitRefTreeNode>;
+  readonly expandedRefKeys: ReadonlySet<string>;
+  readonly filterActive: boolean;
+  readonly hasMoreRefs: boolean;
+  readonly refPaginationError: string | null;
+}): ReadonlyArray<RefPaneRow> {
+  const rows: RefPaneRow[] = [
+    { kind: "all", key: "all" },
+    { kind: "current", key: "current" },
+  ];
+  for (const section of [
+    { label: "Local", section: "local", nodes: props.localRefTree, namespace: "heads" as const },
+    {
+      label: "Remote",
+      section: "remote",
+      nodes: props.remoteRefTree,
+      namespace: "remotes" as const,
+    },
+    { label: "Tags", section: "tags", nodes: props.tagRefTree, namespace: "tags" as const },
+  ]) {
+    const open = props.filterActive || props.expandedRefKeys.has(`section:${section.section}`);
+    const sectionRows: RefPaneRow[] = [];
+    const count = open
+      ? appendRefTreeRows(
+          sectionRows,
+          section.nodes,
+          section.section,
+          section.namespace,
+          props.expandedRefKeys,
+          props.filterActive,
+        )
+      : countRefTreeRefs(section.nodes);
+    rows.push({
+      kind: "section",
+      key: `section:${section.section}`,
+      label: section.label,
+      count,
+      open,
+    });
+    if (open) rows.push(...sectionRows);
+  }
+  if (
+    props.filterActive &&
+    props.localRefTree.length + props.remoteRefTree.length + props.tagRefTree.length === 0
+  )
+    rows.push({ kind: "empty", key: "empty" });
+  if (props.refPaginationError)
+    rows.push({ kind: "error", key: "error", message: props.refPaginationError });
+  if (props.hasMoreRefs) rows.push({ kind: "load-more", key: "load-more" });
+  return rows;
 }
 
 export function GitRefsPane(props: {
@@ -183,6 +170,27 @@ export function GitRefsPane(props: {
   onRetryRefs: () => void;
   onClose?: () => void;
 }) {
+  const rows = useMemo(
+    () =>
+      buildRefPaneRows({
+        localRefTree: props.localRefTree,
+        remoteRefTree: props.remoteRefTree,
+        tagRefTree: props.tagRefTree,
+        expandedRefKeys: props.expandedRefKeys,
+        filterActive: props.normalizedRefFilter.length > 0,
+        hasMoreRefs: props.hasMoreRefs,
+        refPaginationError: props.refPaginationError,
+      }),
+    [
+      props.expandedRefKeys,
+      props.hasMoreRefs,
+      props.localRefTree,
+      props.normalizedRefFilter,
+      props.refPaginationError,
+      props.remoteRefTree,
+      props.tagRefTree,
+    ],
+  );
   return (
     <aside
       id={props.id}
@@ -217,85 +225,186 @@ export function GitRefsPane(props: {
           aria-label="Filter branches and tags"
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-        <button
-          type="button"
-          className={cn(
-            "flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-            props.selectedRevision === null && "bg-accent/70 font-medium text-foreground",
-          )}
-          onClick={props.onSelectAll}
-          aria-pressed={props.selectedRevision === null}
-        >
-          <GitCommitHorizontalIcon className="size-3.5 shrink-0" />
-          <span className="truncate">All refs</span>
-        </button>
-        <button
-          type="button"
-          className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/90 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
-          disabled={props.currentRef === null}
-          onClick={() => {
-            if (props.currentRef)
-              props.onSelectRef(props.currentRef.name, `refs/heads/${props.currentRef.name}`);
+      <div className="min-h-0 flex-1 px-2 py-1">
+        <LegendList<RefPaneRow>
+          data={rows}
+          keyExtractor={(row) => row.key}
+          getItemType={(row) => row.kind}
+          estimatedItemSize={26}
+          drawDistance={312}
+          className="h-full"
+          renderItem={({ item: row }) => {
+            if (row.kind === "all")
+              return (
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                    props.selectedRevision === null && "bg-accent/70 font-medium text-foreground",
+                  )}
+                  onClick={props.onSelectAll}
+                  aria-pressed={props.selectedRevision === null}
+                >
+                  <GitCommitHorizontalIcon className="size-3.5 shrink-0" />
+                  <span className="truncate">All refs</span>
+                </button>
+              );
+            if (row.kind === "current")
+              return (
+                <button
+                  type="button"
+                  className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/90 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+                  disabled={props.currentRef === null}
+                  onClick={() =>
+                    props.currentRef &&
+                    props.onSelectRef(props.currentRef.name, `refs/heads/${props.currentRef.name}`)
+                  }
+                >
+                  <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">HEAD (Current Branch)</span>
+                </button>
+              );
+            if (row.kind === "section")
+              return (
+                <button
+                  type="button"
+                  className="flex h-7 w-full items-center gap-1 px-1 text-left text-[0.625rem] font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
+                  onClick={() => props.onToggleRefKey(row.key)}
+                  aria-expanded={row.open}
+                >
+                  {row.open ? (
+                    <ChevronDownIcon className="size-3" />
+                  ) : (
+                    <ChevronRightIcon className="size-3" />
+                  )}
+                  {row.label}
+                  <span className="ml-auto font-normal tabular-nums text-muted-foreground/70">
+                    {row.count}
+                  </span>
+                </button>
+              );
+            if (row.kind === "folder")
+              return (
+                <button
+                  type="button"
+                  className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  style={{ paddingLeft: `${row.depth * 14 + 4}px` }}
+                  onClick={() => props.onToggleRefKey(row.key)}
+                  aria-expanded={row.open}
+                  title={row.path}
+                >
+                  {row.open ? (
+                    <ChevronDownIcon className="size-3 shrink-0" />
+                  ) : (
+                    <ChevronRightIcon className="size-3 shrink-0" />
+                  )}
+                  {row.open ? (
+                    <FolderOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="truncate">{row.label}</span>
+                </button>
+              );
+            if (row.kind === "ref") {
+              const revision = `refs/${row.namespace}/${row.node.ref.name}`;
+              const selected = props.sharedRefTreeProps.selectedRevision === revision;
+              const aheadCount = row.node.ref.aheadCount ?? 0;
+              const behindCount = row.node.ref.behindCount ?? 0;
+              const upstreamName = row.node.ref.upstreamName ?? "the configured upstream";
+              const syncDescription = [
+                aheadCount > 0 ? `${aheadCount} commits ahead of upstream ${upstreamName}` : null,
+                behindCount > 0 ? `${behindCount} commits behind upstream ${upstreamName}` : null,
+              ]
+                .filter((description): description is string => description !== null)
+                .join(". ");
+              return (
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-6 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                    selected && "bg-accent/70 font-medium text-foreground",
+                  )}
+                  style={{ paddingLeft: `${row.depth * 14 + 20}px` }}
+                  title={row.node.ref.name}
+                  onClick={() => props.sharedRefTreeProps.onSelect(row.node.ref.name, revision)}
+                  aria-pressed={selected}
+                  aria-label={
+                    syncDescription
+                      ? `${row.node.ref.name}. ${syncDescription}.`
+                      : row.node.ref.name
+                  }
+                >
+                  {row.node.ref.isDefault ? (
+                    <StarIcon className="size-3 shrink-0 fill-amber-400 text-amber-400" />
+                  ) : row.namespace === "tags" ? (
+                    <TagIcon className="size-3 shrink-0 text-amber-400" />
+                  ) : (
+                    <GitBranchIcon
+                      className={cn("size-3 shrink-0", row.node.ref.current && "text-foreground")}
+                    />
+                  )}
+                  <span className="truncate">{row.node.name}</span>
+                  {aheadCount > 0 || behindCount > 0 ? (
+                    <span className="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem]">
+                      {aheadCount > 0 ? (
+                        <span
+                          className="flex items-center text-emerald-400"
+                          title={`${aheadCount} commits ahead of ${upstreamName}`}
+                        >
+                          <ArrowUpIcon className="size-2.5" />
+                          {aheadCount > 99 ? "99+" : aheadCount}
+                        </span>
+                      ) : null}
+                      {behindCount > 0 ? (
+                        <span
+                          className="flex items-center text-sky-400"
+                          title={`${behindCount} commits behind ${upstreamName}`}
+                        >
+                          <ArrowDownIcon className="size-2.5" />
+                          {behindCount > 99 ? "99+" : behindCount}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            }
+            if (row.kind === "empty")
+              return (
+                <p className="px-2 py-4 text-center text-[0.6875rem] text-muted-foreground">
+                  No matching branches or tags.
+                </p>
+              );
+            if (row.kind === "error")
+              return (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[0.6875rem] text-destructive">
+                  <span className="min-w-0 truncate" title={row.message}>
+                    {row.message}
+                  </span>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="shrink-0"
+                    onClick={props.onRetryRefs}
+                  >
+                    Retry refs
+                  </Button>
+                </div>
+              );
+            return (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="mt-2 w-full"
+                onClick={props.onLoadMoreRefs}
+                disabled={props.isFetchingMoreRefs}
+              >
+                {props.isFetchingMoreRefs ? "Loading more refs…" : "Load more refs"}
+              </Button>
+            );
           }}
-        >
-          <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate">HEAD (Current Branch)</span>
-        </button>
-        <RefSection
-          label="Local"
-          section="local"
-          nodes={props.localRefTree}
-          namespace="heads"
-          open={props.normalizedRefFilter.length > 0 || props.expandedRefKeys.has("section:local")}
-          treeProps={props.sharedRefTreeProps}
-          onToggle={() => props.onToggleRefKey("section:local")}
         />
-        <RefSection
-          label="Remote"
-          section="remote"
-          nodes={props.remoteRefTree}
-          namespace="remotes"
-          open={props.normalizedRefFilter.length > 0 || props.expandedRefKeys.has("section:remote")}
-          treeProps={props.sharedRefTreeProps}
-          onToggle={() => props.onToggleRefKey("section:remote")}
-        />
-        <RefSection
-          label="Tags"
-          section="tags"
-          nodes={props.tagRefTree}
-          namespace="tags"
-          open={props.normalizedRefFilter.length > 0 || props.expandedRefKeys.has("section:tags")}
-          treeProps={props.sharedRefTreeProps}
-          onToggle={() => props.onToggleRefKey("section:tags")}
-        />
-        {props.normalizedRefFilter.length > 0 &&
-        props.localRefTree.length + props.remoteRefTree.length + props.tagRefTree.length === 0 ? (
-          <p className="px-2 py-4 text-center text-[0.6875rem] text-muted-foreground">
-            No matching branches or tags.
-          </p>
-        ) : null}
-        {props.refPaginationError ? (
-          <div className="mt-2 flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[0.6875rem] text-destructive">
-            <span className="min-w-0 truncate" title={props.refPaginationError}>
-              {props.refPaginationError}
-            </span>
-            <Button size="xs" variant="ghost" className="shrink-0" onClick={props.onRetryRefs}>
-              Retry refs
-            </Button>
-          </div>
-        ) : null}
-        {props.hasMoreRefs ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            className="mt-2 w-full"
-            onClick={props.onLoadMoreRefs}
-            disabled={props.isFetchingMoreRefs}
-          >
-            {props.isFetchingMoreRefs ? "Loading more refs…" : "Load more refs"}
-          </Button>
-        ) : null}
       </div>
     </aside>
   );
