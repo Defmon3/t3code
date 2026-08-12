@@ -29,6 +29,7 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
@@ -265,13 +266,19 @@ export function createVcsEnvironmentAtoms<R, E>(
   const invalidateRefs = (
     target: { readonly environmentId: EnvironmentId; readonly input: { readonly cwd: string } },
     registry: AtomRegistry.AtomRegistry,
+    invalidateHistory = true,
   ) =>
-    invalidateCachedVcsRefs(registry, {
-      environmentId: target.environmentId,
-      cwd: target.input.cwd,
-    });
+    invalidateCachedVcsRefs(
+      registry,
+      {
+        environmentId: target.environmentId,
+        cwd: target.input.cwd,
+      },
+      invalidateHistory,
+    );
 
   return {
+    historyRevisionAtom: vcsHistoryRevisionAtom,
     getHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:vcs:get-history",
       tag: WS_METHODS.vcsGetHistory,
@@ -314,7 +321,7 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.vcsRefreshStatus,
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
-      onSettled: invalidateRefs,
+      onSettled: (target, registry) => invalidateRefs(target, registry, false),
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",

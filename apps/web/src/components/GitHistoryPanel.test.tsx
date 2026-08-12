@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  VcsSnapshotExpiredError,
   type GitCommitDetails,
   type GitHistoryCommit,
   type VcsGetHistoryResult,
@@ -38,8 +39,11 @@ const historyState = vi.hoisted(() => ({
     hasMore: false,
     capped: false,
   } as VcsListCommitFilesResult,
+  commitFilesErrorCause: null as Cause.Cause<unknown> | null,
+  commitFilesRefresh: vi.fn(),
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
+  historyRevision: 0,
   pages: new Map<string | undefined, PageResult>(),
   refresh: vi.fn(),
   refreshRefs: vi.fn(),
@@ -178,7 +182,16 @@ vi.mock("../state/query", () => ({
     if (target?.kind === "status") return { ...base, data: historyState.status };
     if (target?.kind === "commit-details")
       return { ...base, data: { commit: historyState.commitDetails } };
-    if (target?.kind === "commit-files") return { ...base, data: historyState.commitFiles };
+    if (target?.kind === "commit-files") {
+      const errorCause = historyState.commitFilesErrorCause;
+      return {
+        ...base,
+        data: errorCause === null ? historyState.commitFiles : null,
+        error: errorCause === null ? null : "Git browsing snapshot expired.",
+        errorCause,
+        refresh: historyState.commitFilesRefresh,
+      };
+    }
     if (target?.kind === "commit-diff") return { ...base, data: historyState.diff };
     return { ...base, data: null };
   },
@@ -186,6 +199,7 @@ vi.mock("../state/query", () => ({
 
 vi.mock("../state/vcs", () => ({
   vcsEnvironment: {
+    historyRevisionAtom: () => ({ value: historyState.historyRevision }),
     getHistory: (target: { readonly input: { readonly cursor?: string } }) => {
       historyState.getHistory(target);
       const value = historyState.pages.get(target.input.cursor);
@@ -196,9 +210,9 @@ vi.mock("../state/vcs", () => ({
       historyState.getCommitDetails(target);
       return { kind: "commit-details" };
     },
-    listCommitFiles: (target: unknown) => {
+    listCommitFiles: (target: { readonly input: unknown }) => {
       historyState.listCommitFiles(target);
-      return { kind: "commit-files" };
+      return { kind: "commit-files", input: target.input };
     },
     getCommitDiff: (target: unknown) => {
       historyState.getCommitDiff(target);
@@ -212,6 +226,7 @@ vi.mock("../state/vcs", () => ({
 import {
   appendCommitFilesPage,
   nextCommitFilesCursor,
+  nextCommitFilesRecoveryGeneration,
   isWideHistoryLayout,
 } from "./GitHistoryPanel";
 import GitHistoryPanel from "./GitHistoryPanel";
@@ -248,8 +263,19 @@ function page(
 
 const expiredHistoryPage = (): PageResult => ({
   _tag: "Failure",
-  cause: Cause.fail({ _tag: "VcsSnapshotExpiredError" }),
+  cause: Cause.fail(
+    Object.assign(new Error("Git browsing snapshot expired."), { _tag: "VcsSnapshotExpiredError" }),
+  ),
 });
+
+function expiredSnapshotCause(): Cause.Cause<unknown> {
+  return Cause.fail(
+    new VcsSnapshotExpiredError({
+      operation: "GitVcsDriver.listCommitFiles",
+      cursor: "expired-cursor",
+    }),
+  );
+}
 
 function gitRef(
   name: string,
@@ -377,8 +403,11 @@ describe("GitHistoryPanel", () => {
       hasMore: false,
       capped: false,
     };
+    historyState.commitFilesErrorCause = null;
+    historyState.commitFilesRefresh.mockReset();
     historyState.getCommitDiff.mockReset();
     historyState.getHistory.mockReset();
+    historyState.historyRevision = 0;
     historyState.pages.clear();
     historyState.refresh.mockReset();
     historyState.refreshRefs.mockReset();
@@ -446,6 +475,64 @@ describe("GitHistoryPanel", () => {
     expect(generations).toContain(2);
     expect(generations).not.toContain(3);
     expect(generations.at(-1)).toBe(2);
+  });
+
+  it("rekeys open history reads when the shared VCS history revision changes", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+    historyState.commitDetails = { ...historyCommit, body: "" };
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
+    const details = renderPanel();
+    const detailsPane = componentTree(details, "CommitDetailsPane");
+    const showDiff = visitElements(
+      detailsPane,
+      (element) =>
+        typeof element.props.onClick === "function" &&
+        JSON.stringify(element.props.children).includes("View all changes"),
+    );
+    (showDiff?.props.onClick as (() => void) | undefined)?.();
+    renderPanel();
+
+    historyState.historyRevision = 1;
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 1 },
+    });
+    expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+    });
+    expect(historyState.listCommitFiles).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, limit: 100, queryGeneration: 1 },
+    });
+    expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+    });
+  });
+
+  it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
+    const errorCause = expiredSnapshotCause();
+
+    expect(
+      nextCommitFilesRecoveryGeneration({ errorCause, generation: 0, recoveryInFlight: false }),
+    ).toBe(1);
+    expect(
+      nextCommitFilesRecoveryGeneration({ errorCause, generation: 1, recoveryInFlight: true }),
+    ).toBeNull();
+    expect(
+      nextCommitFilesRecoveryGeneration({ errorCause, generation: 1, recoveryInFlight: false }),
+    ).toBe(2);
   });
 
   it("renders populated history rows through the virtualized list", () => {
@@ -680,44 +767,50 @@ describe("GitHistoryPanel", () => {
       },
     });
     const initialPane = componentTree(initial, "GitRefsPane");
-    const initialSection = componentTree(initialPane, "RefSection", { section: "local" });
-    const initialTree = componentTree(initialSection, "RefTree");
-    const featureFolder = visitElements(
-      initialTree,
-      (element) => element.props.title === "feature",
-    );
-    expect(featureFolder?.props["aria-expanded"]).toBe(false);
+    const initialList = componentElement(initialPane, "LegendList");
+    const initialRows = initialList.props.data as Array<{
+      readonly key: string;
+      readonly open?: boolean;
+    }>;
+    const featureFolder = initialRows.find((row) => row.key === "local:feature");
+    expect(featureFolder?.open).toBe(false);
 
-    (featureFolder?.props.onClick as (() => void) | undefined)?.();
+    const renderInitialRow = initialList.props.renderItem as (props: {
+      readonly item: (typeof initialRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    (renderInitialRow({ item: featureFolder! }).props.onClick as (() => void) | undefined)?.();
     const expanded = renderPanel();
     const expandedPane = componentTree(expanded, "GitRefsPane");
-    const expandedSection = componentTree(expandedPane, "RefSection", { section: "local" });
-    const expandedTree = componentTree(expandedSection, "RefTree");
-    const nestedTree = componentTree(expandedTree, "RefTree", { depth: 1 });
-    const uiBranch = visitElements(nestedTree, (element) => element.props.title === "feature/ui");
-    expect(uiBranch).not.toBeNull();
+    const expandedList = componentElement(expandedPane, "LegendList");
+    const expandedRows = expandedList.props.data as Array<{ readonly key: string }>;
+    expect(expandedRows.map((row) => row.key)).toContain("refs/heads/feature/ui");
+    const renderExpandedRow = expandedList.props.renderItem as (props: {
+      readonly item: (typeof expandedRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    const uiBranch = renderExpandedRow({
+      item: expandedRows.find((row) => row.key === "refs/heads/feature/ui")!,
+    });
     expect(
       visitElements(
-        nestedTree,
+        uiBranch,
         (element) => element.props.title === "10 commits ahead of origin/feature/ui",
       ),
     ).not.toBeNull();
+    const developmentBranch = renderExpandedRow({
+      item: expandedRows.find((row) => row.key === "refs/heads/development")!,
+    });
     expect(
       visitElements(
-        initialTree,
+        developmentBranch,
         (element) => element.props.title === "3 commits ahead of origin/development",
       ),
     ).not.toBeNull();
-    const developmentBranch = visitElements(
-      initialTree,
-      (element) => element.props.title === "development",
-    );
-    expect(developmentBranch?.props["aria-label"]).toBe(
+    expect(developmentBranch.props["aria-label"]).toBe(
       "development. 3 commits ahead of upstream origin/development. 2 commits behind upstream origin/development.",
     );
     expect(
       visitElements(
-        initialTree,
+        developmentBranch,
         (element) => element.props.title === "2 commits behind origin/development",
       ),
     ).not.toBeNull();
@@ -747,15 +840,10 @@ describe("GitHistoryPanel", () => {
     });
     const filtered = renderPanel();
     const filteredPane = componentTree(filtered, "GitRefsPane");
-    const filteredSection = componentTree(filteredPane, "RefSection", { section: "local" });
-    const filteredTree = componentTree(filteredSection, "RefTree");
-    const filteredNestedTree = componentTree(filteredTree, "RefTree", { depth: 1 });
-    expect(
-      visitElements(filteredNestedTree, (element) => element.props.title === "feature/api"),
-    ).not.toBeNull();
-    expect(
-      visitElements(filteredNestedTree, (element) => element.props.title === "feature/ui"),
-    ).toBeNull();
+    const filteredList = componentElement(filteredPane, "LegendList");
+    const filteredRows = filteredList.props.data as Array<{ readonly key: string }>;
+    expect(filteredRows.map((row) => row.key)).toContain("refs/heads/feature/api");
+    expect(filteredRows.map((row) => row.key)).not.toContain("refs/heads/feature/ui");
   });
 
   it("lists and selects tags from the refs snapshot even when history has no tag decorations", () => {
@@ -767,17 +855,28 @@ describe("GitHistoryPanel", () => {
 
     const initial = renderPanel();
     const initialPane = componentTree(initial, "GitRefsPane");
-    const tags = componentTree(initialPane, "RefSection", { section: "tags" });
-    const tagsToggle = visitElements(tags, (element) => element.props["aria-expanded"] === false);
-    (tagsToggle?.props.onClick as (() => void) | undefined)?.();
+    const initialList = componentElement(initialPane, "LegendList");
+    const initialRows = initialList.props.data as Array<{ readonly key: string }>;
+    const renderInitialRow = initialList.props.renderItem as (props: {
+      readonly item: (typeof initialRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    (
+      renderInitialRow({ item: initialRows.find((row) => row.key === "section:tags")! }).props
+        .onClick as (() => void) | undefined
+    )?.();
 
     const expanded = renderPanel();
     const expandedPane = componentTree(expanded, "GitRefsPane");
-    const expandedTags = componentTree(expandedPane, "RefSection", { section: "tags" });
-    const tagTree = componentTree(expandedTags, "RefTree");
-    const tag = visitElements(tagTree, (element) => element.props.title === "v1.2.3");
-    expect(tag).not.toBeNull();
-    (tag?.props.onClick as (() => void) | undefined)?.();
+    const expandedList = componentElement(expandedPane, "LegendList");
+    const expandedRows = expandedList.props.data as Array<{ readonly key: string }>;
+    expect(expandedRows.map((row) => row.key)).toContain("refs/tags/v1.2.3");
+    const renderExpandedRow = expandedList.props.renderItem as (props: {
+      readonly item: (typeof expandedRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    (
+      renderExpandedRow({ item: expandedRows.find((row) => row.key === "refs/tags/v1.2.3")! }).props
+        .onClick as (() => void) | undefined
+    )?.();
 
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
@@ -812,7 +911,7 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash },
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
     });
   });
 
@@ -933,11 +1032,16 @@ describe("GitHistoryPanel", () => {
     const diff = renderPanel();
     expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash },
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
     });
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, filePath: "src/panel.tsx" },
+      input: {
+        cwd: "C:/workspace",
+        hash: historyCommit.hash,
+        filePath: "src/panel.tsx",
+        queryGeneration: 0,
+      },
     });
     const diffView = visitElements(
       diff,

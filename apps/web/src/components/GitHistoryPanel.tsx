@@ -47,14 +47,23 @@ const HISTORY_PAGE_SIZE = 100;
 const MAX_HISTORY_PAGES = 10;
 const INITIAL_CURSORS = [undefined] as const;
 const WIDE_HISTORY_LAYOUT_MIN_WIDTH = 1120;
+const REFS_PANE_MIN_WIDTH = 176;
+const REFS_PANE_MAX_WIDTH = 480;
+const DETAILS_PANE_MIN_WIDTH = 256;
+const DETAILS_PANE_MAX_WIDTH = 720;
 
 function isHistorySnapshotExpired(cause: Cause.Cause<unknown>): boolean {
   const error = Option.getOrNull(Cause.findErrorOption(cause));
+  const squashed = Cause.squash(cause);
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    error._tag === "VcsSnapshotExpiredError"
+    (typeof error === "object" &&
+      error !== null &&
+      "_tag" in error &&
+      error._tag === "VcsSnapshotExpiredError") ||
+    (typeof squashed === "object" &&
+      squashed !== null &&
+      "_tag" in squashed &&
+      squashed._tag === "VcsSnapshotExpiredError")
   );
 }
 
@@ -77,6 +86,18 @@ export function appendCommitFilesPage(
 
 export function nextCommitFilesCursor(nextCursor: string | null): string | undefined {
   return nextCursor ?? undefined;
+}
+
+export function nextCommitFilesRecoveryGeneration(input: {
+  readonly errorCause: Cause.Cause<unknown> | null;
+  readonly generation: number;
+  readonly recoveryInFlight: boolean;
+}): number | null {
+  return input.errorCause !== null &&
+    isHistorySnapshotExpired(input.errorCause) &&
+    !input.recoveryInFlight
+    ? input.generation + 1
+    : null;
 }
 
 function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
@@ -102,9 +123,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
   const [detailsPaneWidth, setDetailsPaneWidth] = useState(384);
   const [historyQueryGeneration, setHistoryQueryGeneration] = useState(0);
+  const vcsHistoryRevision = useAtomValue(
+    vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId }),
+  );
   const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd);
   const { selectedRevision } = historyRefs;
-  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}`;
+  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
     cursors: ReadonlyArray<string | undefined>;
@@ -117,14 +141,21 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           environmentId: props.environmentId,
           input: {
             cwd: props.cwd,
-            queryGeneration: historyQueryGeneration,
+            queryGeneration: historyQueryGeneration + vcsHistoryRevision,
             ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
             ...(cursor === undefined ? {} : { cursor }),
             limit: HISTORY_PAGE_SIZE,
           },
         }),
       ),
-    [cursors, historyQueryGeneration, props.cwd, props.environmentId, selectedRevision],
+    [
+      cursors,
+      historyQueryGeneration,
+      props.cwd,
+      props.environmentId,
+      selectedRevision,
+      vcsHistoryRevision,
+    ],
   );
   const pagesAtom = useMemo(
     () =>
@@ -201,7 +232,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDetails({
           environmentId: props.environmentId,
-          input: { cwd: props.cwd, hash: selectedHash },
+          input: { cwd: props.cwd, hash: selectedHash, queryGeneration: vcsHistoryRevision },
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
@@ -210,6 +241,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const [commitFilesNextCursor, setCommitFilesNextCursor] = useState<string | null>(null);
   const [commitFilesHasMore, setCommitFilesHasMore] = useState(false);
   const [commitFilesCapped, setCommitFilesCapped] = useState(false);
+  const [commitFilesQueryGeneration, setCommitFilesQueryGeneration] = useState(0);
   const receivedCommitFilesPages = useRef(new Set<string>());
   const commitFilesRecoveryInFlight = useRef(false);
   useEffect(() => {
@@ -220,7 +252,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setCommitFilesCapped(false);
     commitFilesRecoveryInFlight.current = false;
     receivedCommitFilesPages.current.clear();
-  }, [props.cwd, props.environmentId, selectedHash]);
+  }, [props.cwd, props.environmentId, selectedHash, vcsHistoryRevision]);
   const commitFilesQuery = useEnvironmentQuery(
     selectedHash === null
       ? null
@@ -230,6 +262,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             cwd: props.cwd,
             hash: selectedHash,
             limit: 100,
+            queryGeneration: commitFilesQueryGeneration + vcsHistoryRevision,
             ...(commitFilesCursor ? { cursor: commitFilesCursor } : {}),
           },
         }),
@@ -247,20 +280,20 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     if (commitFilesCursor === undefined) commitFilesRecoveryInFlight.current = false;
   }, [commitFilesCursor, commitFilesQuery.data, selectedHash]);
   useEffect(() => {
-    if (
-      commitFilesQuery.error !== null &&
-      commitFilesQuery.errorCause !== null &&
-      isHistorySnapshotExpired(commitFilesQuery.errorCause) &&
-      !commitFilesRecoveryInFlight.current
-    ) {
+    const recoveryGeneration = nextCommitFilesRecoveryGeneration({
+      errorCause: commitFilesQuery.error === null ? null : commitFilesQuery.errorCause,
+      generation: commitFilesQueryGeneration,
+      recoveryInFlight: commitFilesRecoveryInFlight.current,
+    });
+    if (recoveryGeneration !== null) {
       receivedCommitFilesPages.current.clear();
       setCommitFiles([]);
       setCommitFilesCursor(undefined);
       setCommitFilesHasMore(false);
       commitFilesRecoveryInFlight.current = true;
-      void commitFilesQuery.refresh();
+      setCommitFilesQueryGeneration(recoveryGeneration);
     }
-  }, [commitFilesQuery]);
+  }, [commitFilesQuery.error, commitFilesQuery.errorCause, commitFilesQueryGeneration]);
   const selectedCommitFiles = commitFiles;
   const loadMoreCommitFiles = () => {
     const cursor = nextCommitFilesCursor(commitFilesNextCursor);
@@ -274,6 +307,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           input: {
             cwd: props.cwd,
             hash: commitDiffRequest.hash,
+            queryGeneration: vcsHistoryRevision,
             ...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {}),
           },
         }),
@@ -536,8 +570,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             <PaneResizeHandle
               label="Resize branches pane"
               value={refsPaneWidth}
+              min={REFS_PANE_MIN_WIDTH}
+              max={REFS_PANE_MAX_WIDTH}
               onMove={(delta) =>
-                setRefsPaneWidth((width) => Math.min(480, Math.max(176, width + delta)))
+                setRefsPaneWidth((width) =>
+                  Math.min(REFS_PANE_MAX_WIDTH, Math.max(REFS_PANE_MIN_WIDTH, width + delta)),
+                )
               }
               onReset={() => setRefsPaneWidth(256)}
             />
@@ -659,8 +697,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             <PaneResizeHandle
               label="Resize commit details pane"
               value={detailsPaneWidth}
+              min={DETAILS_PANE_MIN_WIDTH}
+              max={DETAILS_PANE_MAX_WIDTH}
               onMove={(delta) =>
-                setDetailsPaneWidth((width) => Math.min(720, Math.max(256, width - delta)))
+                setDetailsPaneWidth((width) =>
+                  Math.min(DETAILS_PANE_MAX_WIDTH, Math.max(DETAILS_PANE_MIN_WIDTH, width - delta)),
+                )
               }
               onReset={() => setDetailsPaneWidth(384)}
             />

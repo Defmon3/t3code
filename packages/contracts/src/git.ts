@@ -152,6 +152,7 @@ export type VcsGetHistoryInput = typeof VcsGetHistoryInput.Type;
 export const VcsGetCommitDetailsInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
+  queryGeneration: Schema.optional(NonNegativeInt),
 });
 export type VcsGetCommitDetailsInput = typeof VcsGetCommitDetailsInput.Type;
 
@@ -159,6 +160,7 @@ export const VcsListCommitFilesInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
   cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
 });
 export type VcsListCommitFilesInput = typeof VcsListCommitFilesInput.Type;
@@ -167,6 +169,7 @@ export const VcsGetCommitDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
   filePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  queryGeneration: Schema.optional(NonNegativeInt),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
 });
 export type VcsGetCommitDiffInput = typeof VcsGetCommitDiffInput.Type;
