@@ -64,6 +64,9 @@ const makeGitHistoryOutput = (count: number): string =>
       `${index.toString(16).padStart(40, "0")}\x00\x00commit ${index}\x00Test\x00test@example.com\x002026-08-12T00:00:00Z\x00\x00`,
   ).join("");
 
+const makeGitCommitFilesOutput = (count: number): string =>
+  Array.from({ length: count }, (_, index) => `A\x00file-${index}.ts\x00`).join("");
+
 const makeTmpDir = (
   prefix = "git-vcs-driver-test-",
 ): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> =>
@@ -553,6 +556,134 @@ it.effect("returns full commit details and root commit changed files", () =>
     const initialFiles = yield* driver.listCommitFiles({ cwd, hash: initialHash });
     assert.deepEqual(initialFiles.files, [{ status: "A", path: "README.md" }]);
   }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("pages commit files once, rejects replay, and cleans up after the final page", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    for (const name of ["second", "third"]) {
+      yield* writeTextFile(cwd, `${name}.md`, `${name}\n`);
+    }
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "add files"]);
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+    const first = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+    assert.deepEqual(first.files, [{ status: "A", path: "second.md" }]);
+    assert.ok(first.nextCursor);
+    const second = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
+    assert.equal(second.hasMore, false);
+    assert.equal(second.nextCursor, null);
+    const replay = yield* driver
+      .listCommitFiles({ cwd, hash, cursor: first.nextCursor })
+      .pipe(Effect.flip);
+    assert.equal(replay._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "rejects commit-file cursors after TestClock expiry and across worktree or hash bindings",
+  () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const worktreesRoot = yield* makeTmpDir("git-vcs-driver-worktrees-");
+      const pathService = yield* Path.Path;
+      const linked = pathService.join(worktreesRoot, "linked");
+      yield* initRepoWithCommit(cwd);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      yield* writeTextFile(cwd, "second.md", "second\n");
+      yield* writeTextFile(cwd, "third.md", "third\n");
+      yield* git(cwd, ["add", "."]);
+      yield* git(cwd, ["commit", "-m", "second"]);
+      const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+      yield* git(cwd, ["worktree", "add", "-b", "commit-files-linked", linked]);
+      const first = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.ok(first.nextCursor);
+      const wrongWorktree = yield* driver
+        .listCommitFiles({ cwd: linked, hash, cursor: first.nextCursor })
+        .pipe(Effect.flip);
+      assert.equal(wrongWorktree._tag, "VcsSnapshotExpiredError");
+      const second = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.ok(second.nextCursor);
+      const wrongHash = yield* driver
+        .listCommitFiles({
+          cwd,
+          hash: yield* git(cwd, ["rev-parse", "HEAD~1"]),
+          cursor: second.nextCursor,
+        })
+        .pipe(Effect.flip);
+      assert.equal(wrongHash._tag, "VcsSnapshotExpiredError");
+      const third = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.ok(third.nextCursor);
+      yield* TestClock.adjust("2 minutes");
+      const expired = yield* driver
+        .listCommitFiles({ cwd, hash, cursor: third.nextCursor })
+        .pipe(Effect.flip);
+      assert.equal(expired._tag, "VcsSnapshotExpiredError");
+    }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "enforces commit-file retained bytes, file cap, and 64-session eviction through synthetic git output",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const output = makeGitCommitFilesOutput(2_001);
+        const spawner = ChildProcessSpawner.make((command) =>
+          ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
+            ? Effect.succeed(makeSuccessfulHandle(output))
+            : delegate.spawn(command),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const cwd = yield* makeTmpDir();
+        yield* driver.initRepo({ cwd });
+        const hash = "a".repeat(40);
+        const first = yield* driver.listCommitFiles({ cwd, hash, limit: 100 });
+        assert.equal(first.files.length, 100);
+        assert.equal(first.capped, true);
+        assert.ok(first.nextCursor);
+        const cursors = [first.nextCursor];
+        for (let index = 0; index < 64; index += 1) {
+          const page = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+          assert.ok(page.nextCursor);
+          cursors.push(page.nextCursor);
+        }
+        const evicted = yield* driver
+          .listCommitFiles({ cwd, hash, cursor: cursors[0] })
+          .pipe(Effect.flip);
+        assert.equal(evicted._tag, "VcsSnapshotExpiredError");
+        const retained = yield* driver.listCommitFiles({ cwd, hash, cursor: cursors[1], limit: 1 });
+        assert.equal(retained.files.length, 1);
+      }),
+    ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("rejects synthetic commit-file output above the 512 KiB retained-byte cap", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
+          ? Effect.succeed(makeSuccessfulHandle("x".repeat(512 * 1024 + 1)))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+      const error = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) }).pipe(Effect.flip);
+      assert.deepInclude(error, {
+        _tag: "GitCommandError",
+        operation: "GitVcsDriver.listCommitFiles.diffTree",
+        outputLength: 512 * 1024 + 1,
+      });
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect("excludes internal refs from history while including normal branch history", () =>
