@@ -256,7 +256,7 @@ export function CommitRow(props: {
   return (
     <div
       className={cn(
-        "group relative flex h-[1.875rem] w-full min-w-0 items-stretch border-b border-border/45 text-left transition-colors hover:bg-accent/45",
+        "group relative flex h-[1.875rem] w-full min-w-0 items-stretch text-left transition-colors hover:bg-accent/45",
         props.selected && "bg-accent/70",
       )}
     >
@@ -275,7 +275,7 @@ export function CommitRow(props: {
           selected={props.selected}
           current={commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))}
         />
-        <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 pr-3 text-xs @max-[720px]:grid-cols-[minmax(10rem,1fr)]">
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 border-b border-border/45 pr-3 text-xs @max-[720px]:grid-cols-[minmax(10rem,1fr)]">
           <div className="min-w-0">
             <span
               className={cn(
