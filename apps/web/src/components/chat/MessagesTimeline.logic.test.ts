@@ -1171,7 +1171,7 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
   });
 
-  it("replaces stale commentary with an explicit marker when tools outlive the final text", () => {
+  it("keeps an assistant response visible when later work arrives", () => {
     const turnId = "turn-without-final" as never;
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -1214,7 +1214,42 @@ describe("computeStableMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
-    expect(rows.map((row) => row.kind)).toEqual(["turn-fold", "turn-ended-without-response"]);
+    expect(rows.map((row) => row.id)).toEqual([
+      "turn-fold:turn-without-final",
+      "assistant-waiting-entry",
+    ]);
+    expect(rows.some((row) => row.kind === "turn-ended-without-response")).toBe(false);
+  });
+
+  it("marks a completed latest turn with no assistant response", () => {
+    const turnId = "turn-without-assistant" as never;
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:20Z",
+          entry: {
+            id: "work",
+            createdAt: "2026-01-01T00:00:20Z",
+            turnId,
+            label: "File change",
+            tone: "tool",
+          },
+        },
+      ],
+      latestTurn: {
+        turnId,
+        state: "completed",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:22Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
     expect(rows).toContainEqual(
       expect.objectContaining({
         kind: "turn-ended-without-response",
@@ -1222,5 +1257,108 @@ describe("computeStableMessagesTimelineRows", () => {
         state: "completed",
       }),
     );
+  });
+
+  it("keeps a completed assistant response visible after the next turn begins", () => {
+    const firstTurnId = "turn-one" as never;
+    const initialRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Done",
+            turnId: firstTurnId,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "trailing-work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:10Z",
+          entry: {
+            id: "trailing-work",
+            createdAt: "2026-01-01T00:00:10Z",
+            turnId: firstTurnId,
+            label: "File change",
+            tone: "tool",
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: firstTurnId,
+        state: "completed",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:12Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    const transitionedRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Done",
+            turnId: firstTurnId,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "trailing-work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:10Z",
+          entry: {
+            id: "trailing-work",
+            createdAt: "2026-01-01T00:00:10Z",
+            turnId: firstTurnId,
+            label: "File change",
+            tone: "tool",
+          },
+        },
+        {
+          id: "user-next-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:15Z",
+          message: {
+            id: "user-next" as never,
+            role: "user",
+            text: "Next",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:15Z",
+            updatedAt: "2026-01-01T00:00:15Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-two" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:00:15Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:15Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(initialRows.map((row) => row.id)).toContain("assistant-final-entry");
+    expect(transitionedRows.map((row) => row.id)).toContain("assistant-final-entry");
+    expect(initialRows.some((row) => row.kind === "turn-ended-without-response")).toBe(false);
+    expect(transitionedRows.some((row) => row.kind === "turn-ended-without-response")).toBe(false);
   });
 });
