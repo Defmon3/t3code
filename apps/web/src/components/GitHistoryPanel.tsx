@@ -196,16 +196,18 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
   const [commitFilesCursor, setCommitFilesCursor] = useState<string | undefined>(undefined);
   const [commitFiles, setCommitFiles] = useState<ReadonlyArray<GitCommitChangedFile>>([]);
+  const [commitFilesNextCursor, setCommitFilesNextCursor] = useState<string | null>(null);
   const [commitFilesHasMore, setCommitFilesHasMore] = useState(false);
   const [commitFilesCapped, setCommitFilesCapped] = useState(false);
-  const [commitFilesRecovered, setCommitFilesRecovered] = useState(false);
   const receivedCommitFilesPages = useRef(new Set<string>());
+  const commitFilesRecoveryInFlight = useRef(false);
   useEffect(() => {
     setCommitFilesCursor(undefined);
     setCommitFiles([]);
+    setCommitFilesNextCursor(null);
     setCommitFilesHasMore(false);
     setCommitFilesCapped(false);
-    setCommitFilesRecovered(false);
+    commitFilesRecoveryInFlight.current = false;
     receivedCommitFilesPages.current.clear();
   }, [props.cwd, props.environmentId, selectedHash]);
   const commitFilesQuery = useEnvironmentQuery(
@@ -230,25 +232,27 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setCommitFiles((current) => [...current, ...page.files].slice(0, 2_000));
     setCommitFilesHasMore(page.hasMore);
     setCommitFilesCapped(page.capped);
+    setCommitFilesNextCursor(page.nextCursor);
+    if (commitFilesCursor === undefined) commitFilesRecoveryInFlight.current = false;
   }, [commitFilesCursor, commitFilesQuery.data, selectedHash]);
   useEffect(() => {
     if (
       commitFilesQuery.error !== null &&
       commitFilesQuery.errorCause !== null &&
       isHistorySnapshotExpired(commitFilesQuery.errorCause) &&
-      !commitFilesRecovered
+      !commitFilesRecoveryInFlight.current
     ) {
       receivedCommitFilesPages.current.clear();
       setCommitFiles([]);
       setCommitFilesCursor(undefined);
       setCommitFilesHasMore(false);
-      setCommitFilesRecovered(true);
+      commitFilesRecoveryInFlight.current = true;
       void commitFilesQuery.refresh();
     }
-  }, [commitFilesQuery, commitFilesRecovered]);
+  }, [commitFilesQuery]);
   const selectedCommitFiles = commitFiles;
   const loadMoreCommitFiles = () => {
-    const nextCursor = commitFilesQuery.data?.nextCursor;
+    const nextCursor = commitFilesNextCursor;
     if (nextCursor) setCommitFilesCursor(nextCursor);
   };
   const commitDiffQuery = useEnvironmentQuery(

@@ -3,6 +3,7 @@ import {
   type GitCommitDetails,
   type GitHistoryCommit,
   type VcsGetHistoryResult,
+  type VcsListCommitFilesResult,
   type VcsRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -26,7 +27,13 @@ const historyState = vi.hoisted(() => ({
   diff: { diff: "", isRepo: true, truncated: false },
   getCommitDetails: vi.fn(),
   listCommitFiles: vi.fn(),
-  commitFiles: { files: [], isRepo: true, nextCursor: null, hasMore: false, capped: false },
+  commitFiles: {
+    files: [],
+    isRepo: true,
+    nextCursor: null,
+    hasMore: false,
+    capped: false,
+  } as VcsListCommitFilesResult,
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
   pages: new Map<string | undefined, PageResult>(),
@@ -306,6 +313,18 @@ function componentTree(
   );
   expect(component).not.toBeNull();
   return renderComponent(component as ReactElement<Record<string, unknown>>);
+}
+
+function componentElement(
+  panel: ReactElement<Record<string, unknown>>,
+  componentName: string,
+): ReactElement<Record<string, unknown>> {
+  const component = visitElements(
+    panel,
+    (element) => typeof element.type === "function" && element.type.name === componentName,
+  );
+  expect(component).not.toBeNull();
+  return component as ReactElement<Record<string, unknown>>;
 }
 
 describe("GitHistoryPanel", () => {
@@ -860,5 +879,41 @@ describe("GitHistoryPanel", () => {
       (element) => typeof element.type === "function" && element.type.name === "CommitDiffView",
     );
     expect(diffView?.props).toMatchObject({ hash: historyCommit.hash, filePath: "src/panel.tsx" });
+  });
+
+  it("exposes changed-file loading, retry, capped, and accessible file selection states", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add files");
+    historyState.pages.set(undefined, page([historyCommit]));
+    historyState.commitDetails = { ...historyCommit, body: "" };
+    historyState.commitFiles = {
+      files: [{ status: "A", path: "first.ts" }],
+      isRepo: true,
+      nextCursor: "next-page",
+      hasMore: true,
+      capped: true,
+    };
+
+    const list = historyList(renderPanel());
+    const row = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    (
+      visitElements(row, (element) => element.props["data-commit-hash"] === historyCommit.hash)
+        ?.props.onClick as (() => void) | undefined
+    )?.();
+    renderPanel();
+    flushEffects();
+    const firstPane = componentElement(renderPanel(), "CommitDetailsPane");
+    expect(firstPane.props.files).toEqual([{ status: "A", path: "first.ts" }]);
+    expect(firstPane.props.filesHasMore).toBe(true);
+    expect(firstPane.props.filesCapped).toBe(true);
+    (firstPane.props.onLoadMoreFiles as () => void)();
+    (firstPane.props.onShowDiff as ((hash: string, path: string) => void) | undefined)?.(
+      historyCommit.hash,
+      "first.ts",
+    );
+    renderPanel();
+    expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, filePath: "first.ts" },
+    });
   });
 });
