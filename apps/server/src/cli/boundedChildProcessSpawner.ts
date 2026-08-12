@@ -20,6 +20,16 @@ const DEFAULT_POLL_INTERVAL_MS = 25;
 const normalizedDelay = (value: number | undefined, fallback: number) =>
   value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, value);
 
+const isProcessAlive = (pid: ChildProcessSpawner.ProcessId) =>
+  Effect.sync(() => {
+    try {
+      globalThis.process.kill(Number(pid), 0);
+      return true;
+    } catch (cause) {
+      return !(cause instanceof Error && Reflect.get(cause, "code") === "ESRCH");
+    }
+  });
+
 const isStillRunning = (handle: ChildProcessSpawner.ChildProcessHandle) =>
   handle.isRunning.pipe(Effect.orElseSucceed(() => true));
 
@@ -30,7 +40,7 @@ const waitUntilStopped = Effect.fn("BoundedChildProcessSpawner.waitUntilStopped"
 ) {
   let remainingMs = timeoutMs;
 
-  while (yield* isStillRunning(handle)) {
+  while ((yield* isStillRunning(handle)) && (yield* isProcessAlive(handle.pid))) {
     if (remainingMs <= 0) return false;
     const delayMs = Math.min(pollIntervalMs, remainingMs);
     yield* Effect.sleep(delayMs);
@@ -38,15 +48,6 @@ const waitUntilStopped = Effect.fn("BoundedChildProcessSpawner.waitUntilStopped"
   }
 
   return true;
-});
-
-const closeScopeDetached = Effect.fn("BoundedChildProcessSpawner.closeScopeDetached")(function* (
-  scope: Scope.Closeable,
-) {
-  yield* Scope.close(scope, Exit.void).pipe(
-    Effect.ignoreCause({ log: true }),
-    Effect.forkDetach({ startImmediately: true }),
-  );
 });
 
 export const make = (
@@ -78,14 +79,11 @@ export const make = (
     const initialGraceMs =
       initialSignal === "SIGKILL"
         ? killGraceMs
-        : Math.min(
+        : normalizedDelay(
+            killOptions?.forceKillAfter === undefined
+              ? undefined
+              : Duration.toMillis(killOptions.forceKillAfter),
             termGraceMs,
-            normalizedDelay(
-              killOptions?.forceKillAfter === undefined
-                ? undefined
-                : Duration.toMillis(killOptions.forceKillAfter),
-              termGraceMs,
-            ),
           );
     yield* sendSignal(handle, initialSignal);
     const stoppedAfterInitialSignal = yield* waitUntilStopped(
@@ -114,11 +112,6 @@ export const make = (
     if (isReferenced()) {
       yield* kill(handle);
     }
-
-    // The platform spawner's own finalizer can wait forever for an exit event.
-    // Run it detached so it can finish normally without blocking the caller's
-    // scope when the operating system does not report an exit in time.
-    yield* closeScopeDetached(childScope);
   });
 
   const spawn = Effect.fn("BoundedChildProcessSpawner.spawn")(function* (
@@ -130,7 +123,7 @@ export const make = (
       .pipe(Effect.provideService(Scope.Scope, childScope), Effect.exit);
 
     if (Exit.isFailure(spawned)) {
-      yield* closeScopeDetached(childScope);
+      yield* Scope.close(childScope, Exit.void).pipe(Effect.ignoreCause({ log: true }));
       return yield* Effect.failCause(spawned.cause);
     }
 

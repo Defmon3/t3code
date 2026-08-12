@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { layer, make, type ChildProcessShutdownSignal } from "./boundedChildProcessSpawner.ts";
+import * as BoundedChildProcessSpawner from "./boundedChildProcessSpawner.ts";
 
 const makeHandle = (input: {
   readonly pid: number;
@@ -75,6 +75,7 @@ it.effect("closes the delegate scope after a natural child exit", () =>
   Effect.gen(function* () {
     const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
     const delegateClosed = yield* Deferred.make<void>();
+    let closeCount = 0;
     const handle = makeHandle({
       pid: 1,
       exitCode: Deferred.await(exited),
@@ -82,11 +83,15 @@ it.effect("closes the delegate scope after a natural child exit", () =>
     });
     const delegate = ChildProcessSpawner.make(() =>
       Effect.gen(function* () {
-        yield* Effect.addFinalizer(() => Deferred.succeed(delegateClosed, undefined));
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            closeCount += 1;
+          }).pipe(Effect.andThen(Deferred.succeed(delegateClosed, undefined))),
+        );
         return handle;
       }),
     );
-    const spawner = make(delegate);
+    const spawner = BoundedChildProcessSpawner.make(delegate);
     const callerScope = yield* Scope.make();
 
     const spawned = yield* spawner
@@ -97,13 +102,14 @@ it.effect("closes the delegate scope after a natural child exit", () =>
     yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0));
     yield* Deferred.await(delegateClosed).pipe(Effect.timeout("1 second"));
     yield* Scope.close(callerScope, Exit.void);
+    expect(closeCount).toBe(1);
   }),
 );
 
 it.effect("preserves unref as an opt-out from scope-owned termination", () =>
   Effect.gen(function* () {
     const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
-    const signals: Array<ChildProcessShutdownSignal> = [];
+    const signals: Array<BoundedChildProcessSpawner.ChildProcessShutdownSignal> = [];
     let running = true;
     const handle = makeHandle({
       pid: 43,
@@ -114,7 +120,7 @@ it.effect("preserves unref as an opt-out from scope-owned termination", () =>
           if (killSignal === "SIGTERM" || killSignal === "SIGKILL") signals.push(killSignal);
         }),
     });
-    const spawner = make(
+    const spawner = BoundedChildProcessSpawner.make(
       ChildProcessSpawner.make(() => Effect.succeed(handle)),
       {
         termGraceMs: 0,
@@ -139,10 +145,10 @@ it.effect("preserves unref as an opt-out from scope-owned termination", () =>
 it.effect("bounds explicit handle kill calls and escalates to SIGKILL", () =>
   Effect.gen(function* () {
     const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
-    const signals: Array<ChildProcessShutdownSignal> = [];
+    const signals: Array<BoundedChildProcessSpawner.ChildProcessShutdownSignal> = [];
     let running = true;
     const handle = makeHandle({
-      pid: 44,
+      pid: process.pid,
       exitCode: Deferred.await(exited),
       isRunning: Effect.sync(() => running),
       kill: ({ killSignal } = {}) =>
@@ -152,7 +158,7 @@ it.effect("bounds explicit handle kill calls and escalates to SIGKILL", () =>
           if (killSignal === "SIGKILL") running = false;
         }).pipe(Effect.andThen(Deferred.await(exited)), Effect.asVoid),
     });
-    const spawner = make(
+    const spawner = BoundedChildProcessSpawner.make(
       ChildProcessSpawner.make(() => Effect.succeed(handle)),
       {
         termGraceMs: 0,
@@ -172,15 +178,82 @@ it.effect("bounds explicit handle kill calls and escalates to SIGKILL", () =>
   }),
 );
 
-it.effect("does not wait for the delegate's unbounded finalizer", () =>
+it.effect("respects an explicit force-kill grace period", () =>
+  Effect.gen(function* () {
+    const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+    const signals: Array<BoundedChildProcessSpawner.ChildProcessShutdownSignal> = [];
+    let running = true;
+    const handle = makeHandle({
+      pid: process.pid,
+      exitCode: Deferred.await(exited),
+      isRunning: Effect.sync(() => running),
+      kill: ({ killSignal } = {}) =>
+        Effect.sync(() => {
+          if (killSignal !== "SIGTERM" && killSignal !== "SIGKILL") return;
+          signals.push(killSignal);
+          if (killSignal === "SIGKILL") running = false;
+        }),
+    });
+    const spawner = BoundedChildProcessSpawner.make(
+      ChildProcessSpawner.make(() => Effect.succeed(handle)),
+      {
+        termGraceMs: 0,
+        killGraceMs: 0,
+        pollIntervalMs: 100,
+      },
+    );
+    const callerScope = yield* Scope.make();
+    const spawned = yield* spawner
+      .spawn(ChildProcess.make("unused"))
+      .pipe(Effect.provideService(Scope.Scope, callerScope));
+
+    const killFiber = yield* spawned.kill({ forceKillAfter: "10 seconds" }).pipe(Effect.forkChild);
+    yield* TestClock.adjust("9 seconds");
+    expect(signals).toEqual(["SIGTERM"]);
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(killFiber);
+
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(137));
+    yield* Scope.close(callerScope, Exit.void);
+  }),
+);
+
+it.effect("treats a missing pid as stopped when the delegate exit event is stale", () =>
+  Effect.gen(function* () {
+    const signals: Array<BoundedChildProcessSpawner.ChildProcessShutdownSignal> = [];
+    const handle = makeHandle({
+      pid: 2_147_483_647,
+      exitCode: Effect.never,
+      isRunning: Effect.succeed(true),
+      kill: ({ killSignal } = {}) =>
+        Effect.sync(() => {
+          if (killSignal === "SIGTERM" || killSignal === "SIGKILL") signals.push(killSignal);
+        }),
+    });
+    const spawner = BoundedChildProcessSpawner.make(
+      ChildProcessSpawner.make(() => Effect.succeed(handle)),
+    );
+    const callerScope = yield* Scope.make();
+
+    yield* spawner
+      .spawn(ChildProcess.make("unused"))
+      .pipe(Effect.provideService(Scope.Scope, callerScope));
+    yield* Scope.close(callerScope, Exit.void);
+
+    expect(signals).toEqual(["SIGTERM"]);
+  }),
+);
+
+it.effect("returns from scope close before the delegate finalizer can block", () =>
   Effect.gen(function* () {
     const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
     const delegateCloseStarted = yield* Deferred.make<void>();
     const allowDelegateClose = yield* Deferred.make<void>();
-    const signals: Array<ChildProcessShutdownSignal> = [];
+    const signals: Array<BoundedChildProcessSpawner.ChildProcessShutdownSignal> = [];
     let running = true;
     const handle = makeHandle({
-      pid: 42,
+      pid: process.pid,
       exitCode: Deferred.await(exited),
       isRunning: Effect.sync(() => running),
       kill: ({ killSignal } = {}) =>
@@ -200,7 +273,7 @@ it.effect("does not wait for the delegate's unbounded finalizer", () =>
         return handle;
       }),
     );
-    const spawner = make(delegate, {
+    const spawner = BoundedChildProcessSpawner.make(delegate, {
       termGraceMs: 0,
       killGraceMs: 0,
     });
@@ -212,9 +285,10 @@ it.effect("does not wait for the delegate's unbounded finalizer", () =>
     yield* Scope.close(callerScope, Exit.void);
 
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(yield* Deferred.poll(delegateCloseStarted)).toEqual(Option.none());
+    yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(137));
     yield* Deferred.await(delegateCloseStarted).pipe(Effect.timeout("1 second"));
     yield* Deferred.succeed(allowDelegateClose, undefined);
-    yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(137));
   }),
 );
 
@@ -235,7 +309,7 @@ it.effect("kills a Windows child process tree without blocking scope close", () 
     });
     setInterval(() => {}, 1_000);
   `;
-  const boundedLayer = layer({
+  const boundedLayer = BoundedChildProcessSpawner.layer({
     termGraceMs: 100,
     killGraceMs: 1_000,
     pollIntervalMs: 10,
@@ -256,6 +330,7 @@ it.effect("kills a Windows child process tree without blocking scope close", () 
       Effect.map(Option.getOrThrow),
     );
     const pids = readFixturePids(line);
+
     const closeFiber = yield* Scope.close(callerScope, Exit.void).pipe(
       Effect.forkDetach({ startImmediately: true }),
     );
