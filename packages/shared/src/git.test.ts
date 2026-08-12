@@ -176,8 +176,17 @@ describe("applyGitStatusStreamEvent", () => {
 });
 
 describe("sanitizeWorktreeBranchNameInput", () => {
-  it("lowercases and dashes invalid characters while typing", () => {
-    expect(sanitizeWorktreeBranchNameInput("Feat/My Fix!")).toBe("feat/my-fix-");
+  it("preserves case and dashes invalid characters while typing", () => {
+    expect(sanitizeWorktreeBranchNameInput("Feat/My Fix!")).toBe("Feat/My-Fix-");
+  });
+
+  it("allows dots but blocks the ref shapes git refuses", () => {
+    expect(sanitizeWorktreeBranchNameInput("release/v1.2")).toBe("release/v1.2");
+    // ".." is invalid anywhere in a ref.
+    expect(sanitizeWorktreeBranchNameInput("a..b")).toBe("a.b");
+    // No component can begin with a dot.
+    expect(sanitizeWorktreeBranchNameInput(".hidden")).toBe("hidden");
+    expect(sanitizeWorktreeBranchNameInput("feat/.hidden")).toBe("feat/hidden");
   });
 
   it("keeps edge separators so slashes and dashes can be typed mid-name", () => {
@@ -198,6 +207,8 @@ describe("normalizeWorktreeBranchName", () => {
   it("trims edge separators from the final name", () => {
     expect(normalizeWorktreeBranchName("feat/my-fix-")).toBe("feat/my-fix");
     expect(normalizeWorktreeBranchName("/feat/my-fix")).toBe("feat/my-fix");
+    // A ref cannot end with a dot.
+    expect(normalizeWorktreeBranchName("release/v1.")).toBe("release/v1");
   });
 
   it("returns null when nothing usable remains", () => {
@@ -209,5 +220,6 @@ describe("normalizeWorktreeBranchName", () => {
     expect(normalizeWorktreeBranchName("feat/custom-worktree-location")).toBe(
       "feat/custom-worktree-location",
     );
+    expect(normalizeWorktreeBranchName("Feat/JIRA-123_v1.2")).toBe("Feat/JIRA-123_v1.2");
   });
 });
