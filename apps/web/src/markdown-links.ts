@@ -111,6 +111,15 @@ export function rewriteMarkdownFileUriHref(href: string | undefined): string | n
   return `${target.path}${target.hash}`;
 }
 
+export function normalizeMarkdownFileLinkHrefKey(href: string): string {
+  const normalizedHref = normalizeMarkdownLinkDestination(href);
+  const rewrittenHref = rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
+  if (!WINDOWS_DRIVE_PATH_PATTERN.test(rewrittenHref)) return rewrittenHref;
+
+  const target = parseFileUrlHref(`file:///${rewrittenHref}`, { decodePath: false });
+  return target ? `${target.path}${target.hash}` : rewrittenHref;
+}
+
 interface MarkdownLinkNode {
   type?: string;
   url?: unknown;
