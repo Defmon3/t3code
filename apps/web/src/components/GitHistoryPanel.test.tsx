@@ -1,35 +1,70 @@
 import {
   EnvironmentId,
+  VcsSnapshotExpiredError,
   type GitCommitDetails,
   type GitHistoryCommit,
   type VcsGetHistoryResult,
+  type VcsListCommitFilesResult,
   type VcsRef,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
 import { visitElements } from "../test/reactElementTree";
 
-type PageAtom = {
-  readonly result: {
-    readonly _tag: "Success";
-    readonly waiting: false;
-    readonly value: VcsGetHistoryResult;
-  };
-};
+type PageResult =
+  | { readonly _tag: "Failure"; readonly cause: Cause.Cause<unknown> }
+  | { readonly _tag: "Success"; readonly waiting: false; readonly value: VcsGetHistoryResult };
+
+type PageAtom = { readonly result: PageResult };
+
+const effectQueue = vi.hoisted(() => ({
+  cursor: 0,
+  dependencies: [] as Array<ReadonlyArray<unknown> | undefined>,
+  effects: [] as Array<() => void>,
+}));
 
 const historyState = vi.hoisted(() => ({
   commitDetails: null as GitCommitDetails | null,
   diff: { diff: "", isRepo: true, truncated: false },
   getCommitDetails: vi.fn(),
+  listCommitFiles: vi.fn(),
+  commitFiles: {
+    files: [],
+    isRepo: true,
+    nextCursor: null,
+    hasMore: false,
+    capped: false,
+  } as VcsListCommitFilesResult,
+  commitFilesErrorCause: null as Cause.Cause<unknown> | null,
+  commitFilesRefresh: vi.fn(),
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
-  pages: new Map<number | undefined, VcsGetHistoryResult>(),
+  historyRevision: 0,
+  pages: new Map<string | undefined, PageResult>(),
   refresh: vi.fn(),
+  refreshRefs: vi.fn(),
+  refreshRemoteRefs: vi.fn(),
+  refreshTags: vi.fn(),
+  toastAdd: vi.fn(),
   refs: [] as ReadonlyArray<VcsRef>,
   tags: [] as ReadonlyArray<VcsRef>,
   status: { aheadCount: 0, behindCount: 0, branchCommitCount: 0 },
+}));
+
+vi.mock("../hooks/useCopyToClipboard", () => ({
+  useCopyToClipboard: (options?: { readonly onError?: (error: Error) => void }) => ({
+    copyToClipboard: () => options?.onError?.(new Error("Clipboard permission was denied.")),
+    isCopied: false,
+  }),
+}));
+
+vi.mock("./ui/toast", () => ({
+  stackedThreadToast: (toast: unknown) => toast,
+  toastManager: { add: historyState.toastAdd },
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -39,7 +74,20 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useCallback: reactHookHarness.useCallback,
     useDeferredValue: <Value,>(value: Value) => value,
-    useEffect: () => {},
+    useEffect: (effect: () => void, dependencies?: ReadonlyArray<unknown>) => {
+      const index = effectQueue.cursor++;
+      const previous = effectQueue.dependencies[index];
+      if (
+        previous !== undefined &&
+        dependencies !== undefined &&
+        previous.length === dependencies.length &&
+        previous.every((value, dependencyIndex) => Object.is(value, dependencies[dependencyIndex]))
+      ) {
+        return;
+      }
+      effectQueue.dependencies[index] = dependencies;
+      effectQueue.effects.push(effect);
+    },
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
@@ -61,7 +109,8 @@ vi.mock("effect/unstable/reactivity", async (importOriginal) => {
     ...actual,
     AsyncResult: {
       ...actual.AsyncResult,
-      value: (result: PageAtom["result"]) => ({ _tag: "Some", value: result.value }),
+      value: (result: PageAtom["result"]) =>
+        result._tag === "Success" ? Option.some(result.value) : Option.none(),
     },
     Atom: {
       ...actual.Atom,
@@ -88,29 +137,35 @@ vi.mock("../rpc/atomRegistry", () => ({
 }));
 
 vi.mock("../state/queries", () => ({
-  usePaginatedBranches: (_target: unknown, options?: { readonly refKind?: string }) => {
-    const refs = options?.refKind === "tag" ? historyState.tags : historyState.refs;
+  usePaginatedBranches: (_target: unknown, options?: { readonly namespace?: string }) => {
+    const refs = options?.namespace === "tag" ? historyState.tags : historyState.refs;
     return {
       data: {
         refs,
         isRepo: true,
         hasPrimaryRemote: false,
         nextCursor: null,
-        totalCount: refs.length,
+        currentRef: refs.find((ref) => ref.current) ?? null,
+        isComplete: true,
       },
       refs,
       error: null,
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
-      refresh: vi.fn(),
+      refresh:
+        options?.namespace === "tag"
+          ? historyState.refreshTags
+          : options?.namespace === "remote"
+            ? historyState.refreshRemoteRefs
+            : historyState.refreshRefs,
     };
   },
 }));
 
 vi.mock("../state/query", () => ({
   useEnvironmentQuery: (target: { readonly kind?: string } | null) => {
-    const base = { error: null, isPending: false, refresh: vi.fn() };
+    const base = { error: null, errorCause: null, isPending: false, refresh: vi.fn() };
     if (target?.kind === "refs") {
       return {
         ...base,
@@ -127,6 +182,16 @@ vi.mock("../state/query", () => ({
     if (target?.kind === "status") return { ...base, data: historyState.status };
     if (target?.kind === "commit-details")
       return { ...base, data: { commit: historyState.commitDetails } };
+    if (target?.kind === "commit-files") {
+      const errorCause = historyState.commitFilesErrorCause;
+      return {
+        ...base,
+        data: errorCause === null ? historyState.commitFiles : null,
+        error: errorCause === null ? null : "Git browsing snapshot expired.",
+        errorCause,
+        refresh: historyState.commitFilesRefresh,
+      };
+    }
     if (target?.kind === "commit-diff") return { ...base, data: historyState.diff };
     return { ...base, data: null };
   },
@@ -134,15 +199,20 @@ vi.mock("../state/query", () => ({
 
 vi.mock("../state/vcs", () => ({
   vcsEnvironment: {
-    getHistory: (target: { readonly input: { readonly cursor?: number } }) => {
+    historyRevisionAtom: () => ({ value: historyState.historyRevision }),
+    getHistory: (target: { readonly input: { readonly cursor?: string } }) => {
       historyState.getHistory(target);
       const value = historyState.pages.get(target.input.cursor);
       if (!value) throw new Error(`Missing history page for cursor ${target.input.cursor}`);
-      return { result: { _tag: "Success", waiting: false, value } } satisfies PageAtom;
+      return { result: value } satisfies PageAtom;
     },
     getCommitDetails: (target: unknown) => {
       historyState.getCommitDetails(target);
       return { kind: "commit-details" };
+    },
+    listCommitFiles: (target: { readonly input: unknown }) => {
+      historyState.listCommitFiles(target);
+      return { kind: "commit-files", input: target.input };
     },
     getCommitDiff: (target: unknown) => {
       historyState.getCommitDiff(target);
@@ -153,6 +223,12 @@ vi.mock("../state/vcs", () => ({
   },
 }));
 
+import {
+  appendCommitFilesPage,
+  nextCommitFilesCursor,
+  nextCommitFilesRecoveryGeneration,
+  isWideHistoryLayout,
+} from "./GitHistoryPanel";
 import GitHistoryPanel from "./GitHistoryPanel";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -171,14 +247,34 @@ function commit(hash: string, subject: string, authorName = "Ada Lovelace"): Git
 
 function page(
   commits: ReadonlyArray<GitHistoryCommit>,
-  options?: { readonly hasMore?: boolean; readonly nextCursor?: number | null },
-): VcsGetHistoryResult {
+  options?: { readonly hasMore?: boolean; readonly nextCursor?: string | null },
+): PageResult {
   return {
-    commits,
-    isRepo: true,
-    hasMore: options?.hasMore ?? false,
-    nextCursor: options?.nextCursor ?? null,
+    _tag: "Success",
+    waiting: false,
+    value: {
+      commits,
+      isRepo: true,
+      hasMore: options?.hasMore ?? false,
+      nextCursor: options?.nextCursor ?? null,
+    },
   };
+}
+
+const expiredHistoryPage = (): PageResult => ({
+  _tag: "Failure",
+  cause: Cause.fail(
+    Object.assign(new Error("Git browsing snapshot expired."), { _tag: "VcsSnapshotExpiredError" }),
+  ),
+});
+
+function expiredSnapshotCause(): Cause.Cause<unknown> {
+  return Cause.fail(
+    new VcsSnapshotExpiredError({
+      operation: "GitVcsDriver.listCommitFiles",
+      cursor: "expired-cursor",
+    }),
+  );
 }
 
 function gitRef(
@@ -207,11 +303,17 @@ function gitRef(
 
 function renderPanel(issueUrlPrefix?: string): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
+  effectQueue.cursor = 0;
   return GitHistoryPanel({
     environmentId,
     cwd: "C:/workspace",
     ...(issueUrlPrefix ? { issueUrlPrefix } : {}),
   }) as ReactElement<Record<string, unknown>>;
+}
+
+function flushEffects(): void {
+  const effects = effectQueue.effects.splice(0);
+  for (const effect of effects) effect();
 }
 
 function historyList(panel: ReactElement<Record<string, unknown>>) {
@@ -232,7 +334,19 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
         readonly graph: { readonly edges: ReadonlyArray<unknown> };
       };
     }) => ReactElement<Record<string, unknown>>;
+    readonly onEndReached?: () => void;
   }>;
+}
+
+function loadMoreHistory(panel: ReactElement<Record<string, unknown>>): void {
+  const footer = visitElements(
+    panel,
+    (element) =>
+      element.props.className === "flex shrink-0 justify-center border-t border-border/50 p-2",
+  );
+  const loadMore = visitElements(footer, (element) => element.props.children === "Load more");
+  expect(loadMore).not.toBeNull();
+  (loadMore?.props.onClick as (() => void) | undefined)?.();
 }
 
 function renderComponent(
@@ -260,19 +374,199 @@ function componentTree(
   return renderComponent(component as ReactElement<Record<string, unknown>>);
 }
 
+function componentElement(
+  panel: ReactElement<Record<string, unknown>>,
+  componentName: string,
+): ReactElement<Record<string, unknown>> {
+  const component = visitElements(
+    panel,
+    (element) => typeof element.type === "function" && element.type.name === componentName,
+  );
+  expect(component).not.toBeNull();
+  return component as ReactElement<Record<string, unknown>>;
+}
+
 describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
+    effectQueue.cursor = 0;
+    effectQueue.dependencies.length = 0;
+    effectQueue.effects.length = 0;
     historyState.commitDetails = null;
     historyState.diff = { diff: "", isRepo: true, truncated: false };
     historyState.getCommitDetails.mockReset();
+    historyState.listCommitFiles.mockReset();
+    historyState.commitFiles = {
+      files: [],
+      isRepo: true,
+      nextCursor: null,
+      hasMore: false,
+      capped: false,
+    };
+    historyState.commitFilesErrorCause = null;
+    historyState.commitFilesRefresh.mockReset();
     historyState.getCommitDiff.mockReset();
     historyState.getHistory.mockReset();
+    historyState.historyRevision = 0;
     historyState.pages.clear();
     historyState.refresh.mockReset();
+    historyState.refreshRefs.mockReset();
+    historyState.refreshRemoteRefs.mockReset();
+    historyState.refreshTags.mockReset();
+    historyState.toastAdd.mockReset();
     historyState.refs = [];
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0, branchCommitCount: 0 };
+  });
+
+  it("restarts the first history page after a typed continuation expiry", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "First")], {
+        hasMore: true,
+        nextCursor: "history-page-2",
+      }),
+    );
+    historyState.pages.set("history-page-2", expiredHistoryPage());
+
+    const first = renderPanel();
+    loadMoreHistory(first);
+    renderPanel();
+    flushEffects();
+    renderPanel();
+
+    const requests = historyState.getHistory.mock.calls.map(([target]) => target.input);
+    expect(requests).toContainEqual({
+      cwd: "C:/workspace",
+      cursor: "history-page-2",
+      limit: 100,
+      queryGeneration: 0,
+    });
+    expect(requests.at(-1)).toEqual({ cwd: "C:/workspace", limit: 100, queryGeneration: 1 });
+  });
+
+  it("recovers a second continuation expiry once after a successful recovery", () => {
+    const firstPage = page([commit("aaaaaaaa11111111111111111111111111111111", "First")], {
+      hasMore: true,
+      nextCursor: "history-page-2",
+    });
+    historyState.pages.set(undefined, firstPage);
+    historyState.pages.set("history-page-2", expiredHistoryPage());
+
+    const first = renderPanel();
+    loadMoreHistory(first);
+    renderPanel();
+    flushEffects();
+    renderPanel();
+    flushEffects();
+
+    const recovered = renderPanel();
+    loadMoreHistory(recovered);
+    renderPanel();
+    flushEffects();
+    renderPanel();
+    flushEffects();
+    renderPanel();
+    flushEffects();
+
+    const generations = historyState.getHistory.mock.calls.map(
+      ([target]) => target.input.queryGeneration,
+    );
+    expect(generations).toContain(2);
+    expect(generations).not.toContain(3);
+    expect(generations.at(-1)).toBe(2);
+  });
+
+  it("rekeys open history reads when the shared VCS history revision changes", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+    historyState.commitDetails = { ...historyCommit, body: "" };
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
+    const details = renderPanel();
+    const detailsPane = componentTree(details, "CommitDetailsPane");
+    const showDiff = visitElements(
+      detailsPane,
+      (element) =>
+        typeof element.props.onClick === "function" &&
+        JSON.stringify(element.props.children).includes("View all changes"),
+    );
+    (showDiff?.props.onClick as (() => void) | undefined)?.();
+    renderPanel();
+
+    historyState.historyRevision = 1;
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 1 },
+    });
+    expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+    });
+    expect(historyState.listCommitFiles).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, limit: 100, queryGeneration: 1 },
+    });
+    expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+    });
+  });
+
+  it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
+    const errorCause = expiredSnapshotCause();
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+    historyState.commitDetails = { ...historyCommit, body: "" };
+    historyState.commitFiles = {
+      files: [{ status: "M", path: "stale.ts" }],
+      isRepo: true,
+      nextCursor: "stale-cursor",
+      hasMore: true,
+      capped: true,
+    };
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
+    renderPanel();
+    flushEffects();
+    expect(componentElement(renderPanel(), "CommitDetailsPane").props).toMatchObject({
+      files: [{ status: "M", path: "stale.ts" }],
+      filesCapped: true,
+      filesHasMore: true,
+    });
+
+    historyState.commitFilesErrorCause = errorCause;
+    renderPanel();
+    flushEffects();
+    expect(componentElement(renderPanel(), "CommitDetailsPane").props).toMatchObject({
+      files: [],
+      filesCapped: false,
+      filesHasMore: false,
+    });
+
+    expect(
+      nextCommitFilesRecoveryGeneration({ errorCause, generation: 0, recoveryInFlight: false }),
+    ).toBe(1);
+    expect(
+      nextCommitFilesRecoveryGeneration({ errorCause, generation: 1, recoveryInFlight: true }),
+    ).toBeNull();
+    expect(
+      nextCommitFilesRecoveryGeneration({ errorCause, generation: 1, recoveryInFlight: false }),
+    ).toBe(2);
   });
 
   it("renders populated history rows through the virtualized list", () => {
@@ -295,6 +589,11 @@ describe("GitHistoryPanel", () => {
       environmentId,
       input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
     });
+  });
+
+  it("keeps the desktop refs and details workflow available at ordinary desktop widths", () => {
+    expect(isWideHistoryLayout(1119)).toBe(false);
+    expect(isWideHistoryLayout(1120)).toBe(true);
   });
 
   it("filters history by commit message", () => {
@@ -434,9 +733,12 @@ describe("GitHistoryPanel", () => {
 
   it("deduplicates overlapping pages and keeps Load more in the scrolling column footer", () => {
     const duplicate = commit("aaaaaaaa11111111111111111111111111111111", "Initial commit");
-    historyState.pages.set(undefined, page([duplicate], { hasMore: true, nextCursor: 1 }));
     historyState.pages.set(
-      1,
+      undefined,
+      page([duplicate], { hasMore: true, nextCursor: "next-page" }),
+    );
+    historyState.pages.set(
+      "next-page",
       page([duplicate, commit("bbbbbbbb22222222222222222222222222222222", "Second page commit")]),
     );
 
@@ -463,7 +765,7 @@ describe("GitHistoryPanel", () => {
     ]);
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", cursor: 1, limit: 100, queryGeneration: 0 },
+      input: { cwd: "C:/workspace", cursor: "next-page", limit: 100, queryGeneration: 0 },
     });
   });
 
@@ -499,37 +801,50 @@ describe("GitHistoryPanel", () => {
       },
     });
     const initialPane = componentTree(initial, "GitRefsPane");
-    const initialSection = componentTree(initialPane, "RefSection", { section: "local" });
-    const initialTree = componentTree(initialSection, "RefTree");
-    const featureFolder = visitElements(
-      initialTree,
-      (element) => element.props.title === "feature",
-    );
-    expect(featureFolder?.props["aria-expanded"]).toBe(false);
+    const initialList = componentElement(initialPane, "LegendList");
+    const initialRows = initialList.props.data as Array<{
+      readonly key: string;
+      readonly open?: boolean;
+    }>;
+    const featureFolder = initialRows.find((row) => row.key === "local:feature");
+    expect(featureFolder?.open).toBe(false);
 
-    (featureFolder?.props.onClick as (() => void) | undefined)?.();
+    const renderInitialRow = initialList.props.renderItem as (props: {
+      readonly item: (typeof initialRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    (renderInitialRow({ item: featureFolder! }).props.onClick as (() => void) | undefined)?.();
     const expanded = renderPanel();
     const expandedPane = componentTree(expanded, "GitRefsPane");
-    const expandedSection = componentTree(expandedPane, "RefSection", { section: "local" });
-    const expandedTree = componentTree(expandedSection, "RefTree");
-    const nestedTree = componentTree(expandedTree, "RefTree", { depth: 1 });
-    const uiBranch = visitElements(nestedTree, (element) => element.props.title === "feature/ui");
-    expect(uiBranch).not.toBeNull();
+    const expandedList = componentElement(expandedPane, "LegendList");
+    const expandedRows = expandedList.props.data as Array<{ readonly key: string }>;
+    expect(expandedRows.map((row) => row.key)).toContain("refs/heads/feature/ui");
+    const renderExpandedRow = expandedList.props.renderItem as (props: {
+      readonly item: (typeof expandedRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    const uiBranch = renderExpandedRow({
+      item: expandedRows.find((row) => row.key === "refs/heads/feature/ui")!,
+    });
     expect(
       visitElements(
-        nestedTree,
+        uiBranch,
         (element) => element.props.title === "10 commits ahead of origin/feature/ui",
       ),
     ).not.toBeNull();
+    const developmentBranch = renderExpandedRow({
+      item: expandedRows.find((row) => row.key === "refs/heads/development")!,
+    });
     expect(
       visitElements(
-        initialTree,
+        developmentBranch,
         (element) => element.props.title === "3 commits ahead of origin/development",
       ),
     ).not.toBeNull();
+    expect(developmentBranch.props["aria-label"]).toBe(
+      "development. 3 commits ahead of upstream origin/development. 2 commits behind upstream origin/development.",
+    );
     expect(
       visitElements(
-        initialTree,
+        developmentBranch,
         (element) => element.props.title === "2 commits behind origin/development",
       ),
     ).not.toBeNull();
@@ -559,15 +874,10 @@ describe("GitHistoryPanel", () => {
     });
     const filtered = renderPanel();
     const filteredPane = componentTree(filtered, "GitRefsPane");
-    const filteredSection = componentTree(filteredPane, "RefSection", { section: "local" });
-    const filteredTree = componentTree(filteredSection, "RefTree");
-    const filteredNestedTree = componentTree(filteredTree, "RefTree", { depth: 1 });
-    expect(
-      visitElements(filteredNestedTree, (element) => element.props.title === "feature/api"),
-    ).not.toBeNull();
-    expect(
-      visitElements(filteredNestedTree, (element) => element.props.title === "feature/ui"),
-    ).toBeNull();
+    const filteredList = componentElement(filteredPane, "LegendList");
+    const filteredRows = filteredList.props.data as Array<{ readonly key: string }>;
+    expect(filteredRows.map((row) => row.key)).toContain("refs/heads/feature/api");
+    expect(filteredRows.map((row) => row.key)).not.toContain("refs/heads/feature/ui");
   });
 
   it("lists and selects tags from the refs snapshot even when history has no tag decorations", () => {
@@ -579,17 +889,28 @@ describe("GitHistoryPanel", () => {
 
     const initial = renderPanel();
     const initialPane = componentTree(initial, "GitRefsPane");
-    const tags = componentTree(initialPane, "RefSection", { section: "tags" });
-    const tagsToggle = visitElements(tags, (element) => element.props["aria-expanded"] === false);
-    (tagsToggle?.props.onClick as (() => void) | undefined)?.();
+    const initialList = componentElement(initialPane, "LegendList");
+    const initialRows = initialList.props.data as Array<{ readonly key: string }>;
+    const renderInitialRow = initialList.props.renderItem as (props: {
+      readonly item: (typeof initialRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    (
+      renderInitialRow({ item: initialRows.find((row) => row.key === "section:tags")! }).props
+        .onClick as (() => void) | undefined
+    )?.();
 
     const expanded = renderPanel();
     const expandedPane = componentTree(expanded, "GitRefsPane");
-    const expandedTags = componentTree(expandedPane, "RefSection", { section: "tags" });
-    const tagTree = componentTree(expandedTags, "RefTree");
-    const tag = visitElements(tagTree, (element) => element.props.title === "v1.2.3");
-    expect(tag).not.toBeNull();
-    (tag?.props.onClick as (() => void) | undefined)?.();
+    const expandedList = componentElement(expandedPane, "LegendList");
+    const expandedRows = expandedList.props.data as Array<{ readonly key: string }>;
+    expect(expandedRows.map((row) => row.key)).toContain("refs/tags/v1.2.3");
+    const renderExpandedRow = expandedList.props.renderItem as (props: {
+      readonly item: (typeof expandedRows)[number];
+    }) => ReactElement<Record<string, unknown>>;
+    (
+      renderExpandedRow({ item: expandedRows.find((row) => row.key === "refs/tags/v1.2.3")! }).props
+        .onClick as (() => void) | undefined
+    )?.();
 
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
@@ -601,7 +922,7 @@ describe("GitHistoryPanel", () => {
   it("opens the full commit diff from selected commit details", () => {
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
-    historyState.commitDetails = { ...historyCommit, body: "", changedFiles: [] };
+    historyState.commitDetails = { ...historyCommit, body: "" };
 
     const list = historyList(renderPanel());
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
@@ -624,7 +945,7 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash },
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
     });
   });
 
@@ -639,6 +960,60 @@ describe("GitHistoryPanel", () => {
     expect(shortHash).not.toBeNull();
     expect(shortHash?.props.title).toBe(`Copy full commit hash ${historyCommit.hash}`);
     expect(shortHash?.props["aria-label"]).toBe(`Copy commit hash ${historyCommit.hash}`);
+  });
+
+  it("shows an error toast when copying a history hash is rejected", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const copyHash = visitElements(
+      historyRow,
+      (element) => element.props["aria-label"] === `Copy commit hash ${historyCommit.hash}`,
+    );
+    (copyHash?.props.onClick as (() => void) | undefined)?.();
+
+    expect(historyState.toastAdd).toHaveBeenCalledWith({
+      type: "error",
+      title: "Could not copy commit hash",
+      description: "Clipboard permission was denied.",
+    });
+  });
+
+  it("gives every selectable commit its author, date, and parent topology", () => {
+    const historyCommit = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Merge release", "Grace Hopper"),
+      parentHashes: ["parent-one", "parent-two"],
+    };
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectableRow = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+
+    expect(selectableRow?.props["aria-label"]).toContain("Author Grace Hopper");
+    expect(selectableRow?.props["aria-label"]).toContain("2-parent merge commit");
+  });
+
+  it("refreshes both history and loaded refs", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const refresh = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Refresh Git history",
+    );
+    (refresh?.props.onClick as (() => void) | undefined)?.();
+
+    expect(historyState.refreshRefs).toHaveBeenCalledOnce();
+    expect(historyState.refreshRemoteRefs).toHaveBeenCalledOnce();
+    expect(historyState.refreshTags).toHaveBeenCalledOnce();
   });
 
   it("links issue references to the active GitHub repository", () => {
@@ -663,7 +1038,6 @@ describe("GitHistoryPanel", () => {
     historyState.commitDetails = {
       ...historyCommit,
       body: "",
-      changedFiles: [{ status: "A", path: "src/panel.tsx" }],
     };
     historyState.diff = {
       diff: "diff --git a/src/panel.tsx b/src/panel.tsx\n+added line\n",
@@ -692,16 +1066,33 @@ describe("GitHistoryPanel", () => {
     const diff = renderPanel();
     expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash },
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
     });
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, filePath: "src/panel.tsx" },
+      input: {
+        cwd: "C:/workspace",
+        hash: historyCommit.hash,
+        filePath: "src/panel.tsx",
+        queryGeneration: 0,
+      },
     });
     const diffView = visitElements(
       diff,
       (element) => typeof element.type === "function" && element.type.name === "CommitDiffView",
     );
     expect(diffView?.props).toMatchObject({ hash: historyCommit.hash, filePath: "src/panel.tsx" });
+  });
+
+  it("uses the returned changed-file cursor and accumulates its page", () => {
+    const firstPage = [{ status: "A" as const, path: "first.ts" }];
+    const secondPage = [{ status: "M" as const, path: "second.ts" }];
+
+    expect(nextCommitFilesCursor("files-page-2")).toBe("files-page-2");
+    expect(nextCommitFilesCursor(null)).toBeUndefined();
+    expect(appendCommitFilesPage(firstPage, secondPage)).toEqual([
+      { status: "A", path: "first.ts" },
+      { status: "M", path: "second.ts" },
+    ]);
   });
 });

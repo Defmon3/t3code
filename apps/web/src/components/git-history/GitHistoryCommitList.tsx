@@ -10,8 +10,12 @@ import {
 import * as Cause from "effect/Cause";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { type GitHistoryGraphRow } from "../../lib/gitHistoryGraph";
+import {
+  MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW,
+  type GitHistoryGraphRow,
+} from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
+import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
 export const GIT_HISTORY_ROW_HEIGHT = 30;
@@ -187,16 +191,19 @@ function GraphCell(props: {
           strokeWidth="1.1"
         />
       ) : null}
-      {props.graph.edges.map((edge, index) => {
-        const fromX = edge.kind === "parent" ? x(props.graph.lane) : x(edge.fromLane);
-        const fromY = edge.kind === "parent" ? centerY : 0;
+      {props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW).map((edge, index) => {
+        const fromX =
+          edge.kind === "parent" || edge.kind === "elided" ? x(props.graph.lane) : x(edge.fromLane);
+        const fromY = edge.kind === "parent" || edge.kind === "elided" ? centerY : 0;
         const toX = x(edge.toLane);
         const path =
           edge.kind === "continuation"
             ? `M ${fromX} -1 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
             : edge.kind === "incoming"
               ? `M ${fromX} -1 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
-              : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`;
+              : edge.kind === "elided"
+                ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
+                : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`;
         return (
           <path
             data-edge-kind={edge.kind}
@@ -206,7 +213,7 @@ function GraphCell(props: {
             stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
             strokeWidth="1.1"
             strokeLinecap="round"
-            strokeDasharray={edge.isMissingParent ? "3 2" : undefined}
+            strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
           />
         );
       })}
@@ -240,7 +247,10 @@ export function CommitRow(props: {
   onSelect: (hash: string) => void;
 }) {
   const { commit } = props.row;
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "commit hash" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: "commit hash",
+    onError: reportCommitHashCopyFailure,
+  });
   const pullRequestNumber = pullRequestNumberFromSubject(commit.subject);
   const isMergeCommit = commit.parentHashes.length > 1 || /^Merge\b/i.test(commit.subject);
   return (
@@ -256,7 +266,7 @@ export function CommitRow(props: {
         className="absolute inset-0 z-0 outline-none focus-visible:bg-accent/60"
         onClick={() => props.onSelect(commit.hash)}
         aria-pressed={props.selected}
-        aria-label={`${commit.subject || "No subject"}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : "Commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
+        aria-label={`${commit.subject || "No subject"}. Author ${commit.authorName}, ${formatCommitDate(commit.authoredAt)}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : commit.parentHashes.length === 1 ? "One parent." : "Root commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
       />
       <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-stretch">
         <GraphCell
@@ -332,6 +342,9 @@ export function CommitRow(props: {
           commit.hash.slice(0, 8)
         )}
       </button>
+      <span className="sr-only" aria-live="polite">
+        {isCopied ? `Copied commit hash ${commit.hash}` : ""}
+      </span>
     </div>
   );
 }

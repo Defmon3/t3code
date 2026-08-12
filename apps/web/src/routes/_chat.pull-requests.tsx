@@ -1146,6 +1146,7 @@ function PullRequestsRouteView() {
             onAddDiff={() => undefined}
             onAddGitHistory={() => undefined}
             onAddFiles={() => undefined}
+            onAddGitHistory={() => undefined}
             onAddPullRequest={() => undefined}
             onAddAgents={() => undefined}
             browserAvailable={false}
@@ -1153,6 +1154,7 @@ function PullRequestsRouteView() {
             diffAvailable={false}
             gitHistoryAvailable={false}
             filesAvailable={false}
+            gitHistoryAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}

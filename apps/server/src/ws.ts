@@ -1990,6 +1990,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.vcsGetCommitDetails, gitWorkflow.getCommitDetails(input), {
             "rpc.aggregate": "vcs",
           }),
+        [WS_METHODS.vcsListCommitFiles]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsListCommitFiles, gitWorkflow.listCommitFiles(input), {
+            "rpc.aggregate": "vcs",
+          }),
         [WS_METHODS.vcsGetCommitDiff]: (input) =>
           observeRpcEffect(WS_METHODS.vcsGetCommitDiff, gitWorkflow.getCommitDiff(input), {
             "rpc.aggregate": "vcs",

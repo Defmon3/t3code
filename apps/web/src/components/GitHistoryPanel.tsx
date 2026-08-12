@@ -1,7 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, GitHistoryCommit } from "@t3tools/contracts";
+import type { EnvironmentId, GitCommitChangedFile, GitHistoryCommit } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import { FileIcon, GitBranchIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
@@ -12,6 +13,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type RefObject,
 } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -39,9 +41,31 @@ import type {
 import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Sheet, SheetPopup, SheetTitle } from "./ui/sheet";
 
 const HISTORY_PAGE_SIZE = 100;
+const MAX_HISTORY_PAGES = 10;
 const INITIAL_CURSORS = [undefined] as const;
+const WIDE_HISTORY_LAYOUT_MIN_WIDTH = 1120;
+const REFS_PANE_MIN_WIDTH = 176;
+const REFS_PANE_MAX_WIDTH = 480;
+const DETAILS_PANE_MIN_WIDTH = 256;
+const DETAILS_PANE_MAX_WIDTH = 720;
+
+function isHistorySnapshotExpired(cause: Cause.Cause<unknown>): boolean {
+  const error = Option.getOrNull(Cause.findErrorOption(cause));
+  const squashed = Cause.squash(cause);
+  return (
+    (typeof error === "object" &&
+      error !== null &&
+      "_tag" in error &&
+      error._tag === "VcsSnapshotExpiredError") ||
+    (typeof squashed === "object" &&
+      squashed !== null &&
+      "_tag" in squashed &&
+      squashed._tag === "VcsSnapshotExpiredError")
+  );
+}
 
 interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
@@ -49,17 +73,65 @@ interface GitHistoryPanelProps {
   issueUrlPrefix?: string;
 }
 
+export function isWideHistoryLayout(width: number): boolean {
+  return width >= WIDE_HISTORY_LAYOUT_MIN_WIDTH;
+}
+
+export function appendCommitFilesPage(
+  current: ReadonlyArray<GitCommitChangedFile>,
+  page: ReadonlyArray<GitCommitChangedFile>,
+): ReadonlyArray<GitCommitChangedFile> {
+  return [...current, ...page].slice(0, 2_000);
+}
+
+export function nextCommitFilesCursor(nextCursor: string | null): string | undefined {
+  return nextCursor ?? undefined;
+}
+
+export function nextCommitFilesRecoveryGeneration(input: {
+  readonly errorCause: Cause.Cause<unknown> | null;
+  readonly generation: number;
+  readonly recoveryInFlight: boolean;
+}): number | null {
+  return input.errorCause !== null &&
+    isHistorySnapshotExpired(input.errorCause) &&
+    !input.recoveryInFlight
+    ? input.generation + 1
+    : null;
+}
+
+function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
+  const [isWide, setIsWide] = useState(true);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      setIsWide(isWideHistoryLayout(entry?.contentRect.width ?? 0));
+    });
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [panelRef]);
+
+  return isWide;
+}
+
 export default function GitHistoryPanel(props: GitHistoryPanelProps) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const isWideLayout = useWideHistoryLayout(panelRef);
   const baseTargetKey = `${props.environmentId}:${props.cwd}`;
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
   const [detailsPaneWidth, setDetailsPaneWidth] = useState(384);
   const [historyQueryGeneration, setHistoryQueryGeneration] = useState(0);
+  const vcsHistoryRevision = useAtomValue(
+    vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId }),
+  );
   const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd);
   const { selectedRevision } = historyRefs;
-  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}`;
+  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
-    cursors: ReadonlyArray<number | undefined>;
+    cursors: ReadonlyArray<string | undefined>;
   }>({ targetKey, cursors: INITIAL_CURSORS });
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_CURSORS;
   const pageAtoms = useMemo(
@@ -69,14 +141,21 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           environmentId: props.environmentId,
           input: {
             cwd: props.cwd,
-            queryGeneration: historyQueryGeneration,
+            queryGeneration: historyQueryGeneration + vcsHistoryRevision,
             ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
             ...(cursor === undefined ? {} : { cursor }),
             limit: HISTORY_PAGE_SIZE,
           },
         }),
       ),
-    [cursors, historyQueryGeneration, props.cwd, props.environmentId, selectedRevision],
+    [
+      cursors,
+      historyQueryGeneration,
+      props.cwd,
+      props.environmentId,
+      selectedRevision,
+      vcsHistoryRevision,
+    ],
   );
   const pagesAtom = useMemo(
     () =>
@@ -92,6 +171,30 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   });
   const failed = results.find((result) => result._tag === "Failure");
   const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
+  const recoveredSnapshot = useRef<{
+    readonly targetKey: string;
+    readonly generation: number;
+  } | null>(null);
+  useEffect(() => {
+    if (recoveredSnapshot.current?.targetKey !== targetKey) recoveredSnapshot.current = null;
+    if (
+      recoveredSnapshot.current?.generation === historyQueryGeneration &&
+      failed === undefined &&
+      values.length > 0
+    ) {
+      recoveredSnapshot.current = null;
+      return;
+    }
+    if (
+      failed?._tag === "Failure" &&
+      isHistorySnapshotExpired(failed.cause) &&
+      recoveredSnapshot.current?.generation !== historyQueryGeneration
+    ) {
+      recoveredSnapshot.current = { targetKey, generation: historyQueryGeneration + 1 };
+      setPagination({ targetKey, cursors: INITIAL_CURSORS });
+      setHistoryQueryGeneration((generation) => generation + 1);
+    }
+  }, [failed, historyQueryGeneration, targetKey, values.length]);
   const isPending = results.some((result) => result.waiting);
   const isInitialLoad = values.length === 0 && isPending;
   const history = useMemo(() => {
@@ -106,7 +209,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const isRepo = values[0]?.isRepo ?? true;
   const lastPage = values.at(-1) ?? null;
   const nextCursor = lastPage?.nextCursor ?? null;
-  const hasMore = lastPage?.hasMore === true && nextCursor !== null;
+  const hasMoreFromServer = lastPage?.hasMore === true && nextCursor !== null;
+  const historyLimitReached = cursors.length >= MAX_HISTORY_PAGES;
+  const hasMore = hasMoreFromServer && !historyLimitReached;
   const isFetchingNextPage = results.at(-1)?.waiting === true && values.length > 0;
   const [filter, setFilter] = useState("");
   const normalizedFilter = filter.trim().toLocaleLowerCase();
@@ -127,10 +232,75 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDetails({
           environmentId: props.environmentId,
-          input: { cwd: props.cwd, hash: selectedHash },
+          input: { cwd: props.cwd, hash: selectedHash, queryGeneration: vcsHistoryRevision },
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
+  const [commitFilesCursor, setCommitFilesCursor] = useState<string | undefined>(undefined);
+  const [commitFiles, setCommitFiles] = useState<ReadonlyArray<GitCommitChangedFile>>([]);
+  const [commitFilesNextCursor, setCommitFilesNextCursor] = useState<string | null>(null);
+  const [commitFilesHasMore, setCommitFilesHasMore] = useState(false);
+  const [commitFilesCapped, setCommitFilesCapped] = useState(false);
+  const [commitFilesQueryGeneration, setCommitFilesQueryGeneration] = useState(0);
+  const receivedCommitFilesPages = useRef(new Set<string>());
+  const commitFilesRecoveryInFlight = useRef(false);
+  useEffect(() => {
+    setCommitFilesCursor(undefined);
+    setCommitFiles([]);
+    setCommitFilesNextCursor(null);
+    setCommitFilesHasMore(false);
+    setCommitFilesCapped(false);
+    commitFilesRecoveryInFlight.current = false;
+    receivedCommitFilesPages.current.clear();
+  }, [props.cwd, props.environmentId, selectedHash, vcsHistoryRevision]);
+  const commitFilesQuery = useEnvironmentQuery(
+    selectedHash === null
+      ? null
+      : vcsEnvironment.listCommitFiles({
+          environmentId: props.environmentId,
+          input: {
+            cwd: props.cwd,
+            hash: selectedHash,
+            limit: 100,
+            queryGeneration: commitFilesQueryGeneration + vcsHistoryRevision,
+            ...(commitFilesCursor ? { cursor: commitFilesCursor } : {}),
+          },
+        }),
+  );
+  useEffect(() => {
+    const page = commitFilesQuery.data;
+    if (!page || selectedHash === null) return;
+    const pageKey = `${selectedHash}:${commitFilesCursor ?? "first"}:${page.nextCursor ?? "last"}`;
+    if (receivedCommitFilesPages.current.has(pageKey)) return;
+    receivedCommitFilesPages.current.add(pageKey);
+    setCommitFiles((current) => appendCommitFilesPage(current, page.files));
+    setCommitFilesHasMore(page.hasMore);
+    setCommitFilesCapped(page.capped);
+    setCommitFilesNextCursor(page.nextCursor);
+    if (commitFilesCursor === undefined) commitFilesRecoveryInFlight.current = false;
+  }, [commitFilesCursor, commitFilesQuery.data, selectedHash]);
+  useEffect(() => {
+    const recoveryGeneration = nextCommitFilesRecoveryGeneration({
+      errorCause: commitFilesQuery.error === null ? null : commitFilesQuery.errorCause,
+      generation: commitFilesQueryGeneration,
+      recoveryInFlight: commitFilesRecoveryInFlight.current,
+    });
+    if (recoveryGeneration !== null) {
+      receivedCommitFilesPages.current.clear();
+      setCommitFiles([]);
+      setCommitFilesCursor(undefined);
+      setCommitFilesNextCursor(null);
+      setCommitFilesHasMore(false);
+      setCommitFilesCapped(false);
+      commitFilesRecoveryInFlight.current = true;
+      setCommitFilesQueryGeneration(recoveryGeneration);
+    }
+  }, [commitFilesQuery.error, commitFilesQuery.errorCause, commitFilesQueryGeneration]);
+  const selectedCommitFiles = commitFiles;
+  const loadMoreCommitFiles = () => {
+    const cursor = nextCommitFilesCursor(commitFilesNextCursor);
+    if (cursor) setCommitFilesCursor(cursor);
+  };
   const commitDiffQuery = useEnvironmentQuery(
     commitDiffRequest === null
       ? null
@@ -139,6 +309,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           input: {
             cwd: props.cwd,
             hash: commitDiffRequest.hash,
+            queryGeneration: vcsHistoryRevision,
             ...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {}),
           },
         }),
@@ -153,6 +324,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     normalizedRefFilter,
     onLoadMoreRefs,
     onRetryRefs,
+    refreshRefs,
     refPaginationError,
     refFilter,
     remoteRefTree,
@@ -218,6 +390,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setMobilePane(null);
   }, [targetKey]);
 
+  useEffect(() => {
+    if (isWideLayout) setMobilePane(null);
+  }, [isWideLayout]);
+
   const headHash = useMemo(() => currentHeadHash(history), [history]);
   const primaryHashes = useMemo(() => firstParentHashes(history, headHash), [headHash, history]);
   const filteredHistory = useMemo(() => {
@@ -263,7 +439,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const refresh = useCallback(() => {
     setHistoryQueryGeneration((generation) => generation + 1);
     setPagination({ targetKey, cursors: INITIAL_CURSORS });
-  }, [targetKey]);
+    refreshRefs();
+  }, [refreshRefs, targetKey]);
   const loadNext = useCallback(() => {
     if (!hasMore || nextCursor === null) return;
     setPagination((current) => {
@@ -281,6 +458,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
 
   return (
     <section
+      ref={panelRef}
       className="@container/history-list flex size-full min-h-0 min-w-0 flex-col bg-background"
       aria-label="Git history"
     >
@@ -303,29 +481,31 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             </span>
           ) : null}
         </div>
-        <Button
-          ref={branchesButtonRef}
-          variant="ghost"
-          size="xs"
-          className="@min-[1380px]/history-list:hidden"
-          onClick={() => setMobilePane((pane) => (pane === "refs" ? null : "refs"))}
-          aria-controls="git-history-refs-panel"
-          aria-expanded={mobilePane === "refs"}
-        >
-          <GitBranchIcon className="size-3.5" /> Branches
-        </Button>
-        <Button
-          ref={detailsButtonRef}
-          variant="ghost"
-          size="xs"
-          className="@min-[1380px]/history-list:hidden"
-          onClick={() => setMobilePane((pane) => (pane === "details" ? null : "details"))}
-          disabled={selectedHash === null}
-          aria-controls="git-history-details-panel"
-          aria-expanded={mobilePane === "details"}
-        >
-          <FileIcon className="size-3.5" /> Details
-        </Button>
+        {!isWideLayout ? (
+          <>
+            <Button
+              ref={branchesButtonRef}
+              variant="ghost"
+              size="xs"
+              onClick={() => setMobilePane((pane) => (pane === "refs" ? null : "refs"))}
+              aria-controls="git-history-refs-panel"
+              aria-expanded={mobilePane === "refs"}
+            >
+              <GitBranchIcon className="size-3.5" /> Branches
+            </Button>
+            <Button
+              ref={detailsButtonRef}
+              variant="ghost"
+              size="xs"
+              onClick={() => setMobilePane((pane) => (pane === "details" ? null : "details"))}
+              disabled={selectedHash === null}
+              aria-controls="git-history-details-panel"
+              aria-expanded={mobilePane === "details"}
+            >
+              <FileIcon className="size-3.5" /> Details
+            </Button>
+          </>
+        ) : null}
         <Button
           variant="ghost"
           size="icon-xs"
@@ -340,7 +520,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         <CommitDiffView
           hash={commitDiffRequest.hash}
           {...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {})}
-          files={selectedCommitDetails?.changedFiles ?? []}
+          files={selectedCommitFiles}
           diff={commitDiffQuery.data?.diff ?? null}
           truncated={commitDiffQuery.data?.truncated ?? false}
           isPending={commitDiffQuery.isPending}
@@ -376,24 +556,32 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
-          <GitRefsPane
-            className="hidden !border-r-0 @min-[1380px]/history-list:flex"
-            style={{
-              width: refsPaneWidth,
-              minWidth: refsPaneWidth,
-              maxWidth: refsPaneWidth,
-              flexBasis: refsPaneWidth,
-            }}
-            {...refPaneProps}
-          />
-          <PaneResizeHandle
-            label="Resize branches pane"
-            value={refsPaneWidth}
-            onMove={(delta) =>
-              setRefsPaneWidth((width) => Math.min(480, Math.max(176, width + delta)))
-            }
-            onReset={() => setRefsPaneWidth(256)}
-          />
+          {isWideLayout ? (
+            <GitRefsPane
+              className="!border-r-0"
+              style={{
+                width: refsPaneWidth,
+                minWidth: refsPaneWidth,
+                maxWidth: refsPaneWidth,
+                flexBasis: refsPaneWidth,
+              }}
+              {...refPaneProps}
+            />
+          ) : null}
+          {isWideLayout ? (
+            <PaneResizeHandle
+              label="Resize branches pane"
+              value={refsPaneWidth}
+              min={REFS_PANE_MIN_WIDTH}
+              max={REFS_PANE_MAX_WIDTH}
+              onMove={(delta) =>
+                setRefsPaneWidth((width) =>
+                  Math.min(REFS_PANE_MAX_WIDTH, Math.max(REFS_PANE_MIN_WIDTH, width + delta)),
+                )
+              }
+              onReset={() => setRefsPaneWidth(256)}
+            />
+          ) : null}
           <div
             className="@container min-h-0 min-w-0 flex-1 overflow-hidden"
             inert={mobilePane !== null ? true : undefined}
@@ -499,86 +687,98 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                   </Button>
                 </div>
               ) : null}
+              {filteredRows.length > 0 && historyLimitReached && hasMoreFromServer ? (
+                <div className="shrink-0 border-t border-border/50 px-3 py-2 text-center text-[0.6875rem] text-muted-foreground">
+                  Showing the first {HISTORY_PAGE_SIZE * MAX_HISTORY_PAGES} commits. Choose a branch
+                  or refine the search to keep history responsive.
+                </div>
+              ) : null}
             </div>
           </div>
-          <PaneResizeHandle
-            label="Resize commit details pane"
-            value={detailsPaneWidth}
-            onMove={(delta) =>
-              setDetailsPaneWidth((width) => Math.min(720, Math.max(256, width - delta)))
-            }
-            onReset={() => setDetailsPaneWidth(384)}
-          />
-          <CommitDetailsPane
-            className="hidden !border-l-0 @min-[1380px]/history-list:flex"
-            style={{
-              width: detailsPaneWidth,
-              minWidth: detailsPaneWidth,
-              maxWidth: detailsPaneWidth,
-              flexBasis: detailsPaneWidth,
-            }}
-            details={selectedCommitDetails}
-            isPending={commitDetailsQuery.isPending}
-            hasError={commitDetailsQuery.error !== null}
-            hasSelection={selectedHash !== null}
-            onRetry={commitDetailsQuery.refresh}
-            onShowDiff={(hash, filePath) =>
-              setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-            }
-          />
-          {mobilePane === "refs" ? (
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Branches and tags"
-              className="absolute inset-0 z-30 flex bg-background @min-[1380px]/history-list:hidden"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setMobilePane(null);
-              }}
-            >
-              <GitRefsPane
-                id="git-history-refs-panel"
-                className="!w-full !min-w-0 !max-w-none !border-r-0 !bg-background"
-                {...refPaneProps}
-                onClose={() => setMobilePane(null)}
-              />
-            </div>
+          {isWideLayout ? (
+            <PaneResizeHandle
+              label="Resize commit details pane"
+              value={detailsPaneWidth}
+              min={DETAILS_PANE_MIN_WIDTH}
+              max={DETAILS_PANE_MAX_WIDTH}
+              onMove={(delta) =>
+                setDetailsPaneWidth((width) =>
+                  Math.min(DETAILS_PANE_MAX_WIDTH, Math.max(DETAILS_PANE_MIN_WIDTH, width - delta)),
+                )
+              }
+              onReset={() => setDetailsPaneWidth(384)}
+            />
           ) : null}
-          {mobilePane === "details" ? (
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Commit details"
-              className="absolute inset-0 z-30 flex flex-col bg-background @min-[1380px]/history-list:hidden"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setMobilePane(null);
+          {isWideLayout ? (
+            <CommitDetailsPane
+              className="!border-l-0"
+              style={{
+                width: detailsPaneWidth,
+                minWidth: detailsPaneWidth,
+                maxWidth: detailsPaneWidth,
+                flexBasis: detailsPaneWidth,
               }}
+              details={selectedCommitDetails}
+              files={selectedCommitFiles}
+              filesCapped={commitFilesCapped}
+              filesHasMore={commitFilesHasMore}
+              filesError={commitFilesQuery.error !== null}
+              filesLoading={commitFilesQuery.isPending}
+              onLoadMoreFiles={loadMoreCommitFiles}
+              onRetryFiles={() => void commitFilesQuery.refresh()}
+              isPending={commitDetailsQuery.isPending}
+              hasError={commitDetailsQuery.error !== null}
+              hasSelection={selectedHash !== null}
+              onRetry={commitDetailsQuery.refresh}
+              onShowDiff={(hash, filePath) =>
+                setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+              }
+            />
+          ) : null}
+          {!isWideLayout && mobilePane === "refs" ? (
+            <Sheet
+              open={mobilePane === "refs"}
+              onOpenChange={(open) => !open && setMobilePane(null)}
             >
-              <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/60 px-3">
-                <span className="text-xs font-medium">Commit details</span>
-                <Button
-                  autoFocus
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={() => setMobilePane(null)}
-                  aria-label="Close commit details"
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
-              </div>
-              <CommitDetailsPane
-                id="git-history-details-panel"
-                className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
-                details={selectedCommitDetails}
-                isPending={commitDetailsQuery.isPending}
-                hasError={commitDetailsQuery.error !== null}
-                hasSelection={selectedHash !== null}
-                onRetry={commitDetailsQuery.refresh}
-                onShowDiff={(hash, filePath) =>
-                  setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-                }
-              />
-            </div>
+              <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none p-0">
+                <SheetTitle className="sr-only">Branches and tags</SheetTitle>
+                <GitRefsPane
+                  id="git-history-refs-panel"
+                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
+                  {...refPaneProps}
+                  onClose={() => setMobilePane(null)}
+                />
+              </SheetPopup>
+            </Sheet>
+          ) : null}
+          {!isWideLayout && mobilePane === "details" ? (
+            <Sheet
+              open={mobilePane === "details"}
+              onOpenChange={(open) => !open && setMobilePane(null)}
+            >
+              <SheetPopup side="right" showCloseButton className="w-full max-w-none p-0">
+                <SheetTitle className="sr-only">Commit details</SheetTitle>
+                <CommitDetailsPane
+                  id="git-history-details-panel"
+                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
+                  details={selectedCommitDetails}
+                  files={selectedCommitFiles}
+                  filesCapped={commitFilesCapped}
+                  filesHasMore={commitFilesHasMore}
+                  filesError={commitFilesQuery.error !== null}
+                  filesLoading={commitFilesQuery.isPending}
+                  onLoadMoreFiles={loadMoreCommitFiles}
+                  onRetryFiles={() => void commitFilesQuery.refresh()}
+                  isPending={commitDetailsQuery.isPending}
+                  hasError={commitDetailsQuery.error !== null}
+                  hasSelection={selectedHash !== null}
+                  onRetry={commitDetailsQuery.refresh}
+                  onShowDiff={(hash, filePath) =>
+                    setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+                  }
+                />
+              </SheetPopup>
+            </Sheet>
           ) : null}
         </div>
       )}

@@ -4,6 +4,8 @@ import { useRef } from "react";
 export function PaneResizeHandle(props: {
   label: string;
   value: number;
+  min: number;
+  max: number;
   onMove: (delta: number) => void;
   onReset: () => void;
 }) {
@@ -13,6 +15,8 @@ export function PaneResizeHandle(props: {
       role="separator"
       aria-label={props.label}
       aria-orientation="vertical"
+      aria-valuemin={props.min}
+      aria-valuemax={props.max}
       aria-valuenow={props.value}
       tabIndex={0}
       className="group relative z-10 hidden w-2 shrink-0 cursor-col-resize touch-none bg-background/70 outline-none @min-[1380px]/history-list:block"

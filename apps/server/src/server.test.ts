@@ -5263,7 +5263,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 isRepo: true,
                 hasPrimaryRemote: true,
                 nextCursor: null,
-                totalCount: 1,
+                currentRef: null,
+                isComplete: true,
               }),
             createWorktree: () =>
               Effect.succeed({

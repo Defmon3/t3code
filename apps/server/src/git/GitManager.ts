@@ -27,6 +27,7 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   VcsStatusResult,
+  VcsSnapshotExpiredError,
   ModelSelection,
   type SourceControlWritingStyleSettings,
 } from "@t3tools/contracts";
@@ -1971,7 +1972,13 @@ export const make = Effect.gen(function* () {
       });
 
       const findLocalHeadBranch = Effect.fn("findLocalHeadBranch")(function* (cwd: string) {
-        const result = yield* gitCore.listRefs({ cwd, refresh: true });
+        const result = yield* gitCore
+          .listRefs({ cwd, refresh: true })
+          .pipe(
+            Effect.catchTag("VcsSnapshotExpiredError", () =>
+              Effect.die("A fresh Git ref snapshot cannot expire."),
+            ),
+          );
         const localBranch = result.refs.find(
           (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
         );
