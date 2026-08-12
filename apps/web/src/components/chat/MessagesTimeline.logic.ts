@@ -208,6 +208,13 @@ export type MessagesTimelineRow =
       createdAt: string;
       turnPlan: TurnPlanEntry;
     }
+  | {
+      kind: "turn-ended-without-response";
+      id: string;
+      createdAt: string;
+      turnId: TurnId;
+      state: "completed" | "interrupted" | "error";
+    }
   | { kind: "working"; id: string; createdAt: string | null };
 
 export interface StableMessagesTimelineRowsState {
@@ -310,6 +317,56 @@ function deriveUnsettledTurnId(
   return isSettled ? null : latestTurn.turnId;
 }
 
+function deriveTurnEndedWithoutFinalResponse(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  latestTurn: TimelineLatestTurn | null,
+): Extract<MessagesTimelineRow, { kind: "turn-ended-without-response" }> | null {
+  if (
+    latestTurn === null ||
+    latestTurn.state === "running" ||
+    latestTurn.state === "interrupted" ||
+    latestTurn.completedAt === null
+  ) {
+    return null;
+  }
+
+  let lastAssistantIndex = -1;
+  let lastMeaningfulEntryIndex = -1;
+  for (let index = 0; index < timelineEntries.length; index += 1) {
+    const entry = timelineEntries[index];
+    if (!entry) continue;
+    if (
+      entry.kind === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.turnId === latestTurn.turnId
+    ) {
+      lastAssistantIndex = index;
+      lastMeaningfulEntryIndex = index;
+      continue;
+    }
+    if (
+      entry.kind === "work" &&
+      entry.entry.turnId === latestTurn.turnId &&
+      entry.entry.agentSpawn === undefined &&
+      !workEntryIndicatesToolNeutralStatus(entry.entry)
+    ) {
+      lastMeaningfulEntryIndex = index;
+    }
+  }
+
+  if (lastMeaningfulEntryIndex < 0 || lastMeaningfulEntryIndex <= lastAssistantIndex) {
+    return null;
+  }
+
+  return {
+    kind: "turn-ended-without-response",
+    id: `turn-ended-without-response:${latestTurn.turnId}`,
+    createdAt: latestTurn.completedAt,
+    turnId: latestTurn.turnId,
+    state: latestTurn.state,
+  };
+}
+
 /**
  * Settled turns fold their commentary and tool activity behind a
  * "Worked for ..." row anchored at the turn's first foldable entry; the
@@ -320,6 +377,7 @@ function deriveTurnFolds(input: {
   terminalAssistantMessageIds: ReadonlySet<string>;
   latestTurn: TimelineLatestTurn | null;
   unsettledTurnId: TurnId | null;
+  turnEndedWithoutFinalResponseId: TurnId | null;
 }): ReadonlyMap<string, TurnFold> {
   interface TurnGroup {
     entries: Array<TimelineEntry>;
@@ -366,7 +424,10 @@ function deriveTurnFolds(input: {
     }
     group.entries.push(entry);
     if (entry.kind === "message") {
-      if (input.terminalAssistantMessageIds.has(entry.message.id)) {
+      if (
+        turnId !== input.turnEndedWithoutFinalResponseId &&
+        input.terminalAssistantMessageIds.has(entry.message.id)
+      ) {
         group.terminalEntry = entry;
       }
       if (entry.message.streaming) {
@@ -462,11 +523,16 @@ export function deriveMessagesTimelineRows(input: {
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
+  const turnEndedWithoutFinalResponse = deriveTurnEndedWithoutFinalResponse(
+    input.timelineEntries,
+    input.latestTurn ?? null,
+  );
   const foldsByAnchorEntryId = deriveTurnFolds({
     timelineEntries: input.timelineEntries,
     terminalAssistantMessageIds,
     latestTurn: input.latestTurn ?? null,
     unsettledTurnId,
+    turnEndedWithoutFinalResponseId: turnEndedWithoutFinalResponse?.turnId ?? null,
   });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
@@ -607,6 +673,7 @@ export function deriveMessagesTimelineRows(input: {
     const showAssistantMeta =
       timelineEntry.message.role === "assistant" &&
       terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+      timelineEntry.message.turnId !== turnEndedWithoutFinalResponse?.turnId &&
       !assistantTurnStillInProgress;
 
     nextRows.push({
@@ -627,6 +694,10 @@ export function deriveMessagesTimelineRows(input: {
           ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
           : undefined,
     });
+  }
+
+  if (turnEndedWithoutFinalResponse !== null && !input.isWorking) {
+    nextRows.push(turnEndedWithoutFinalResponse);
   }
 
   if (input.isWorking) {
@@ -667,6 +738,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   switch (a.kind) {
     case "working":
       return a.createdAt === (b as typeof a).createdAt;
+
+    case "turn-ended-without-response": {
+      const bt = b as typeof a;
+      return a.createdAt === bt.createdAt && a.turnId === bt.turnId && a.state === bt.state;
+    }
 
     case "turn-fold": {
       const bf = b as typeof a;

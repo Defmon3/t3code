@@ -121,11 +121,50 @@ describe("GitWorkflowService", () => {
 
       assert.deepStrictEqual(refs, {
         refs: [],
+        currentRef: null,
         isRepo: false,
         hasPrimaryRemote: false,
         nextCursor: null,
-        totalCount: 0,
+        isComplete: true,
       });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("returns an empty history when no VCS repository is detected", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const history = yield* workflow.getHistory({ cwd: "/not-a-repo" });
+
+      assert.deepStrictEqual(history, {
+        commits: [],
+        isRepo: false,
+        nextCursor: null,
+        hasMore: false,
+      });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("returns no commit details when no VCS repository is detected", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const details = yield* workflow.getCommitDetails({
+        cwd: "/not-a-repo",
+        hash: "0123456789abcdef0123456789abcdef01234567",
+      });
+
+      assert.deepStrictEqual(details, { commit: null, isRepo: false });
     }).pipe(
       Effect.provide(
         makeLayer({

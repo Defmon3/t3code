@@ -74,7 +74,8 @@ import {
 } from "../markdown-clipboard";
 import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
 import {
-  normalizeMarkdownLinkDestination,
+  normalizeMarkdownFileLinkHrefKey,
+  remarkRewriteWindowsFileLinks,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
@@ -162,6 +163,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
+  remarkRewriteWindowsFileLinks,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkPreserveCodeMeta,
@@ -170,6 +172,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
+  remarkRewriteWindowsFileLinks,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkBreaks,
@@ -791,7 +794,9 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
-  onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
+  onOpenInBrowser?:
+    | ((filePath: string) => Promise<AtomCommandResult<unknown, unknown>>)
+    | undefined;
   className?: string | undefined;
 }
 
@@ -882,11 +887,6 @@ function extractMarkdownLinkHrefs(text: string): string[] {
     hrefs.push(href);
   }
   return hrefs;
-}
-
-function normalizeMarkdownLinkHrefKey(href: string): string {
-  const normalizedHref = normalizeMarkdownLinkDestination(href);
-  return rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
 }
 
 const MARKDOWN_LINK_FAVICON_CLASS_NAME = "block size-full shrink-0 select-none";
@@ -1145,7 +1145,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     void (async () => {
       try {
-        const result = await onOpenInBrowser();
+        const result = await onOpenInBrowser(workspaceRelativePath ?? targetPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1175,7 +1175,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpenInBrowser, targetPath]);
+  }, [onOpenInBrowser, targetPath, workspaceRelativePath]);
 
   const handleCopy = useCallback(
     (value: string, title: string) => {
@@ -1349,7 +1349,7 @@ function ChatMarkdown({
       NonNullable<ReturnType<typeof resolveMarkdownFileLinkMeta>>
     >();
     for (const href of extractMarkdownLinkHrefs(text)) {
-      const normalizedHref = normalizeMarkdownLinkHrefKey(href);
+      const normalizedHref = normalizeMarkdownFileLinkHrefKey(href);
       if (metaByHref.has(normalizedHref)) continue;
       const meta = resolveMarkdownFileLinkMeta(normalizedHref, cwd);
       if (meta) {
@@ -1471,7 +1471,7 @@ function ChatMarkdown({
             threadRef &&
             isPreviewSupportedInRuntime() &&
             isBrowserPreviewFile(fileLinkMeta.filePath)
-              ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+              ? openMarkdownFileInPreview
               : undefined
           }
           className={className}
@@ -1543,7 +1543,7 @@ function ChatMarkdown({
         );
       },
       a({ node, href, children, ...props }) {
-        const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
+        const normalizedHref = href ? normalizeMarkdownFileLinkHrefKey(href) : "";
         const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
         if (!fileLinkMeta) {
           const faviconHost = resolveExternalWebLinkHost(href);

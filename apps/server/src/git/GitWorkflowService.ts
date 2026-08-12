@@ -5,12 +5,21 @@ import * as Layer from "effect/Layer";
 import {
   GitManagerError,
   GitCommandError,
+  VcsSnapshotExpiredError,
   type VcsSwitchRefInput,
   type VcsSwitchRefResult,
   type VcsCreateRefInput,
   type VcsCreateRefResult,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
+  type VcsGetHistoryInput,
+  type VcsGetHistoryResult,
+  type VcsGetCommitDetailsInput,
+  type VcsGetCommitDetailsResult,
+  type VcsListCommitFilesInput,
+  type VcsListCommitFilesResult,
+  type VcsGetCommitDiffInput,
+  type VcsGetCommitDiffResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
   type GitManagerServiceError,
@@ -61,7 +70,19 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
     readonly listRefs: (
       input: VcsListRefsInput,
-    ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    ) => Effect.Effect<VcsListRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly getHistory: (
+      input: VcsGetHistoryInput,
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly getCommitDetails: (
+      input: VcsGetCommitDetailsInput,
+    ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+    readonly listCommitFiles: (
+      input: VcsListCommitFilesInput,
+    ) => Effect.Effect<VcsListCommitFilesResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly getCommitDiff: (
+      input: VcsGetCommitDiffInput,
+    ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
@@ -127,11 +148,33 @@ function nonRepositoryStatus(): VcsStatusResult {
 function nonRepositoryListRefs(): VcsListRefsResult {
   return {
     refs: [],
+    currentRef: null,
     isRepo: false,
     hasPrimaryRemote: false,
     nextCursor: null,
-    totalCount: 0,
+    isComplete: true,
   };
+}
+
+function nonRepositoryHistory(): VcsGetHistoryResult {
+  return {
+    commits: [],
+    isRepo: false,
+    nextCursor: null,
+    hasMore: false,
+  };
+}
+
+function nonRepositoryCommitDetails(): VcsGetCommitDetailsResult {
+  return { commit: null, isRepo: false };
+}
+
+function nonRepositoryCommitFiles(): VcsListCommitFilesResult {
+  return { files: [], isRepo: false, nextCursor: null, hasMore: false, capped: false };
+}
+
+function nonRepositoryCommitDiff(): VcsGetCommitDiffResult {
+  return { diff: "", truncated: false, isRepo: false };
 }
 
 export const make = Effect.gen(function* () {
@@ -297,6 +340,32 @@ export const make = Effect.gen(function* () {
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
+        ),
+      ),
+    getHistory: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getHistory", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getHistory(input) : Effect.succeed(nonRepositoryHistory()),
+        ),
+      ),
+    getCommitDetails: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDetails", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.getCommitDetails(input)
+            : Effect.succeed(nonRepositoryCommitDetails()),
+        ),
+      ),
+    listCommitFiles: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.listCommitFiles", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.listCommitFiles(input) : Effect.succeed(nonRepositoryCommitFiles()),
+        ),
+      ),
+    getCommitDiff: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDiff", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getCommitDiff(input) : Effect.succeed(nonRepositoryCommitDiff()),
         ),
       ),
     createWorktree: (input) =>

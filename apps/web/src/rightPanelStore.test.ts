@@ -241,6 +241,21 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps Git History as a singleton surface", () => {
+    useRightPanelStore.getState().open(refA, "git-history");
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().open(refA, "git-history");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "git-history",
+      surfaces: [
+        { id: "git-history", kind: "git-history" },
+        { id: "agents", kind: "agents" },
+      ],
+    });
+  });
+
   it("keeps files as a singleton surface", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().open(refA, "files");

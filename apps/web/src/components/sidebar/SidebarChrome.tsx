@@ -5,7 +5,7 @@ import {
   SettingsIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
-import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_VERSION } from "../../branding";
@@ -29,8 +29,9 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -131,7 +132,6 @@ function T3Wordmark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const canGoBack = useCanGoBack();
   const currentFooterPage = useLocation({
     select: (location) =>
       location.pathname === "/usage"
@@ -166,54 +166,72 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
-    if (canGoBack) {
-      window.history.back();
-      return;
-    }
     void navigate({ to: "/" });
-  }, [canGoBack, closeMobileSidebar, navigate]);
+  }, [closeMobileSidebar, navigate]);
 
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
-      <SidebarUpdatePill />
-      <SidebarMenu>
-        {currentFooterPage === "pull-requests" ? (
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={handleBackClick}>
-              <ArrowLeftIcon />
-              <span>Back</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ) : pullRequestsSupported ? (
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={handlePullRequestsClick}>
-              <GitPullRequestIcon />
-              <span>Pull Requests</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ) : null}
-        {currentFooterPage === "usage" ? (
-          <SidebarMenuItem>
+      <SidebarUpdateArchitectureWarning />
+      <SidebarMenu className="flex-row items-center">
+        {currentFooterPage ? (
+          <SidebarMenuItem className="min-w-0 flex-1">
             <SidebarMenuButton onClick={handleBackClick}>
               <ArrowLeftIcon />
               <span>Back</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         ) : (
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={handleUsageClick}>
-              <ChartNoAxesColumnIcon />
-              <span>Usage</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          <>
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      aria-label="Settings"
+                      onClick={handleSettingsClick}
+                      size="icon"
+                    >
+                      <SettingsIcon />
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Settings</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
+            {pullRequestsSupported ? (
+              <SidebarMenuItem className="shrink-0">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        aria-label="Pull Requests"
+                        onClick={handlePullRequestsClick}
+                        size="icon"
+                      >
+                        <GitPullRequestIcon />
+                      </SidebarMenuButton>
+                    }
+                  />
+                  <TooltipPopup side="top">Pull Requests</TooltipPopup>
+                </Tooltip>
+              </SidebarMenuItem>
+            ) : null}
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
+                      <ChartNoAxesColumnIcon />
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Usage</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
+          </>
         )}
-        <SidebarMenuItem>
-          <SidebarMenuButton onClick={handleSettingsClick}>
-            <SettingsIcon />
-            <span>Settings</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        <SidebarUpdatePill />
       </SidebarMenu>
     </SidebarFooter>
   );

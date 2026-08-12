@@ -19,6 +19,7 @@ import {
   type OrchestrationCommand,
   ProjectId,
   ProviderItemId,
+  RuntimeRequestId,
   type ServerSettings,
   ThreadId,
   TurnId,
@@ -47,7 +48,10 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  ProviderRuntimeIngestionLive,
+  runtimeEventToActivities,
+} from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -65,6 +69,40 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+
+describe("runtimeEventToActivities", () => {
+  it("preserves hook approval metadata", () => {
+    const activities = runtimeEventToActivities({
+      type: "request.opened",
+      eventId: asEventId("evt-hook-approval"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: "2026-08-11T00:00:00.000Z",
+      threadId: asThreadId("thread-hook-approval"),
+      turnId: asTurnId("turn-hook-approval"),
+      requestId: RuntimeRequestId.make("req-hook-approval"),
+      payload: {
+        requestType: "command_execution_approval",
+        detail: "Bash: git push origin main",
+        args: {
+          approvalSource: "hook",
+          approvalTitle: "Push protected branch?",
+          approvalDescription: "This command updates the shared remote branch.",
+          approvalReason: "Argus policy requires confirmation for git push.",
+        },
+      },
+    });
+
+    expect(activities[0]?.payload).toMatchObject({
+      requestId: "req-hook-approval",
+      requestKind: "command",
+      detail: "Bash: git push origin main",
+      approvalSource: "hook",
+      approvalTitle: "Push protected branch?",
+      approvalDescription: "This command updates the shared remote branch.",
+      approvalReason: "Argus policy requires confirmation for git push.",
+    });
+  });
+});
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;

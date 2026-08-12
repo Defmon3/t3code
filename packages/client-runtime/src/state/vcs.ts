@@ -15,7 +15,11 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
+} from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -25,6 +29,7 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
@@ -39,10 +44,9 @@ const VCS_REFS_RETRY_SCHEDULE = Schedule.exponential("1 second").pipe(
 
 function canUseVcsRefsCache(input: VcsListRefsInput): boolean {
   return (
-    input.query === undefined &&
+    input.prefix === undefined &&
     input.cursor === undefined &&
-    input.includeMatchingRemoteRefs === undefined &&
-    input.refKind === undefined &&
+    input.namespace === undefined &&
     input.limit === OFFLINE_BRANCH_LIST_LIMIT
   );
 }
@@ -262,13 +266,35 @@ export function createVcsEnvironmentAtoms<R, E>(
   const invalidateRefs = (
     target: { readonly environmentId: EnvironmentId; readonly input: { readonly cwd: string } },
     registry: AtomRegistry.AtomRegistry,
+    invalidateHistory = true,
   ) =>
-    invalidateCachedVcsRefs(registry, {
-      environmentId: target.environmentId,
-      cwd: target.input.cwd,
-    });
+    invalidateCachedVcsRefs(
+      registry,
+      {
+        environmentId: target.environmentId,
+        cwd: target.input.cwd,
+      },
+      invalidateHistory,
+    );
 
   return {
+    historyRevisionAtom: vcsHistoryRevisionAtom,
+    getHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-history",
+      tag: WS_METHODS.vcsGetHistory,
+    }),
+    getCommitDetails: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-details",
+      tag: WS_METHODS.vcsGetCommitDetails,
+    }),
+    listCommitFiles: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:list-commit-files",
+      tag: WS_METHODS.vcsListCommitFiles,
+    }),
+    getCommitDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-diff",
+      tag: WS_METHODS.vcsGetCommitDiff,
+    }),
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
@@ -295,7 +321,7 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.vcsRefreshStatus,
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
-      onSettled: invalidateRefs,
+      onSettled: (target, registry) => invalidateRefs(target, registry, false),
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",
