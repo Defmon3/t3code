@@ -719,6 +719,49 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status does not adopt a PR from the upstream branch of a local topic branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, [
+        "checkout",
+        "--track",
+        "-b",
+        "feature/tracks-origin-main",
+        "origin/main",
+      ]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListByHeadSelector: {
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            main: JSON.stringify([
+              {
+                number: 349,
+                title: "Historical main PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/349",
+                baseRefName: "main",
+                headRefName: "main",
+                state: "MERGED",
+                updatedAt: "2026-01-01T00:00:00Z",
+              },
+            ]),
+            "feature/tracks-origin-main": "[]",
+          },
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr).toBeNull();
+      expect(ghCalls.some((call) => call.includes("--head feature/tracks-origin-main"))).toBe(true);
+      expect(ghCalls.some((call) => call.includes("--head main"))).toBe(false);
+    }),
+  );
+
   it.effect("status trims PR metadata returned by gh before publishing it", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
