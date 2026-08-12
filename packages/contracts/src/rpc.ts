@@ -82,6 +82,8 @@ import {
   IssueListResult,
   IssueOperationError,
   IssueRef,
+  IssueRepositoryRef,
+  IssueTemplateList,
   IssueUnavailableError,
   IssueUpdateInput,
 } from "./issue.ts";
@@ -328,6 +330,7 @@ export const WS_METHODS = {
   issuesSetAssignees: "issues.setAssignees",
   issuesLabelCandidates: "issues.labelCandidates",
   issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesTemplates: "issues.templates",
   issuesInvalidate: "issues.invalidate",
 
   // Source control methods
@@ -701,6 +704,17 @@ export const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandida
 export const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
   payload: IssueRef,
   success: IssueAssigneeCandidateList,
+  error: IssueRpcError,
+});
+
+/**
+ * What this repository offers as a starting point for a new issue, read when somebody opens the
+ * composer rather than with the listing: it is about the repository and not about any issue in it,
+ * which is why it takes a repository rather than a reference.
+ */
+export const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
+  payload: IssueRepositoryRef,
+  success: IssueTemplateList,
   error: IssueRpcError,
 });
 
@@ -1150,6 +1164,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesSetAssigneesRpc,
   WsIssuesLabelCandidatesRpc,
   WsIssuesAssigneeCandidatesRpc,
+  WsIssuesTemplatesRpc,
   WsIssuesInvalidateRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
