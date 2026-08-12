@@ -101,9 +101,11 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  buildLinkIssuesHandoff,
   buildResolveConflictsPrompt,
   handoffPrompt,
   handoffReviewComments,
+  LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
   pullRequestActionMenuHasGroup,
   pullRequestActionNeedsHostRefresh,
@@ -757,7 +759,13 @@ export function PullRequestDetailPanel({
   };
 
   /** A question about the change, which needs a thread and nothing else. */
-  const startAsk = async (kind: string, task: ThreadTask) => {
+  const startAsk = async (
+    kind: string,
+    task: ThreadTask,
+    // What the toast says landed, for the hand-offs that need a thread and no checkout but are
+    // not questions.
+    announce?: { readonly title: string; readonly description: string },
+  ) => {
     if (!detail || handoff !== null) return;
     if (attachTarget !== null) {
       writeTaskToComposer(attachTarget, task);
@@ -785,13 +793,15 @@ export function PullRequestDetailPanel({
     }
     toastManager.add({
       type: "success",
-      title: "Asked in a thread",
-      // "Ask" leaves the composer empty on purpose, so saying the question is in it would send
-      // the reader looking for something that is not there. The chips are what landed.
-      description:
-        task.prompt.length > 0
-          ? "The question is in the composer — read it over, then send."
-          : "The pull request is in the composer — type your question, then send.",
+      ...(announce ?? {
+        title: "Asked in a thread",
+        // "Ask" leaves the composer empty on purpose, so saying the question is in it would send
+        // the reader looking for something that is not there. The chips are what landed.
+        description:
+          task.prompt.length > 0
+            ? "The question is in the composer — read it over, then send."
+            : "The pull request is in the composer — type your question, then send.",
+      }),
     });
   };
 
@@ -951,6 +961,28 @@ export function PullRequestDetailPanel({
         baseBranch: detail.baseBranch,
       }),
     });
+  };
+
+  /**
+   * Which issues this change is about, decided by an agent. No checkout: the link is a line in
+   * the description, and nothing here touches code.
+   */
+  const linkIssues = () => {
+    if (!detail) return;
+    void startAsk(
+      LINK_ISSUES_HANDOFF_KIND,
+      buildLinkIssuesHandoff({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+      }),
+      {
+        title: "Opened in a thread",
+        description: "The task is in the composer — read it over, then send.",
+      },
+    );
   };
 
   const addSelectionToAgent = (selection: PullRequestAgentSelectionInput) => {
@@ -1949,6 +1981,7 @@ export function PullRequestDetailPanel({
                   fixFindingLabel={handoffLabels.fixFinding}
                   fixCheckLabel={handoffLabels.fixCheck}
                   onFixFinding={startFixFinding}
+                  onLinkIssues={linkIssues}
                   {...(onOpenLinkedIssue ? { onOpenLinkedIssue } : {})}
                   onRefresh={refreshDetail}
                 />
