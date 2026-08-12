@@ -17,7 +17,9 @@ import { forkParked } from "../../serverActivation.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 
 export interface ProviderSessionReaperLiveOptions {
+  /** Overrides the `providerSessionInactivityThreshold` server setting. */
   readonly inactivityThresholdMs?: number;
+  /** Overrides the `providerSessionSweepInterval` server setting. */
   readonly sweepIntervalMs?: number;
 }
 
@@ -28,12 +30,16 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const serverSettings = yield* ServerSettingsService;
 
+    // Threshold is re-read every sweep so settings edits apply live; the
+    // sweep interval is fixed into the schedule when `start()` runs. A
+    // failed settings read fails the sweep (logged and retried on the next
+    // one) rather than silently reaping with a default the user overrode.
     const resolveInactivityThresholdMs =
       options?.inactivityThresholdMs !== undefined
         ? Effect.succeed(Math.max(1, options.inactivityThresholdMs))
         : serverSettings.getSettings.pipe(
             Effect.map((settings) =>
-              Duration.toMillis(settings.providerSessionInactivityThreshold),
+              Math.max(1, Duration.toMillis(settings.providerSessionInactivityThreshold)),
             ),
           );
 
@@ -41,11 +47,13 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.sweepIntervalMs !== undefined
         ? Effect.succeed(Math.max(1, options.sweepIntervalMs))
         : serverSettings.getSettings.pipe(
-            Effect.map((settings) => Duration.toMillis(settings.providerSessionSweepInterval)),
+            Effect.map((settings) =>
+              Math.max(1, Duration.toMillis(settings.providerSessionSweepInterval)),
+            ),
             Effect.catch((error) =>
-              Effect.logWarning("provider.session.reaper.settings-fallback", { error }).pipe(
-                Effect.as(Duration.toMillis(DEFAULT_PROVIDER_SESSION_SWEEP_INTERVAL)),
-              ),
+              Effect.logWarning("provider.session.reaper.settings-fallback", {
+                error,
+              }).pipe(Effect.as(Duration.toMillis(DEFAULT_PROVIDER_SESSION_SWEEP_INTERVAL))),
             ),
           );
 
@@ -133,32 +141,35 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       }
     });
 
-    const run = Effect.gen(function* () {
-      const inactivityThresholdMs = yield* resolveInactivityThresholdMs.pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
-      const sweepIntervalMs = yield* resolveSweepIntervalMs;
-      yield* Effect.logInfo("provider.session.reaper.started", {
-        inactivityThresholdMs,
-        sweepIntervalMs,
+    const start: ProviderSessionReaperShape["start"] = () =>
+      Effect.gen(function* () {
+        // Informational only — the sweep re-reads the threshold, so a failed
+        // settings read here must not abort the startup phase.
+        const inactivityThresholdMs = yield* resolveInactivityThresholdMs.pipe(
+          Effect.orElseSucceed(() => undefined),
+        );
+        const sweepIntervalMs = yield* resolveSweepIntervalMs;
+        yield* forkParked(
+          sweep.pipe(
+            Effect.catch((error: unknown) =>
+              Effect.logWarning("provider.session.reaper.sweep-failed", {
+                error,
+              }),
+            ),
+            Effect.catchDefect((defect: unknown) =>
+              Effect.logWarning("provider.session.reaper.sweep-defect", {
+                defect,
+              }),
+            ),
+            Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))),
+          ),
+        );
+
+        yield* Effect.logInfo("provider.session.reaper.started", {
+          inactivityThresholdMs,
+          sweepIntervalMs,
+        });
       });
-
-      yield* sweep.pipe(
-        Effect.catch((error: unknown) =>
-          Effect.logWarning("provider.session.reaper.sweep-failed", {
-            error,
-          }),
-        ),
-        Effect.catchDefect((defect: unknown) =>
-          Effect.logWarning("provider.session.reaper.sweep-defect", {
-            defect,
-          }),
-        ),
-        Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))),
-      );
-    });
-
-    const start: ProviderSessionReaperShape["start"] = () => forkParked(run);
 
     return {
       start,
