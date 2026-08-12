@@ -68,7 +68,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
     readonly listRefs: (
       input: VcsListRefsInput,
-    ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    ) => Effect.Effect<VcsListRefsResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly getHistory: (
       input: VcsGetHistoryInput,
     ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
@@ -143,10 +143,11 @@ function nonRepositoryStatus(): VcsStatusResult {
 function nonRepositoryListRefs(): VcsListRefsResult {
   return {
     refs: [],
+    currentRef: null,
     isRepo: false,
     hasPrimaryRemote: false,
     nextCursor: null,
-    totalCount: 0,
+    isComplete: true,
   };
 }
 

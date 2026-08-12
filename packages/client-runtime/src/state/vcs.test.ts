@@ -67,7 +67,8 @@ const CACHED_REFS: VcsListRefsResult = {
   isRepo: true,
   hasPrimaryRemote: true,
   nextCursor: null,
-  totalCount: 1,
+  currentRef: null,
+  isComplete: true,
 };
 
 const LIVE_REFS: VcsListRefsResult = {
@@ -167,8 +168,8 @@ describe("cached VCS refs", () => {
           makeCachedVcsRefsChanges({
             cwd: "/repo",
             limit: 20,
-            query: "release",
-            refKind: "remote",
+            prefix: "release",
+            namespace: "remote",
           }).pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
             Effect.provideService(Persistence.EnvironmentCacheStore, cacheWithRefs(Option.none())),
@@ -179,8 +180,8 @@ describe("cached VCS refs", () => {
           {
             cwd: "/repo",
             limit: 20,
-            query: "release",
-            refKind: "remote",
+            prefix: "release",
+            namespace: "remote",
           },
         ]);
 
@@ -188,8 +189,8 @@ describe("cached VCS refs", () => {
           makeCachedVcsRefsChanges({
             cwd: "/repo",
             limit: 20,
-            query: "release",
-            refKind: "remote",
+            prefix: "release",
+            namespace: "remote",
             refresh: true,
           }).pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -201,8 +202,8 @@ describe("cached VCS refs", () => {
           {
             cwd: "/repo",
             limit: 20,
-            query: "release",
-            refKind: "remote",
+            prefix: "release",
+            namespace: "remote",
           },
           {
             cwd: "/repo",

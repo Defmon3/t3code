@@ -30,6 +30,7 @@ const historyState = vi.hoisted(() => ({
   pages: new Map<string | undefined, PageResult>(),
   refresh: vi.fn(),
   refreshRefs: vi.fn(),
+  refreshRemoteRefs: vi.fn(),
   refreshTags: vi.fn(),
   toastAdd: vi.fn(),
   refs: [] as ReadonlyArray<VcsRef>,
@@ -108,22 +109,28 @@ vi.mock("../rpc/atomRegistry", () => ({
 }));
 
 vi.mock("../state/queries", () => ({
-  usePaginatedBranches: (_target: unknown, options?: { readonly refKind?: string }) => {
-    const refs = options?.refKind === "tag" ? historyState.tags : historyState.refs;
+  usePaginatedBranches: (_target: unknown, options?: { readonly namespace?: string }) => {
+    const refs = options?.namespace === "tag" ? historyState.tags : historyState.refs;
     return {
       data: {
         refs,
         isRepo: true,
         hasPrimaryRemote: false,
         nextCursor: null,
-        totalCount: refs.length,
+        currentRef: refs.find((ref) => ref.current) ?? null,
+        isComplete: true,
       },
       refs,
       error: null,
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
-      refresh: options?.refKind === "tag" ? historyState.refreshTags : historyState.refreshRefs,
+      refresh:
+        options?.namespace === "tag"
+          ? historyState.refreshTags
+          : options?.namespace === "remote"
+            ? historyState.refreshRemoteRefs
+            : historyState.refreshRefs,
     };
   },
 }));
@@ -306,6 +313,7 @@ describe("GitHistoryPanel", () => {
     historyState.pages.clear();
     historyState.refresh.mockReset();
     historyState.refreshRefs.mockReset();
+    historyState.refreshRemoteRefs.mockReset();
     historyState.refreshTags.mockReset();
     historyState.toastAdd.mockReset();
     historyState.refs = [];
@@ -772,6 +780,7 @@ describe("GitHistoryPanel", () => {
     (refresh?.props.onClick as (() => void) | undefined)?.();
 
     expect(historyState.refreshRefs).toHaveBeenCalledOnce();
+    expect(historyState.refreshRemoteRefs).toHaveBeenCalledOnce();
     expect(historyState.refreshTags).toHaveBeenCalledOnce();
   });
 

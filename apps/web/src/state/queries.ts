@@ -9,19 +9,21 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
-import type {
-  EnvironmentId,
-  OrchestrationThread,
-  ProjectContentMatch,
-  ProjectEntryKind,
-  ThreadId,
-  VcsListRefsResult,
-  VcsRef,
+import {
+  VcsSnapshotExpiredError,
+  type EnvironmentId,
+  type OrchestrationThread,
+  type ProjectContentMatch,
+  type ProjectEntryKind,
+  type ThreadId,
+  type VcsListRefsResult,
+  type VcsRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { orchestrationEnvironment } from "./orchestration";
@@ -124,7 +126,7 @@ export function useBranches(target: VcsRefTarget) {
           environmentId: target.environmentId,
           input: {
             cwd: target.cwd,
-            ...(query.length > 0 ? { query } : {}),
+            ...(query.length > 0 ? { prefix: query } : {}),
             limit: VCS_REF_LIST_LIMIT,
           },
         })
@@ -136,15 +138,14 @@ export function usePaginatedBranches(
   target: VcsRefTarget,
   options?: {
     readonly limit?: number;
-    readonly includeMatchingRemoteRefs?: boolean;
-    readonly refKind?: "all" | "local" | "remote" | "tag";
+    readonly namespace?: "local" | "remote" | "tag";
   },
 ) {
   const query = target.query?.trim() ?? "";
   const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
-  const includeMatchingRemoteRefs = options?.includeMatchingRemoteRefs === true;
-  const refKind = options?.refKind;
+  const namespace = options?.namespace ?? "local";
   const [queryGeneration, setQueryGeneration] = useState(0);
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const targetKey =
     target.environmentId !== null && target.cwd !== null
       ? JSON.stringify([
@@ -152,13 +153,13 @@ export function usePaginatedBranches(
           target.cwd,
           query,
           limit,
-          includeMatchingRemoteRefs,
-          refKind,
+          namespace,
+          refreshGeneration,
         ])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
-    readonly cursors: ReadonlyArray<number | undefined>;
+    readonly cursors: ReadonlyArray<string | undefined>;
   }>({
     targetKey,
     cursors: INITIAL_BRANCH_CURSORS,
@@ -172,23 +173,23 @@ export function usePaginatedBranches(
               environmentId: target.environmentId!,
               input: {
                 cwd: target.cwd!,
-                ...(query.length > 0 ? { query } : {}),
+                ...(query.length > 0 ? { prefix: query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit,
                 queryGeneration,
-                ...(includeMatchingRemoteRefs ? { includeMatchingRemoteRefs: true } : {}),
-                ...(refKind === undefined ? {} : { refKind }),
+                namespace,
+                ...(refreshGeneration > 0 ? { refresh: true } : {}),
               },
             }),
           )
         : [],
     [
       cursors,
-      includeMatchingRemoteRefs,
       limit,
       query,
       queryGeneration,
-      refKind,
+      namespace,
+      refreshGeneration,
       target.cwd,
       target.environmentId,
     ],
@@ -219,13 +220,24 @@ export function usePaginatedBranches(
     }
     return {
       refs: [...refs.values()],
+      currentRef: first.currentRef,
       isRepo: first.isRepo,
       hasPrimaryRemote: first.hasPrimaryRemote,
       nextCursor: last.nextCursor,
-      totalCount: Math.max(...values.map((value) => value.totalCount)),
+      isComplete: last.isComplete,
     };
   }, [values]);
   const failed = results.find((result) => result._tag === "Failure");
+  const expiredPage =
+    failed?._tag === "Failure" && Schema.is(VcsSnapshotExpiredError)(Cause.squash(failed.cause));
+  const recoveredSnapshotGeneration = useRef<number | null>(null);
+  useEffect(() => {
+    if (!expiredPage || recoveredSnapshotGeneration.current === queryGeneration) return;
+    recoveredSnapshotGeneration.current = queryGeneration;
+    setQueryGeneration((generation) => generation + 1);
+    setRefreshGeneration((generation) => generation + 1);
+    setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
+  }, [expiredPage, queryGeneration, targetKey]);
   const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
   const error =
     failed?._tag === "Failure"
@@ -238,6 +250,7 @@ export function usePaginatedBranches(
       : null;
   const refresh = useCallback(() => {
     setQueryGeneration((generation) => generation + 1);
+    setRefreshGeneration((generation) => generation + 1);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
   }, [targetKey]);
   const retry = useCallback(() => {
