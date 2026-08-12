@@ -28,6 +28,7 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { BranchToolbarWorktreeNameInput } from "./BranchToolbarWorktreeNameInput";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -52,6 +53,7 @@ interface BranchToolbarProps {
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  onWorktreeBranchNameConflictChange?: (conflict: boolean) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -384,6 +386,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
+  onWorktreeBranchNameConflictChange,
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -463,6 +466,24 @@ export const BranchToolbar = memo(function BranchToolbar({
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const labelsOverflow = useLabelsOverflow(stripElement);
 
+  // Naming the next worktree's branch only makes sense before the first send,
+  // when a brand-new worktree (not a reused one) is about to be created.
+  const showWorktreeNameInput =
+    showGitControls &&
+    serverThread === null &&
+    draftThread !== null &&
+    effectiveEnvMode === "worktree" &&
+    activeWorktreePath === null &&
+    !envLocked;
+  const onWorktreeBranchNameChange = useCallback(
+    (value: string) => {
+      setDraftThreadContext(draftId ?? threadRef, {
+        worktreeBranchName: value.length > 0 ? value : null,
+      });
+    },
+    [draftId, setDraftThreadContext, threadRef],
+  );
+
   if (!hasActiveThread || !activeProject) return null;
 
   return (
@@ -513,6 +534,17 @@ export const BranchToolbar = memo(function BranchToolbar({
               onEnvModeChange={onEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               onUsePreviousWorktree={onUsePreviousWorktree}
+            />
+          ) : null}
+          {showWorktreeNameInput ? (
+            <BranchToolbarWorktreeNameInput
+              environmentId={environmentId}
+              cwd={activeProject.workspaceRoot}
+              value={draftThread?.worktreeBranchName ?? ""}
+              onValueChange={onWorktreeBranchNameChange}
+              {...(onWorktreeBranchNameConflictChange
+                ? { onConflictChange: onWorktreeBranchNameConflictChange }
+                : {})}
             />
           ) : null}
         </div>
