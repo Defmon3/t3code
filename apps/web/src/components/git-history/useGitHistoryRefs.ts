@@ -19,15 +19,25 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   );
   const deferredRefFilter = useDeferredValue(refFilter.trim());
   const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
+  const shouldLoadRemote = deferredRefFilter.length > 0 || expandedRefKeys.has("section:remote");
+  const shouldLoadTags = deferredRefFilter.length > 0 || expandedRefKeys.has("section:tag");
   const refs = usePaginatedBranches(
     { environmentId, cwd, query: deferredRefFilter },
-    { limit: 200, includeMatchingRemoteRefs: true, refKind: "all" },
+    { limit: 200, namespace: "local" },
+  );
+  const remote = usePaginatedBranches(
+    shouldLoadRemote
+      ? { environmentId, cwd, query: deferredRefFilter }
+      : { environmentId: null, cwd: null },
+    { limit: 200, namespace: "remote" },
   );
   const tags = usePaginatedBranches(
-    { environmentId, cwd, query: deferredRefFilter },
-    { limit: 200, refKind: "tag" },
+    shouldLoadTags
+      ? { environmentId, cwd, query: deferredRefFilter }
+      : { environmentId: null, cwd: null },
+    { limit: 200, namespace: "tag" },
   );
-  const mergedRefs = refs.refs;
+  const mergedRefs = [...refs.refs, ...remote.refs];
   const tagRefs = tags.refs;
   const localRefs = mergedRefs.filter((ref) => !ref.isRemote && !ref.isTag);
   const remoteRefs = mergedRefs.filter((ref) => ref.isRemote);
@@ -43,7 +53,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
     () => filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter),
     [normalizedRefFilter, tagRefs],
   );
-  const currentRef = localRefs.find((ref) => ref.current) ?? null;
+  const currentRef = refs.data?.currentRef ?? null;
   const selectedRevision =
     selectedRevisionState === undefined
       ? currentRef === null
@@ -76,20 +86,24 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
     expandedRefKeys,
     hasMoreRefs:
       (refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
+      (remote.data?.nextCursor !== null && remote.data?.nextCursor !== undefined) ||
       (tags.data?.nextCursor !== null && tags.data?.nextCursor !== undefined),
-    isFetchingMoreRefs: refs.isFetchingNextPage || tags.isFetchingNextPage,
+    isFetchingMoreRefs:
+      refs.isFetchingNextPage || remote.isFetchingNextPage || tags.isFetchingNextPage,
     localRefTree,
     localRefs,
     normalizedRefFilter,
     onLoadMoreRefs: () => {
       refs.loadNext();
+      remote.loadNext();
       tags.loadNext();
     },
     onRetryRefs: () => {
       if (refs.error) refs.retry();
+      if (remote.error) remote.retry();
       if (tags.error) tags.retry();
     },
-    refPaginationError: refs.error ?? tags.error,
+    refPaginationError: refs.error ?? remote.error ?? tags.error,
     refFilter,
     remoteRefTree,
     remoteRefs,

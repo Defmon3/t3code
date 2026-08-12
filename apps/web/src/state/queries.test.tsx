@@ -1,4 +1,8 @@
-import type { EnvironmentId, VcsListRefsResult } from "@t3tools/contracts";
+import {
+  VcsSnapshotExpiredError,
+  type EnvironmentId,
+  type VcsListRefsResult,
+} from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
@@ -18,7 +22,7 @@ type PageResult =
 
 type PageAtom = {
   readonly input: {
-    readonly cursor?: number;
+    readonly cursor?: string;
     readonly queryGeneration: number;
   };
   readonly result: PageResult;
@@ -36,8 +40,9 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
-    useEffect: () => {},
+    useEffect: (effect: () => void) => effect(),
     useMemo: reactHookHarness.useMemo,
+    useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
   };
 });
@@ -108,7 +113,7 @@ const target = {
   query: "",
 };
 
-function page(nextCursor: number | null): PageResult {
+function page(nextCursor: string | null): PageResult {
   return {
     _tag: "Success",
     waiting: false,
@@ -117,7 +122,8 @@ function page(nextCursor: number | null): PageResult {
       isRepo: true,
       hasPrimaryRemote: false,
       nextCursor,
-      totalCount: 0,
+      currentRef: null,
+      isComplete: true,
     },
   };
 }
@@ -144,8 +150,8 @@ describe("usePaginatedBranches", () => {
     render();
 
     expect(refsState.atoms.map((atom) => atom.input)).toEqual([
-      { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
-      { cwd: "C:/workspace", limit: 100, queryGeneration: 1 },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
     ]);
   });
 
@@ -166,5 +172,27 @@ describe("usePaginatedBranches", () => {
     expect(refsState.atoms.map((atom) => atom.input.cursor)).toEqual([undefined, undefined, 4]);
     expect(refsState.refresh).toHaveBeenCalledTimes(1);
     expect(refsState.refresh).toHaveBeenCalledWith(refsState.atoms.at(-1));
+  });
+
+  it("recovers an expired snapshot once per generation, including after a later refresh", () => {
+    const expired = (cursor: string) =>
+      new VcsSnapshotExpiredError({ operation: "GitVcsDriver.listRefs", cursor });
+    refsState.results.set("0:first", { _tag: "Failure", cause: expired("first"), waiting: false });
+    refsState.results.set("1:first", page(null));
+
+    render();
+    render();
+    render();
+
+    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1, 1]);
+
+    const recovered = render();
+    recovered.refresh();
+    refsState.results.set("2:first", { _tag: "Failure", cause: expired("second"), waiting: false });
+    refsState.results.set("3:first", page(null));
+    render();
+    render();
+
+    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1, 1, 1, 2, 3]);
   });
 });

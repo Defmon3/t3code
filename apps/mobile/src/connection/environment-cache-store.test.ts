@@ -19,7 +19,8 @@ const REFS: VcsListRefsResult = {
   isRepo: true,
   hasPrimaryRemote: true,
   nextCursor: null,
-  totalCount: 1,
+  currentRef: null,
+  isComplete: true,
 };
 
 function cacheId(environmentId: EnvironmentId, kind: ClientCacheKind, cacheKey: string) {

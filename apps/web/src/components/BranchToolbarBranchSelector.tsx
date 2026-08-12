@@ -303,7 +303,7 @@ export function BranchToolbarBranchSelector({
           environmentId,
           input: {
             cwd: branchCwd,
-            query: resolvedActiveBranch,
+            prefix: resolvedActiveBranch,
             limit: 10,
           },
         })
@@ -319,13 +319,12 @@ export function BranchToolbarBranchSelector({
         ? queriedActiveBranch.isRemote === true
         : null;
   const [isBranchActionPending, startBranchActionTransition] = useTransition();
-  const totalBranchCount = branchRefState.data?.totalCount ?? 0;
   const branchStatusText = isInitialBranchesLoadPending
     ? "Loading refs..."
     : isFetchingNextPage
       ? "Loading more refs..."
       : hasNextPage
-        ? `Showing ${refs.length} of ${totalBranchCount} refs`
+        ? `Showing ${refs.length} refs`
         : null;
 
   // ---------------------------------------------------------------------------

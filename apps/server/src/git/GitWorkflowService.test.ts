@@ -121,10 +121,11 @@ describe("GitWorkflowService", () => {
 
       assert.deepStrictEqual(refs, {
         refs: [],
+        currentRef: null,
         isRepo: false,
         hasPrimaryRemote: false,
         nextCursor: null,
-        totalCount: 0,
+        isComplete: true,
       });
     }).pipe(
       Effect.provide(

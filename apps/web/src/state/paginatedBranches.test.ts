@@ -9,10 +9,11 @@ import {
 
 const FIRST_PAGE: VcsListRefsResult = {
   refs: [],
+  currentRef: null,
   isRepo: true,
   hasPrimaryRemote: true,
-  nextCursor: 100,
-  totalCount: 150,
+  nextCursor: "cursor-100",
+  isComplete: true,
 };
 
 const LAST_PAGE: VcsListRefsResult = {
