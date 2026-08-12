@@ -76,15 +76,26 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
       {buildIdentityLabel ? (
-        <Badge
-          className="relative z-10 ml-1 min-w-0 rounded-full px-1.5 text-muted-foreground"
-          data-environment-identification="pill"
-          size="sm"
-          title={`${pillLabel} build\nVersion ${APP_VERSION}${APP_BUILD_TIME ? `\nBuilt ${APP_BUILD_TIME}` : ""}${APP_COMMIT_HASH ? `\nCommit ${APP_COMMIT_HASH}` : ""}`}
-          variant="secondary"
-        >
-          <span className="truncate">{buildIdentityLabel}</span>
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Badge
+                className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+                data-environment-identification="pill"
+                size="sm"
+                variant="secondary"
+              >
+                {pillLabel}
+              </Badge>
+            }
+          />
+          <TooltipPopup className="max-w-none whitespace-pre-line font-mono text-xs" side="bottom">
+            {buildIdentityLabel}
+            {`\nVersion ${APP_VERSION}`}
+            {APP_BUILD_TIME ? `\nBuilt ${APP_BUILD_TIME}` : ""}
+            {APP_COMMIT_HASH ? `\nCommit ${APP_COMMIT_HASH}` : ""}
+          </TooltipPopup>
+        </Tooltip>
       ) : null}
     </SidebarHeader>
   );
