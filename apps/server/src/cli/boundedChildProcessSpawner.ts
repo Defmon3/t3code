@@ -5,28 +5,49 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+export type ChildProcessShutdownSignal = "SIGTERM" | "SIGKILL";
+
 export interface BoundedChildProcessSpawnerOptions {
   readonly termGraceMs?: number;
   readonly killGraceMs?: number;
+  readonly pollIntervalMs?: number;
 }
 
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;
+const DEFAULT_POLL_INTERVAL_MS = 25;
 
 const normalizedDelay = (value: number | undefined, fallback: number) =>
   value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, value);
 
+const isProcessAlive = (pid: ChildProcessSpawner.ProcessId) =>
+  Effect.sync(() => {
+    try {
+      globalThis.process.kill(Number(pid), 0);
+      return true;
+    } catch (cause) {
+      return !(cause instanceof Error && Reflect.get(cause, "code") === "ESRCH");
+    }
+  });
+
 const isStillRunning = (handle: ChildProcessSpawner.ChildProcessHandle) =>
   handle.isRunning.pipe(Effect.orElseSucceed(() => true));
 
-const waitUntilStopped = Effect.fn("BoundedChildProcessSpawner.waitUntilStopped")(function (
+const waitUntilStopped = Effect.fn("BoundedChildProcessSpawner.waitUntilStopped")(function* (
   handle: ChildProcessSpawner.ChildProcessHandle,
   timeoutMs: number,
+  pollIntervalMs: number,
 ) {
-  return Effect.timeoutOrElse(handle.exitCode.pipe(Effect.exit, Effect.as(true)), {
-    duration: timeoutMs,
-    orElse: () => Effect.succeed(false),
-  });
+  let remainingMs = timeoutMs;
+
+  while ((yield* isStillRunning(handle)) && (yield* isProcessAlive(handle.pid))) {
+    if (remainingMs <= 0) return false;
+    const delayMs = Math.min(pollIntervalMs, remainingMs);
+    yield* Effect.sleep(delayMs);
+    remainingMs -= delayMs;
+  }
+
+  return true;
 });
 
 export const make = (
@@ -35,23 +56,20 @@ export const make = (
 ) => {
   const termGraceMs = normalizedDelay(options.termGraceMs, DEFAULT_TERM_GRACE_MS);
   const killGraceMs = normalizedDelay(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
+  const pollIntervalMs = Math.max(
+    1,
+    normalizedDelay(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS),
+  );
   const sendSignal = Effect.fn("BoundedChildProcessSpawner.sendSignal")(function* (
     handle: ChildProcessSpawner.ChildProcessHandle,
     signal: ChildProcess.Signal,
   ) {
-    yield* handle.kill({ killSignal: signal }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Failed to signal child process", {
-          cause,
-          pid: Number(handle.pid),
-          signal,
-        }),
-      ),
-      Effect.forkDetach({ startImmediately: true }),
-    );
+    yield* handle
+      .kill({ killSignal: signal })
+      .pipe(Effect.ignore, Effect.forkDetach({ startImmediately: true }));
   });
 
-  const killForShutdown = Effect.fn("BoundedChildProcessSpawner.killForShutdown")(function* (
+  const kill = Effect.fn("BoundedChildProcessSpawner.kill")(function* (
     handle: ChildProcessSpawner.ChildProcessHandle,
     killOptions?: ChildProcess.KillOptions,
   ) {
@@ -68,12 +86,16 @@ export const make = (
             termGraceMs,
           );
     yield* sendSignal(handle, initialSignal);
-    const stoppedAfterInitialSignal = yield* waitUntilStopped(handle, initialGraceMs);
+    const stoppedAfterInitialSignal = yield* waitUntilStopped(
+      handle,
+      initialGraceMs,
+      pollIntervalMs,
+    );
     if (stoppedAfterInitialSignal) return;
 
     if (initialSignal !== "SIGKILL") {
       yield* sendSignal(handle, "SIGKILL");
-      if (yield* waitUntilStopped(handle, killGraceMs)) return;
+      if (yield* waitUntilStopped(handle, killGraceMs, pollIntervalMs)) return;
     }
 
     yield* Effect.logWarning("Child process did not stop after SIGKILL grace period", {
@@ -82,10 +104,19 @@ export const make = (
     });
   });
 
+  const shutdown = Effect.fn("BoundedChildProcessSpawner.shutdown")(function* (
+    handle: ChildProcessSpawner.ChildProcessHandle,
+    childScope: Scope.Closeable,
+    isReferenced: () => boolean,
+  ) {
+    if (isReferenced()) {
+      yield* kill(handle);
+    }
+  });
+
   const spawn = Effect.fn("BoundedChildProcessSpawner.spawn")(function* (
     command: ChildProcess.Command,
   ) {
-    const callerScope = yield* Scope.Scope;
     const childScope = yield* Scope.make("sequential");
     const spawned = yield* delegate
       .spawn(command)
@@ -98,23 +129,11 @@ export const make = (
 
     const delegateHandle = spawned.value;
     let referenced = true;
-    let shutdownAttempted = false;
-    const killOnceForShutdown = (killOptions?: ChildProcess.KillOptions) =>
-      Effect.suspend(() => {
-        if (shutdownAttempted) return Effect.void;
-        shutdownAttempted = true;
-        return killForShutdown(delegateHandle, killOptions);
-      });
     const handle = ChildProcessSpawner.makeHandle({
       pid: delegateHandle.pid,
       exitCode: delegateHandle.exitCode,
       isRunning: delegateHandle.isRunning,
-      kill: (killOptions) =>
-        Effect.suspend(() =>
-          callerScope.state._tag === "Closed"
-            ? killOnceForShutdown(killOptions)
-            : delegateHandle.kill(killOptions),
-        ),
+      kill: (killOptions) => kill(delegateHandle, killOptions),
       stdin: delegateHandle.stdin,
       stdout: delegateHandle.stdout,
       stderr: delegateHandle.stderr,
@@ -130,17 +149,15 @@ export const make = (
         Effect.map((reref) =>
           reref.pipe(
             Effect.tap(() =>
-              Effect.suspend(() => {
-                if (callerScope.state._tag === "Closed") return killOnceForShutdown();
+              Effect.sync(() => {
                 referenced = true;
-                return Effect.void;
               }),
             ),
           ),
         ),
       ),
     });
-    yield* Effect.addFinalizer(() => (referenced ? killOnceForShutdown() : Effect.void));
+    yield* Effect.addFinalizer(() => shutdown(delegateHandle, childScope, () => referenced));
     yield* handle.exitCode.pipe(
       Effect.exit,
       Effect.andThen(Scope.close(childScope, Exit.void)),
