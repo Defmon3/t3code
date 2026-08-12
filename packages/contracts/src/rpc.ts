@@ -33,6 +33,8 @@ import {
   VcsGetHistoryResult,
   VcsGetCommitDetailsInput,
   VcsGetCommitDetailsResult,
+  VcsListCommitFilesInput,
+  VcsListCommitFilesResult,
   VcsGetCommitDiffInput,
   VcsGetCommitDiffResult,
   VcsInitInput,
@@ -218,6 +220,7 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsGetHistory: "vcs.getHistory",
   vcsGetCommitDetails: "vcs.getCommitDetails",
+  vcsListCommitFiles: "vcs.listCommitFiles",
   vcsGetCommitDiff: "vcs.getCommitDiff",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -697,6 +700,12 @@ export const WsVcsGetCommitDetailsRpc = Rpc.make(WS_METHODS.vcsGetCommitDetails,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsListCommitFilesRpc = Rpc.make(WS_METHODS.vcsListCommitFiles, {
+  payload: VcsListCommitFilesInput,
+  success: VcsListCommitFilesResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsGetCommitDiffRpc = Rpc.make(WS_METHODS.vcsGetCommitDiff, {
   payload: VcsGetCommitDiffInput,
   success: VcsGetCommitDiffResult,
@@ -1031,6 +1040,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsGetHistoryRpc,
   WsVcsGetCommitDetailsRpc,
+  WsVcsListCommitFilesRpc,
   WsVcsGetCommitDiffRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,

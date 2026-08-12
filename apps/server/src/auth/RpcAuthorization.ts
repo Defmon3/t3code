@@ -90,6 +90,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.vcsListRefs]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsGetHistory]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsGetCommitDetails]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsListCommitFiles]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsGetCommitDiff]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsCreateWorktree]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsRemoveWorktree]: AuthOrchestrationOperateScope,
