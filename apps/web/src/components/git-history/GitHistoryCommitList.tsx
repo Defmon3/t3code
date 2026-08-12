@@ -10,7 +10,10 @@ import {
 import * as Cause from "effect/Cause";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { type GitHistoryGraphRow } from "../../lib/gitHistoryGraph";
+import {
+  MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW,
+  type GitHistoryGraphRow,
+} from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
@@ -188,16 +191,19 @@ function GraphCell(props: {
           strokeWidth="1.1"
         />
       ) : null}
-      {props.graph.edges.map((edge, index) => {
-        const fromX = edge.kind === "parent" ? x(props.graph.lane) : x(edge.fromLane);
-        const fromY = edge.kind === "parent" ? centerY : 0;
+      {props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW).map((edge, index) => {
+        const fromX =
+          edge.kind === "parent" || edge.kind === "elided" ? x(props.graph.lane) : x(edge.fromLane);
+        const fromY = edge.kind === "parent" || edge.kind === "elided" ? centerY : 0;
         const toX = x(edge.toLane);
         const path =
           edge.kind === "continuation"
             ? `M ${fromX} -1 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
             : edge.kind === "incoming"
               ? `M ${fromX} -1 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
-              : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`;
+              : edge.kind === "elided"
+                ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`
+                : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 1}`;
         return (
           <path
             data-edge-kind={edge.kind}
@@ -207,7 +213,7 @@ function GraphCell(props: {
             stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
             strokeWidth="1.1"
             strokeLinecap="round"
-            strokeDasharray={edge.isMissingParent ? "3 2" : undefined}
+            strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
           />
         );
       })}

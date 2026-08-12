@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { layoutGitHistoryGraph } from "./gitHistoryGraph";
+import {
+  MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW,
+  MAX_GIT_HISTORY_GRAPH_LANES,
+  layoutGitHistoryGraph,
+} from "./gitHistoryGraph";
 
 describe("layoutGitHistoryGraph", () => {
   it("lays out a linear history in one lane", () => {
@@ -290,5 +294,33 @@ describe("layoutGitHistoryGraph", () => {
 
     expect(layoutGitHistoryGraph(commits)).toEqual(layoutGitHistoryGraph(commits));
     expect(layoutGitHistoryGraph(commits).rows[0]?.edges).toHaveLength(1);
+  });
+
+  it("compacts a 1001-commit high-parent snapshot into bounded, explicit graph elisions", () => {
+    const parentHashes = Array.from({ length: 1_000 }, (_, index) => `parent-${index}`);
+    const layout = layoutGitHistoryGraph([
+      { hash: "merge", parentHashes },
+      ...parentHashes.map((hash) => ({ hash, parentHashes: [] })),
+    ]);
+
+    expect(layout.rows).toHaveLength(1_001);
+    expect(layout.laneCount).toBeLessThanOrEqual(MAX_GIT_HISTORY_GRAPH_LANES);
+    expect(layout.rows.every((row) => row.lane < MAX_GIT_HISTORY_GRAPH_LANES)).toBe(true);
+    expect(
+      layout.rows.every((row) => row.edges.length <= MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW),
+    ).toBe(true);
+    expect(layout.rows.flatMap((row) => row.edges).length).toBeLessThanOrEqual(
+      layout.rows.length * MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW,
+    );
+    expect(
+      layout.rows.flatMap((row) => row.edges).filter((edge) => edge.kind === "elided"),
+    ).toEqual([expect.objectContaining({ fromLane: 0, toLane: MAX_GIT_HISTORY_GRAPH_LANES - 1 })]);
+    expect(
+      layout.rows.every((row) =>
+        row.edges
+          .filter((edge) => edge.kind === "parent" || edge.kind === "elided")
+          .every((edge) => edge.fromLane === row.lane),
+      ),
+    ).toBe(true);
   });
 });
