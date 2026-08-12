@@ -1313,13 +1313,6 @@ export const make = Effect.gen(function* () {
     const remoteName =
       details.remoteName ??
       (yield* readConfigValueNullable(cwd, `branch.${details.branch}.remote`));
-    const headBranchFromUpstream = details.upstreamRef
-      ? extractBranchNameFromRemoteRef(details.upstreamRef, { remoteName })
-      : "";
-    const headBranch = headBranchFromUpstream.length > 0 ? headBranchFromUpstream : details.branch;
-    const shouldProbeLocalBranchSelector =
-      headBranchFromUpstream.length === 0 || headBranch === details.branch;
-
     const [remoteRepository, originRepository] = yield* Effect.all(
       [
         resolveRemoteRepositoryContext(cwd, remoteName),
@@ -1336,6 +1329,15 @@ export const make = Effect.gen(function* () {
         : remoteName !== null &&
           remoteName !== "origin" &&
           remoteRepository.repositoryNameWithOwner !== null;
+
+    const headBranchFromUpstream = details.upstreamRef
+      ? extractBranchNameFromRemoteRef(details.upstreamRef, { remoteName })
+      : "";
+    const headBranch =
+      isCrossRepository && headBranchFromUpstream.length > 0
+        ? headBranchFromUpstream
+        : details.branch;
+    const shouldProbeLocalBranchSelector = headBranch === details.branch;
 
     const ownerHeadSelector =
       remoteRepository.ownerLogin && headBranch.length > 0
