@@ -1,6 +1,5 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import * as NodeChildProcess from "node:child_process";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -43,14 +42,6 @@ const isProcessAlive = (pid: number) => {
   } catch (cause) {
     return !(cause instanceof Error && Reflect.get(cause, "code") === "ESRCH");
   }
-};
-
-const stopProcessTree = (pid: number) => {
-  try {
-    NodeChildProcess.execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-    });
-  } catch {}
 };
 
 const readFixturePids = (line: string) => {
@@ -253,6 +244,7 @@ it.effect("kills a Windows child process tree without blocking scope close", () 
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const callerScope = yield* Scope.make();
+    yield* Effect.addFinalizer(() => Scope.close(callerScope, Exit.void).pipe(Effect.ignore));
     const handle = yield* spawner
       .spawn(ChildProcess.make(process.execPath, ["-e", childScript]))
       .pipe(Effect.provideService(Scope.Scope, callerScope));
@@ -264,8 +256,6 @@ it.effect("kills a Windows child process tree without blocking scope close", () 
       Effect.map(Option.getOrThrow),
     );
     const pids = readFixturePids(line);
-    yield* Effect.addFinalizer(() => Effect.sync(() => stopProcessTree(pids.pid)));
-
     const closeFiber = yield* Scope.close(callerScope, Exit.void).pipe(
       Effect.forkDetach({ startImmediately: true }),
     );
