@@ -113,6 +113,7 @@ export class WorkspaceFileSystem extends Context.Service<
       ProjectReadFileResult,
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
+    /** Resolve an existing workspace file to its canonical relative path. */
     readonly resolveFile: (
       input: ProjectResolveFileInput,
     ) => Effect.Effect<ProjectResolveFileResult, WorkspaceFileSystemError>;

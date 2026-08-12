@@ -1,28 +1,25 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 
-type ClickableAnchorElement = ReactElement<{
+type FileLinkElement = ReactElement<{
   readonly onClick?: (event: { preventDefault: () => void; stopPropagation: () => void }) => void;
 }>;
 
-const capturedFileLink = vi.hoisted(() => ({ element: null as ClickableAnchorElement | null }));
-const chatMarkdownMocks = vi.hoisted(() => ({
+const captured = vi.hoisted(() => ({ link: null as FileLinkElement | null }));
+const mocks = vi.hoisted(() => ({
   createAssetUrl: vi.fn(),
-  editorHook: vi.fn(),
-  openFileInPreview: vi.fn(),
-  openFilePanel: vi.fn(),
+  openFile: vi.fn(),
+  openInBrowser: vi.fn(),
   openInEditor: vi.fn(),
   resolveProjectFile: vi.fn(),
-  serverConfigAtom: vi.fn(() => "server-config"),
   toastAdd: vi.fn(),
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({ availableEditors: [] }) }));
 
-vi.mock("~/lib/openPullRequestLink", () => ({
-  useOpenChangeRequestLink: () => () => false,
-}));
+vi.mock("~/lib/openPullRequestLink", () => ({ useOpenChangeRequestLink: () => () => false }));
 
 vi.mock("../state/assets", () => ({ assetEnvironment: { createUrl: "asset-url" } }));
 
@@ -35,7 +32,7 @@ vi.mock("../state/projects", () => ({
 }));
 
 vi.mock("../state/server", () => ({
-  serverEnvironment: { configValueAtom: chatMarkdownMocks.serverConfigAtom },
+  serverEnvironment: { configValueAtom: () => "server-config" },
 }));
 
 vi.mock("../state/session", () => ({
@@ -46,244 +43,157 @@ vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 
 vi.mock("../state/use-atom-query-runner", () => ({
   useAtomQueryRunner: (family: string) =>
-    family === "project-resolve-file"
-      ? chatMarkdownMocks.resolveProjectFile
-      : chatMarkdownMocks.createAssetUrl,
+    family === "project-resolve-file" ? mocks.resolveProjectFile : mocks.createAssetUrl,
 }));
 
-vi.mock("../editorPreferences", () => ({
-  useOpenInPreferredEditor: (environmentId: string) => {
-    chatMarkdownMocks.editorHook(environmentId);
-    return chatMarkdownMocks.openInEditor;
-  },
-}));
+vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => mocks.openInEditor }));
 
 vi.mock("../previewStateStore", () => ({ isPreviewSupportedInRuntime: () => true }));
-
-vi.mock("../rightPanelStore", () => ({
-  useRightPanelStore: { getState: () => ({ openFile: chatMarkdownMocks.openFilePanel }) },
-}));
 
 vi.mock("../browser/openFileInPreview", () => ({
   BrowserPreviewUnavailableError: class BrowserPreviewUnavailableError extends Error {},
   isBrowserPreviewFile: (path: string) => /\.(?:html?|pdf)$/i.test(path),
-  openFileInPreview: chatMarkdownMocks.openFileInPreview,
+  openFileInPreview: mocks.openInBrowser,
   openUrlInPreview: vi.fn(),
+}));
+
+vi.mock("./chat/FileTagChip", () => ({
+  CHAT_FILE_TAG_CHIP_CLASS_NAME: "file-tag",
+  FileTagChipContent: ({ label }: { readonly label: string }) => <span>{label}</span>,
+}));
+
+vi.mock("../rightPanelStore", () => ({
+  useRightPanelStore: { getState: () => ({ openFile: mocks.openFile }) },
+}));
+
+vi.mock("./ui/toast", () => ({
+  stackedThreadToast: (input: unknown) => input,
+  toastManager: { add: mocks.toastAdd },
 }));
 
 vi.mock("./ui/tooltip", () => ({
   Tooltip: ({ children }: { readonly children: ReactNode }) => children,
   TooltipTrigger: ({ render }: { readonly render: ReactElement }) => {
-    capturedFileLink.element = render as ClickableAnchorElement;
+    captured.link = render as FileLinkElement;
     return render;
   },
   TooltipPopup: ({ children }: { readonly children: ReactNode }) => children,
 }));
 
-vi.mock("./ui/toast", () => ({
-  stackedThreadToast: (input: unknown) => input,
-  toastManager: { add: chatMarkdownMocks.toastAdd },
-}));
+import ChatMarkdown, { MarkdownFileLink } from "./ChatMarkdown";
 
-import {
-  MarkdownFileLink,
-  openMarkdownBrowserFileInT3,
-  openMarkdownFileInT3,
-} from "./ChatMarkdown";
-import ChatMarkdown from "./ChatMarkdown";
-import { resolveMarkdownFileLinkMeta } from "../markdown-links";
+const threadRef = { environmentId: "env-1", threadId: "thread-1" } as never;
 
-const threadRef = {
-  environmentId: "env-1",
-  threadId: "thread-1",
-} as never;
-
-function renderChatMarkdownLink(
-  path: string,
-): (event: { preventDefault: () => void; stopPropagation: () => void }) => void {
-  expect(resolveMarkdownFileLinkMeta(path, "G:/t3-code/t3code-terminal")).not.toBeNull();
-  capturedFileLink.element = null;
-  const markup = renderToStaticMarkup(
-    <ChatMarkdown
-      text={`[Open the file](${path})`}
-      cwd="G:/t3-code/t3code-terminal"
+function renderFileLink(input: {
+  readonly resolveWorkspaceRelativePath: () => Promise<string | null>;
+  readonly onOpenInBrowser?:
+    | ((path: string) => Promise<AtomCommandResult<unknown, unknown>>)
+    | undefined;
+}) {
+  captured.link = null;
+  renderToStaticMarkup(
+    <MarkdownFileLink
+      href="G:/workspace/link-tests/test.html"
+      targetPath="G:/workspace/link-tests/test.html"
+      iconPath="G:/workspace/link-tests/test.html"
+      displayPath="link-tests/test.html"
+      workspaceRelativePath={null}
+      label="test.html"
+      copyMarkdown="[test](G:/workspace/link-tests/test.html)"
+      theme="dark"
       threadRef={threadRef}
-      lineBreaks
+      onOpen={mocks.openInEditor}
+      resolveWorkspaceRelativePath={input.resolveWorkspaceRelativePath}
+      onOpenInBrowser={input.onOpenInBrowser}
     />,
   );
-  expect(markup).toContain("chat-markdown-file-link");
-  const element = capturedFileLink.element as ClickableAnchorElement | null;
-  const click = element?.props.onClick;
-  expect(click).toBeTypeOf("function");
-  return click as (event: { preventDefault: () => void; stopPropagation: () => void }) => void;
+  const link = captured.link as FileLinkElement | null;
+  const onClick = link?.props.onClick;
+  expect(onClick).toBeTypeOf("function");
+  return onClick as (event: { preventDefault: () => void; stopPropagation: () => void }) => void;
 }
 
-describe("ChatMarkdown file-link click action", () => {
+describe("MarkdownFileLink in-app routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    chatMarkdownMocks.resolveProjectFile.mockResolvedValue({
+    mocks.resolveProjectFile.mockResolvedValue({
       _tag: "Success",
-      value: { relativePath: ".t3/link-tests/test.md" },
+      value: { relativePath: "link-tests/test.html" },
     });
-    chatMarkdownMocks.openFileInPreview.mockResolvedValue({ _tag: "Success", value: undefined });
+    mocks.openInBrowser.mockResolvedValue({ _tag: "Success" });
   });
 
-  it.each([
-    ["test.md", ".t3/link-tests/test.md"],
-    ["test.html", ".t3/link-tests/test.html"],
-    ["test.png", ".t3/link-tests/test.png"],
-  ])(
-    "opens %s in the T3 file panel after resolving its junction path",
-    async (_name, relativePath) => {
-      const resolveWorkspaceRelativePath = vi.fn(async () => relativePath);
-      const openFile = vi.fn();
+  it("routes a resolved workspace file to the file panel", async () => {
+    const click = renderFileLink({
+      resolveWorkspaceRelativePath: async () => "link-tests/test.html",
+    });
 
-      const opened = await openMarkdownFileInT3({
+    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+
+    await vi.waitFor(() => {
+      expect(mocks.openFile).toHaveBeenCalledExactlyOnceWith(
         threadRef,
-        line: undefined,
-        workspaceRelativePath: null,
-        resolveWorkspaceRelativePath,
-        openFile,
-      });
-
-      expect(opened).toBe(true);
-      expect(resolveWorkspaceRelativePath).toHaveBeenCalledExactlyOnceWith();
-      expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, relativePath, undefined);
-    },
-  );
-
-  it("does not open a path the server refuses to resolve within the project", async () => {
-    const openFile = vi.fn();
-
-    const opened = await openMarkdownFileInT3({
-      threadRef,
-      line: 4,
-      workspaceRelativePath: null,
-      resolveWorkspaceRelativePath: async () => null,
-      openFile,
+        "link-tests/test.html",
+        undefined,
+      );
     });
-
-    expect(opened).toBe(false);
-    expect(openFile).not.toHaveBeenCalled();
+    expect(mocks.openInEditor).not.toHaveBeenCalled();
   });
 
-  it("resolves an HTML link before invoking the integrated-browser action", async () => {
-    const resolveWorkspaceRelativePath = vi.fn(async () => ".t3/link-tests/test.html");
-    const openInBrowser = vi.fn(async () => ({ _tag: "Success", value: undefined }) as never);
+  it("does not route an unresolvable target to an editor or panel", async () => {
+    const click = renderFileLink({ resolveWorkspaceRelativePath: async () => null });
 
-    const result = await openMarkdownBrowserFileInT3({
-      workspaceRelativePath: null,
-      resolveWorkspaceRelativePath,
-      openInBrowser,
+    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+
+    await vi.waitFor(() => {
+      expect(mocks.toastAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Unable to open file" }),
+      );
     });
-
-    expect(resolveWorkspaceRelativePath).toHaveBeenCalledExactlyOnceWith();
-    expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(".t3/link-tests/test.html");
-    expect(result?._tag).toBe("Success");
+    expect(mocks.openFile).not.toHaveBeenCalled();
+    expect(mocks.openInEditor).not.toHaveBeenCalled();
   });
 
-  it("clicking an HTML MarkdownFileLink resolves before opening the integrated browser", async () => {
-    const resolveWorkspaceRelativePath = vi.fn(async () => ".t3/link-tests/test.html");
-    const openInBrowser = vi.fn(async () => ({ _tag: "Success", value: undefined }) as never);
+  it("resolves an HTML target before opening it in the integrated browser", async () => {
+    mocks.openInBrowser.mockResolvedValue({ _tag: "Success" });
+    const click = renderFileLink({
+      resolveWorkspaceRelativePath: async () => "link-tests/test.html",
+      onOpenInBrowser: mocks.openInBrowser,
+    });
 
+    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+
+    await vi.waitFor(() => {
+      expect(mocks.openInBrowser).toHaveBeenCalledExactlyOnceWith("link-tests/test.html");
+    });
+    expect(mocks.openFile).not.toHaveBeenCalled();
+  });
+
+  it("uses the thread environment to resolve a chat link before opening the panel", async () => {
+    captured.link = null;
     renderToStaticMarkup(
-      <MarkdownFileLink
-        href="G:/t3-code/t3code/.t3/link-tests/test.html"
-        targetPath="G:/t3-code/t3code/.t3/link-tests/test.html"
-        iconPath="G:/t3-code/t3code/.t3/link-tests/test.html"
-        displayPath=".t3/link-tests/test.html"
-        workspaceRelativePath={null}
-        label="test.html"
-        copyMarkdown="[test.html](G:/t3-code/t3code/.t3/link-tests/test.html)"
-        theme="dark"
+      <ChatMarkdown
+        text="[Open the file](file:///linked-workspace/link-tests/test.html)"
+        cwd="/workspace"
         threadRef={threadRef}
-        onOpen={async () => ({ _tag: "Success", value: undefined }) as never}
-        resolveWorkspaceRelativePath={resolveWorkspaceRelativePath}
-        onOpenInBrowser={openInBrowser}
       />,
     );
-
-    const click = capturedFileLink.element?.props.onClick;
+    const link = captured.link as FileLinkElement | null;
+    const click = link?.props.onClick;
     expect(click).toBeTypeOf("function");
-    click?.({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+
+    (click as (event: { preventDefault: () => void; stopPropagation: () => void }) => void)({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
 
     await vi.waitFor(() => {
-      expect(resolveWorkspaceRelativePath).toHaveBeenCalledExactlyOnceWith();
-      expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(".t3/link-tests/test.html");
-    });
-  });
-
-  it("uses the thread environment and resolved path for a rendered HTML ChatMarkdown click", async () => {
-    chatMarkdownMocks.resolveProjectFile.mockResolvedValue({
-      _tag: "Success",
-      value: { relativePath: ".t3/link-tests/test.html" },
-    });
-    const click = renderChatMarkdownLink("G:/t3-code/t3code/.t3/link-tests/test.html");
-
-    expect(chatMarkdownMocks.editorHook).toHaveBeenCalledWith("env-1");
-    expect(chatMarkdownMocks.serverConfigAtom).toHaveBeenCalledWith("env-1");
-    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-
-    await vi.waitFor(() => {
-      expect(chatMarkdownMocks.resolveProjectFile).toHaveBeenCalledWith({
+      expect(mocks.resolveProjectFile).toHaveBeenCalledExactlyOnceWith({
         environmentId: "env-1",
-        input: {
-          cwd: "G:/t3-code/t3code-terminal",
-          path: "g:/t3-code/t3code/.t3/link-tests/test.html",
-        },
+        input: { cwd: "/workspace", path: "/linked-workspace/link-tests/test.html" },
       });
-      expect(chatMarkdownMocks.openFileInPreview).toHaveBeenCalledWith(
-        expect.objectContaining({ filePath: ".t3/link-tests/test.html", threadRef }),
-      );
-      expect(chatMarkdownMocks.openFilePanel).not.toHaveBeenCalled();
-    });
-  });
-
-  it("uses the right panel instead of browser preview for a rendered Markdown click", async () => {
-    const click = renderChatMarkdownLink("G:/t3-code/t3code/.t3/link-tests/test.md");
-
-    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-
-    await vi.waitFor(() => {
-      expect(chatMarkdownMocks.openFilePanel).toHaveBeenCalledExactlyOnceWith(
-        threadRef,
-        ".t3/link-tests/test.md",
-        undefined,
-      );
-      expect(chatMarkdownMocks.openFileInPreview).not.toHaveBeenCalled();
-    });
-  });
-
-  it("opens a rendered PNG link in the T3 right-panel image preview", async () => {
-    chatMarkdownMocks.resolveProjectFile.mockResolvedValue({
-      _tag: "Success",
-      value: { relativePath: ".t3/link-tests/test.png" },
-    });
-    const click = renderChatMarkdownLink("G:/t3-code/t3code/.t3/link-tests/test.png");
-
-    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-
-    await vi.waitFor(() => {
-      expect(chatMarkdownMocks.openFilePanel).toHaveBeenCalledExactlyOnceWith(
-        threadRef,
-        ".t3/link-tests/test.png",
-        undefined,
-      );
-      expect(chatMarkdownMocks.openFileInPreview).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps a rejected rendered ChatMarkdown link in T3 and explains why", async () => {
-    chatMarkdownMocks.resolveProjectFile.mockResolvedValue({ _tag: "Failure", cause: {} });
-    const click = renderChatMarkdownLink("G:/t3-code/t3code/.t3/link-tests/test.md");
-
-    click({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-
-    await vi.waitFor(() => {
-      expect(chatMarkdownMocks.openFilePanel).not.toHaveBeenCalled();
-      expect(chatMarkdownMocks.openInEditor).not.toHaveBeenCalled();
-      expect(chatMarkdownMocks.toastAdd).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Unable to open file" }),
+      expect(mocks.openInBrowser).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ filePath: "link-tests/test.html" }),
       );
     });
   });

@@ -234,6 +234,23 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
       }),
     );
+
+    it.effect("rejects a directory", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const directory = path.join(cwd, "plans");
+        yield* fileSystem.makeDirectory(directory);
+
+        const error = yield* workspaceFileSystem
+          .resolveFile({ cwd, path: directory })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspacePathNotFileError);
+      }),
+    );
   });
 
   describe("writeFile", () => {
