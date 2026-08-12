@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -6,6 +7,10 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   DEFAULT_SERVER_SETTINGS,
+  MAX_PROVIDER_SESSION_INACTIVITY_THRESHOLD,
+  MAX_PROVIDER_SESSION_SWEEP_INTERVAL,
+  MIN_PROVIDER_SESSION_INACTIVITY_THRESHOLD,
+  MIN_PROVIDER_SESSION_SWEEP_INTERVAL,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -100,6 +105,62 @@ describe("ClientSettings sidebar", () => {
   it.each([-1, 0, 91])("rejects an auto-settle threshold outside 1..90: %s", (value) => {
     expect(() => decodeClientSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
     expect(() => decodeClientSettingsPatch({ sidebarAutoSettleAfterDays: value })).toThrow();
+  });
+});
+
+describe("ServerSettings provider session reaper", () => {
+  it("defaults to the supported reaper timings", () => {
+    expect(Duration.toMillis(DEFAULT_SERVER_SETTINGS.providerSessionInactivityThreshold)).toBe(
+      30 * 60 * 1_000,
+    );
+    expect(Duration.toMillis(DEFAULT_SERVER_SETTINGS.providerSessionSweepInterval)).toBe(
+      5 * 60 * 1_000,
+    );
+  });
+
+  it("accepts supported reaper timing boundaries", () => {
+    const settings = decodeServerSettings({
+      providerSessionInactivityThreshold: Duration.toMillis(
+        MIN_PROVIDER_SESSION_INACTIVITY_THRESHOLD,
+      ),
+      providerSessionSweepInterval: Duration.toMillis(MIN_PROVIDER_SESSION_SWEEP_INTERVAL),
+    });
+    expect(Duration.toMillis(settings.providerSessionInactivityThreshold)).toBe(
+      Duration.toMillis(MIN_PROVIDER_SESSION_INACTIVITY_THRESHOLD),
+    );
+    expect(Duration.toMillis(settings.providerSessionSweepInterval)).toBe(
+      Duration.toMillis(MIN_PROVIDER_SESSION_SWEEP_INTERVAL),
+    );
+    const patch = decodeServerSettingsPatch({
+      providerSessionInactivityThreshold: Duration.toMillis(
+        MAX_PROVIDER_SESSION_INACTIVITY_THRESHOLD,
+      ),
+      providerSessionSweepInterval: Duration.toMillis(MAX_PROVIDER_SESSION_SWEEP_INTERVAL),
+    });
+    expect(Duration.toMillis(patch.providerSessionInactivityThreshold!)).toBe(
+      Duration.toMillis(MAX_PROVIDER_SESSION_INACTIVITY_THRESHOLD),
+    );
+    expect(Duration.toMillis(patch.providerSessionSweepInterval!)).toBe(
+      Duration.toMillis(MAX_PROVIDER_SESSION_SWEEP_INTERVAL),
+    );
+  });
+
+  it.each([
+    [
+      "providerSessionInactivityThreshold",
+      Duration.toMillis(MIN_PROVIDER_SESSION_INACTIVITY_THRESHOLD) - 1,
+    ],
+    [
+      "providerSessionInactivityThreshold",
+      Duration.toMillis(MAX_PROVIDER_SESSION_INACTIVITY_THRESHOLD) + 1,
+    ],
+    ["providerSessionInactivityThreshold", Infinity],
+    ["providerSessionSweepInterval", Duration.toMillis(MIN_PROVIDER_SESSION_SWEEP_INTERVAL) - 1],
+    ["providerSessionSweepInterval", Duration.toMillis(MAX_PROVIDER_SESSION_SWEEP_INTERVAL) + 1],
+    ["providerSessionSweepInterval", -Infinity],
+  ] as const)("rejects an unsupported reaper timing: %s=%s", (key, value) => {
+    expect(() => decodeServerSettings({ [key]: value })).toThrow();
+    expect(() => decodeServerSettingsPatch({ [key]: value })).toThrow();
   });
 });
 
