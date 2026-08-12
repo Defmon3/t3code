@@ -695,7 +695,7 @@ describe("GitHistoryPanel", () => {
     expect(historyList(renderPanel()).props.data).toHaveLength(2);
   });
 
-  it("keeps a no-match search visible and clearable", () => {
+  it("keeps a trailing-space search visible, literal, and clearable", () => {
     historyState.pages.set(
       undefined,
       page([commit("aaaaaaaa11111111111111111111111111111111", "Add Git history panel")]),
@@ -708,15 +708,17 @@ describe("GitHistoryPanel", () => {
     const changeSearch = search?.props.onChange as
       | ((event: { readonly target: { readonly value: string } }) => void)
       | undefined;
+    const historyQueryCallCount = historyState.getHistory.mock.calls.length;
     changeSearch?.({ target: { value: "fix " } });
 
     const filteredPanel = renderPanel();
-    expect(
-      visitElements(
-        filteredPanel,
-        (element) => element.props["aria-label"] === "Filter Git history",
-      ),
-    ).not.toBeNull();
+    const filteredSearch = visitElements(
+      filteredPanel,
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    expect(filteredSearch).not.toBeNull();
+    expect(filteredSearch?.props.value).toBe("fix ");
+    expect(historyState.getHistory).toHaveBeenCalledTimes(historyQueryCallCount);
     const clear = visitElements(
       filteredPanel,
       (element) => element.props["aria-label"] === "Clear Git history search",
