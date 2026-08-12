@@ -28,6 +28,8 @@ import {
   type GitCommitDetails,
   type GitHistoryCommit,
   type VcsGetCommitDiffInput,
+  type VcsListCommitFilesInput,
+  type VcsListCommitFilesResult,
   type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
@@ -88,7 +90,12 @@ const GIT_HISTORY_SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 const GIT_HISTORY_MAX_OUTPUT_BYTES = 512 * 1024;
 const GIT_HISTORY_RECORD_FIELD_COUNT = 7;
 const GIT_COMMIT_DETAILS_RECORD_FIELD_COUNT = 8;
-const GIT_COMMIT_DETAILS_MAX_OUTPUT_BYTES = 4_000_000;
+const GIT_COMMIT_DETAILS_MAX_OUTPUT_BYTES = 64 * 1024;
+const GIT_COMMIT_FILES_MAX_OUTPUT_BYTES = 512 * 1024;
+const GIT_COMMIT_FILES_MAX_FILES = 2_000;
+const GIT_COMMIT_FILES_DEFAULT_LIMIT = 100;
+const GIT_COMMIT_FILES_SNAPSHOT_MAX_SESSIONS = 64;
+const GIT_COMMIT_FILES_SNAPSHOT_TTL_MS = 2 * 60 * 1000;
 
 interface GitHistorySnapshot {
   readonly gitCommonDir: string;
@@ -109,6 +116,15 @@ interface GitRefSnapshot {
   readonly hasPrimaryRemote: boolean;
   readonly isComplete: boolean;
   expiresAt: number;
+}
+
+interface GitCommitFilesSnapshot {
+  readonly gitCommonDir: string;
+  readonly worktreePath: string | null;
+  readonly hash: string;
+  readonly files: ReadonlyArray<GitCommitChangedFile>;
+  readonly capped: boolean;
+  readonly expiresAt: number;
 }
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
@@ -308,7 +324,6 @@ function parseGitCommitDetails(stdout: string): GitCommitDetails | null {
     authorEmail,
     authoredAt,
     refs: decorations.length === 0 ? [] : decorations.split(", "),
-    changedFiles: [],
   };
 }
 
@@ -326,6 +341,8 @@ function parseGitCommitChangedFiles(stdout: string): ReadonlyArray<GitCommitChan
       (status !== "A" &&
         status !== "M" &&
         status !== "D" &&
+        status !== "R" &&
+        status !== "C" &&
         status !== "T" &&
         status !== "U" &&
         status !== "X" &&
@@ -806,6 +823,32 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     string,
     { readonly snapshotId: string; readonly offset: number }
   >();
+  const commitFilesSnapshots = new Map<string, GitCommitFilesSnapshot>();
+  const commitFilesCursors = new Map<
+    string,
+    { readonly snapshotId: string; readonly offset: number }
+  >();
+  const deleteCommitFilesSnapshot = (snapshotId: string): void => {
+    commitFilesSnapshots.delete(snapshotId);
+    for (const [cursor, value] of commitFilesCursors) {
+      if (value.snapshotId === snapshotId) commitFilesCursors.delete(cursor);
+    }
+  };
+  const newCommitFilesCursor = (snapshotId: string, offset: number): string => {
+    const cursor = randomBytes(18).toString("base64url");
+    commitFilesCursors.set(cursor, { snapshotId, offset });
+    return cursor;
+  };
+  const storeCommitFilesSnapshot = (snapshot: GitCommitFilesSnapshot): string => {
+    const snapshotId = randomBytes(18).toString("base64url");
+    commitFilesSnapshots.set(snapshotId, snapshot);
+    while (commitFilesSnapshots.size > GIT_COMMIT_FILES_SNAPSHOT_MAX_SESSIONS) {
+      const oldest = commitFilesSnapshots.keys().next().value;
+      if (oldest === undefined) break;
+      deleteCommitFilesSnapshot(oldest);
+    }
+    return snapshotId;
+  };
   const deleteHistorySnapshot = (snapshotId: string): void => {
     historySnapshots.delete(snapshotId);
     for (const [cursor, value] of historyCursors) {
@@ -2917,33 +2960,95 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
-    const changes = yield* executeGitWithStableDiagnostics(
-      "GitVcsDriver.getCommitDetails.diffTree",
-      input.cwd,
-      [
-        "diff-tree",
-        "--no-commit-id",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--name-status",
-        "--no-renames",
-        "--first-parent",
-        "-m",
-        "--root",
-        "-r",
-        "-z",
-        input.hash,
-      ],
-      {
-        maxOutputBytes: GIT_COMMIT_DETAILS_MAX_OUTPUT_BYTES,
-        fallbackErrorDetail: "git diff-tree failed",
-      },
-    );
-
     return {
-      commit: { ...commit, changedFiles: parseGitCommitChangedFiles(changes.stdout) },
+      commit,
       isRepo: true,
+    };
+  });
+
+  const listCommitFiles: GitVcsDriver.GitVcsDriver["Service"]["listCommitFiles"] = Effect.fn(
+    "listCommitFiles",
+  )(function* (input) {
+    const repositoryPaths = yield* resolveRepositoryPaths(input.cwd).pipe(
+      Effect.catchTags({
+        GitCommandError: (error) =>
+          isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
+      }),
+    );
+    if (repositoryPaths === null) {
+      return { files: [], isRepo: false, nextCursor: null, hasMore: false, capped: false };
+    }
+    const worktreePath = repositoryPaths.worktreeRoot ?? path.normalize(input.cwd);
+    const limit = input.limit ?? GIT_COMMIT_FILES_DEFAULT_LIMIT;
+    let snapshotId: string;
+    let offset: number;
+    let snapshot: GitCommitFilesSnapshot;
+    if (input.cursor) {
+      const continuation = commitFilesCursors.get(input.cursor);
+      const existing = continuation ? commitFilesSnapshots.get(continuation.snapshotId) : undefined;
+      const now = yield* Clock.currentTimeMillis;
+      if (
+        continuation === undefined ||
+        existing === undefined ||
+        existing.expiresAt <= now ||
+        existing.gitCommonDir !== repositoryPaths.gitCommonDir ||
+        existing.worktreePath !== worktreePath ||
+        existing.hash !== input.hash
+      ) {
+        return yield* new VcsSnapshotExpiredError({
+          operation: "GitVcsDriver.listCommitFiles",
+          cursor: input.cursor,
+        });
+      }
+      commitFilesCursors.delete(input.cursor);
+      snapshot = existing;
+      snapshotId = continuation.snapshotId;
+      offset = continuation.offset;
+    } else {
+      const changes = yield* executeGitWithStableDiagnostics(
+        "GitVcsDriver.listCommitFiles.diffTree",
+        input.cwd,
+        [
+          "diff-tree",
+          "--no-commit-id",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--name-status",
+          "--no-renames",
+          "--first-parent",
+          "-m",
+          "--root",
+          "-r",
+          "-z",
+          input.hash,
+        ],
+        {
+          maxOutputBytes: GIT_COMMIT_FILES_MAX_OUTPUT_BYTES,
+          fallbackErrorDetail: "git diff-tree failed",
+        },
+      );
+      const parsed = parseGitCommitChangedFiles(changes.stdout);
+      snapshot = {
+        gitCommonDir: repositoryPaths.gitCommonDir,
+        worktreePath,
+        hash: input.hash,
+        files: parsed.slice(0, GIT_COMMIT_FILES_MAX_FILES),
+        capped: changes.stdoutTruncated || parsed.length > GIT_COMMIT_FILES_MAX_FILES,
+        expiresAt: (yield* Clock.currentTimeMillis) + GIT_COMMIT_FILES_SNAPSHOT_TTL_MS,
+      };
+      snapshotId = storeCommitFilesSnapshot(snapshot);
+      offset = 0;
+    }
+    const files = snapshot.files.slice(offset, offset + limit);
+    const hasMore = offset + files.length < snapshot.files.length;
+    if (!hasMore) deleteCommitFilesSnapshot(snapshotId);
+    return {
+      files,
+      isRepo: true,
+      nextCursor: hasMore ? newCommitFilesCursor(snapshotId, offset + files.length) : null,
+      hasMore,
+      capped: snapshot.capped,
     };
   });
 
@@ -2978,6 +3083,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...(input.filePath ? [input.filePath] : []),
       ],
       {
+        timeoutMs: 10_000,
         maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
         appendTruncationMarker: true,
         fallbackErrorDetail: "git show diff failed",
@@ -3426,6 +3532,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     listRefs,
     getHistory,
     getCommitDetails,
+    listCommitFiles,
     getCommitDiff,
     createWorktree: (input) => withListRefsInvalidation(input.cwd, createWorktree(input)),
     fetchPullRequestBranch: (input) =>

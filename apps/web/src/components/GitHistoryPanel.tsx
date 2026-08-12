@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, GitHistoryCommit } from "@t3tools/contracts";
+import type { EnvironmentId, GitCommitChangedFile, GitHistoryCommit } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import { FileIcon, GitBranchIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import * as Cause from "effect/Cause";
@@ -194,6 +194,63 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
+  const [commitFilesCursor, setCommitFilesCursor] = useState<string | undefined>(undefined);
+  const [commitFiles, setCommitFiles] = useState<ReadonlyArray<GitCommitChangedFile>>([]);
+  const [commitFilesHasMore, setCommitFilesHasMore] = useState(false);
+  const [commitFilesCapped, setCommitFilesCapped] = useState(false);
+  const [commitFilesRecovered, setCommitFilesRecovered] = useState(false);
+  const receivedCommitFilesPages = useRef(new Set<string>());
+  useEffect(() => {
+    setCommitFilesCursor(undefined);
+    setCommitFiles([]);
+    setCommitFilesHasMore(false);
+    setCommitFilesCapped(false);
+    setCommitFilesRecovered(false);
+    receivedCommitFilesPages.current.clear();
+  }, [props.cwd, props.environmentId, selectedHash]);
+  const commitFilesQuery = useEnvironmentQuery(
+    selectedHash === null
+      ? null
+      : vcsEnvironment.listCommitFiles({
+          environmentId: props.environmentId,
+          input: {
+            cwd: props.cwd,
+            hash: selectedHash,
+            limit: 100,
+            ...(commitFilesCursor ? { cursor: commitFilesCursor } : {}),
+          },
+        }),
+  );
+  useEffect(() => {
+    const page = commitFilesQuery.data;
+    if (!page || selectedHash === null) return;
+    const pageKey = `${selectedHash}:${commitFilesCursor ?? "first"}:${page.nextCursor ?? "last"}`;
+    if (receivedCommitFilesPages.current.has(pageKey)) return;
+    receivedCommitFilesPages.current.add(pageKey);
+    setCommitFiles((current) => [...current, ...page.files].slice(0, 2_000));
+    setCommitFilesHasMore(page.hasMore);
+    setCommitFilesCapped(page.capped);
+  }, [commitFilesCursor, commitFilesQuery.data, selectedHash]);
+  useEffect(() => {
+    if (
+      commitFilesQuery.error !== null &&
+      commitFilesQuery.errorCause !== null &&
+      isHistorySnapshotExpired(commitFilesQuery.errorCause) &&
+      !commitFilesRecovered
+    ) {
+      receivedCommitFilesPages.current.clear();
+      setCommitFiles([]);
+      setCommitFilesCursor(undefined);
+      setCommitFilesHasMore(false);
+      setCommitFilesRecovered(true);
+      void commitFilesQuery.refresh();
+    }
+  }, [commitFilesQuery, commitFilesRecovered]);
+  const selectedCommitFiles = commitFiles;
+  const loadMoreCommitFiles = () => {
+    const nextCursor = commitFilesQuery.data?.nextCursor;
+    if (nextCursor) setCommitFilesCursor(nextCursor);
+  };
   const commitDiffQuery = useEnvironmentQuery(
     commitDiffRequest === null
       ? null
@@ -412,7 +469,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         <CommitDiffView
           hash={commitDiffRequest.hash}
           {...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {})}
-          files={selectedCommitDetails?.changedFiles ?? []}
+          files={selectedCommitFiles}
           diff={commitDiffQuery.data?.diff ?? null}
           truncated={commitDiffQuery.data?.truncated ?? false}
           isPending={commitDiffQuery.isPending}
@@ -603,6 +660,13 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                 flexBasis: detailsPaneWidth,
               }}
               details={selectedCommitDetails}
+              files={selectedCommitFiles}
+              filesCapped={commitFilesCapped}
+              filesHasMore={commitFilesHasMore}
+              filesError={commitFilesQuery.error !== null}
+              filesLoading={commitFilesQuery.isPending}
+              onLoadMoreFiles={loadMoreCommitFiles}
+              onRetryFiles={() => void commitFilesQuery.refresh()}
               isPending={commitDetailsQuery.isPending}
               hasError={commitDetailsQuery.error !== null}
               hasSelection={selectedHash !== null}
@@ -639,6 +703,13 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                   id="git-history-details-panel"
                   className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
                   details={selectedCommitDetails}
+                  files={selectedCommitFiles}
+                  filesCapped={commitFilesCapped}
+                  filesHasMore={commitFilesHasMore}
+                  filesError={commitFilesQuery.error !== null}
+                  filesLoading={commitFilesQuery.isPending}
+                  onLoadMoreFiles={loadMoreCommitFiles}
+                  onRetryFiles={() => void commitFilesQuery.refresh()}
                   isPending={commitDetailsQuery.isPending}
                   hasError={commitDetailsQuery.error !== null}
                   hasSelection={selectedHash !== null}

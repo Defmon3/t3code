@@ -25,6 +25,8 @@ const historyState = vi.hoisted(() => ({
   commitDetails: null as GitCommitDetails | null,
   diff: { diff: "", isRepo: true, truncated: false },
   getCommitDetails: vi.fn(),
+  listCommitFiles: vi.fn(),
+  commitFiles: { files: [], isRepo: true, nextCursor: null, hasMore: false, capped: false },
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
   pages: new Map<string | undefined, PageResult>(),
@@ -137,7 +139,7 @@ vi.mock("../state/queries", () => ({
 
 vi.mock("../state/query", () => ({
   useEnvironmentQuery: (target: { readonly kind?: string } | null) => {
-    const base = { error: null, isPending: false, refresh: vi.fn() };
+    const base = { error: null, errorCause: null, isPending: false, refresh: vi.fn() };
     if (target?.kind === "refs") {
       return {
         ...base,
@@ -154,6 +156,7 @@ vi.mock("../state/query", () => ({
     if (target?.kind === "status") return { ...base, data: historyState.status };
     if (target?.kind === "commit-details")
       return { ...base, data: { commit: historyState.commitDetails } };
+    if (target?.kind === "commit-files") return { ...base, data: historyState.commitFiles };
     if (target?.kind === "commit-diff") return { ...base, data: historyState.diff };
     return { ...base, data: null };
   },
@@ -170,6 +173,10 @@ vi.mock("../state/vcs", () => ({
     getCommitDetails: (target: unknown) => {
       historyState.getCommitDetails(target);
       return { kind: "commit-details" };
+    },
+    listCommitFiles: (target: unknown) => {
+      historyState.listCommitFiles(target);
+      return { kind: "commit-files" };
     },
     getCommitDiff: (target: unknown) => {
       historyState.getCommitDiff(target);
@@ -308,6 +315,14 @@ describe("GitHistoryPanel", () => {
     historyState.commitDetails = null;
     historyState.diff = { diff: "", isRepo: true, truncated: false };
     historyState.getCommitDetails.mockReset();
+    historyState.listCommitFiles.mockReset();
+    historyState.commitFiles = {
+      files: [],
+      isRepo: true,
+      nextCursor: null,
+      hasMore: false,
+      capped: false,
+    };
     historyState.getCommitDiff.mockReset();
     historyState.getHistory.mockReset();
     historyState.pages.clear();
@@ -690,7 +705,7 @@ describe("GitHistoryPanel", () => {
   it("opens the full commit diff from selected commit details", () => {
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
-    historyState.commitDetails = { ...historyCommit, body: "", changedFiles: [] };
+    historyState.commitDetails = { ...historyCommit, body: "" };
 
     const list = historyList(renderPanel());
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
@@ -806,7 +821,6 @@ describe("GitHistoryPanel", () => {
     historyState.commitDetails = {
       ...historyCommit,
       body: "",
-      changedFiles: [{ status: "A", path: "src/panel.tsx" }],
     };
     historyState.diff = {
       diff: "diff --git a/src/panel.tsx b/src/panel.tsx\n+added line\n",

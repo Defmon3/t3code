@@ -155,6 +155,14 @@ export const VcsGetCommitDetailsInput = Schema.Struct({
 });
 export type VcsGetCommitDetailsInput = typeof VcsGetCommitDetailsInput.Type;
 
+export const VcsListCommitFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  hash: GitCommitHash,
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
+});
+export type VcsListCommitFilesInput = typeof VcsListCommitFilesInput.Type;
+
 export const VcsGetCommitDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
@@ -305,7 +313,7 @@ export const GitHistoryCommit = Schema.Struct({
 export type GitHistoryCommit = typeof GitHistoryCommit.Type;
 
 export const GitCommitChangedFile = Schema.Struct({
-  status: Schema.Literals(["A", "M", "D", "T", "U", "X", "B"]),
+  status: Schema.Literals(["A", "M", "D", "R", "C", "T", "U", "X", "B"]),
   path: TrimmedNonEmptyStringSchema,
 });
 export type GitCommitChangedFile = typeof GitCommitChangedFile.Type;
@@ -319,7 +327,6 @@ export const GitCommitDetails = Schema.Struct({
   authorEmail: TrimmedNonEmptyStringSchema,
   authoredAt: Schema.String,
   refs: Schema.Array(TrimmedNonEmptyStringSchema),
-  changedFiles: Schema.Array(GitCommitChangedFile),
 });
 export type GitCommitDetails = typeof GitCommitDetails.Type;
 
@@ -336,6 +343,15 @@ export const VcsGetCommitDetailsResult = Schema.Struct({
   isRepo: Schema.Boolean,
 });
 export type VcsGetCommitDetailsResult = typeof VcsGetCommitDetailsResult.Type;
+
+export const VcsListCommitFilesResult = Schema.Struct({
+  files: Schema.Array(GitCommitChangedFile),
+  isRepo: Schema.Boolean,
+  nextCursor: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  hasMore: Schema.Boolean,
+  capped: Schema.Boolean,
+});
+export type VcsListCommitFilesResult = typeof VcsListCommitFilesResult.Type;
 
 export const VcsGetCommitDiffResult = Schema.Struct({
   diff: Schema.String,

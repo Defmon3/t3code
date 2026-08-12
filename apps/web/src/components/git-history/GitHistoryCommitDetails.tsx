@@ -1,16 +1,8 @@
 import type { GitCommitChangedFile, GitCommitDetails } from "@t3tools/contracts";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  FileDiffIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  RefreshCwIcon,
-} from "lucide-react";
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { LegendList } from "@legendapp/list/react";
+import { CheckIcon, FileDiffIcon, RefreshCwIcon } from "lucide-react";
+import { type CSSProperties } from "react";
 
-import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -23,108 +15,63 @@ const FILE_STATUS_COLORS = {
   A: "text-emerald-500",
   M: "text-amber-500",
   D: "text-red-500",
+  R: "text-sky-500",
+  C: "text-sky-500",
   T: "text-sky-500",
   U: "text-red-500",
   X: "text-muted-foreground",
   B: "text-muted-foreground",
 } as const;
 
-function countTreeFiles(node: TurnDiffTreeNode): number {
-  return node.kind === "file"
-    ? 1
-    : node.children.reduce((count, child) => count + countTreeFiles(child), 0);
-}
+const FILE_STATUS_LABELS = {
+  A: "Added",
+  M: "Modified",
+  D: "Deleted",
+  R: "Renamed",
+  C: "Copied",
+  T: "Type changed",
+  U: "Unmerged",
+  X: "Unknown",
+  B: "Broken pairing",
+} as const;
 
 function CommitFilesTree(props: {
   files: ReadonlyArray<GitCommitChangedFile>;
   onShowDiff: (path: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
-  const nodes = useMemo(
-    () =>
-      buildTurnDiffTree(
-        props.files.map((file) => ({
-          path: file.path,
-          kind: file.status,
-          additions: 0,
-          deletions: 0,
-        })),
-      ),
-    [props.files],
-  );
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const statusByPath = useMemo(
-    () => new Map(props.files.map((file) => [file.path.replaceAll("\\", "/"), file.status])),
-    [props.files],
-  );
-  const renderNode = (node: TurnDiffTreeNode, depth: number): ReactNode => {
-    const paddingLeft = depth * 14 + 4;
-    if (node.kind === "directory") {
-      const isCollapsed = collapsed.has(node.path);
-      return (
-        <div key={`directory:${node.path}`}>
-          <button
-            type="button"
-            className="flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            style={{ paddingLeft }}
-            onClick={() =>
-              setCollapsed((current) => {
-                const next = new Set(current);
-                if (next.has(node.path)) next.delete(node.path);
-                else next.add(node.path);
-                return next;
-              })
-            }
-            aria-expanded={!isCollapsed}
-          >
-            {isCollapsed ? (
-              <ChevronRightIcon className="size-3 shrink-0" />
-            ) : (
-              <ChevronDownIcon className="size-3 shrink-0" />
-            )}
-            {isCollapsed ? (
-              <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <FolderOpenIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <span className="truncate">{node.name}</span>
-            <span className="ml-auto shrink-0 text-[0.5625rem] text-muted-foreground">
-              {countTreeFiles(node)} files
-            </span>
-          </button>
-          {!isCollapsed ? node.children.map((child) => renderNode(child, depth + 1)) : null}
-        </div>
-      );
-    }
-    const status = statusByPath.get(node.path);
-    return (
-      <button
-        type="button"
-        key={`file:${node.path}`}
-        className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-        style={{ paddingLeft: paddingLeft + 17 }}
-        onClick={() => props.onShowDiff(node.path)}
-        title={`Show diff for ${node.path}`}
-      >
-        <span
-          className={cn(
-            "w-3 shrink-0 font-mono font-semibold",
-            status ? FILE_STATUS_COLORS[status] : "text-muted-foreground",
-          )}
+  return (
+    <LegendList<GitCommitChangedFile>
+      data={props.files}
+      keyExtractor={(file) => file.path}
+      estimatedItemSize={24}
+      drawDistance={192}
+      className="h-full"
+      renderItem={({ item: file }) => (
+        <button
+          type="button"
+          key={file.path}
+          className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          onClick={() => props.onShowDiff(file.path)}
+          title={`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}
+          aria-label={`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}
         >
-          {status ?? "?"}
-        </span>
-        <PierreEntryIcon
-          pathValue={node.path}
-          kind="file"
-          theme={resolvedTheme}
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
-        <span className="truncate">{node.name}</span>
-      </button>
-    );
-  };
-  return <div>{nodes.map((node) => renderNode(node, 0))}</div>;
+          <span
+            className={cn("w-3 shrink-0 font-mono font-semibold", FILE_STATUS_COLORS[file.status])}
+          >
+            {file.status}
+          </span>
+          <PierreEntryIcon
+            pathValue={file.path}
+            kind="file"
+            theme={resolvedTheme}
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+          <span className="truncate">{file.path}</span>
+        </button>
+      )}
+    />
+  );
 }
 
 export function CommitDetailsPane(props: {
@@ -132,6 +79,13 @@ export function CommitDetailsPane(props: {
   style?: CSSProperties;
   id?: string;
   details: GitCommitDetails | null;
+  files: ReadonlyArray<GitCommitChangedFile>;
+  filesCapped: boolean;
+  filesHasMore: boolean;
+  filesError: boolean;
+  filesLoading: boolean;
+  onLoadMoreFiles: () => void;
+  onRetryFiles: () => void;
   isPending: boolean;
   hasError: boolean;
   hasSelection: boolean;
@@ -226,8 +180,7 @@ export function CommitDetailsPane(props: {
       <div className="flex min-h-0 flex-1 flex-col border-b border-border/60">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-[0.6875rem] font-medium">
           <span>
-            {details.changedFiles.length} changed{" "}
-            {details.changedFiles.length === 1 ? "file" : "files"}
+            {props.files.length} loaded changed {props.files.length === 1 ? "file" : "files"}
           </span>
           <Button size="xs" variant="outline" onClick={() => props.onShowDiff(details.hash)}>
             <FileDiffIcon className="size-3" /> View all changes
@@ -235,9 +188,27 @@ export function CommitDetailsPane(props: {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1">
           <CommitFilesTree
-            files={details.changedFiles}
+            files={props.files}
             onShowDiff={(path) => props.onShowDiff(details.hash, path)}
           />
+          {props.filesError ? (
+            <Button size="xs" variant="outline" onClick={props.onRetryFiles}>
+              Retry loading changed files
+            </Button>
+          ) : null}
+          {props.filesHasMore ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={props.onLoadMoreFiles}
+              disabled={props.filesLoading}
+            >
+              {props.filesLoading ? "Loading more…" : "Load more"}
+            </Button>
+          ) : null}
+          {props.filesCapped ? (
+            <p className="px-2 py-1 text-xs text-muted-foreground">Changed-file list was capped.</p>
+          ) : null}
         </div>
       </div>
       <div className="max-h-[34%] shrink-0 overflow-y-auto p-3 text-[0.6875rem]">

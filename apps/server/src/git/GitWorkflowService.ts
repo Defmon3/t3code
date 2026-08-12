@@ -16,6 +16,8 @@ import {
   type VcsGetHistoryResult,
   type VcsGetCommitDetailsInput,
   type VcsGetCommitDetailsResult,
+  type VcsListCommitFilesInput,
+  type VcsListCommitFilesResult,
   type VcsGetCommitDiffInput,
   type VcsGetCommitDiffResult,
   type VcsListRefsInput,
@@ -75,6 +77,9 @@ export class GitWorkflowService extends Context.Service<
     readonly getCommitDetails: (
       input: VcsGetCommitDetailsInput,
     ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+    readonly listCommitFiles: (
+      input: VcsListCommitFilesInput,
+    ) => Effect.Effect<VcsListCommitFilesResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly getCommitDiff: (
       input: VcsGetCommitDiffInput,
     ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
@@ -162,6 +167,10 @@ function nonRepositoryHistory(): VcsGetHistoryResult {
 
 function nonRepositoryCommitDetails(): VcsGetCommitDetailsResult {
   return { commit: null, isRepo: false };
+}
+
+function nonRepositoryCommitFiles(): VcsListCommitFilesResult {
+  return { files: [], isRepo: false, nextCursor: null, hasMore: false, capped: false };
 }
 
 function nonRepositoryCommitDiff(): VcsGetCommitDiffResult {
@@ -345,6 +354,12 @@ export const make = Effect.gen(function* () {
           isGitRepository
             ? git.getCommitDetails(input)
             : Effect.succeed(nonRepositoryCommitDetails()),
+        ),
+      ),
+    listCommitFiles: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.listCommitFiles", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.listCommitFiles(input) : Effect.succeed(nonRepositoryCommitFiles()),
         ),
       ),
     getCommitDiff: (input) =>

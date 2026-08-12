@@ -531,7 +531,12 @@ it.effect("returns full commit details and root commit changed files", () =>
     assert.equal(details.commit?.authorEmail, "test@test.com");
     assert.equal(details.commit?.parentHashes.length, 1);
     assert.include(details.commit?.refs ?? [], "tag: v2");
-    assert.deepEqual(details.commit?.changedFiles, [{ status: "A", path: "SECOND.md" }]);
+    const files = yield* driver.listCommitFiles({ cwd, hash });
+    assert.deepEqual(files.files, [{ status: "A", path: "SECOND.md" }]);
+
+    const paged = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+    assert.equal(paged.hasMore, false);
+    assert.equal(paged.nextCursor, null);
 
     const diff = yield* driver.getCommitDiff({ cwd, hash });
     assert.equal(diff.isRepo, true);
@@ -545,7 +550,8 @@ it.effect("returns full commit details and root commit changed files", () =>
     const initialHash = details.commit?.parentHashes[0];
     assert.ok(initialHash);
     const initial = yield* driver.getCommitDetails({ cwd, hash: initialHash });
-    assert.deepEqual(initial.commit?.changedFiles, [{ status: "A", path: "README.md" }]);
+    const initialFiles = yield* driver.listCommitFiles({ cwd, hash: initialHash });
+    assert.deepEqual(initialFiles.files, [{ status: "A", path: "README.md" }]);
   }).pipe(Effect.provide(TestLayer)),
 );
 
