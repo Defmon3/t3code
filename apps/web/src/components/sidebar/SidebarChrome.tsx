@@ -4,11 +4,12 @@ import {
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
+import type { EnvironmentIdentificationMode } from "@t3tools/contracts";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
-import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_VERSION } from "../../branding";
+import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_STAGE_LABEL, APP_VERSION } from "../../branding";
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
 import {
@@ -33,6 +34,14 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 
+export function resolveSidebarChromePillLabel(
+  appStageLabel: string,
+  environmentIdentificationMode: EnvironmentIdentificationMode,
+) {
+  const pillLabel = resolveEnvironmentIdentificationPillLabel(appStageLabel);
+  return pillLabel === "Custom" || environmentIdentificationMode === "pill" ? pillLabel : null;
+}
+
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
 }: {
@@ -44,15 +53,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     stageLabel,
     environmentIdentificationMode === "artwork",
   );
-  const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel);
-  const pillLabel =
-    resolvedPillLabel === "Custom" || environmentIdentificationMode === "pill"
-      ? resolvedPillLabel
-      : null;
+  const pillLabel = resolveSidebarChromePillLabel(APP_STAGE_LABEL, environmentIdentificationMode);
   const buildIdentityLabel = pillLabel
     ? formatBuildIdentityLabel({
         stageLabel: pillLabel,
-        version: APP_VERSION,
         commitHash: APP_COMMIT_HASH,
         buildTime: APP_BUILD_TIME,
       })
@@ -80,12 +84,12 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           <TooltipTrigger
             render={
               <Badge
-                className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+                className="relative z-10 ml-1 rounded-full px-1 text-[.5625rem] tracking-tighter text-muted-foreground"
                 data-environment-identification="pill"
                 size="sm"
                 variant="secondary"
               >
-                {pillLabel}
+                {buildIdentityLabel}
               </Badge>
             }
           />

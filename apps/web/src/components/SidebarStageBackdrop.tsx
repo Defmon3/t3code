@@ -10,17 +10,14 @@ export type EnvironmentIdentificationPillLabel = "Custom" | "Dev";
 
 export function formatBuildIdentityLabel(input: {
   readonly stageLabel: EnvironmentIdentificationPillLabel;
-  readonly version: string;
   readonly commitHash: string | null;
   readonly buildTime: string | null;
 }): string {
-  const nightlyBuild = input.version.match(/-nightly\.\d{8}\.(\d+)$/)?.[1];
-  const versionLabel = nightlyBuild ? `n${nightlyBuild}` : input.version;
   const commitLabel = input.commitHash?.slice(0, 8);
   const builtAtLabel = input.buildTime
     ? `${input.buildTime.slice(0, 10)} ${input.buildTime.slice(11, 16)}Z`
     : null;
-  return [input.stageLabel, builtAtLabel, versionLabel, commitLabel].filter(Boolean).join(" · ");
+  return [input.stageLabel, builtAtLabel, commitLabel].filter(Boolean).join(" · ");
 }
 
 // A wide viewBox keeps the 96-unit art height at a fixed scale while sidebar resizing reveals
