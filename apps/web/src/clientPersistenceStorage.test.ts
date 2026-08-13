@@ -45,11 +45,22 @@ describe("clientPersistenceStorage", () => {
     const settings = {
       ...DEFAULT_CLIENT_SETTINGS,
       timestampFormat: "24-hour" as const,
+      sidebarAutoSettleCompletedChangeRequests: false,
     };
 
     writeBrowserClientSettings(settings);
 
     expect(readBrowserClientSettings()).toEqual(settings);
+  });
+
+  it("defaults completed pull request auto-settlement on", async () => {
+    const testWindow = getTestWindow();
+    testWindow.localStorage.setItem("t3code:client-settings:v1", "{}");
+    const { readBrowserClientSettings } = await import("./clientPersistenceStorage");
+
+    expect(readBrowserClientSettings()).toEqual(
+      expect.objectContaining({ sidebarAutoSettleCompletedChangeRequests: true }),
+    );
   });
 
   it("reports structured decode failures while preserving the fallback", async () => {

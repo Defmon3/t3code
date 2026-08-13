@@ -193,6 +193,16 @@ describe("effectiveSettled", () => {
         }),
       ).toBe(false);
     }
+
+    const stale = makeShell({ activityAt: STALE });
+    expect(
+      effectiveSettled(stale, {
+        now: NOW,
+        autoSettleAfterDays: 3,
+        autoSettleCompletedChangeRequests: false,
+        changeRequestState: "merged",
+      }),
+    ).toBe(true);
   });
 
   it("supports a manual-only workflow", () => {
