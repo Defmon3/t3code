@@ -179,6 +179,7 @@ function GraphCell(props: {
                 (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
               ],
             key: `incoming:${props.graph.hash}`,
+            lane: props.graph.lane,
             side: "top" as const,
             x: x(props.graph.lane),
           },
@@ -190,10 +191,22 @@ function GraphCell(props: {
       const key = `${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`;
       const caps = [];
       if (edge.kind === "continuation" || edge.kind === "incoming") {
-        caps.push({ color, key: `${key}:top`, side: "top" as const, x: x(edge.fromLane) });
+        caps.push({
+          color,
+          key: `${key}:top`,
+          lane: edge.fromLane,
+          side: "top" as const,
+          x: x(edge.fromLane),
+        });
       }
       if (edge.kind === "continuation" || edge.kind === "parent") {
-        caps.push({ color, key: `${key}:bottom`, side: "bottom" as const, x: x(edge.toLane) });
+        caps.push({
+          color,
+          key: `${key}:bottom`,
+          lane: edge.toLane,
+          side: "bottom" as const,
+          x: x(edge.toLane),
+        });
       }
       return caps;
     }),
@@ -243,6 +256,7 @@ function GraphCell(props: {
           return (
             <path
               data-edge-kind={edge.kind}
+              data-edge-to-lane={edge.toLane}
               key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
               d={path}
               fill="none"
@@ -274,6 +288,7 @@ function GraphCell(props: {
       {boundaryCaps.map((cap) => (
         <span
           data-graph-boundary={cap.side}
+          data-graph-boundary-lane={cap.lane}
           key={cap.key}
           className="pointer-events-none absolute"
           style={{

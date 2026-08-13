@@ -561,16 +561,16 @@ describe("GitHistoryPanel", () => {
       graphRoot,
       (element) => element.props["data-graph-boundary"] === "bottom",
     );
-    expect(graphRoot.props.className).toContain("overflow-hidden");
+    expect(graphRoot.props.className).toContain("overflow-visible");
     expect(graphSvg).not.toBeNull();
-    expect(graphSvg!.props.className).toContain("inset-0");
+    expect(graphSvg!.props.className).toContain("-top-px");
     expect(graphSvg!.props.style).toBeUndefined();
-    expect(graphSvg!.props.height).toBe(30);
-    expect(graphSvg!.props.viewBox).toBe("0 0 44 30");
+    expect(graphSvg!.props.height).toBe(32);
+    expect(graphSvg!.props.viewBox).toBe("0 -1 44 32");
     expect(topBoundary?.type).toBe("span");
-    expect(topBoundary?.props.style).toMatchObject({ top: 0, height: 3, width: 1 });
+    expect(topBoundary?.props.style).toMatchObject({ top: 0, height: 2, width: 2 });
     expect(bottomBoundary?.type).toBe("span");
-    expect(bottomBoundary?.props.style).toMatchObject({ bottom: 0, height: 3, width: 1 });
+    expect(bottomBoundary?.props.style).toMatchObject({ bottom: 0, height: 2, width: 2 });
   });
 
   it("joins diagonal parent edges to their destination lane before the row boundary", () => {
@@ -601,13 +601,13 @@ describe("GitHistoryPanel", () => {
         element.props["data-graph-boundary-lane"] === 1,
     );
 
-    expect(diagonalParent?.props.d).toBe("M 11.5 15 L 22.5 27 L 22.5 30");
+    expect(diagonalParent?.props.d).toBe("M 11.5 15 L 22.5 32");
     expect(destinationCap?.type).toBe("span");
     expect(destinationCap?.props.style).toMatchObject({
-      left: 22,
+      left: 21.5,
       bottom: 0,
-      height: 3,
-      width: 1,
+      height: 2,
+      width: 2,
     });
   });
 
@@ -637,7 +637,7 @@ describe("GitHistoryPanel", () => {
     );
 
     expect(missingParent?.props.strokeDasharray).toBe("3 2");
-    expect(missingParent?.props.d).toMatch(/^M .* 15 L .* 30$/);
+    expect(missingParent?.props.d).toMatch(/^M .* 15 L .* 32$/);
     expect(elided?.props.strokeDasharray).toBe("3 2");
   });
 
