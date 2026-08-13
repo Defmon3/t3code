@@ -44,7 +44,11 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     stageLabel,
     environmentIdentificationMode === "artwork",
   );
-  const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel);
+  const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel, {
+    version: APP_VERSION,
+    commitHash: APP_COMMIT_HASH,
+    buildTime: APP_BUILD_TIME,
+  });
   const pillLabel =
     resolvedPillLabel === "Custom" || environmentIdentificationMode === "pill"
       ? resolvedPillLabel

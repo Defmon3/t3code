@@ -553,23 +553,24 @@ describe("GitHistoryPanel", () => {
 
     const graphRoot = renderComponent(graph!);
     const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
-    expect(graphRoot.props.className).toContain("overflow-visible");
-    expect(graphSvg).not.toBeNull();
-    expect(graphSvg!.props.style).toEqual({ top: -2 });
-    expect(graphSvg!.props.height).toBe(34);
-    expect(graphSvg!.props.viewBox).toBe("0 0 44 34");
     const topBoundary = visitElements(
-      graphSvg,
+      graphRoot,
       (element) => element.props["data-graph-boundary"] === "top",
     );
     const bottomBoundary = visitElements(
-      graphSvg,
+      graphRoot,
       (element) => element.props["data-graph-boundary"] === "bottom",
     );
-    expect(topBoundary?.type).toBe("rect");
-    expect(topBoundary?.props).toMatchObject({ y: 2, height: 3, width: 1.1 });
-    expect(bottomBoundary?.type).toBe("rect");
-    expect(bottomBoundary?.props).toMatchObject({ y: 29, height: 3, width: 1.1 });
+    expect(graphRoot.props.className).toContain("overflow-hidden");
+    expect(graphSvg).not.toBeNull();
+    expect(graphSvg!.props.className).toContain("inset-0");
+    expect(graphSvg!.props.style).toBeUndefined();
+    expect(graphSvg!.props.height).toBe(30);
+    expect(graphSvg!.props.viewBox).toBe("0 0 44 30");
+    expect(topBoundary?.type).toBe("span");
+    expect(topBoundary?.props.style).toMatchObject({ top: 0, height: 3, width: 1 });
+    expect(bottomBoundary?.type).toBe("span");
+    expect(bottomBoundary?.props.style).toMatchObject({ bottom: 0, height: 3, width: 1 });
   });
 
   it("joins diagonal parent edges to their destination lane before the row boundary", () => {
@@ -600,9 +601,44 @@ describe("GitHistoryPanel", () => {
         element.props["data-graph-boundary-lane"] === 1,
     );
 
-    expect(diagonalParent?.props.d).toBe("M 11.5 17 L 22.5 29 L 22.5 34");
-    expect(destinationCap?.props).toMatchObject({ y: 29, height: 3, width: 1.1 });
-    expect(destinationCap?.props.x).toBeCloseTo(21.95);
+    expect(diagonalParent?.props.d).toBe("M 11.5 15 L 22.5 27 L 22.5 30");
+    expect(destinationCap?.type).toBe("span");
+    expect(destinationCap?.props.style).toMatchObject({
+      left: 22,
+      bottom: 0,
+      height: 3,
+      width: 1,
+    });
+  });
+
+  it("preserves dashed missing and elided edges in the contained row renderer", () => {
+    const missingParents = Array.from({ length: 13 }, (_, index) => `missing-${index}`);
+    const newest = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Many missing parents"),
+      parentHashes: missingParents,
+    };
+    historyState.pages.set(undefined, page([newest]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const graph = visitElements(
+      historyRow,
+      (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+    );
+    const graphRoot = renderComponent(graph!);
+    const missingParent = visitElements(
+      graphRoot,
+      (element) =>
+        element.props["data-edge-kind"] === "parent" && element.props["data-edge-to-lane"] === 0,
+    );
+    const elided = visitElements(
+      graphRoot,
+      (element) => element.props["data-edge-kind"] === "elided",
+    );
+
+    expect(missingParent?.props.strokeDasharray).toBe("3 2");
+    expect(missingParent?.props.d).toMatch(/^M .* 15 L .* 30$/);
+    expect(elided?.props.strokeDasharray).toBe("3 2");
   });
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {

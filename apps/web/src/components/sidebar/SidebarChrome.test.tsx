@@ -13,16 +13,28 @@ vi.mock("../../branding", () => ({
   APP_VERSION: "0.0.34-nightly.20260813.1000",
 }));
 vi.mock("../../hooks/useSettings", () => ({
-  useEnvironmentIdentificationMode: () => "pill",
+  useEnvironmentIdentificationMode: () => "artwork",
 }));
 vi.mock("../../state/environments", () => ({ useEnvironments: () => ({ environments: [] }) }));
 vi.mock("../SidebarStageBackdrop", () => ({
   formatBuildIdentityLabel: () => "Custom build",
-  resolveEnvironmentIdentificationPillLabel: () => "Custom",
+  resolveEnvironmentIdentificationPillLabel: (
+    _stageLabel: string,
+    buildIdentity: {
+      readonly version: string;
+      readonly commitHash: string | null;
+      readonly buildTime: string | null;
+    },
+  ) =>
+    buildIdentity.commitHash &&
+    buildIdentity.buildTime &&
+    /-nightly\.\d{8}\.\d+$/.test(buildIdentity.version)
+      ? "Custom"
+      : null,
   resolveSidebarStageBackdropVariant: () => null,
   resolveSidebarStageFocusRingOffsetClass: () => "",
   SidebarStageBackdrop: () => null,
-  useEnvironmentStageLabel: () => "Nightly",
+  useEnvironmentStageLabel: () => "Latest",
 }));
 vi.mock("../ui/sidebar", () => ({
   SidebarFooter: ({ children }: { readonly children: ReactNode }) => <footer>{children}</footer>,
@@ -49,7 +61,7 @@ vi.mock("./SidebarUpdatePill", () => ({
 import { SidebarChromeHeader } from "./SidebarChrome";
 
 describe("SidebarChromeHeader", () => {
-  it("keeps the custom build tooltip trigger in the keyboard tab order", () => {
+  it("renders a keyboard-focusable custom build pill when the server reports Latest", () => {
     const html = renderToStaticMarkup(<SidebarChromeHeader isElectron />);
 
     expect(html).toContain('data-environment-identification="pill"');
