@@ -522,11 +522,19 @@ describe("GitHistoryPanel", () => {
   });
 
   it("keeps row separators out of the graph column", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
-    historyState.pages.set(undefined, page([historyCommit]));
+    const oldest = commit("cccccccc33333333333333333333333333333333", "Add panel");
+    const middle = {
+      ...commit("bbbbbbbb22222222222222222222222222222222", "Connect panel"),
+      parentHashes: [oldest.hash],
+    };
+    const newest = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Use panel"),
+      parentHashes: [middle.hash],
+    };
+    historyState.pages.set(undefined, page([newest, middle, oldest]));
 
     const list = historyList(renderPanel());
-    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[1]! }));
     const graph = visitElements(
       historyRow,
       (element) => typeof element.type === "function" && element.type.name === "GraphCell",
@@ -547,9 +555,54 @@ describe("GitHistoryPanel", () => {
     const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
     expect(graphRoot.props.className).toContain("overflow-visible");
     expect(graphSvg).not.toBeNull();
-    expect(graphSvg!.props.className).toContain("-top-px");
-    expect(graphSvg!.props.height).toBe(32);
-    expect(graphSvg!.props.viewBox).toBe("0 -1 44 32");
+    expect(graphSvg!.props.style).toEqual({ top: -2 });
+    expect(graphSvg!.props.height).toBe(34);
+    expect(graphSvg!.props.viewBox).toBe("0 0 44 34");
+    const topBoundary = visitElements(
+      graphSvg,
+      (element) => element.props["data-graph-boundary"] === "top",
+    );
+    const bottomBoundary = visitElements(
+      graphSvg,
+      (element) => element.props["data-graph-boundary"] === "bottom",
+    );
+    expect(topBoundary?.type).toBe("rect");
+    expect(topBoundary?.props).toMatchObject({ y: 2, height: 3, width: 1.1 });
+    expect(bottomBoundary?.type).toBe("rect");
+    expect(bottomBoundary?.props).toMatchObject({ y: 29, height: 3, width: 1.1 });
+  });
+
+  it("joins diagonal parent edges to their destination lane before the row boundary", () => {
+    const main = commit("bbbbbbbb22222222222222222222222222222222", "Main parent");
+    const side = commit("cccccccc33333333333333333333333333333333", "Side parent");
+    const merge = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Merge parents"),
+      parentHashes: [main.hash, side.hash],
+    };
+    historyState.pages.set(undefined, page([merge, main, side]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const graph = visitElements(
+      historyRow,
+      (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+    );
+    const graphRoot = renderComponent(graph!);
+    const diagonalParent = visitElements(
+      graphRoot,
+      (element) =>
+        element.props["data-edge-kind"] === "parent" && element.props["data-edge-to-lane"] === 1,
+    );
+    const destinationCap = visitElements(
+      graphRoot,
+      (element) =>
+        element.props["data-graph-boundary"] === "bottom" &&
+        element.props["data-graph-boundary-lane"] === 1,
+    );
+
+    expect(diagonalParent?.props.d).toBe("M 11.5 17 L 22.5 29 L 22.5 34");
+    expect(destinationCap?.props).toMatchObject({ y: 29, height: 3, width: 1.1 });
+    expect(destinationCap?.props.x).toBeCloseTo(21.95);
   });
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {

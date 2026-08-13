@@ -22,6 +22,9 @@ export const GIT_HISTORY_ROW_HEIGHT = 30;
 const LANE_WIDTH = 11;
 const GRAPH_HORIZONTAL_PADDING = 6;
 const MAX_GRAPH_WIDTH = 104;
+const GRAPH_ROW_OVERLAP = 2;
+const GRAPH_BOUNDARY_CAP_HEIGHT = 3;
+const GRAPH_STROKE_WIDTH = 1.1;
 const GRAPH_COLORS = ["#4f9cff", "#b26cff", "#f59e0b", "#22c55e", "#ec4899", "#14b8a6"] as const;
 
 export function queryErrorMessage(cause: Cause.Cause<unknown>): string {
@@ -162,12 +165,28 @@ function GraphCell(props: {
   current: boolean;
 }) {
   const width = graphColumnWidth(props.laneCount);
-  const centerY = GIT_HISTORY_ROW_HEIGHT / 2;
+  const svgHeight = GIT_HISTORY_ROW_HEIGHT + GRAPH_ROW_OVERLAP * 2;
+  const centerY = GIT_HISTORY_ROW_HEIGHT / 2 + GRAPH_ROW_OVERLAP;
+  const incomingTurnY = (GIT_HISTORY_ROW_HEIGHT / 2) * 0.45 + GRAPH_ROW_OVERLAP;
+  const bottomCapY = GRAPH_ROW_OVERLAP + GIT_HISTORY_ROW_HEIGHT - GRAPH_BOUNDARY_CAP_HEIGHT;
   const laneWidth = Math.min(
     LANE_WIDTH,
     (width - GRAPH_HORIZONTAL_PADDING * 2) / Math.max(props.laneCount, 1),
   );
   const x = (lane: number) => lane * laneWidth + GRAPH_HORIZONTAL_PADDING + laneWidth / 2;
+  const edges = props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW);
+  const boundaryCap = (side: "top" | "bottom", lane: number, colorIndex: number, key: string) => (
+    <rect
+      data-graph-boundary={side}
+      data-graph-boundary-lane={lane}
+      key={key}
+      x={x(lane) - GRAPH_STROKE_WIDTH / 2}
+      y={side === "top" ? GRAPH_ROW_OVERLAP : bottomCapY}
+      width={GRAPH_STROKE_WIDTH}
+      height={GRAPH_BOUNDARY_CAP_HEIGHT}
+      fill={GRAPH_COLORS[colorIndex % GRAPH_COLORS.length]}
+    />
+  );
   return (
     <div
       aria-hidden="true"
@@ -176,15 +195,34 @@ function GraphCell(props: {
       style={{ width }}
     >
       <svg
-        className="absolute -top-px left-0 overflow-visible"
-        viewBox={`0 -1 ${width} ${GIT_HISTORY_ROW_HEIGHT + 2}`}
+        className="absolute left-0 overflow-visible"
+        style={{ top: -GRAPH_ROW_OVERLAP }}
+        viewBox={`0 0 ${width} ${svgHeight}`}
         width={width}
-        height={GIT_HISTORY_ROW_HEIGHT + 2}
+        height={svgHeight}
       >
+        {props.graph.hasIncoming
+          ? boundaryCap(
+              "top",
+              props.graph.lane,
+              props.graph.incomingColorIndex ?? props.graph.colorIndex,
+              "top:node",
+            )
+          : null}
+        {edges.map((edge, index) =>
+          edge.kind === "continuation" || edge.kind === "incoming"
+            ? boundaryCap("top", edge.fromLane, edge.colorIndex, `top:${index}`)
+            : null,
+        )}
+        {edges.map((edge, index) =>
+          (edge.kind === "continuation" || edge.kind === "parent") && !edge.isMissingParent
+            ? boundaryCap("bottom", edge.toLane, edge.colorIndex, `bottom:${index}`)
+            : null,
+        )}
         {props.graph.hasIncoming ? (
           <line
             x1={x(props.graph.lane)}
-            y1="-2"
+            y1="0"
             x2={x(props.graph.lane)}
             y2={centerY}
             stroke={
@@ -192,10 +230,10 @@ function GraphCell(props: {
                 (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
               ]
             }
-            strokeWidth="1.1"
+            strokeWidth={GRAPH_STROKE_WIDTH}
           />
         ) : null}
-        {props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW).map((edge, index) => {
+        {edges.map((edge, index) => {
           const fromX =
             edge.kind === "parent" || edge.kind === "elided"
               ? x(props.graph.lane)
@@ -204,20 +242,24 @@ function GraphCell(props: {
           const toX = x(edge.toLane);
           const path =
             edge.kind === "continuation"
-              ? `M ${fromX} -2 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
+              ? `M ${fromX} 0 L ${toX} ${svgHeight}`
               : edge.kind === "incoming"
-                ? `M ${fromX} -2 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
+                ? `M ${fromX} 0 L ${fromX} ${incomingTurnY} L ${toX} ${centerY}`
                 : edge.kind === "elided"
-                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
-                  : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`;
+                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${svgHeight}`
+                  : edge.isMissingParent
+                    ? `M ${fromX} ${fromY} L ${toX} ${svgHeight}`
+                    : `M ${fromX} ${fromY} L ${toX} ${bottomCapY} L ${toX} ${svgHeight}`;
           return (
             <path
               data-edge-kind={edge.kind}
+              data-edge-from-lane={edge.fromLane}
+              data-edge-to-lane={edge.toLane}
               key={`${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`}
               d={path}
               fill="none"
               stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
-              strokeWidth="1.1"
+              strokeWidth={GRAPH_STROKE_WIDTH}
               strokeLinecap="round"
               strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
             />
