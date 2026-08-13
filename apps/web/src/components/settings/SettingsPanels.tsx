@@ -126,6 +126,7 @@ import { ThemeLibrary } from "./ThemeSettings";
 import {
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
+  completedPullRequestAutoSettleRestorePatch,
   durationToSeconds,
   formatDiagnosticsDescription,
   getChangedTypographySettingLabels,
@@ -661,8 +662,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
-      sidebarAutoSettleCompletedChangeRequests:
-        DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
+      ...completedPullRequestAutoSettleRestorePatch(settings),
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       showSlowRequestWarnings: DEFAULT_UNIFIED_SETTINGS.showSlowRequestWarnings,
