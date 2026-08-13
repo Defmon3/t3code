@@ -1659,6 +1659,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       : ({
           configPath: undefined,
           hasPreToolUseHooks: false,
+          hasPreToolUseHooksNow: Effect.succeed(false),
           evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
         } satisfies T3HookPlan);
     hookPlans.set(cwd, prepared);

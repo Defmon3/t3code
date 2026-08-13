@@ -35,6 +35,15 @@ const HooksConfig = Schema.Struct({
 const HooksConfigJson = fromLenientJson(HooksConfig);
 const decodeHooksConfigJson = Schema.decodeUnknownEffect(HooksConfigJson);
 
+const HooksConfigEventKeys = Schema.Struct({
+  hooks: Schema.Record(Schema.String, Schema.Unknown),
+});
+const decodeHooksConfigEventKeysJson = Schema.decodeUnknownEffect(
+  fromLenientJson(HooksConfigEventKeys),
+);
+
+const SUPPORTED_HOOK_EVENTS = ["PreToolUse"] as const;
+
 const HookSpecificOutput = Schema.Struct({
   hookEventName: Schema.optional(Schema.String),
   permissionDecision: Schema.optional(Schema.Literals(["allow", "ask", "deny"])),
@@ -87,6 +96,7 @@ export interface T3PreToolUseInput {
 export interface T3HookPlan {
   readonly configPath: string | undefined;
   readonly hasPreToolUseHooks: boolean;
+  readonly hasPreToolUseHooksNow: Effect.Effect<boolean>;
   readonly evaluatePreToolUse: (
     input: Omit<T3PreToolUseInput, "cwd">,
   ) => Effect.Effect<T3HookDecision, T3HookCommandError>;
@@ -139,6 +149,14 @@ function normalizedDecision(output: typeof HookCommandOutput.Type): T3HookDecisi
   };
 }
 
+function logConfigFailure(error: T3HookConfigError) {
+  return Effect.logWarning("T3 project hooks could not be loaded", {
+    path: error.configPath,
+    operation: error.operation,
+    cause: error.cause,
+  });
+}
+
 function expandProjectDirectory(command: string, projectDirectory: string): string {
   return command
     .replaceAll("${T3_PROJECT_DIR}", projectDirectory)
@@ -182,6 +200,7 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
   const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner;
   const platform = yield* HostProcessPlatform;
+  const warnedUnsupportedEvents = new Set<string>();
 
   const findConfigPath = Effect.fn("T3HookRunner.findConfigPath")(function* (cwd: string) {
     let current = cwd;
@@ -242,6 +261,28 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
         });
       }
     }
+
+    const declaredEvents = yield* decodeHooksConfigEventKeysJson(raw).pipe(
+      Effect.map((decoded) => Object.keys(decoded.hooks)),
+      Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+    );
+    const unsupportedEvents = declaredEvents
+      .filter((event) => !SUPPORTED_HOOK_EVENTS.some((supported) => supported === event))
+      .sort();
+    if (unsupportedEvents.length > 0) {
+      const warningKey = [configPath, ...unsupportedEvents]
+        .map((part) => `${part.length}:${part}`)
+        .join("");
+      if (!warnedUnsupportedEvents.has(warningKey)) {
+        warnedUnsupportedEvents.add(warningKey);
+        yield* Effect.logWarning("ignoring unsupported T3 hook events", {
+          path: configPath,
+          unsupportedEvents,
+          supportedEvents: SUPPORTED_HOOK_EVENTS,
+        });
+      }
+    }
+
     return config;
   });
 
@@ -342,31 +383,61 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
     return { decision: "allow" } satisfies T3HookDecision;
   });
 
+  const resolvePlanState = Effect.fn("T3HookRunner.resolvePlanState")(function* (cwd: string) {
+    const configPathOption = yield* findConfigPath(cwd);
+    if (Option.isNone(configPathOption)) {
+      return {
+        configPath: undefined,
+        entries: [] as ReadonlyArray<HookMatcherConfig>,
+        projectDirectory: undefined,
+      };
+    }
+
+    const configPath = configPathOption.value;
+    const config = yield* readConfig(configPath);
+    return {
+      configPath,
+      entries: config.hooks.PreToolUse ?? ([] as ReadonlyArray<HookMatcherConfig>),
+      projectDirectory: path.dirname(path.dirname(configPath)),
+    };
+  });
+
   const prepare: T3HookRunner["Service"]["prepare"] = Effect.fn("T3HookRunner.prepare")(
     function* (cwd) {
-      const configPathOption = yield* findConfigPath(cwd);
-      if (Option.isNone(configPathOption)) {
-        return {
-          configPath: undefined,
-          hasPreToolUseHooks: false,
-          evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
-        } satisfies T3HookPlan;
-      }
-
-      const configPath = configPathOption.value;
-      const config = yield* readConfig(configPath);
-      const entries = config.hooks.PreToolUse ?? [];
-      const projectDirectory = path.dirname(path.dirname(configPath));
+      const snapshot = yield* resolvePlanState(cwd);
+      const snapshotHasHooks = snapshot.entries.length > 0;
       return {
-        configPath,
-        hasPreToolUseHooks: entries.length > 0,
+        configPath: snapshot.configPath,
+        hasPreToolUseHooks: snapshotHasHooks,
+        hasPreToolUseHooksNow: resolvePlanState(cwd).pipe(
+          Effect.map((state) => state.entries.length > 0),
+          Effect.catchTag("T3HookConfigError", (error) =>
+            logConfigFailure(error).pipe(Effect.as(true)),
+          ),
+        ),
         evaluatePreToolUse: (input) =>
-          evaluateEntries({
-            entries,
-            configPath,
-            projectDirectory,
-            payload: { ...input, cwd },
-          }),
+          Effect.gen(function* () {
+            const state = yield* resolvePlanState(cwd);
+            if (state.configPath === undefined) {
+              return { decision: "allow" } satisfies T3HookDecision;
+            }
+            return yield* evaluateEntries({
+              entries: state.entries,
+              configPath: state.configPath,
+              projectDirectory: state.projectDirectory,
+              payload: { ...input, cwd },
+            });
+          }).pipe(
+            Effect.catchTag("T3HookConfigError", (error) =>
+              logConfigFailure(error).pipe(
+                Effect.as({
+                  decision: "ask",
+                  title: "T3 hook config failed",
+                  reason: `T3 project hooks could not be loaded from ${error.configPath}.`,
+                } satisfies T3HookDecision),
+              ),
+            ),
+          ),
       } satisfies T3HookPlan;
     },
   );

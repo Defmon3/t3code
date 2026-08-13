@@ -76,6 +76,19 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params.sandboxPolicy, { type: "dangerFullAccess" });
   });
 
+  it("stops requesting callbacks once a full-access turn has no T3 hooks", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        interceptApprovals: false,
+      }),
+    );
+
+    NodeAssert.equal(params.approvalPolicy, "never");
+    NodeAssert.deepStrictEqual(params.sandboxPolicy, { type: "dangerFullAccess" });
+  });
+
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";
     const error = Effect.runSync(
