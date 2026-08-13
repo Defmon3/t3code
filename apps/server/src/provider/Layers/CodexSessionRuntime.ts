@@ -921,7 +921,7 @@ export const makeCodexSessionRuntime = (
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
     const allowHookApprovalsForSessionRef = yield* Ref.make(false);
-    const interceptApprovals = options.hookPlan?.hasPreToolUseHooks === true;
+    const interceptApprovalsAtStart = options.hookPlan?.hasPreToolUseHooks === true;
 
     const evaluatePreToolUseHook = Effect.fn("CodexSessionRuntime.evaluatePreToolUseHook")(
       function* (toolName: string, toolInput: unknown) {
@@ -1835,7 +1835,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
-        interceptApprovals,
+        interceptApprovals: interceptApprovalsAtStart,
       });
 
       const providerThreadId = opened.thread.id;
@@ -1901,6 +1901,9 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
+          const interceptApprovals = options.hookPlan
+            ? yield* options.hookPlan.hasPreToolUseHooksNow
+            : false;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,

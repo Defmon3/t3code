@@ -95,3 +95,19 @@ silently ignored.
 Hook approvals appear only in the thread that triggered them. **Always allow this session** skips
 later hook prompts for that provider session. Other permission modes keep their provider's built-in
 protections and do not run T3 project hooks.
+
+**Live changes.** T3 Code re-reads `.t3code/hooks.json` before every hook check, so edits do not
+need a restart. In a Claude thread, creating, editing, or deleting the file affects the very next
+tool call. In a Codex thread, edits to hook commands and matchers apply to the next tool approval;
+adding hooks to a project that had none (or removing the last hook) changes how Codex routes
+approvals starting with the next message you send in that thread.
+
+**Supported events.** Only `PreToolUse` runs. Other event names copied from a Claude hooks file
+(`PostToolUse`, `Stop`, and so on) never run and are reported once as a warning in the T3 Code
+server log, naming the file and the ignored events.
+
+**Unreadable config.** If the file becomes unreadable or invalid while a thread is running, the
+affected tool call turns into an approval prompt rather than being allowed silently, and the
+problem is reported in the T3 Code server log. In a Codex thread that started without hooks, those
+prompts begin with the next message you send, like any other change to whether the project has
+hooks.
