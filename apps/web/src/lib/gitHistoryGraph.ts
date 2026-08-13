@@ -23,7 +23,6 @@ export interface GitHistoryGraphRow {
   hash: string;
   lane: number;
   colorIndex: number;
-  incomingColorIndex?: number;
   hasIncoming: boolean;
   edges: ReadonlyArray<GitHistoryGraphEdge>;
 }
@@ -54,14 +53,6 @@ function findLaneIndices(lanes: ReadonlyArray<LaneSlot>, hash: string): number[]
 
 function uniqueHashes(hashes: ReadonlyArray<string>): string[] {
   return Array.from(new Set(hashes));
-}
-
-function hasBranchDecoration(commit: GitHistoryGraphCommit): boolean {
-  return (
-    commit.refs?.some(
-      (ref) => ref !== "HEAD" && !ref.startsWith("tag: ") && !ref.includes("HEAD ->"),
-    ) === true
-  );
 }
 
 function nextColorIndex(lanes: ReadonlyArray<LaneSlot>): number {
@@ -147,16 +138,9 @@ export function layoutGitHistoryGraph(
             : ELISION_LANE;
     const isElidedNode = nodeLane === ELISION_LANE && matchingLanes.length === 0;
     const existingNodeLane = lanes[nodeLane];
-    const startsDecoratedSegment =
-      commit.hash !== currentHeadHash &&
-      existingNodeLane?.started === true &&
-      hasBranchDecoration(commit);
-    const nodeColorIndex = startsDecoratedSegment
-      ? nextColorIndex(lanes)
-      : isPrimary
-        ? (existingNodeLane?.colorIndex ?? 0)
-        : (existingNodeLane?.colorIndex ?? nextColorIndex(lanes));
-    const incomingColorIndex = startsDecoratedSegment ? existingNodeLane?.colorIndex : undefined;
+    const nodeColorIndex = isPrimary
+      ? (existingNodeLane?.colorIndex ?? 0)
+      : (existingNodeLane?.colorIndex ?? nextColorIndex(lanes));
     const beforeLanes = [...lanes];
     while (!isElidedNode && beforeLanes.length <= nodeLane) beforeLanes.push(null);
     if (!isElidedNode && (beforeLanes[nodeLane] === null || beforeLanes[nodeLane] === undefined)) {
@@ -232,7 +216,6 @@ export function layoutGitHistoryGraph(
       hash: commit.hash,
       lane: nodeLane,
       colorIndex: nodeColorIndex,
-      ...(incomingColorIndex === undefined ? {} : { incomingColorIndex }),
       hasIncoming: activeMatchingLanes.includes(nodeLane),
       edges: edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW),
     });

@@ -55,11 +55,19 @@ const historyState = vi.hoisted(() => ({
   status: { aheadCount: 0, behindCount: 0 },
 }));
 
+const fontState = vi.hoisted(() => ({ interfaceSize: 16 }));
+
 vi.mock("../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: (options?: { readonly onError?: (error: Error) => void }) => ({
     copyToClipboard: () => options?.onError?.(new Error("Clipboard permission was denied.")),
     isCopied: false,
   }),
+}));
+
+vi.mock("../hooks/useSettings", () => ({
+  useClientSettings: <Value,>(
+    selector: (settings: { readonly fontSizeInterface: number }) => Value,
+  ) => selector({ fontSizeInterface: fontState.interfaceSize }),
 }));
 
 vi.mock("./ui/toast", () => ({
@@ -137,6 +145,7 @@ vi.mock("../rpc/atomRegistry", () => ({
 }));
 
 vi.mock("../state/queries", () => ({
+  useDebouncedValue: <Value,>(value: Value) => value,
   usePaginatedHistoryRefs: (_target: unknown, options?: { readonly namespace?: string }) => {
     const refs = options?.namespace === "tag" ? historyState.tags : historyState.refs;
     return {
@@ -321,7 +330,8 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
   const list = visitElements(
     panel,
     (element) =>
-      element.props.estimatedItemSize === 30 && typeof element.props.keyExtractor === "function",
+      typeof element.props.estimatedItemSize === "number" &&
+      typeof element.props.keyExtractor === "function",
   );
   expect(list).not.toBeNull();
   return list as ReactElement<{
@@ -335,6 +345,7 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
         readonly graph: { readonly edges: ReadonlyArray<unknown> };
       };
     }) => ReactElement<Record<string, unknown>>;
+    readonly estimatedItemSize: number;
     readonly onEndReached?: () => void;
   }>;
 }
@@ -390,6 +401,7 @@ function componentElement(
 describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
+    fontState.interfaceSize = 16;
     effectQueue.cursor = 0;
     effectQueue.dependencies.length = 0;
     effectQueue.effects.length = 0;
@@ -546,14 +558,35 @@ describe("GitHistoryPanel", () => {
 
     const graphRoot = renderComponent(graph!);
     const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
-    expect(graphRoot.props.className).toContain("overflow-visible");
+    expect(graphRoot.props.className).not.toContain("overflow-visible");
     expect(graphSvg).not.toBeNull();
-    expect(graphSvg!.props.className).toContain("-top-px");
-    expect(graphSvg!.props.height).toBe(32);
-    expect(graphSvg!.props.viewBox).toBe("0 -1 44 32");
+    expect(graphSvg!.props.className).toBe("absolute inset-0");
+    expect(graphSvg!.props.height).toBe(30);
+    expect(graphSvg!.props.viewBox).toBe("0 0 44 30");
   });
 
-  it("joins solid graph lanes inside adjacent paint-contained rows", () => {
+  it("scales the list and graph geometry with the interface font size", () => {
+    fontState.interfaceSize = 20;
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const graph = visitElements(
+      historyRow,
+      (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+    );
+    expect(graph).not.toBeNull();
+    const graphRoot = renderComponent(graph!);
+    const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
+
+    expect(list.props.estimatedItemSize).toBe(37.5);
+    expect(historyRow.props.style).toMatchObject({ height: 37.5 });
+    expect(graphSvg!.props.height).toBe(37.5);
+    expect(graphSvg!.props.viewBox).toBe("0 0 44 37.5");
+  });
+
+  it("keeps graph paths within each paint-contained row while joining adjacent lanes", () => {
     const parent = commit("bbbbbbbb22222222222222222222222222222222", "Parent");
     const child = {
       ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
@@ -571,28 +604,29 @@ describe("GitHistoryPanel", () => {
       expect(graph).not.toBeNull();
       return renderComponent(graph!);
     });
-    const childBottom = visitElements(
+    const childSvg = visitElements(graphRoots[0], (element) => element.type === "svg");
+    const parentSvg = visitElements(graphRoots[1], (element) => element.type === "svg");
+    const childParentEdge = visitElements(
       graphRoots[0],
-      (element) => element.props["data-graph-boundary"] === "bottom",
+      (element) => element.props["data-edge-kind"] === "parent",
     );
-    const parentTop = visitElements(
+    const parentIncoming = visitElements(
       graphRoots[1],
-      (element) => element.props["data-graph-boundary"] === "top",
+      (element) => element.type === "line" && element.props.y1 === "0",
     );
 
-    expect(childBottom).not.toBeNull();
-    expect(parentTop).not.toBeNull();
-    const childBottomStyle = childBottom!.props.style as Record<string, unknown>;
-    const parentTopStyle = parentTop!.props.style as Record<string, unknown>;
-    expect(childBottom!.type).toBe("span");
-    expect(parentTop!.type).toBe("span");
-    expect(childBottomStyle).toMatchObject({ bottom: 0, height: 2, width: 2 });
-    expect(parentTopStyle).toMatchObject({ top: 0, height: 2, width: 2 });
-    expect(childBottomStyle.left).toBe(parentTopStyle.left);
-    expect(childBottomStyle.backgroundColor).toBe(parentTopStyle.backgroundColor);
+    expect(childSvg).not.toBeNull();
+    expect(parentSvg).not.toBeNull();
+    expect(childSvg!.props.className).toBe("absolute inset-0");
+    expect(childSvg!.props.viewBox).toBe("0 0 44 30");
+    expect(childSvg!.props.height).toBe(30);
+    expect(childParentEdge!.props.d).toContain("L 11.5 30");
+    expect(childParentEdge!.props.strokeLinecap).toBe("butt");
+    expect(parentIncoming).not.toBeNull();
+    expect(parentIncoming!.props.strokeLinecap).toBe("butt");
   });
 
-  it("leaves missing-parent graph boundaries dashed", () => {
+  it("keeps missing-parent graph paths dashed without boundary overlays", () => {
     const child = {
       ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
       parentHashes: ["bbbbbbbb22222222222222222222222222222222"],
@@ -612,13 +646,9 @@ describe("GitHistoryPanel", () => {
       (element) =>
         element.props["data-edge-kind"] === "parent" && element.props.strokeDasharray === "3 2",
     );
-    const bottomCap = visitElements(
-      graphRoot,
-      (element) => element.props["data-graph-boundary"] === "bottom",
-    );
 
     expect(missingParent).not.toBeNull();
-    expect(bottomCap).toBeNull();
+    expect(missingParent!.props.strokeLinecap).toBe("butt");
   });
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {

@@ -18,11 +18,12 @@ import { cn } from "../../lib/utils";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
-export const GIT_HISTORY_ROW_HEIGHT = 30;
+const GIT_HISTORY_ROW_HEIGHT_REM = 1.875;
+const DEFAULT_INTERFACE_FONT_SIZE = 16;
+export const GIT_HISTORY_ROW_HEIGHT = GIT_HISTORY_ROW_HEIGHT_REM * DEFAULT_INTERFACE_FONT_SIZE;
 const LANE_WIDTH = 11;
 const GRAPH_HORIZONTAL_PADDING = 6;
 const MAX_GRAPH_WIDTH = 104;
-const GRAPH_BOUNDARY_CAP_SIZE = 2;
 const GRAPH_COLORS = ["#4f9cff", "#b26cff", "#f59e0b", "#22c55e", "#ec4899", "#14b8a6"] as const;
 
 export function queryErrorMessage(cause: Cause.Cause<unknown>): string {
@@ -110,6 +111,10 @@ export function graphColumnWidth(laneCount: number): number {
   );
 }
 
+export function gitHistoryRowHeight(interfaceFontSize: number): number {
+  return GIT_HISTORY_ROW_HEIGHT_REM * interfaceFontSize;
+}
+
 export function currentHeadHash(commits: ReadonlyArray<GitHistoryCommit>): string | undefined {
   return (
     commits.find((commit) =>
@@ -159,70 +164,40 @@ function CommitSubject({ subject, issueUrlPrefix }: { subject: string; issueUrlP
 function GraphCell(props: {
   graph: GitHistoryGraphRow;
   laneCount: number;
+  rowHeight: number;
   selected: boolean;
   current: boolean;
 }) {
   const width = graphColumnWidth(props.laneCount);
-  const centerY = GIT_HISTORY_ROW_HEIGHT / 2;
+  const centerY = props.rowHeight / 2;
   const laneWidth = Math.min(
     LANE_WIDTH,
     (width - GRAPH_HORIZONTAL_PADDING * 2) / Math.max(props.laneCount, 1),
   );
   const x = (lane: number) => lane * laneWidth + GRAPH_HORIZONTAL_PADDING + laneWidth / 2;
   const edges = props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW);
-  const boundaryCaps = [
-    ...(props.graph.hasIncoming
-      ? [
-          {
-            color:
-              GRAPH_COLORS[
-                (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
-              ],
-            key: `incoming:${props.graph.hash}`,
-            side: "top" as const,
-            x: x(props.graph.lane),
-          },
-        ]
-      : []),
-    ...edges.flatMap((edge, index) => {
-      if (edge.isMissingParent || edge.kind === "elided") return [];
-      const color = GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length];
-      const key = `${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`;
-      const caps = [];
-      if (edge.kind === "continuation" || edge.kind === "incoming") {
-        caps.push({ color, key: `${key}:top`, side: "top" as const, x: x(edge.fromLane) });
-      }
-      if (edge.kind === "continuation" || edge.kind === "parent") {
-        caps.push({ color, key: `${key}:bottom`, side: "bottom" as const, x: x(edge.toLane) });
-      }
-      return caps;
-    }),
-  ];
   return (
     <div
       aria-hidden="true"
       data-git-graph={props.graph.hash}
-      className="relative h-full shrink-0 overflow-visible"
+      className="relative h-full shrink-0"
       style={{ width }}
     >
       <svg
-        className="absolute -top-px left-0 overflow-visible"
-        viewBox={`0 -1 ${width} ${GIT_HISTORY_ROW_HEIGHT + 2}`}
+        className="absolute inset-0"
+        viewBox={`0 0 ${width} ${props.rowHeight}`}
         width={width}
-        height={GIT_HISTORY_ROW_HEIGHT + 2}
+        height={props.rowHeight}
       >
         {props.graph.hasIncoming ? (
           <line
             x1={x(props.graph.lane)}
-            y1="-2"
+            y1="0"
             x2={x(props.graph.lane)}
             y2={centerY}
-            stroke={
-              GRAPH_COLORS[
-                (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
-              ]
-            }
+            stroke={GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]}
             strokeWidth="1.1"
+            strokeLinecap="butt"
           />
         ) : null}
         {edges.map((edge, index) => {
@@ -234,12 +209,12 @@ function GraphCell(props: {
           const toX = x(edge.toLane);
           const path =
             edge.kind === "continuation"
-              ? `M ${fromX} -2 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
+              ? `M ${fromX} 0 L ${toX} ${props.rowHeight}`
               : edge.kind === "incoming"
-                ? `M ${fromX} -2 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
+                ? `M ${fromX} 0 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
                 : edge.kind === "elided"
-                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
-                  : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`;
+                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${props.rowHeight}`
+                  : `M ${fromX} ${fromY} L ${toX} ${props.rowHeight}`;
           return (
             <path
               data-edge-kind={edge.kind}
@@ -248,7 +223,7 @@ function GraphCell(props: {
               fill="none"
               stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
               strokeWidth="1.1"
-              strokeLinecap="round"
+              strokeLinecap="butt"
               strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
             />
           );
@@ -271,20 +246,6 @@ function GraphCell(props: {
           className="transition-[r]"
         />
       </svg>
-      {boundaryCaps.map((cap) => (
-        <span
-          data-graph-boundary={cap.side}
-          key={cap.key}
-          className="pointer-events-none absolute"
-          style={{
-            backgroundColor: cap.color,
-            height: GRAPH_BOUNDARY_CAP_SIZE,
-            left: cap.x - GRAPH_BOUNDARY_CAP_SIZE / 2,
-            width: GRAPH_BOUNDARY_CAP_SIZE,
-            ...(cap.side === "top" ? { top: 0 } : { bottom: 0 }),
-          }}
-        />
-      ))}
     </div>
   );
 }
@@ -292,12 +253,14 @@ function GraphCell(props: {
 export function CommitRow(props: {
   row: GitHistoryRow;
   laneCount: number;
+  rowHeight?: number;
   refKinds: ReadonlyMap<string, CommitRefKind>;
   issueUrlPrefix?: string;
   selected: boolean;
   onSelect: (hash: string) => void;
 }) {
   const { commit } = props.row;
+  const rowHeight = props.rowHeight ?? GIT_HISTORY_ROW_HEIGHT;
   const { copyToClipboard, isCopied } = useCopyToClipboard({
     target: "commit hash",
     onError: reportCommitHashCopyFailure,
@@ -307,9 +270,10 @@ export function CommitRow(props: {
   return (
     <div
       className={cn(
-        "group relative flex h-[1.875rem] w-full min-w-0 items-stretch text-left transition-colors hover:bg-accent/45",
+        "group relative flex w-full min-w-0 items-stretch text-left transition-colors hover:bg-accent/45",
         props.selected && "bg-accent/70",
       )}
+      style={{ height: rowHeight }}
     >
       <button
         type="button"
@@ -323,6 +287,7 @@ export function CommitRow(props: {
         <GraphCell
           graph={props.row.graph}
           laneCount={props.laneCount}
+          rowHeight={rowHeight}
           selected={props.selected}
           current={commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))}
         />
