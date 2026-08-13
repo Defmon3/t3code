@@ -3,9 +3,11 @@ import * as NodeFSP from "node:fs/promises";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
@@ -86,6 +88,25 @@ it.effect("skips Git for workspace paths that no longer exist", () =>
     const missing = `${process.cwd()}/.t3-missing-repository-identity-4de6738a`;
 
     expect(yield* resolver.resolve(missing)).toBeNull();
+  }),
+);
+
+it.effect("returns an unknown identity when repository discovery exceeds its deadline", () =>
+  Effect.gen(function* () {
+    const discoveryStarted = yield* Deferred.make<void>();
+    const processRunner = ProcessRunner.ProcessRunner.of({
+      run: () => Deferred.succeed(discoveryStarted, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    const resolver = yield* RepositoryIdentityResolver.make({
+      cacheCapacity: 16,
+      discoveryTimeout: Duration.millis(50),
+    }).pipe(Effect.provideService(ProcessRunner.ProcessRunner, processRunner));
+
+    const identityFiber = yield* resolver.resolve(process.cwd()).pipe(Effect.forkScoped);
+    yield* Deferred.await(discoveryStarted);
+    yield* TestClock.adjust(Duration.millis(50));
+
+    expect(yield* Fiber.join(identityFiber)).toBeNull();
   }),
 );
 

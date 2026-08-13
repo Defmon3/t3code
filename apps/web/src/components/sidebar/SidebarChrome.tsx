@@ -83,6 +83,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
                 className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
                 data-environment-identification="pill"
                 size="sm"
+                tabIndex={0}
                 variant="secondary"
               >
                 {pillLabel}

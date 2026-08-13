@@ -19,12 +19,14 @@ import * as ProcessRunner from "../processRunner.ts";
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
 const DEFAULT_REPOSITORY_IDENTITY_CONCURRENCY = 8;
+const DEFAULT_REPOSITORY_IDENTITY_DISCOVERY_TIMEOUT = "3 seconds";
 const DEFAULT_REPOSITORY_IDENTITY_PROCESS_TIMEOUT = "2 seconds";
 const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(1);
 const DEFAULT_NEGATIVE_CACHE_TTL = Duration.minutes(1);
 
 export interface RepositoryIdentityResolverOptions {
   readonly cacheCapacity?: number;
+  readonly discoveryTimeout?: Duration.Input;
   readonly positiveCacheTtl?: Duration.Input;
   readonly negativeCacheTtl?: Duration.Input;
 }
@@ -208,13 +210,22 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
 
   const repositoryIdentityByCwdCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
     (cwd) =>
-      resolutionSemaphore.withPermits(1)(
-        Effect.promise(() => findRepositoryRoot(cwd)).pipe(
-          Effect.flatMap((rootPath) =>
-            rootPath === null ? Effect.succeed(null) : Cache.get(repositoryIdentityCache, rootPath),
+      resolutionSemaphore
+        .withPermits(1)(
+          Effect.promise(() => findRepositoryRoot(cwd)).pipe(
+            Effect.flatMap((rootPath) =>
+              rootPath === null
+                ? Effect.succeed(null)
+                : Cache.get(repositoryIdentityCache, rootPath),
+            ),
           ),
+        )
+        .pipe(
+          Effect.timeoutOrElse({
+            duration: options.discoveryTimeout ?? DEFAULT_REPOSITORY_IDENTITY_DISCOVERY_TIMEOUT,
+            orElse: () => Effect.succeed(null),
+          }),
         ),
-      ),
     {
       capacity: options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY,
       timeToLive: Exit.match({
