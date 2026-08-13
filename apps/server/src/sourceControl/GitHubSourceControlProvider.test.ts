@@ -125,6 +125,8 @@ it.effect("uses gh json listing for non-open change request state queries", () =
                 baseRefName: "main",
                 headRefName: "feature/merged",
                 state: "merged",
+                mergedAt: "2026-01-02T00:00:00.000Z",
+                closedAt: "2026-01-03T00:00:00.000Z",
                 updatedAt: "2026-01-02T00:00:00.000Z",
               },
             ]),
@@ -154,6 +156,7 @@ it.effect("uses gh json listing for non-open change request state queries", () =
     ]);
     assert.strictEqual(changeRequests[0]?.provider, "github");
     assert.strictEqual(changeRequests[0]?.state, "merged");
+    assert.strictEqual(changeRequests[0]?.completedAt, "2026-01-02T00:00:00.000Z");
     assert.deepStrictEqual(
       changeRequests[0]?.updatedAt,
       Option.some(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")),

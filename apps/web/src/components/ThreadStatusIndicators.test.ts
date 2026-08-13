@@ -35,6 +35,7 @@ describe("resolveThreadPr", () => {
     expect(
       resolveThreadPr({
         threadBranch: "feature/other",
+        threadCreatedAt: "2026-08-01T12:00:00.000Z",
         gitStatus: status(),
       }),
     ).toBeNull();
@@ -44,6 +45,7 @@ describe("resolveThreadPr", () => {
     expect(
       resolveThreadPr({
         threadBranch: "stack/base",
+        threadCreatedAt: "2026-08-01T12:00:00.000Z",
         gitStatus: status(),
       }),
     ).toBeNull();
@@ -53,6 +55,7 @@ describe("resolveThreadPr", () => {
     expect(
       resolveThreadPr({
         threadBranch: null,
+        threadCreatedAt: "2026-08-01T12:00:00.000Z",
         gitStatus: status(),
       }),
     ).toBeNull();
@@ -64,6 +67,7 @@ describe("resolveThreadPr", () => {
     expect(
       resolveThreadPr({
         threadBranch: "feature/current",
+        threadCreatedAt: "2026-08-01T12:00:00.000Z",
         gitStatus,
       }),
     ).toBe(gitStatus.pr);

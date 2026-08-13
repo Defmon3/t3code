@@ -606,6 +606,7 @@ export function BranchToolbarBranchSelector({
       activeThreadBranch,
       resolvedActiveBranch,
     }),
+    threadCreatedAt: serverThread?.createdAt ?? draftThread?.createdAt ?? null,
     gitStatus: branchStatusQuery.data ?? null,
   });
   const branchPrStatus = prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);

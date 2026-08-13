@@ -30,7 +30,6 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: Option.none(),
-    ...(summary.completedAt !== undefined ? { completedAt: summary.completedAt } : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
