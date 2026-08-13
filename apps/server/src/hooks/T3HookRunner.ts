@@ -409,7 +409,9 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
         hasPreToolUseHooks: snapshotHasHooks,
         hasPreToolUseHooksNow: resolvePlanState(cwd).pipe(
           Effect.map((state) => state.entries.length > 0),
-          Effect.catch((error) => logConfigFailure(error).pipe(Effect.as(true))),
+          Effect.catchTag("T3HookConfigError", (error) =>
+            logConfigFailure(error).pipe(Effect.as(true)),
+          ),
         ),
         evaluatePreToolUse: (input) =>
           Effect.gen(function* () {
