@@ -317,6 +317,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveWorktreeBranchNameValidation,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -4121,12 +4122,12 @@ function ChatViewContent(props: ChatViewProps) {
   const draftWorktreeBranchName = isLocalDraftThread
     ? normalizeWorktreeBranchName(draftThread?.worktreeBranchName ?? "")
     : null;
-  // Only a name the toolbar input is currently showing (and has checked for
-  // conflicts) can name the worktree branch; otherwise it stays generated.
+  const worktreeBranchNameValidation = resolveWorktreeBranchNameValidation(
+    draftWorktreeBranchName,
+    worktreeBranchNameStatus,
+  );
   const customWorktreeBranchName =
-    draftWorktreeBranchName !== null && worktreeBranchNameStatus?.name === draftWorktreeBranchName
-      ? draftWorktreeBranchName
-      : null;
+    worktreeBranchNameValidation.state === "available" ? worktreeBranchNameValidation.name : null;
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
@@ -5130,24 +5131,19 @@ function ChatViewContent(props: ChatViewProps) {
     }
     // A typed name is never silently dropped: sending waits for its conflict
     // lookup to settle instead of trusting the last reported answer.
-    if (shouldCreateWorktree && draftWorktreeBranchName !== null && worktreeBranchNameStatus) {
-      if (
-        worktreeBranchNameStatus.name !== draftWorktreeBranchName ||
-        worktreeBranchNameStatus.state === "checking"
-      ) {
-        setThreadError(
-          threadIdForSend,
-          `Still checking whether branch "${draftWorktreeBranchName}" is available. Try again in a moment.`,
-        );
-        return;
-      }
-      if (worktreeBranchNameStatus.state === "conflict") {
-        setThreadError(
-          threadIdForSend,
-          `Branch "${draftWorktreeBranchName}" already exists. Pick a different worktree branch name.`,
-        );
-        return;
-      }
+    if (shouldCreateWorktree && worktreeBranchNameValidation.state === "checking") {
+      setThreadError(
+        threadIdForSend,
+        `Still checking whether branch "${worktreeBranchNameValidation.name}" is available. Try again in a moment.`,
+      );
+      return;
+    }
+    if (shouldCreateWorktree && worktreeBranchNameValidation.state === "conflict") {
+      setThreadError(
+        threadIdForSend,
+        `Branch "${worktreeBranchNameValidation.name}" already exists. Pick a different worktree branch name.`,
+      );
+      return;
     }
 
     const composerImagesSnapshot = [...composerImages];
