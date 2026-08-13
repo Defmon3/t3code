@@ -1,5 +1,12 @@
 # Plan: Solidify the in-app project-hook system
 
+## ERRATA — 2026-08-13
+
+DISK WINS over contradicting prescriptions below. `T3HookPlan.hasPreToolUseHooksNow` resolves to
+`true` when live config resolution fails, regardless of the prepare-time snapshot, so Codex keeps
+routing approvals through the fail-closed hook path. The focused runner coverage also includes
+deleting `.t3code/hooks.json` after `prepare`.
+
 **Branch:** `feat/in-app-hook-confirmation` (worktree `G:/t3-code/worktrees/t3-hook-confirmation`, HEAD `8a9f99719`)
 **Shape:** one reversible commit, server-only, 8 files.
 
