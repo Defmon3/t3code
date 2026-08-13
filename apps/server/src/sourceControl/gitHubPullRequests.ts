@@ -81,7 +81,7 @@ function normalizeCompletionAt(
 ): string | null {
   const parse = (value: string | null | undefined): string | null => {
     const trimmed = value?.trim() ?? "";
-    return trimmed.length > 0 && !Number.isNaN(Date.parse(trimmed)) ? trimmed : null;
+    return trimmed.length > 0 && Option.isSome(DateTime.make(trimmed)) ? trimmed : null;
   };
   if (state === "merged") return parse(mergedAt) ?? parse(closedAt);
   return state === "closed" ? parse(closedAt) : null;

@@ -117,7 +117,6 @@ describe("GitHubCli.layer", () => {
               baseRefName: "main",
               headRefName: "feature/pr-threads",
               state: "OPEN",
-              mergedAt: null,
               isCrossRepository: true,
               headRepository: {
                 nameWithOwner: "octocat/codething-mvp",
@@ -155,7 +154,7 @@ describe("GitHubCli.layer", () => {
           "view",
           "#42",
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "number,title,url,baseRefName,headRefName,state,isCrossRepository,headRepository,headRepositoryOwner",
         ],
         cwd: "/repo",
         timeoutMs: 30_000,
@@ -176,7 +175,6 @@ describe("GitHubCli.layer", () => {
               baseRefName: " main ",
               headRefName: "\tfeature/pr-threads\t",
               state: "OPEN",
-              mergedAt: null,
               isCrossRepository: true,
               headRepository: {
                 nameWithOwner: " octocat/codething-mvp ",
@@ -277,7 +275,6 @@ describe("GitHubCli.layer", () => {
                 baseRefName: "main",
                 headRefName: "t3code/codex-turn-mapping",
                 state: "OPEN",
-                mergedAt: null,
                 isCrossRepository: false,
                 headRepository: {
                   id: "R_kgDORLtfbQ",
