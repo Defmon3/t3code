@@ -270,7 +270,9 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
       .filter((event) => !SUPPORTED_HOOK_EVENTS.some((supported) => supported === event))
       .sort();
     if (unsupportedEvents.length > 0) {
-      const warningKey = `${configPath}|${unsupportedEvents.join(",")}`;
+      const warningKey = [configPath, ...unsupportedEvents]
+        .map((part) => `${part.length}:${part}`)
+        .join("");
       if (!warnedUnsupportedEvents.has(warningKey)) {
         warnedUnsupportedEvents.add(warningKey);
         yield* Effect.logWarning("ignoring unsupported T3 hook events", {

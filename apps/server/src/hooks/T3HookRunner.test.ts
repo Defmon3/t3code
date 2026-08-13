@@ -388,16 +388,26 @@ describe("T3HookRunner", () => {
             toolName: "Bash",
             toolInput: { command: "git push" },
           };
-          return [yield* plan.evaluatePreToolUse(call), yield* plan.evaluatePreToolUse(call)];
+          const initialDecisions = [
+            yield* plan.evaluatePreToolUse(call),
+            yield* plan.evaluatePreToolUse(call),
+          ];
+          yield* writeHooksConfig(root, {
+            PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "policy" }] }],
+            "PostToolUse,Stop": [{ hooks: [{ type: "command", command: "combined" }] }],
+          });
+          return [...initialDecisions, yield* plan.evaluatePreToolUse(call)];
         }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
 
         const warnings = records.filter((record) => record.logLevel === "Warn");
-        assert.equal(warnings.length, 1);
+        assert.equal(warnings.length, 2);
         const rendered = encodeJson(warnings[0]?.message);
         assert.match(rendered, /PostToolUse/);
         assert.match(rendered, /Stop/);
         assert.include(rendered, encodeJson(configPath));
+        assert.match(encodeJson(warnings[1]?.message), /PostToolUse,Stop/);
         assert.deepEqual(decisions, [
+          { decision: "ask", reason: "Reviewed." },
           { decision: "ask", reason: "Reviewed." },
           { decision: "ask", reason: "Reviewed." },
         ]);
