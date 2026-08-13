@@ -1555,6 +1555,11 @@ function normalizePersistedDraftThreads(
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
       const startFromOrigin = candidateDraftThread.startFromOrigin === true;
+      const worktreeBranchName =
+        typeof candidateDraftThread.worktreeBranchName === "string" &&
+        candidateDraftThread.worktreeBranchName.length > 0
+          ? candidateDraftThread.worktreeBranchName
+          : null;
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const promotedToCandidate = candidateDraftThread.promotedTo;
       const promotedToRecord =
@@ -1603,7 +1608,7 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
-        worktreeBranchName: null,
+        worktreeBranchName,
         promotedTo,
       };
     }
