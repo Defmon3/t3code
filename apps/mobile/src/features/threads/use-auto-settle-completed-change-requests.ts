@@ -6,7 +6,7 @@ import { resolveAutoSettleCompletedChangeRequests } from "./threadListV2";
 
 export function useAutoSettleCompletedChangeRequests(): boolean {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const preferencesLoaded = AsyncResult.isSuccess(preferencesResult);
+  const preferencesLoaded = AsyncResult.isSuccess(preferencesResult) && !preferencesResult.waiting;
 
   return resolveAutoSettleCompletedChangeRequests({
     preference: preferencesLoaded

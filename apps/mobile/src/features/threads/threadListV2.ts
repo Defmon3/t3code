@@ -10,7 +10,11 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import {
+  DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS,
+  type EnvironmentId,
+  type ProjectId,
+} from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
@@ -124,14 +128,16 @@ export function resolveThreadListV2Enabled(input: {
 
 /**
  * Existing installs had completed-PR auto-settlement before this preference
- * existed, so an absent or not-yet-loaded value preserves that behavior.
+ * existed, so an absent loaded value preserves that behavior. Until mobile
+ * preferences load, keep every thread visible rather than temporarily settling
+ * a thread whose stored device-local preference is false.
  */
 export function resolveAutoSettleCompletedChangeRequests(input: {
   readonly preference: boolean | undefined;
   readonly preferencesLoaded: boolean;
 }): boolean {
-  if (!input.preferencesLoaded) return true;
-  return input.preference ?? true;
+  if (!input.preferencesLoaded) return false;
+  return input.preference ?? DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS;
 }
 
 export function resolveThreadListV2Status(
@@ -362,7 +368,9 @@ export function buildThreadListV2Items(input: {
   const now = input.now ?? new Date().toISOString();
   const snoozeNow = input.snoozeNow ?? now;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
-  const autoSettleCompletedChangeRequests = input.autoSettleCompletedChangeRequests !== false;
+  const autoSettleCompletedChangeRequests =
+    input.autoSettleCompletedChangeRequests ??
+    DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS;
   const query = input.searchQuery.trim().toLocaleLowerCase();
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))

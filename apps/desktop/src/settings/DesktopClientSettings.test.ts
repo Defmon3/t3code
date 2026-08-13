@@ -203,10 +203,8 @@ describe("DesktopClientSettings", () => {
         yield* fileSystem.writeFileString(environment.clientSettingsPath, "{}\n");
 
         const persisted = yield* settings.get;
-        assert.isTrue(Option.isSome(persisted));
-        if (Option.isSome(persisted)) {
-          assert.isTrue(persisted.value.sidebarAutoSettleCompletedChangeRequests);
-        }
+        assert.deepEqual(persisted, Option.some(yield* decodeClientSettingsJson("{}")));
+        assert.isTrue(Option.getOrThrow(persisted).sidebarAutoSettleCompletedChangeRequests);
       }),
     ),
   );

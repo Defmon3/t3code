@@ -3,6 +3,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import {
   CommandId,
+  DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS,
   EnvironmentId,
   MessageId,
   ProjectId,
@@ -133,16 +134,19 @@ describe("resolveAutoSettleCompletedChangeRequests", () => {
     ).toBe(false);
   });
 
-  it("defaults on when the preference is absent", () => {
+  it("uses the shared completed-PR auto-settle default when the preference is absent", () => {
+    expect(DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS).toBe(true);
     expect(
       resolveAutoSettleCompletedChangeRequests({ preference: undefined, preferencesLoaded: true }),
-    ).toBe(true);
+    ).toBe(DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS);
   });
 
-  it("defaults on while preferences load", () => {
-    expect(
-      resolveAutoSettleCompletedChangeRequests({ preference: false, preferencesLoaded: false }),
-    ).toBe(true);
+  it("keeps a saved disabled preference disabled through hydration", () => {
+    const resolvedStates = [false, true].map((preferencesLoaded) =>
+      resolveAutoSettleCompletedChangeRequests({ preference: false, preferencesLoaded }),
+    );
+
+    expect(resolvedStates).toEqual([false, false]);
   });
 });
 
@@ -364,6 +368,29 @@ describe("buildThreadListV2Items", () => {
       ["fresh-completed-pr", "card"],
     ]);
     expect(layout.settledCount).toBe(0);
+  });
+
+  it("does not briefly settle a saved-disabled completed pull request while preferences hydrate", () => {
+    const fresh = makeThread({
+      id: ThreadId.make("saved-disabled-completed-pr"),
+      title: "Saved disabled completed PR",
+    });
+    const layouts = [false, true].map((preferencesLoaded) =>
+      buildThreadListV2Items({
+        threads: [fresh],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        autoSettleCompletedChangeRequests: resolveAutoSettleCompletedChangeRequests({
+          preference: false,
+          preferencesLoaded,
+        }),
+        changeRequestStateByKey: new Map([[`${environmentId}:${fresh.id}`, "closed"]]),
+      }),
+    );
+
+    expect(layouts.map((layout) => layout.items[0]?.variant)).toEqual(["card", "card"]);
+    expect(layouts.map((layout) => layout.settledCount)).toEqual([0, 0]);
   });
 
   it("defaults completed-PR auto-settle on for existing mobile installs", () => {
