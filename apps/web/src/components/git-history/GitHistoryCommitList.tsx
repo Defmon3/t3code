@@ -245,14 +245,18 @@ function GraphCell(props: {
               : x(edge.fromLane);
           const fromY = edge.kind === "parent" || edge.kind === "elided" ? centerY : 0;
           const toX = x(edge.toLane);
+          const rowEndY =
+            edge.isMissingParent || edge.kind === "elided"
+              ? GIT_HISTORY_ROW_HEIGHT
+              : GIT_HISTORY_ROW_HEIGHT + 2;
           const path =
             edge.kind === "continuation"
-              ? `M ${fromX} -2 L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
+              ? `M ${fromX} -2 L ${toX} ${rowEndY}`
               : edge.kind === "incoming"
                 ? `M ${fromX} -2 L ${fromX} ${centerY * 0.45} L ${toX} ${centerY}`
                 : edge.kind === "elided"
-                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`
-                  : `M ${fromX} ${fromY} L ${toX} ${GIT_HISTORY_ROW_HEIGHT + 2}`;
+                  ? `M ${fromX} ${fromY} L ${toX} ${centerY} L ${toX} ${rowEndY}`
+                  : `M ${fromX} ${fromY} L ${toX} ${rowEndY}`;
           return (
             <path
               data-edge-kind={edge.kind}

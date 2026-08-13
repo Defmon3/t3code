@@ -64,7 +64,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center overflow-hidden px-3 py-0 md:px-0",
         isElectron && "drag-region",
       )}
     >
@@ -83,13 +83,13 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           <TooltipTrigger
             render={
               <Badge
-                className="relative z-10 ml-1 rounded-full px-1 text-[.5625rem] tracking-tighter text-muted-foreground"
+                className="relative z-10 ml-1 min-w-0 shrink overflow-hidden rounded-full px-1 text-[.5625rem] tracking-tighter text-muted-foreground"
                 data-environment-identification="pill"
                 size="sm"
                 tabIndex={0}
                 variant="secondary"
               >
-                {buildIdentityLabel}
+                <span className="truncate">{buildIdentityLabel}</span>
               </Badge>
             }
           />

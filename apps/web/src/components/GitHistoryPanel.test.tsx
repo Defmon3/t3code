@@ -637,7 +637,7 @@ describe("GitHistoryPanel", () => {
     );
 
     expect(missingParent?.props.strokeDasharray).toBe("3 2");
-    expect(missingParent?.props.d).toMatch(/^M .* 15 L .* 32$/);
+    expect(missingParent?.props.d).toMatch(/^M .* 15 L .* 30$/);
     expect(elided?.props.strokeDasharray).toBe("3 2");
   });
 
