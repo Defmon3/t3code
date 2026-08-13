@@ -148,7 +148,6 @@ describe("effectiveSettled", () => {
         effectiveSettled(shell, {
           now: NOW,
           autoSettleAfterDays: 3,
-          autoSettleCompletedChangeRequests: true,
           ...changeRequestOptions,
         }),
       ).toBe(expected);
@@ -161,7 +160,6 @@ describe("effectiveSettled", () => {
       effectiveSettled(shell, {
         now: NOW,
         autoSettleAfterDays: null,
-        autoSettleCompletedChangeRequests: true,
         changeRequestState: "closed",
       }),
     ).toBe(true);
@@ -174,59 +172,10 @@ describe("effectiveSettled", () => {
         effectiveSettled(recentlyActive, {
           now: NOW,
           autoSettleAfterDays: null,
-          autoSettleCompletedChangeRequests: true,
           changeRequestState,
         }),
       ).toBe(true);
     }
-  });
-
-  it("keeps completed PR threads active when completed-PR auto-settle is off", () => {
-    const fresh = makeShell({ activityAt: FRESH });
-    for (const changeRequestState of ["merged", "closed"] as const) {
-      expect(
-        effectiveSettled(fresh, {
-          now: NOW,
-          autoSettleAfterDays: 3,
-          autoSettleCompletedChangeRequests: false,
-          changeRequestState,
-        }),
-      ).toBe(false);
-    }
-
-    const stale = makeShell({ activityAt: STALE });
-    expect(
-      effectiveSettled(stale, {
-        now: NOW,
-        autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: false,
-        changeRequestState: "merged",
-      }),
-    ).toBe(true);
-  });
-
-  it("supports a manual-only workflow", () => {
-    const neutral = makeShell({ activityAt: STALE });
-    const explicit = { ...neutral, settledOverride: "settled" as const };
-    const options = {
-      now: NOW,
-      autoSettleAfterDays: null,
-      autoSettleCompletedChangeRequests: false,
-      changeRequestState: "merged" as const,
-    };
-    expect(effectiveSettled(neutral, options)).toBe(false);
-    expect(effectiveSettled(explicit, options)).toBe(true);
-  });
-
-  it("still blocks inactivity settlement for an open PR when the toggle is off", () => {
-    expect(
-      effectiveSettled(makeShell({ activityAt: STALE }), {
-        now: NOW,
-        autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: false,
-        changeRequestState: "open",
-      }),
-    ).toBe(false);
   });
 
   it("never auto-settles a stale thread with an open change request", () => {
@@ -235,7 +184,6 @@ describe("effectiveSettled", () => {
       effectiveSettled(stale, {
         now: NOW,
         autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
         changeRequestState: "open",
       }),
     ).toBe(false);
@@ -245,7 +193,6 @@ describe("effectiveSettled", () => {
       effectiveSettled(settled, {
         now: NOW,
         autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
         changeRequestState: "open",
       }),
     ).toBe(true);
@@ -260,7 +207,6 @@ describe("effectiveSettled", () => {
       effectiveSettled(shell, {
         now: NOW,
         autoSettleAfterDays: null,
-        autoSettleCompletedChangeRequests: true,
         changeRequestState: "merged",
       }),
     ).toBe(false);
@@ -276,7 +222,6 @@ describe("effectiveSettled", () => {
       effectiveSettled(shell, {
         now: NOW,
         autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
         changeRequestState: "merged",
       }),
     ).toBe(false);
@@ -321,7 +266,6 @@ describe("effectiveSettled", () => {
         effectiveSettled(shell, {
           now: transitionNow,
           autoSettleAfterDays: 3,
-          autoSettleCompletedChangeRequests: true,
           changeRequestState: "merged",
         }),
       ).toBe(false);
@@ -334,20 +278,8 @@ describe("effectiveSettled", () => {
     });
     const stale = makeShell({ activityAt: STALE });
 
-    expect(
-      effectiveSettled(boundary, {
-        now: NOW,
-        autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
-      }),
-    ).toBe(false);
-    expect(
-      effectiveSettled(stale, {
-        now: NOW,
-        autoSettleAfterDays: null,
-        autoSettleCompletedChangeRequests: true,
-      }),
-    ).toBe(false);
+    expect(effectiveSettled(boundary, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
+    expect(effectiveSettled(stale, { now: NOW, autoSettleAfterDays: null })).toBe(false);
   });
 });
 
@@ -452,7 +384,6 @@ describe("canSettle", () => {
       effectiveSettled(queued, {
         now: justAfter,
         autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
         changeRequestState: "merged",
       }),
     ).toBe(false);
@@ -475,13 +406,9 @@ describe("canSettle", () => {
       settledAt: "2026-04-09T12:02:10.000Z",
     };
     expect(hasQueuedTurnStart(settledAfterMessage, { now: flooredNow })).toBe(true);
-    expect(
-      effectiveSettled(settledAfterMessage, {
-        now: flooredNow,
-        autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
-      }),
-    ).toBe(true);
+    expect(effectiveSettled(settledAfterMessage, { now: flooredNow, autoSettleAfterDays: 3 })).toBe(
+      true,
+    );
 
     // A message NEWER than settledAt is genuinely new work: still blocked
     // until the server's auto-unsettle lands.
@@ -494,7 +421,6 @@ describe("canSettle", () => {
       effectiveSettled(messageAfterSettle, {
         now: "2026-04-09T12:03:30.000Z",
         autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
       }),
     ).toBe(false);
   });
@@ -508,12 +434,6 @@ describe("canSettle", () => {
       pending: "user-input",
     });
     expect(canSettle(blocked, { now: NOW })).toBe(false);
-    expect(
-      effectiveSettled(blocked, {
-        now: NOW,
-        autoSettleAfterDays: 3,
-        autoSettleCompletedChangeRequests: true,
-      }),
-    ).toBe(false);
+    expect(effectiveSettled(blocked, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
   });
 });

@@ -36,13 +36,11 @@ import {
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
-  getSettingsSearchItems,
   searchSettings,
   SETTINGS_SECTION_LABELS,
   type SettingsPath,
   type SettingsSearchItem,
 } from "./settingsSearch";
-import { useClientSettings } from "../../hooks/useSettings";
 
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
@@ -79,12 +77,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
-  const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
-  const searchItems = useMemo(
-    () => getSettingsSearchItems({ legacySidebarEnabled }),
-    [legacySidebarEnabled],
-  );
-  const results = useMemo(() => searchSettings(query, searchItems), [query, searchItems]);
+  const results = useMemo(() => searchSettings(query), [query]);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
 

@@ -11,7 +11,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
-  completedPullRequestAutoSettleRestorePatch,
   formatDiagnosticsDescription,
   getChangedTypographySettingLabels,
   hasChangedBackgroundActivitySettings,
@@ -148,19 +147,6 @@ describe("project grouping toggle", () => {
   it("restores repository path grouping when the toggle is cycled", () => {
     expect(projectGroupingModeFromToggle(false, "repository_path")).toBe("separate");
     expect(projectGroupingModeFromToggle(true, "repository_path")).toBe("repository_path");
-  });
-});
-
-describe("completed pull request auto-settle restore", () => {
-  it("resets the visible setting for the flat sidebar", () => {
-    expect(completedPullRequestAutoSettleRestorePatch({ legacySidebarEnabled: false })).toEqual({
-      sidebarAutoSettleCompletedChangeRequests:
-        DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
-    });
-  });
-
-  it("preserves the hidden setting for the legacy sidebar", () => {
-    expect(completedPullRequestAutoSettleRestorePatch({ legacySidebarEnabled: true })).toEqual({});
   });
 });
 

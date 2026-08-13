@@ -138,7 +138,6 @@ describe("LocalApi", () => {
     const settings = {
       ...DEFAULT_CLIENT_SETTINGS,
       timestampFormat: "12-hour" as const,
-      sidebarAutoSettleCompletedChangeRequests: false,
     };
 
     await api.persistence.setClientSettings(settings);

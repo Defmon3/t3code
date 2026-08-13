@@ -3,7 +3,6 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import {
   CommandId,
-  DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS,
   EnvironmentId,
   MessageId,
   ProjectId,
@@ -17,7 +16,6 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
-  resolveAutoSettleCompletedChangeRequests,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -124,29 +122,6 @@ describe("resolveThreadListV2Enabled", () => {
     expect(
       resolveThreadListV2Enabled({ legacyPreference: undefined, preferencesLoaded: false }),
     ).toBe(true);
-  });
-});
-
-describe("resolveAutoSettleCompletedChangeRequests", () => {
-  it("preserves an explicit disabled preference", () => {
-    expect(
-      resolveAutoSettleCompletedChangeRequests({ preference: false, preferencesLoaded: true }),
-    ).toBe(false);
-  });
-
-  it("uses the shared completed-PR auto-settle default when the preference is absent", () => {
-    expect(DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS).toBe(true);
-    expect(
-      resolveAutoSettleCompletedChangeRequests({ preference: undefined, preferencesLoaded: true }),
-    ).toBe(DEFAULT_SIDEBAR_AUTO_SETTLE_COMPLETED_CHANGE_REQUESTS);
-  });
-
-  it("keeps a saved disabled preference disabled through hydration", () => {
-    const resolvedStates = [false, true].map((preferencesLoaded) =>
-      resolveAutoSettleCompletedChangeRequests({ preference: false, preferencesLoaded }),
-    );
-
-    expect(resolvedStates).toEqual([false, false]);
   });
 });
 
@@ -338,107 +313,6 @@ describe("buildThreadListV2Items", () => {
     expect(layout.items.map((item) => item.thread.id)).toEqual(["pinned-settled", "active"]);
     expect(layout.items.map((item) => item.pinned)).toEqual([true, false]);
     expect(layout.settledCount).toBe(0);
-  });
-
-  it("keeps fresh completed-PR threads active when completed-PR auto-settle is off", () => {
-    const fresh = makeThread({
-      id: ThreadId.make("fresh-completed-pr"),
-      title: "Fresh completed PR",
-      latestUserMessageAt: "2026-06-01T12:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("fresh-completed-pr-turn"),
-        state: "completed",
-        requestedAt: "2026-06-01T12:00:00.000Z",
-        startedAt: "2026-06-01T12:00:00.000Z",
-        completedAt: "2026-06-01T12:10:00.000Z",
-        assistantMessageId: null,
-      },
-    });
-    const layout = buildThreadListV2Items({
-      threads: [fresh],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-      autoSettleAfterDays: 3,
-      autoSettleCompletedChangeRequests: false,
-      changeRequestStateByKey: new Map([[`${environmentId}:${fresh.id}`, "merged"]]),
-    });
-
-    expect(layout.items.map((item) => [item.thread.id, item.variant])).toEqual([
-      ["fresh-completed-pr", "card"],
-    ]);
-    expect(layout.settledCount).toBe(0);
-  });
-
-  it("does not briefly settle a saved-disabled completed pull request while preferences hydrate", () => {
-    const fresh = makeThread({
-      id: ThreadId.make("saved-disabled-completed-pr"),
-      title: "Saved disabled completed PR",
-    });
-    const layouts = [false, true].map((preferencesLoaded) =>
-      buildThreadListV2Items({
-        threads: [fresh],
-        environmentId: null,
-        searchQuery: "",
-        now: NOW,
-        autoSettleCompletedChangeRequests: resolveAutoSettleCompletedChangeRequests({
-          preference: false,
-          preferencesLoaded,
-        }),
-        changeRequestStateByKey: new Map([[`${environmentId}:${fresh.id}`, "closed"]]),
-      }),
-    );
-
-    expect(layouts.map((layout) => layout.items[0]?.variant)).toEqual(["card", "card"]);
-    expect(layouts.map((layout) => layout.settledCount)).toEqual([0, 0]);
-  });
-
-  it("defaults completed-PR auto-settle on for existing mobile installs", () => {
-    const fresh = makeThread({
-      id: ThreadId.make("default-completed-pr"),
-      title: "Default completed PR",
-    });
-    const layout = buildThreadListV2Items({
-      threads: [fresh],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-      changeRequestStateByKey: new Map([[`${environmentId}:${fresh.id}`, "merged"]]),
-    });
-
-    expect(layout.items.map((item) => [item.thread.id, item.variant])).toEqual([
-      ["default-completed-pr", "slim"],
-    ]);
-  });
-
-  it("keeps inactivity settlement independent when completed-PR auto-settle is off", () => {
-    const stale = makeThread({
-      id: ThreadId.make("stale-completed-pr"),
-      title: "Stale completed PR",
-      latestUserMessageAt: "2026-05-28T12:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("stale-completed-pr-turn"),
-        state: "completed",
-        requestedAt: "2026-05-28T12:00:00.000Z",
-        startedAt: "2026-05-28T12:00:00.000Z",
-        completedAt: "2026-05-28T12:10:00.000Z",
-        assistantMessageId: null,
-      },
-    });
-    const layout = buildThreadListV2Items({
-      threads: [stale],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-      autoSettleAfterDays: 3,
-      autoSettleCompletedChangeRequests: false,
-      changeRequestStateByKey: new Map([[`${environmentId}:${stale.id}`, "closed"]]),
-    });
-
-    expect(layout.items.map((item) => [item.thread.id, item.variant])).toEqual([
-      ["stale-completed-pr", "slim"],
-    ]);
-    expect(layout.settledCount).toBe(1);
   });
 
   it("snooze hides a pinned thread and wake restores it to the pinned block", () => {
