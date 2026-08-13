@@ -19,13 +19,14 @@ import {
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { layoutGitHistoryGraph } from "../lib/gitHistoryGraph";
 import { cn } from "../lib/utils";
+import { useClientSettings } from "../hooks/useSettings";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironmentQuery } from "../state/query";
 import { CommitDetailsPane } from "./git-history/GitHistoryCommitDetails";
 import { CommitDiffView } from "./git-history/GitHistoryCommitDiff";
 import {
   CommitRow,
-  GIT_HISTORY_ROW_HEIGHT,
+  gitHistoryRowHeight,
   currentHeadHash,
   firstParentHashes,
   graphColumnWidth,
@@ -119,6 +120,8 @@ function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean 
 export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const isWideLayout = useWideHistoryLayout(panelRef);
+  const interfaceFontSize = useClientSettings((settings) => settings.fontSizeInterface);
+  const rowHeight = gitHistoryRowHeight(interfaceFontSize);
   const baseTargetKey = `${props.environmentId}:${props.cwd}`;
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
   const [detailsPaneWidth, setDetailsPaneWidth] = useState(384);
@@ -666,14 +669,15 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                     <CommitRow
                       row={item}
                       laneCount={laneCount}
+                      rowHeight={rowHeight}
                       refKinds={commitRefKinds}
                       {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
                       selected={item.commit.hash === selectedHash}
                       onSelect={setSelectedHash}
                     />
                   )}
-                  estimatedItemSize={GIT_HISTORY_ROW_HEIGHT}
-                  drawDistance={GIT_HISTORY_ROW_HEIGHT * 8}
+                  estimatedItemSize={rowHeight}
+                  drawDistance={rowHeight * 8}
                   className="min-h-0 flex-1 overscroll-y-contain"
                 />
               )}
