@@ -197,7 +197,7 @@ function GraphCell(props: {
             y2={centerY}
             stroke={GRAPH_COLORS[props.graph.colorIndex % GRAPH_COLORS.length]}
             strokeWidth="1.1"
-            strokeLinecap="butt"
+            strokeLinecap="square"
           />
         ) : null}
         {edges.map((edge, index) => {
@@ -223,7 +223,7 @@ function GraphCell(props: {
               fill="none"
               stroke={GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length]}
               strokeWidth="1.1"
-              strokeLinecap="butt"
+              strokeLinecap={edge.isMissingParent || edge.kind === "elided" ? "butt" : "square"}
               strokeDasharray={edge.isMissingParent || edge.kind === "elided" ? "3 2" : undefined}
             />
           );
