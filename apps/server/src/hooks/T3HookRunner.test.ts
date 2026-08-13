@@ -250,6 +250,39 @@ describe("T3HookRunner", () => {
     );
   });
 
+  it.layer(testLayer(() => Effect.die("a deleted config must not run a hook")))(
+    "picks up a config deleted after prepare",
+    (it) => {
+      it.effect("reports no live hooks and allows the tool call", () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-hook-runner-" });
+          const configPath = yield* writeHooksConfig(root, {
+            PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "policy" }] }],
+          });
+
+          const runner = yield* T3HookRunner.T3HookRunner;
+          const plan = yield* runner.prepare(root);
+          assert.isTrue(plan.hasPreToolUseHooks);
+          assert.isTrue(yield* plan.hasPreToolUseHooksNow);
+
+          yield* fileSystem.remove(configPath);
+
+          assert.isFalse(yield* plan.hasPreToolUseHooksNow);
+          assert.deepEqual(
+            yield* plan.evaluatePreToolUse({
+              provider: "claudeAgent",
+              threadId: "thread-deleted",
+              toolName: "Bash",
+              toolInput: { command: "git push" },
+            }),
+            { decision: "allow" },
+          );
+        }),
+      );
+    },
+  );
+
   it.layer(
     testLayer(() =>
       Effect.succeed(
