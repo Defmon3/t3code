@@ -257,6 +257,24 @@ export function resolveSendEnvMode(input: {
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
+export function resolveWorktreeBranchNameValidation(
+  draftName: string | null,
+  status: {
+    name: string;
+    state: "checking" | "available" | "conflict";
+  } | null,
+):
+  | { state: "unused"; name: null }
+  | { state: "checking" | "available" | "conflict"; name: string } {
+  if (draftName === null) {
+    return { state: "unused", name: null };
+  }
+  if (status === null || status.name !== draftName) {
+    return { state: "checking", name: draftName };
+  }
+  return { state: status.state, name: draftName };
+}
+
 export function cloneComposerImageForRetry(
   image: ComposerImageAttachment,
 ): ComposerImageAttachment {

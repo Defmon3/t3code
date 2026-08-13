@@ -26,6 +26,7 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveWorktreeBranchNameValidation,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   scheduleEnvironmentReconnectWarning,
@@ -379,6 +380,40 @@ describe("resolveSendEnvMode", () => {
   it("keeps worktree mode only for git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+  });
+});
+
+describe("resolveWorktreeBranchNameValidation", () => {
+  it("does not validate an empty custom name", () => {
+    expect(resolveWorktreeBranchNameValidation(null, null)).toEqual({
+      state: "unused",
+      name: null,
+    });
+  });
+
+  it("keeps a persisted name pending until its first validation completes", () => {
+    expect(resolveWorktreeBranchNameValidation("feat/custom-name", null)).toEqual({
+      state: "checking",
+      name: "feat/custom-name",
+    });
+  });
+
+  it("rejects a stale status for a previously typed name", () => {
+    expect(
+      resolveWorktreeBranchNameValidation("feat/current", {
+        name: "feat/previous",
+        state: "available",
+      }),
+    ).toEqual({ state: "checking", name: "feat/current" });
+  });
+
+  it("preserves the settled status for the current name", () => {
+    expect(
+      resolveWorktreeBranchNameValidation("feat/custom-name", {
+        name: "feat/custom-name",
+        state: "available",
+      }),
+    ).toEqual({ state: "available", name: "feat/custom-name" });
   });
 });
 
