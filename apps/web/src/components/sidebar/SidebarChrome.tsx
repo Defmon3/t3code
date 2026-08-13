@@ -56,7 +56,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   const buildIdentityLabel = pillLabel
     ? formatBuildIdentityLabel({
         stageLabel: pillLabel,
-        version: APP_VERSION,
         commitHash: APP_COMMIT_HASH,
         buildTime: APP_BUILD_TIME,
       })
@@ -84,13 +83,13 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           <TooltipTrigger
             render={
               <Badge
-                className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+                className="relative z-10 ml-1 rounded-full px-1 text-[.5625rem] tracking-tighter text-muted-foreground"
                 data-environment-identification="pill"
                 size="sm"
                 tabIndex={0}
                 variant="secondary"
               >
-                {pillLabel}
+                {buildIdentityLabel}
               </Badge>
             }
           />
