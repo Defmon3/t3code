@@ -22,6 +22,7 @@ export const GIT_HISTORY_ROW_HEIGHT = 30;
 const LANE_WIDTH = 11;
 const GRAPH_HORIZONTAL_PADDING = 6;
 const MAX_GRAPH_WIDTH = 104;
+const GRAPH_BOUNDARY_CAP_SIZE = 2;
 const GRAPH_COLORS = ["#4f9cff", "#b26cff", "#f59e0b", "#22c55e", "#ec4899", "#14b8a6"] as const;
 
 export function queryErrorMessage(cause: Cause.Cause<unknown>): string {
@@ -168,6 +169,35 @@ function GraphCell(props: {
     (width - GRAPH_HORIZONTAL_PADDING * 2) / Math.max(props.laneCount, 1),
   );
   const x = (lane: number) => lane * laneWidth + GRAPH_HORIZONTAL_PADDING + laneWidth / 2;
+  const edges = props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW);
+  const boundaryCaps = [
+    ...(props.graph.hasIncoming
+      ? [
+          {
+            color:
+              GRAPH_COLORS[
+                (props.graph.incomingColorIndex ?? props.graph.colorIndex) % GRAPH_COLORS.length
+              ],
+            key: `incoming:${props.graph.hash}`,
+            side: "top" as const,
+            x: x(props.graph.lane),
+          },
+        ]
+      : []),
+    ...edges.flatMap((edge, index) => {
+      if (edge.isMissingParent || edge.kind === "elided") return [];
+      const color = GRAPH_COLORS[edge.colorIndex % GRAPH_COLORS.length];
+      const key = `${edge.kind}:${edge.fromLane}:${edge.toLane}:${edge.parentHash ?? index}`;
+      const caps = [];
+      if (edge.kind === "continuation" || edge.kind === "incoming") {
+        caps.push({ color, key: `${key}:top`, side: "top" as const, x: x(edge.fromLane) });
+      }
+      if (edge.kind === "continuation" || edge.kind === "parent") {
+        caps.push({ color, key: `${key}:bottom`, side: "bottom" as const, x: x(edge.toLane) });
+      }
+      return caps;
+    }),
+  ];
   return (
     <div
       aria-hidden="true"
@@ -195,7 +225,7 @@ function GraphCell(props: {
             strokeWidth="1.1"
           />
         ) : null}
-        {props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW).map((edge, index) => {
+        {edges.map((edge, index) => {
           const fromX =
             edge.kind === "parent" || edge.kind === "elided"
               ? x(props.graph.lane)
@@ -241,6 +271,20 @@ function GraphCell(props: {
           className="transition-[r]"
         />
       </svg>
+      {boundaryCaps.map((cap) => (
+        <span
+          data-graph-boundary={cap.side}
+          key={cap.key}
+          className="pointer-events-none absolute"
+          style={{
+            backgroundColor: cap.color,
+            height: GRAPH_BOUNDARY_CAP_SIZE,
+            left: cap.x - GRAPH_BOUNDARY_CAP_SIZE / 2,
+            width: GRAPH_BOUNDARY_CAP_SIZE,
+            ...(cap.side === "top" ? { top: 0 } : { bottom: 0 }),
+          }}
+        />
+      ))}
     </div>
   );
 }
