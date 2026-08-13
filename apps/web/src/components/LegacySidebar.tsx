@@ -457,6 +457,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   });
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
     gitStatus: gitStatus.data,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);

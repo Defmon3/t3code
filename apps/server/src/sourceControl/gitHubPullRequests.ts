@@ -15,6 +15,7 @@ export interface NormalizedGitHubPullRequestRecord {
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
   readonly updatedAt: Option.Option<DateTime.Utc>;
+  readonly completedAt: string | null;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
@@ -28,6 +29,7 @@ const GitHubPullRequestSchema = Schema.Struct({
   headRefName: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
   updatedAt: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   isCrossRepository: Schema.optional(Schema.Boolean),
   // gh < 2.47 exports headRepository as {id, name} only; nameWithOwner was
@@ -72,6 +74,19 @@ function normalizeGitHubPullRequestState(input: {
   return "open";
 }
 
+function normalizeCompletionAt(
+  state: "open" | "closed" | "merged",
+  mergedAt: string | null | undefined,
+  closedAt: string | null | undefined,
+): string | null {
+  const parse = (value: string | null | undefined): string | null => {
+    const trimmed = value?.trim() ?? "";
+    return trimmed.length > 0 && !Number.isNaN(Date.parse(trimmed)) ? trimmed : null;
+  };
+  if (state === "merged") return parse(mergedAt) ?? parse(closedAt);
+  return state === "closed" ? parse(closedAt) : null;
+}
+
 function normalizeGitHubPullRequestRecord(
   raw: Schema.Schema.Type<typeof GitHubPullRequestSchema>,
 ): NormalizedGitHubPullRequestRecord {
@@ -86,14 +101,16 @@ function normalizeGitHubPullRequestRecord(
       ? `${headRepositoryOwnerLogin}/${headRepositoryName}`
       : null);
 
+  const state = normalizeGitHubPullRequestState(raw);
   return {
     number: raw.number,
     title: raw.title,
     url: raw.url,
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
-    state: normalizeGitHubPullRequestState(raw),
+    state,
     updatedAt: raw.updatedAt ?? Option.none(),
+    completedAt: normalizeCompletionAt(state, raw.mergedAt, raw.closedAt),
     ...(typeof raw.isCrossRepository === "boolean"
       ? { isCrossRepository: raw.isCrossRepository }
       : {}),

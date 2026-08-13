@@ -753,6 +753,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   );
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
     gitStatus: gitStatus.data,
   });
   const prState = pr?.state ?? null;

@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { resolveThreadPr } from "@t3tools/client-runtime/state/thread-settled";
 
 import { useEnvironmentQuery } from "./query";
 import { presentThreadPr, type ThreadPrPresentation } from "./thread-pr-presentation";
@@ -34,8 +35,10 @@ export function useThreadPr(
   if (status === null || thread.branch === null || status.refName !== thread.branch) {
     return null;
   }
-  if (!status.pr) {
-    return null;
-  }
-  return presentThreadPr(status.pr, status.sourceControlProvider);
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
+    gitStatus: status,
+  });
+  return pr === null ? null : presentThreadPr(pr, status.sourceControlProvider);
 }

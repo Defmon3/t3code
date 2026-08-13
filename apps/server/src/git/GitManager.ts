@@ -151,6 +151,7 @@ interface OpenPrInfo {
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   updatedAt: Option.Option<DateTime.Utc>;
+  completedAt: string | null;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -384,6 +385,7 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: summary.updatedAt,
+    completedAt: summary.completedAt ?? null,
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -537,6 +539,7 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  completedAt?: string;
 } {
   return {
     number: pr.number,
@@ -545,6 +548,7 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.completedAt !== null ? { completedAt: pr.completedAt } : {}),
   };
 }
 
@@ -1295,6 +1299,7 @@ export const make = Effect.gen(function* () {
           headRefName: firstPullRequest.headRefName,
           state: "open",
           updatedAt: Option.none(),
+          completedAt: null,
         } satisfies PullRequestInfo;
       }
     }

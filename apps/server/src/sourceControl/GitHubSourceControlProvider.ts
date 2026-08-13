@@ -30,6 +30,7 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: Option.none(),
+    ...(summary.completedAt !== undefined ? { completedAt: summary.completedAt } : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -139,7 +140,7 @@ export const make = Effect.gen(function* () {
             "--limit",
             String(input.limit ?? 20),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         })
         .pipe(
@@ -155,6 +156,7 @@ export const make = Effect.gen(function* () {
                       decoded.success.map((item) => ({
                         ...toChangeRequest(item),
                         updatedAt: item.updatedAt,
+                        completedAt: item.completedAt,
                       })),
                     )
                   : Effect.fail(
