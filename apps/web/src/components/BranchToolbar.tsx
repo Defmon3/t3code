@@ -458,15 +458,9 @@ export const BranchToolbar = memo(function BranchToolbar({
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
-<<<<<<< HEAD
   autoEnvironmentLabel,
   onAutoEnvironment,
-  onWorktreeBranchNameConflictChange,
-||||||| parent of 6bc6b6bb7 (fix: macroscopeapp comments)
-  onWorktreeBranchNameConflictChange,
-=======
   onWorktreeBranchNameStatusChange,
->>>>>>> 6bc6b6bb7 (fix: macroscopeapp comments)
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
