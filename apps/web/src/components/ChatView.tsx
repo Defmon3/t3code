@@ -4114,6 +4114,7 @@ function ChatViewContent(props: ChatViewProps) {
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const activeThreadPr = resolveThreadPr({
     threadBranch: activeThread?.branch ?? null,
+    threadCreatedAt: activeThread?.createdAt ?? null,
     gitStatus: gitStatusQuery.data ?? null,
   });
   // The right panel offers the thread's own change request, so it can only offer it once the

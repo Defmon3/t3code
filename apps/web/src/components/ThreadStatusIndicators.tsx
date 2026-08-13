@@ -3,6 +3,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import { resolveThreadPr, type ThreadPr } from "@t3tools/client-runtime/state/thread-settled";
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
 import { useMemo } from "react";
@@ -33,7 +34,7 @@ export interface TerminalStatusIndicator {
   pulse: boolean;
 }
 
-export type ThreadPr = VcsStatusResult["pr"];
+export { resolveThreadPr, type ThreadPr };
 
 export function settledPrHoverColorClass(state: NonNullable<ThreadPr>["state"]): string {
   switch (state) {
@@ -108,22 +109,6 @@ export function PrStatusTooltipContent({ status }: { status: PrStatusIndicator }
       <span className="min-w-0 truncate pl-2">{status.tooltipTitle}</span>
     </span>
   );
-}
-
-export function resolveThreadPr(input: {
-  threadBranch: string | null;
-  gitStatus: VcsStatusResult | null;
-}): ThreadPr | null {
-  const { threadBranch, gitStatus } = input;
-  if (gitStatus === null) {
-    return null;
-  }
-
-  if (threadBranch === null || gitStatus.refName !== threadBranch) {
-    return null;
-  }
-
-  return gitStatus.pr ?? null;
 }
 
 export function terminalStatusFromRunningIds(
@@ -252,6 +237,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
   );
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
     gitStatus: gitStatus.data,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);

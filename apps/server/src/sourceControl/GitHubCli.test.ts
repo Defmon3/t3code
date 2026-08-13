@@ -2,11 +2,13 @@ import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubCli from "./GitHubCli.ts";
+import { decodeGitHubPullRequestListJson } from "./gitHubPullRequests.ts";
 
 const processOutput = (stdout: string): VcsProcess.VcsProcessOutput => ({
   exitCode: ChildProcessSpawner.ExitCode(0),
@@ -30,7 +32,57 @@ afterEach(() => {
   mockRun.mockReset();
 });
 
+function decode(records: ReadonlyArray<Record<string, unknown>>) {
+  const result = decodeGitHubPullRequestListJson(JSON.stringify(records));
+  if (Result.isFailure(result)) throw new Error("Expected GitHub pull request records to decode.");
+  return result.success;
+}
+
+function record(input: Record<string, unknown>): Record<string, unknown> {
+  return {
+    number: 4970,
+    title: "Historical PR",
+    url: "https://github.com/t3tools/t3code/pull/4970",
+    baseRefName: "main",
+    headRefName: "feature/historical-pr",
+    ...input,
+  };
+}
+
 describe("GitHubCli.layer", () => {
+  it("normalizes GitHub terminal completion timestamps", () => {
+    const pullRequests = decode([
+      record({
+        state: "MERGED",
+        mergedAt: "2026-08-01T12:00:00.000Z",
+        closedAt: "2026-08-01T12:01:00.000Z",
+      }),
+      record({ state: "MERGED", mergedAt: null, closedAt: "2026-08-01T12:02:00.000Z" }),
+      record({ state: "CLOSED", closedAt: "2026-08-01T12:03:00.000Z" }),
+    ]);
+
+    assert.deepStrictEqual(
+      pullRequests.map(({ state, completedAt }) => ({ state, completedAt })),
+      [
+        { state: "merged", completedAt: "2026-08-01T12:00:00.000Z" },
+        { state: "merged", completedAt: "2026-08-01T12:02:00.000Z" },
+        { state: "closed", completedAt: "2026-08-01T12:03:00.000Z" },
+      ],
+    );
+  });
+
+  it("does not treat updatedAt as a completion timestamp", () => {
+    const [pullRequest] = decode([
+      record({
+        state: "CLOSED",
+        closedAt: "not-a-date",
+        updatedAt: "2026-08-02T12:00:00.000Z",
+      }),
+    ]);
+
+    assert.strictEqual(pullRequest?.completedAt, null);
+  });
+
   it("does not classify a missing cwd as an unavailable gh executable", () => {
     const context = { command: "gh", cwd: "/repo" } as const;
     const missingCwd = new VcsProcessSpawnError({
@@ -103,7 +155,7 @@ describe("GitHubCli.layer", () => {
           "view",
           "#42",
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "number,title,url,baseRefName,headRefName,state,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
         ],
         cwd: "/repo",
         timeoutMs: 30_000,

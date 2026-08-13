@@ -116,6 +116,16 @@ function normalizeFakePullRequestSummary(raw: unknown): GitHubCli.GitHubPullRequ
           ? "closed"
           : "merged"
       : undefined;
+  const completedAt =
+    state === "merged"
+      ? typeof record.mergedAt === "string"
+        ? record.mergedAt
+        : typeof record.closedAt === "string"
+          ? record.closedAt
+          : undefined
+      : state === "closed" && typeof record.closedAt === "string"
+        ? record.closedAt
+        : undefined;
   const isCrossRepository =
     typeof record.isCrossRepository === "boolean" ? record.isCrossRepository : undefined;
   const headRepositoryNameWithOwner =
@@ -138,6 +148,7 @@ function normalizeFakePullRequestSummary(raw: unknown): GitHubCli.GitHubPullRequ
     baseRefName,
     headRefName,
     ...(state ? { state } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
     ...(isCrossRepository !== undefined ? { isCrossRepository } : {}),
     ...(headRepositoryNameWithOwner ? { headRepositoryNameWithOwner } : {}),
     ...(headRepositoryOwnerLogin ? { headRepositoryOwnerLogin } : {}),
@@ -508,7 +519,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--limit",
             String(input.limit ?? 1),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(
           Effect.map((result) => JSON.parse(result.stdout) as unknown[]),
@@ -552,7 +563,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(
           Effect.map((result) => JSON.parse(result.stdout) as GitHubCli.GitHubPullRequestSummary),
@@ -1166,7 +1177,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           state: "open",
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,
@@ -1323,6 +1334,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseRef: "main",
         headRef: "feature/status-merged-pr",
         state: "merged",
+        completedAt: "2026-01-30T10:00:00Z",
       });
     }),
   );
@@ -2745,6 +2757,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             headRefName: "statemachine",
             state: "open",
             updatedAt: Option.none(),
+            completedAt: null,
             isCrossRepository: false,
             headRepositoryNameWithOwner: "pingdotgg/codething-mvp",
             headRepositoryOwnerLogin: "pingdotgg",
@@ -2763,6 +2776,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             headRefName: "statemachine",
             state: "open",
             updatedAt: Option.none(),
+            completedAt: null,
             isCrossRepository: true,
             headRepositoryNameWithOwner: "pingdotgg/codething-mvp",
             headRepositoryOwnerLogin: "pingdotgg",
@@ -2792,6 +2806,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             headRefName: "t3code/git-audit-stability",
             state: "open",
             updatedAt: Option.none(),
+            completedAt: null,
             isCrossRepository: true,
             headRepositoryNameWithOwner: "justsomelegs/t3code",
             headRepositoryOwnerLogin: "justsomelegs",
