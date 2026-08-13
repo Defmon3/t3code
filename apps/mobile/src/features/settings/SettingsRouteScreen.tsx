@@ -35,6 +35,7 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { useAutoSettleCompletedChangeRequests } from "../threads/use-auto-settle-completed-change-requests";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   type AppUpdateCheckState,
@@ -46,6 +47,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { shouldShowAutoSettleCompletedChangeRequestsSetting } from "./autoSettleCompletedChangeRequests";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
@@ -522,10 +524,27 @@ function ConfiguredSettingsRouteScreen() {
 }
 
 function GeneralSettingsSection() {
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const threadListV2Enabled = useThreadListV2Enabled();
+  const autoSettleCompletedChangeRequests = useAutoSettleCompletedChangeRequests();
+  const preferencesLoaded = AsyncResult.isSuccess(preferencesResult) && !preferencesResult.waiting;
+
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
+      {shouldShowAutoSettleCompletedChangeRequestsSetting({
+        preferencesLoaded,
+        threadListV2Enabled,
+      }) ? (
+        <SettingsSwitchRow
+          icon="checkmark.circle"
+          label="Auto-settle completed pull requests"
+          value={autoSettleCompletedChangeRequests}
+          onValueChange={(value) => savePreferences({ autoSettleCompletedChangeRequests: value })}
+        />
+      ) : null}
     </SettingsSection>
   );
 }

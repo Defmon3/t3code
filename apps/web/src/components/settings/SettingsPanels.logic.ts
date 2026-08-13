@@ -22,6 +22,16 @@ export function isProjectGroupingEnabled(mode: SidebarProjectGroupingMode): bool
   return mode !== "separate";
 }
 
+export function completedPullRequestAutoSettleRestorePatch(
+  settings: Pick<UnifiedSettings, "legacySidebarEnabled">,
+): Partial<Pick<UnifiedSettings, "sidebarAutoSettleCompletedChangeRequests">> {
+  if (settings.legacySidebarEnabled) return {};
+  return {
+    sidebarAutoSettleCompletedChangeRequests:
+      DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
+  };
+}
+
 export function projectGroupingModeFromToggle(
   enabled: boolean,
   lastEnabledMode: SidebarProjectGroupingMode = "repository",

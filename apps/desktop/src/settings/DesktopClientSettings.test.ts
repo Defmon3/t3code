@@ -33,6 +33,7 @@ const clientSettings: ClientSettings = {
   planModeEnabled: false,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
+  sidebarAutoSettleCompletedChangeRequests: false,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
@@ -201,7 +202,9 @@ describe("DesktopClientSettings", () => {
         yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
         yield* fileSystem.writeFileString(environment.clientSettingsPath, "{}\n");
 
-        assert.deepEqual(yield* settings.get, Option.some(yield* decodeClientSettingsJson("{}")));
+        const persisted = yield* settings.get;
+        assert.deepEqual(persisted, Option.some(yield* decodeClientSettingsJson("{}")));
+        assert.isTrue(Option.getOrThrow(persisted).sidebarAutoSettleCompletedChangeRequests);
       }),
     ),
   );
