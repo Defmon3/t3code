@@ -54,7 +54,7 @@ describe("layoutGitHistoryGraph", () => {
     });
   });
 
-  it("starts a new color segment at a branch decoration without breaking the lane", () => {
+  it("keeps a lane color stable when a commit has a branch decoration", () => {
     const layout = layoutGitHistoryGraph([
       { hash: "head", parentHashes: ["tip"], refs: ["HEAD -> merge-wt", "origin/merge-wt"] },
       { hash: "tip", parentHashes: ["base"] },
@@ -65,12 +65,11 @@ describe("layoutGitHistoryGraph", () => {
     expect(layout.rows.map((row) => [row.hash, row.lane, row.colorIndex])).toEqual([
       ["head", 0, 0],
       ["tip", 0, 0],
-      ["base", 0, 1],
-      ["root", 0, 1],
+      ["base", 0, 0],
+      ["root", 0, 0],
     ]);
-    expect(layout.rows[2]?.incomingColorIndex).toBe(0);
     expect(layout.rows[2]?.edges).toContainEqual(
-      expect.objectContaining({ kind: "parent", colorIndex: 1, fromLane: 0, toLane: 0 }),
+      expect.objectContaining({ kind: "parent", colorIndex: 0, fromLane: 0, toLane: 0 }),
     );
   });
 
