@@ -83,13 +83,13 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           <TooltipTrigger
             render={
               <Badge
-                className="relative z-10 ml-1 min-w-0 shrink overflow-hidden rounded-full px-1 text-[.5625rem] tracking-tighter text-muted-foreground"
+                className="relative z-10 ml-1 shrink-0 rounded-full px-1 text-[.5rem] tracking-tighter text-muted-foreground"
                 data-environment-identification="pill"
                 size="sm"
                 tabIndex={0}
                 variant="secondary"
               >
-                <span className="truncate">{buildIdentityLabel}</span>
+                {buildIdentityLabel}
               </Badge>
             }
           />

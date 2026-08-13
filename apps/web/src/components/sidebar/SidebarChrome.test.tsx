@@ -66,6 +66,6 @@ describe("SidebarChromeHeader", () => {
 
     expect(html).toContain('data-environment-identification="pill"');
     expect(html).toContain('tabindex="0"');
-    expect(html).toContain('class="truncate">Custom build</span>');
+    expect(html).toContain(">Custom build</span>");
   });
 });
