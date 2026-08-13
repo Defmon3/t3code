@@ -3363,6 +3363,7 @@ describe("ClaudeAdapterLive", () => {
         return Effect.succeed({
           configPath: "/tmp/hooked-project/.t3code/hooks.json",
           hasPreToolUseHooks: true,
+          hasPreToolUseHooksNow: Effect.succeed(true),
           evaluatePreToolUse: (input: {
             readonly provider: string;
             readonly threadId: string;

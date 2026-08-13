@@ -398,6 +398,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     const hookPlan = {
       configPath: "G:/project/.t3code/hooks.json",
       hasPreToolUseHooks: true,
+      hasPreToolUseHooksNow: Effect.succeed(true),
       evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
     };
     const hookRunner = {
