@@ -587,6 +587,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("keeps graph paths within each paint-contained row while joining adjacent lanes", () => {
+    fontState.interfaceSize = 20;
     const parent = commit("bbbbbbbb22222222222222222222222222222222", "Parent");
     const child = {
       ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
@@ -618,12 +619,12 @@ describe("GitHistoryPanel", () => {
     expect(childSvg).not.toBeNull();
     expect(parentSvg).not.toBeNull();
     expect(childSvg!.props.className).toBe("absolute inset-0");
-    expect(childSvg!.props.viewBox).toBe("0 0 44 30");
-    expect(childSvg!.props.height).toBe(30);
-    expect(childParentEdge!.props.d).toContain("L 11.5 30");
-    expect(childParentEdge!.props.strokeLinecap).toBe("butt");
+    expect(childSvg!.props.viewBox).toBe("0 0 44 37.5");
+    expect(childSvg!.props.height).toBe(37.5);
+    expect(childParentEdge!.props.d).toContain("L 11.5 37.5");
+    expect(childParentEdge!.props.strokeLinecap).toBe("square");
     expect(parentIncoming).not.toBeNull();
-    expect(parentIncoming!.props.strokeLinecap).toBe("butt");
+    expect(parentIncoming!.props.strokeLinecap).toBe("square");
   });
 
   it("keeps missing-parent graph paths dashed without boundary overlays", () => {
