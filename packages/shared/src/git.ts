@@ -126,12 +126,17 @@ export function sanitizeWorktreeBranchNameInput(raw: string): string {
 }
 
 /**
- * Final form of a user-typed worktree branch name: live sanitization plus
- * edge trimming. Null when nothing usable remains.
+ * Final form of a user-typed worktree branch name: live sanitization, edge
+ * trimming, and dropping the `.lock` suffixes git refuses on any ref
+ * component. Null when nothing usable remains.
  */
 export function normalizeWorktreeBranchName(raw: string): string | null {
-  const trimmed = sanitizeWorktreeBranchNameInput(raw).replace(/^[./_-]+|[./_-]+$/g, "");
-  return trimmed.length > 0 ? trimmed : null;
+  const normalized = sanitizeWorktreeBranchNameInput(raw)
+    .split("/")
+    .map((component) => component.replace(/^[._-]+|(?:\.lock)*[._-]*$/g, ""))
+    .filter((component) => component.length > 0)
+    .join("/");
+  return normalized.length > 0 ? normalized : null;
 }
 
 /**
