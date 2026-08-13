@@ -196,6 +196,7 @@ import {
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import { BranchToolbar } from "./BranchToolbar";
+import type { WorktreeBranchNameStatus } from "./BranchToolbarWorktreeNameInput";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -1640,7 +1641,8 @@ export default function ChatView(props: ChatViewProps) {
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
   ] = useState<Record<string, boolean>>({});
-  const [worktreeBranchNameConflict, setWorktreeBranchNameConflict] = useState(false);
+  const [worktreeBranchNameStatus, setWorktreeBranchNameStatus] =
+    useState<WorktreeBranchNameStatus | null>(null);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -5028,9 +5030,15 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         primaryServerSettings.newWorktreesStartFromOrigin)
       : false;
-  const customWorktreeBranchName = isLocalDraftThread
+  const draftWorktreeBranchName = isLocalDraftThread
     ? normalizeWorktreeBranchName(draftThread?.worktreeBranchName ?? "")
     : null;
+  // Only a name the toolbar input is currently showing (and has checked for
+  // conflicts) can name the worktree branch; otherwise it stays generated.
+  const customWorktreeBranchName =
+    draftWorktreeBranchName !== null && worktreeBranchNameStatus?.name === draftWorktreeBranchName
+      ? draftWorktreeBranchName
+      : null;
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
@@ -6422,12 +6430,26 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
-    if (shouldCreateWorktree && customWorktreeBranchName !== null && worktreeBranchNameConflict) {
-      setThreadError(
-        threadIdForSend,
-        `Branch "${customWorktreeBranchName}" already exists. Pick a different worktree branch name.`,
-      );
-      return;
+    // A typed name is never silently dropped: sending waits for its conflict
+    // lookup to settle instead of trusting the last reported answer.
+    if (shouldCreateWorktree && draftWorktreeBranchName !== null && worktreeBranchNameStatus) {
+      if (
+        worktreeBranchNameStatus.name !== draftWorktreeBranchName ||
+        worktreeBranchNameStatus.state === "checking"
+      ) {
+        setThreadError(
+          threadIdForSend,
+          `Still checking whether branch "${draftWorktreeBranchName}" is available. Try again in a moment.`,
+        );
+        return;
+      }
+      if (worktreeBranchNameStatus.state === "conflict") {
+        setThreadError(
+          threadIdForSend,
+          `Branch "${draftWorktreeBranchName}" already exists. Pick a different worktree branch name.`,
+        );
+        return;
+      }
     }
 
     const composerImagesSnapshot = [...composerImages];
@@ -8134,7 +8156,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onEnvModeChange={onEnvModeChange}
                                 startFromOrigin={startFromOrigin}
                                 onStartFromOriginChange={onStartFromOriginChange}
-                                onWorktreeBranchNameConflictChange={setWorktreeBranchNameConflict}
+                                onWorktreeBranchNameStatusChange={setWorktreeBranchNameStatus}
                                 {...(canOverrideServerThreadEnvMode
                                   ? { effectiveEnvModeOverride: envMode }
                                   : {})}

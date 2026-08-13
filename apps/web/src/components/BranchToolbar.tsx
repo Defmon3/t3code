@@ -28,7 +28,10 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
-import { BranchToolbarWorktreeNameInput } from "./BranchToolbarWorktreeNameInput";
+import {
+  BranchToolbarWorktreeNameInput,
+  type WorktreeBranchNameStatus,
+} from "./BranchToolbarWorktreeNameInput";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -60,7 +63,7 @@ interface BranchToolbarProps {
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
-  onWorktreeBranchNameConflictChange?: (conflict: boolean) => void;
+  onWorktreeBranchNameStatusChange?: (status: WorktreeBranchNameStatus | null) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -455,9 +458,15 @@ export const BranchToolbar = memo(function BranchToolbar({
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
+<<<<<<< HEAD
   autoEnvironmentLabel,
   onAutoEnvironment,
   onWorktreeBranchNameConflictChange,
+||||||| parent of 6bc6b6bb7 (fix: macroscopeapp comments)
+  onWorktreeBranchNameConflictChange,
+=======
+  onWorktreeBranchNameStatusChange,
+>>>>>>> 6bc6b6bb7 (fix: macroscopeapp comments)
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -558,6 +567,20 @@ export const BranchToolbar = memo(function BranchToolbar({
 
   if (!hasActiveThread || !activeProject) return null;
 
+  // Rendered in both layouts: a stored name the user can't see is a name they
+  // can't clear, and the send path ignores it while the input is unmounted.
+  const worktreeNameInput = showWorktreeNameInput ? (
+    <BranchToolbarWorktreeNameInput
+      environmentId={environmentId}
+      cwd={activeProject.workspaceRoot}
+      value={draftThread?.worktreeBranchName ?? ""}
+      onValueChange={onWorktreeBranchNameChange}
+      {...(onWorktreeBranchNameStatusChange
+        ? { onStatusChange: onWorktreeBranchNameStatusChange }
+        : {})}
+    />
+  ) : null;
+
   return (
     <ComposerSurface.ContextStrip
       ref={setStripElement}
@@ -588,6 +611,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
           />
+          {worktreeNameInput}
         </div>
       ) : null}
       {showGitControls || showEnvironmentIndicator ? (
@@ -627,17 +651,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               onUsePreviousWorktree={onUsePreviousWorktree}
             />
           ) : null}
-          {showWorktreeNameInput ? (
-            <BranchToolbarWorktreeNameInput
-              environmentId={environmentId}
-              cwd={activeProject.workspaceRoot}
-              value={draftThread?.worktreeBranchName ?? ""}
-              onValueChange={onWorktreeBranchNameChange}
-              {...(onWorktreeBranchNameConflictChange
-                ? { onConflictChange: onWorktreeBranchNameConflictChange }
-                : {})}
-            />
-          ) : null}
+          {worktreeNameInput}
         </div>
       ) : null}
 
