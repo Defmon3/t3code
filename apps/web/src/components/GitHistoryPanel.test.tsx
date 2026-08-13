@@ -553,6 +553,74 @@ describe("GitHistoryPanel", () => {
     expect(graphSvg!.props.viewBox).toBe("0 -1 44 32");
   });
 
+  it("joins solid graph lanes inside adjacent paint-contained rows", () => {
+    const parent = commit("bbbbbbbb22222222222222222222222222222222", "Parent");
+    const child = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
+      parentHashes: [parent.hash],
+    };
+    historyState.pages.set(undefined, page([child, parent]));
+
+    const list = historyList(renderPanel());
+    const graphRoots = list.props.data.map((row) => {
+      const historyRow = renderComponent(list.props.renderItem({ item: row }));
+      const graph = visitElements(
+        historyRow,
+        (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+      );
+      expect(graph).not.toBeNull();
+      return renderComponent(graph!);
+    });
+    const childBottom = visitElements(
+      graphRoots[0],
+      (element) => element.props["data-graph-boundary"] === "bottom",
+    );
+    const parentTop = visitElements(
+      graphRoots[1],
+      (element) => element.props["data-graph-boundary"] === "top",
+    );
+
+    expect(childBottom).not.toBeNull();
+    expect(parentTop).not.toBeNull();
+    const childBottomStyle = childBottom!.props.style as Record<string, unknown>;
+    const parentTopStyle = parentTop!.props.style as Record<string, unknown>;
+    expect(childBottom!.type).toBe("span");
+    expect(parentTop!.type).toBe("span");
+    expect(childBottomStyle).toMatchObject({ bottom: 0, height: 2, width: 2 });
+    expect(parentTopStyle).toMatchObject({ top: 0, height: 2, width: 2 });
+    expect(childBottomStyle.left).toBe(parentTopStyle.left);
+    expect(childBottomStyle.backgroundColor).toBe(parentTopStyle.backgroundColor);
+  });
+
+  it("leaves missing-parent graph boundaries dashed", () => {
+    const child = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
+      parentHashes: ["bbbbbbbb22222222222222222222222222222222"],
+    };
+    historyState.pages.set(undefined, page([child]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const graph = visitElements(
+      historyRow,
+      (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+    );
+    expect(graph).not.toBeNull();
+    const graphRoot = renderComponent(graph!);
+    const missingParent = visitElements(
+      graphRoot,
+      (element) =>
+        element.props["data-edge-kind"] === "parent" && element.props.strokeDasharray === "3 2",
+    );
+    const bottomCap = visitElements(
+      graphRoot,
+      (element) => element.props["data-graph-boundary"] === "bottom",
+    );
+
+    expect(missingParent).not.toBeNull();
+    expect(bottomCap).toBeNull();
+  });
+
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
     const errorCause = expiredSnapshotCause();
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
