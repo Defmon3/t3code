@@ -573,8 +573,8 @@ describe("GitHistoryPanel", () => {
     );
 
     expect(childParent!.props.d).toContain("L 11.5 37.5");
-    expect(childParent!.props.strokeLinecap).toBe("butt");
-    expect(parentIncoming!.props.strokeLinecap).toBe("butt");
+    expect(childParent!.props.strokeLinecap).toBe("square");
+    expect(parentIncoming!.props.strokeLinecap).toBe("square");
   });
 
   it("leaves missing-parent graph boundaries dashed", () => {
