@@ -146,7 +146,10 @@ import {
   SettingsSection,
   useSettingsSearchTargetId,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import {
+  searchableSetting,
+  shouldShowCompletedPullRequestAutoSettleSetting,
+} from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -512,8 +515,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
         : []),
-      ...(settings.sidebarAutoSettleCompletedChangeRequests !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests
+      ...(!settings.legacySidebarEnabled &&
+      settings.sidebarAutoSettleCompletedChangeRequests !==
+        DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests
         ? ["Auto-settle completed pull requests"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
@@ -570,6 +574,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fontSizePrompt,
       settings.fontSizeTerminal,
       settings.glassOpacity,
+      settings.legacySidebarEnabled,
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.showSlowRequestWarnings,
@@ -1900,35 +1905,39 @@ export function GeneralSettingsPanel() {
           />
         ) : null}
 
-        <SettingsRow
-          {...searchableSetting("auto-settle-completed-pull-requests")}
-          description="Move threads to Settled when their pull request is merged or closed. Turn this off to keep completed pull-request threads active until you settle them or the inactivity rule applies."
-          resetAction={
-            settings.sidebarAutoSettleCompletedChangeRequests !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests ? (
-              <SettingResetButton
-                label="completed pull request auto-settle"
-                onClick={() =>
+        {shouldShowCompletedPullRequestAutoSettleSetting({
+          legacySidebarEnabled: settings.legacySidebarEnabled,
+        }) ? (
+          <SettingsRow
+            {...searchableSetting("auto-settle-completed-pull-requests")}
+            description="Move threads to Settled when their pull request is merged or closed. Turn this off to keep completed pull-request threads active until you settle them or the inactivity rule applies."
+            resetAction={
+              settings.sidebarAutoSettleCompletedChangeRequests !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests ? (
+                <SettingResetButton
+                  label="completed pull request auto-settle"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarAutoSettleCompletedChangeRequests:
+                        DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarAutoSettleCompletedChangeRequests}
+                onCheckedChange={(checked) =>
                   updateSettings({
-                    sidebarAutoSettleCompletedChangeRequests:
-                      DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleCompletedChangeRequests,
+                    sidebarAutoSettleCompletedChangeRequests: Boolean(checked),
                   })
                 }
+                aria-label="Auto-settle completed pull requests"
               />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sidebarAutoSettleCompletedChangeRequests}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  sidebarAutoSettleCompletedChangeRequests: Boolean(checked),
-                })
-              }
-              aria-label="Auto-settle completed pull requests"
-            />
-          }
-        />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           {...searchableSetting("time-format")}

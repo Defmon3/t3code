@@ -208,6 +208,21 @@ export const SETTINGS_SEARCH_ITEMS = [
 
 export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 
+export function shouldShowCompletedPullRequestAutoSettleSetting(input: {
+  readonly legacySidebarEnabled: boolean;
+}): boolean {
+  return !input.legacySidebarEnabled;
+}
+
+export function getSettingsSearchItems(input: {
+  readonly legacySidebarEnabled: boolean;
+}): ReadonlyArray<SettingsSearchItem> {
+  if (shouldShowCompletedPullRequestAutoSettleSetting(input)) {
+    return SETTINGS_SEARCH_ITEMS;
+  }
+  return SETTINGS_SEARCH_ITEMS.filter((item) => item.id !== "auto-settle-completed-pull-requests");
+}
+
 const SEARCH_ITEMS_BY_ID = Object.fromEntries(
   SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item]),
 ) as Readonly<Record<SettingsSearchItemId, SettingsSearchItem>>;

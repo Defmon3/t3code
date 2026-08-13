@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  getSettingsSearchItems,
   searchableSetting,
   searchSettings,
   SETTINGS_SEARCH_ITEMS,
+  shouldShowCompletedPullRequestAutoSettleSetting,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -63,6 +65,30 @@ describe("searchSettings", () => {
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("shows completed-PR auto-settle only for the flat sidebar", () => {
+    expect(shouldShowCompletedPullRequestAutoSettleSetting({ legacySidebarEnabled: false })).toBe(
+      true,
+    );
+    expect(shouldShowCompletedPullRequestAutoSettleSetting({ legacySidebarEnabled: true })).toBe(
+      false,
+    );
+  });
+
+  it("hides completed-PR auto-settle from legacy-sidebar search results", () => {
+    expect(
+      searchSettings(
+        "completed pull requests",
+        getSettingsSearchItems({ legacySidebarEnabled: false }),
+      ).map((item) => item.id),
+    ).toEqual(["auto-settle-completed-pull-requests"]);
+    expect(
+      searchSettings(
+        "completed pull requests",
+        getSettingsSearchItems({ legacySidebarEnabled: true }),
+      ),
+    ).toEqual([]);
   });
 
   it("serves anchor props to panels from the catalog", () => {
