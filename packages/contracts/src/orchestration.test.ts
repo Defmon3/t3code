@@ -12,6 +12,7 @@ import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
+  OrchestrationShellSnapshot,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -39,6 +40,7 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
+const decodeOrchestrationShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
@@ -188,6 +190,44 @@ it.effect("decodes historical project.created payloads with a default provider",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.instanceId, "codex");
+    assert.deepStrictEqual(parsed.skillShortcuts, []);
+  }),
+);
+
+it.effect("decodes historical project snapshots with empty skill shortcuts", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationShellSnapshot({
+      snapshotSequence: 1,
+      projects: [
+        {
+          id: "project-1",
+          title: "Project Title",
+          workspaceRoot: "/tmp/workspace",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      threads: [],
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepStrictEqual(parsed.projects[0]?.skillShortcuts, []);
+  }),
+);
+
+it.effect("rejects duplicate project skill shortcuts", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "project.meta.update",
+        commandId: "cmd-duplicate-project-skill-shortcuts",
+        projectId: "project-1",
+        skillShortcuts: ["review", "deploy", "review"],
+      }),
+    );
+
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 

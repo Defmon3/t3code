@@ -230,6 +230,7 @@ describe("add project shared logic", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
         defaultModelSelection: null,
+        skillShortcuts: [],
         scripts: [],
       },
       {
@@ -241,6 +242,7 @@ describe("add project shared logic", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
         defaultModelSelection: null,
+        skillShortcuts: [],
         scripts: [],
       },
     ];

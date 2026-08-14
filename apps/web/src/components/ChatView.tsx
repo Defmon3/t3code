@@ -263,6 +263,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { ProjectSkillShortcutBar } from "./chat/ProjectSkillShortcutBar";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -333,6 +334,7 @@ import {
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
+  removeOptimisticUserMessage,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -3196,6 +3198,26 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [environmentId, updateProject, upsertKeybinding],
   );
+  const persistProjectSkillShortcuts = useCallback(
+    async (skillShortcuts: string[]) => {
+      if (!activeProject) return;
+      const result = await updateProject({
+        environmentId,
+        input: { projectId: activeProject.id, skillShortcuts },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not save skill shortcuts",
+            description: error instanceof Error ? error.message : "The project update failed.",
+          }),
+        );
+      }
+    },
+    [activeProject, environmentId, updateProject],
+  );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {
       if (!activeProject) {
@@ -5044,8 +5066,10 @@ function ChatViewContent(props: ChatViewProps) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    options?: { standaloneText?: string },
   ) => {
     e?.preventDefault();
+    const standaloneText = options?.standaloneText;
     const notifyDirectAnnotationAttached = () => {
       if (!directAnnotation) return;
       toastManager.add(
@@ -5076,7 +5100,7 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    if (activePendingProgress) {
+    if (activePendingProgress && !standaloneText) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
         return;
@@ -5091,26 +5115,31 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const {
       images: sendContextImages,
-      terminalContexts: composerTerminalContexts,
-      elementContexts: composerElementContexts,
+      terminalContexts: sendContextTerminalContexts,
+      elementContexts: sendContextElementContexts,
       previewAnnotations: sendContextPreviewAnnotations,
-      reviewComments: composerReviewComments,
+      reviewComments: sendContextReviewComments,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
-    const composerImages =
-      directAnnotation?.image &&
-      !sendContextImages.some((image) => image.id === directAnnotation.image?.id)
+    const composerTerminalContexts = standaloneText ? [] : sendContextTerminalContexts;
+    const composerElementContexts = standaloneText ? [] : sendContextElementContexts;
+    const composerReviewComments = standaloneText ? [] : sendContextReviewComments;
+    const composerImages = standaloneText
+      ? []
+      : directAnnotation?.image &&
+          !sendContextImages.some((image) => image.id === directAnnotation.image?.id)
         ? [...sendContextImages, directAnnotation.image]
         : sendContextImages;
-    const composerPreviewAnnotations =
-      directAnnotation &&
-      !sendContextPreviewAnnotations.some(
-        (annotation) => annotation.id === directAnnotation.annotation.id,
-      )
+    const composerPreviewAnnotations = standaloneText
+      ? []
+      : directAnnotation &&
+          !sendContextPreviewAnnotations.some(
+            (annotation) => annotation.id === directAnnotation.annotation.id,
+          )
         ? [
             ...sendContextPreviewAnnotations,
             {
@@ -5121,7 +5150,7 @@ function ChatViewContent(props: ChatViewProps) {
             },
           ]
         : sendContextPreviewAnnotations;
-    const promptForSend = promptRef.current;
+    const promptForSend = standaloneText ?? promptRef.current;
     const {
       trimmedPrompt: trimmed,
       sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -5136,7 +5165,7 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
-    if (!directAnnotation && showPlanFollowUpPrompt && activeProposedPlan) {
+    if (!standaloneText && !directAnnotation && showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
@@ -5164,6 +5193,7 @@ function ChatViewContent(props: ChatViewProps) {
     // otherwise they send as plain text like any other message.
     const standaloneSlashCommand =
       settings.planModeEnabled &&
+      !standaloneText &&
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
@@ -5343,9 +5373,11 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    if (!standaloneText) {
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+    }
 
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
@@ -5526,7 +5558,15 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     if (failure !== null) {
+      setOptimisticUserMessages((existing) => {
+        const result = removeOptimisticUserMessage(existing, messageIdForSend);
+        for (const message of result.removed) {
+          revokeUserMessagePreviewUrls(message);
+        }
+        return result.messages;
+      });
       if (
+        !standaloneText &&
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0 &&
@@ -5536,14 +5576,6 @@ function ChatViewContent(props: ChatViewProps) {
         (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
           .length ?? 0) === 0
       ) {
-        setOptimisticUserMessages((existing) => {
-          const removed = existing.filter((message) => message.id === messageIdForSend);
-          for (const message of removed) {
-            revokeUserMessagePreviewUrls(message);
-          }
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
         promptRef.current = promptForSend;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
@@ -6664,6 +6696,21 @@ function ChatViewContent(props: ChatViewProps) {
                             keybindings={keybindings}
                             terminalOpen={Boolean(terminalUiState.terminalOpen)}
                             gitCwd={gitCwd}
+                            topSlot={
+                              activeProject ? (
+                                <ProjectSkillShortcutBar
+                                  shortcuts={activeProject.skillShortcuts}
+                                  onChange={(skillShortcuts) =>
+                                    void persistProjectSkillShortcuts(skillShortcuts)
+                                  }
+                                  onInvoke={(shortcut) =>
+                                    void onSend(undefined, undefined, {
+                                      standaloneText: `$${shortcut}`,
+                                    })
+                                  }
+                                />
+                              ) : null
+                            }
                             promptRef={promptRef}
                             composerImagesRef={composerImagesRef}
                             composerTerminalContextsRef={composerTerminalContextsRef}

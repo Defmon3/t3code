@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { Thread, ThreadShell } from "../types";
+import type { ChatMessage, Thread, ThreadShell } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
@@ -28,6 +28,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftPromotionNavigationTarget,
+  removeOptimisticUserMessage,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveDraftHeroState,
@@ -74,6 +75,30 @@ describe("draft hero submission transition", () => {
         backgroundSubmissionPending: true,
       }),
     ).toBeNull();
+  });
+});
+
+function makeUserMessage(id: string, text: string): ChatMessage {
+  return {
+    id: MessageId.make(id),
+    role: "user",
+    text,
+    turnId: null,
+    streaming: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+describe("failed optimistic sends", () => {
+  it("removes only the failed optimistic message", () => {
+    const failed = makeUserMessage("failed-skill", "$review");
+    const retained = makeUserMessage("retained-message", "next message");
+
+    const result = removeOptimisticUserMessage([failed, retained], MessageId.make("failed-skill"));
+
+    expect(result.messages).toEqual([retained]);
+    expect(result.removed).toEqual([failed]);
   });
 });
 

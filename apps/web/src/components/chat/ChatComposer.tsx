@@ -596,6 +596,7 @@ export interface ChatComposerProps {
   keybindings: ResolvedKeybindingsConfig;
   terminalOpen: boolean;
   gitCwd: string | null;
+  topSlot?: ReactNode;
 
   // Refs the parent needs kept in sync
   promptRef: React.RefObject<string>;
@@ -684,6 +685,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     keybindings,
     terminalOpen,
     gitCwd,
+    topSlot,
     promptRef,
     composerRef,
     composerImagesRef,
@@ -2970,6 +2972,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           steps={visibleTaskSteps}
         />
       ) : null}
+      {topSlot}
       <div className="relative">
         {showShoulderTabs && visibleTasksProgress && visibleTaskSteps ? (
           <ComposerTasksBadge

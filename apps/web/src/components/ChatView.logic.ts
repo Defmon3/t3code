@@ -257,6 +257,18 @@ export function revokeUserMessagePreviewUrls(message: ChatMessage): void {
   }
 }
 
+export function removeOptimisticUserMessage(
+  messages: ChatMessage[],
+  messageId: ChatMessage["id"],
+): { messages: ChatMessage[]; removed: ChatMessage[] } {
+  const removed = messages.filter((message) => message.id === messageId);
+  if (removed.length === 0) return { messages, removed };
+  return {
+    messages: messages.filter((message) => message.id !== messageId),
+    removed,
+  };
+}
+
 export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[] {
   if (message.role !== "user" || !message.attachments) {
     return [];
