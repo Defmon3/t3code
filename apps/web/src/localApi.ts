@@ -7,6 +7,19 @@ import { resetRequestLatencyStateForTests } from "./rpc/requestLatencyState";
 
 let cachedApi: LocalApi | undefined;
 
+function openBrowserExternalUrl(url: string): void {
+  const opened = window.open("", "_blank");
+  if (!opened) {
+    throw new Error("Unable to open link.");
+  }
+  const referrerPolicy = opened.document.createElement("meta");
+  referrerPolicy.name = "referrer";
+  referrerPolicy.content = "no-referrer";
+  opened.document.head.append(referrerPolicy);
+  opened.opener = null;
+  opened.location.href = url;
+}
+
 function createBrowserLocalApi(): LocalApi {
   return {
     dialogs: {
@@ -28,7 +41,7 @@ function createBrowserLocalApi(): LocalApi {
           return;
         }
 
-        window.open(url, "_blank", "noopener,noreferrer");
+        openBrowserExternalUrl(url);
       },
     },
     contextMenu: {

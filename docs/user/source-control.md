@@ -55,7 +55,7 @@ T3 Code works with the platforms your team already uses:
 
 ### Browse Git History
 
-Open the right panel menu and choose **Git History** to explore the repository without leaving your thread. The history view shows a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository.
+Open the right panel menu and choose **Git History** to explore the repository without leaving your thread. Use **Tree** for the connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository. Switching to **Issues** and back keeps the Tree view exactly where you left it.
 
 Git History is currently available in web and desktop project views. Mobile keeps its existing Git status and actions, but does not yet include this dense history workspace.
 
@@ -63,6 +63,10 @@ Git History is currently available in web and desktop project views. Mobile keep
 - Select a commit to view its metadata and changed files, then open the same diff view used elsewhere in T3 Code. History diffs use Git's normal patch output, so they match the familiar command-line review view.
 - Copy a full commit hash from a row. When a GitHub repository is connected, issue references in commit subjects open the matching issue.
 - Branch rows show ahead and behind counts when an upstream is configured.
+
+For a GitHub repository, **Issues** lists open or closed GitHub issues from the machine running T3 Code. It needs the GitHub CLI (`gh`) to be installed and authenticated there. Search by GitHub query text, then narrow the same server-side result with author, labels, assignee, milestone, issue type, and newest/oldest filters. Results load in pages and are virtualized; GitHub search can expose only the newest or oldest 1,000 matches for one query, and the view says when that limit applies.
+
+Choose a row or **New issue** to open the canonical GitHub page in your browser. T3 Code does not edit issues in this view. Issues is not available for non-GitHub repositories, environments running an older server, or the mobile client.
 
 For large repositories, history is loaded in pages and the commit list is virtualized. The initial browsing window is intentionally bounded so the right panel remains responsive; select a branch or search to narrow the result.
 

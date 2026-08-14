@@ -107,6 +107,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as GitHubIssueService from "./githubIssues/GitHubIssueService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -409,6 +410,7 @@ const makeWsRpcLayer = (
       );
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const githubIssues = yield* GitHubIssueService.GitHubIssueService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -1702,6 +1704,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsInvalidate, pullRequests.invalidate(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.githubIssuesList]: (input) =>
+          observeRpcEffect(WS_METHODS.githubIssuesList, githubIssues.list(input), {
+            "rpc.aggregate": "github-issues",
+          }),
+        [WS_METHODS.githubIssuesInvalidate]: (input) =>
+          observeRpcEffect(WS_METHODS.githubIssuesInvalidate, githubIssues.invalidate(input), {
+            "rpc.aggregate": "github-issues",
+          }),
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReviewerCandidates,
@@ -2303,6 +2313,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const githubIssues = yield* GitHubIssueService.GitHubIssueService;
     const pullRequests = yield* PullRequestService.PullRequestService;
     return HttpRouter.add(
       "GET",
@@ -2330,6 +2341,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(Layer.succeed(GitHubIssueService.GitHubIssueService, githubIssues)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

@@ -119,10 +119,12 @@ vi.mock("effect/unstable/reactivity", async (importOriginal) => {
     },
     Atom: {
       ...actual.Atom,
-      make: (
-        create: (get: (atom: PageAtom) => PageAtom["result"]) => ReadonlyArray<PageAtom["result"]>,
-      ) => {
-        const value = create((atom) => atom.result);
+      make: (create: unknown) => {
+        if (typeof create !== "function") return actual.Atom.make(create);
+        const derive = create as (
+          get: (atom: PageAtom) => PageAtom["result"],
+        ) => ReadonlyArray<PageAtom["result"]>;
+        const value = derive((atom) => atom.result);
         return {
           pipe: () => ({ value }),
           value,
@@ -135,6 +137,10 @@ vi.mock("effect/unstable/reactivity", async (importOriginal) => {
 
 vi.mock("@legendapp/list/react", () => ({
   LegendList: () => null,
+}));
+
+vi.mock("./githubIssues/GitHubIssuesPane", () => ({
+  GitHubIssuesPane: () => null,
 }));
 
 vi.mock("../rpc/atomRegistry", () => ({

@@ -52,6 +52,7 @@ function shouldTrackRpcAck(method: string): boolean {
   return (
     !method.includes("subscribe") &&
     !method.startsWith("pullRequests.") &&
+    !method.startsWith("githubIssues.") &&
     !untrackedRpcAckMethods.has(method)
   );
 }

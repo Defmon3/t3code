@@ -2008,6 +2008,8 @@ function ChatViewContent(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const githubIssuesCapabilityKnown = serverConfig !== null;
+  const githubIssuesAvailable = serverConfig?.environment.capabilities.githubIssues === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -6125,6 +6127,8 @@ function ChatViewContent(props: ChatViewProps) {
         <GitHistoryPanel
           environmentId={environmentId}
           cwd={gitCwd}
+          githubIssuesCapabilityKnown={githubIssuesCapabilityKnown}
+          githubIssuesAvailable={githubIssuesAvailable}
           {...(gitHistoryIssueUrlPrefix ? { issueUrlPrefix: gitHistoryIssueUrlPrefix } : {})}
         />
       </Suspense>
@@ -6169,10 +6173,6 @@ function ChatViewContent(props: ChatViewProps) {
         composerDraftTarget={composerDraftTarget}
         onStateChange={handlePullRequestTabStatusChange}
       />
-    ) : activeRightPanelSurface?.kind === "git-history" && gitCwd ? (
-      <Suspense fallback={null}>
-        <GitHistoryPanel environmentId={environmentId} cwd={gitCwd} />
-      </Suspense>
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}

@@ -198,6 +198,13 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import {
+  GitHubIssueInvalidateInput,
+  GitHubIssueListInput,
+  GitHubIssueListResult,
+  GitHubIssuesOperationError,
+  GitHubIssuesUnavailableError,
+} from "./githubIssues.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
@@ -306,6 +313,10 @@ export const WS_METHODS = {
   pullRequestsInvalidate: "pullRequests.invalidate",
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
+
+  // GitHub issue methods
+  githubIssuesList: "githubIssues.list",
+  githubIssuesInvalidate: "githubIssues.invalidate",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -576,6 +587,24 @@ export const WsPullRequestsInvalidateRpc = Rpc.make(WS_METHODS.pullRequestsInval
   payload: PullRequestInvalidateInput,
   success: Schema.Void,
   error: PullRequestRpcError,
+});
+
+const GitHubIssuesRpcError = Schema.Union([
+  GitHubIssuesUnavailableError,
+  GitHubIssuesOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsGitHubIssuesListRpc = Rpc.make(WS_METHODS.githubIssuesList, {
+  payload: GitHubIssueListInput,
+  success: GitHubIssueListResult,
+  error: GitHubIssuesRpcError,
+});
+
+export const WsGitHubIssuesInvalidateRpc = Rpc.make(WS_METHODS.githubIssuesInvalidate, {
+  payload: GitHubIssueInvalidateInput,
+  success: Schema.Void,
+  error: GitHubIssuesRpcError,
 });
 
 /**
@@ -1050,6 +1079,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
+  WsGitHubIssuesListRpc,
+  WsGitHubIssuesInvalidateRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

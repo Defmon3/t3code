@@ -103,6 +103,59 @@ describe("LocalApi", () => {
     await expect(createLocalApi().dialogs.confirm("Delete this thread?")).resolves.toBe(false);
   });
 
+  it("opens a browser external link without giving it an opener", async () => {
+    const events: string[] = [];
+    const referrerPolicy = { name: "", content: "" } as HTMLMetaElement;
+    const append = vi.fn((meta: HTMLMetaElement) => {
+      events.push(`${meta.name}:${meta.content}`);
+    });
+    let href = "";
+    const openedWindow = {
+      opener: testWindow(),
+      document: {
+        createElement: vi.fn(() => referrerPolicy),
+        head: { append },
+      },
+      location: {
+        get href() {
+          return href;
+        },
+        set href(value: string) {
+          events.push(`navigate:${value}`);
+          href = value;
+        },
+      },
+    } as unknown as Window;
+    const open = vi.fn(() => openedWindow);
+    Object.defineProperty(testWindow(), "open", {
+      configurable: true,
+      value: open,
+    });
+    const { createLocalApi } = await import("./localApi");
+    const url = "https://github.com/t3tools/t3code/issues/1";
+
+    await expect(createLocalApi().shell.openExternal(url)).resolves.toBeUndefined();
+
+    expect(open).toHaveBeenCalledWith("", "_blank");
+    expect(openedWindow.opener).toBeNull();
+    expect(openedWindow.location.href).toBe(url);
+    expect(events).toEqual(["referrer:no-referrer", `navigate:${url}`]);
+  });
+
+  it("reports a blocked browser external link", async () => {
+    const open = vi.fn(() => null);
+    Object.defineProperty(testWindow(), "open", {
+      configurable: true,
+      value: open,
+    });
+    const { createLocalApi } = await import("./localApi");
+
+    await expect(
+      createLocalApi().shell.openExternal("https://github.com/t3tools/t3code/issues/1"),
+    ).rejects.toThrow("Unable to open link.");
+    expect(open).toHaveBeenCalledWith("", "_blank");
+  });
+
   it("delegates host capabilities and persistence to the desktop bridge", async () => {
     const showContextMenu = vi.fn().mockResolvedValue("delete");
     const pickFolder = vi.fn().mockResolvedValue("/tmp/project");
