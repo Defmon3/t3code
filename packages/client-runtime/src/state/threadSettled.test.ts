@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canSettle,
+  changeRequestAutoSettles,
   effectiveSettled,
   hasQueuedTurnStart,
   resolveThreadPr,
@@ -68,6 +69,18 @@ describe("resolveThreadPr", () => {
     expect(resolve(open)).toBe(open);
     expect(resolve(missing)).toBe(missing);
     expect(resolve(invalid)).toBe(invalid);
+  });
+});
+
+describe("changeRequestAutoSettles", () => {
+  it.each([
+    ["open", true, false],
+    ["merged", true, true],
+    ["merged", false, false],
+    ["closed", false, true],
+    [null, false, false],
+  ] as const)("state=%s autoSettleOnMerge=%s returns %s", (state, autoSettleOnMerge, expected) => {
+    expect(changeRequestAutoSettles(state, autoSettleOnMerge)).toBe(expected);
   });
 });
 
@@ -228,6 +241,27 @@ describe("effectiveSettled", () => {
         }),
       ).toBe(true);
     }
+  });
+
+  it("can keep a merged change request active", () => {
+    const recentlyActive = makeShell({ activityAt: "2026-04-09T23:59:59.999Z" });
+    expect(
+      effectiveSettled(recentlyActive, {
+        now: NOW,
+        autoSettleAfterDays: null,
+        autoSettleOnMerge: false,
+        changeRequestState: "merged",
+      }),
+    ).toBe(false);
+
+    expect(
+      effectiveSettled(recentlyActive, {
+        now: NOW,
+        autoSettleAfterDays: null,
+        autoSettleOnMerge: false,
+        changeRequestState: "closed",
+      }),
+    ).toBe(true);
   });
 
   it("never auto-settles a stale thread with an open change request", () => {
