@@ -2728,65 +2728,81 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
     }),
   );
 
-  it.effect("projects persist updated scripts from project.meta.update", () =>
-    Effect.gen(function* () {
-      const engine = yield* OrchestrationEngineService;
-      const sql = yield* SqlClient.SqlClient;
-      const createdAt = "2026-01-01T00:00:00.000Z";
+  it.effect(
+    "projects persist scripts and preserve skill shortcuts omitted from later updates",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const sql = yield* SqlClient.SqlClient;
+        const createdAt = "2026-01-01T00:00:00.000Z";
 
-      yield* engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cmd-scripts-project-create"),
-        projectId: ProjectId.make("project-scripts"),
-        title: "Scripts Project",
-        workspaceRoot: "/tmp/project-scripts",
-        defaultModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      });
-
-      yield* engine.dispatch({
-        type: "project.meta.update",
-        commandId: CommandId.make("cmd-scripts-project-update"),
-        projectId: ProjectId.make("project-scripts"),
-        scripts: [
-          {
-            id: "script-1",
-            name: "Build",
-            command: "bun run build",
-            icon: "build",
-            runOnWorktreeCreate: false,
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-scripts-project-create"),
+          projectId: ProjectId.make("project-scripts"),
+          title: "Scripts Project",
+          workspaceRoot: "/tmp/project-scripts",
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
           },
-        ],
-        defaultModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5",
-        },
-        faviconPath: "brand/icon.svg",
-      });
+          createdAt,
+        });
 
-      const projectRows = yield* sql<{
-        readonly scriptsJson: string;
-        readonly defaultModelSelection: string;
-        readonly faviconPath: string | null;
-      }>`
+        yield* engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-scripts-project-update"),
+          projectId: ProjectId.make("project-scripts"),
+          scripts: [
+            {
+              id: "script-1",
+              name: "Build",
+              command: "bun run build",
+              icon: "build",
+              runOnWorktreeCreate: false,
+            },
+          ],
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5",
+          },
+          faviconPath: "brand/icon.svg",
+          skillShortcuts: ["review", "deploy"],
+        });
+
+        yield* engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-scripts-project-rename"),
+          projectId: ProjectId.make("project-scripts"),
+          title: "Renamed Scripts Project",
+        });
+
+        const projectRows = yield* sql<{
+          readonly title: string;
+          readonly scriptsJson: string;
+          readonly defaultModelSelection: string;
+          readonly faviconPath: string | null;
+          readonly skillShortcuts: string;
+        }>`
         SELECT
+          title,
           scripts_json AS "scriptsJson",
           default_model_selection_json AS "defaultModelSelection",
-          favicon_path AS "faviconPath"
+          favicon_path AS "faviconPath",
+          skill_shortcuts_json AS "skillShortcuts"
         FROM projection_projects
         WHERE project_id = 'project-scripts'
       `;
-      assert.deepEqual(projectRows, [
-        {
-          scriptsJson:
-            '[{"id":"script-1","name":"Build","command":"bun run build","icon":"build","runOnWorktreeCreate":false}]',
-          defaultModelSelection: '{"instanceId":"codex","model":"gpt-5"}',
-          faviconPath: "brand/icon.svg",
-        },
-      ]);
-    }),
+        assert.deepEqual(projectRows, [
+          {
+            title: "Renamed Scripts Project",
+            scriptsJson:
+              '[{"id":"script-1","name":"Build","command":"bun run build","icon":"build","runOnWorktreeCreate":false}]',
+            defaultModelSelection: '{"instanceId":"codex","model":"gpt-5"}',
+            faviconPath: "brand/icon.svg",
+            skillShortcuts: '["review","deploy"]',
+          },
+        ]);
+      }),
   );
 });

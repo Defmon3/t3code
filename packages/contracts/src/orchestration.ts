@@ -231,6 +231,10 @@ export const ProjectFaviconPath = TrimmedNonEmptyString.check(
 );
 export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 
+export const ProjectSkillShortcut = TrimmedNonEmptyString.check(Schema.isMaxLength(255));
+export type ProjectSkillShortcut = typeof ProjectSkillShortcut.Type;
+export const ProjectSkillShortcuts = Schema.Array(ProjectSkillShortcut).check(Schema.isUnique());
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
@@ -242,6 +246,7 @@ export const OrchestrationProject = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  skillShortcuts: ProjectSkillShortcuts.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -439,6 +444,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  skillShortcuts: ProjectSkillShortcuts.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -654,6 +660,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -1100,6 +1107,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  skillShortcuts: ProjectSkillShortcuts.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1113,6 +1121,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });
