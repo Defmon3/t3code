@@ -145,6 +145,7 @@ const projectCreatedEvent = (input: {
     title: "Projection summary cost",
     workspaceRoot: `/tmp/${input.slug}`,
     defaultModelSelection: null,
+    skillShortcuts: [],
     scripts: [],
     createdAt: input.occurredAt,
     updatedAt: input.occurredAt,
