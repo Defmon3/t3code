@@ -497,6 +497,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             defaultModelSelection: event.payload.defaultModelSelection,
             defaultThreadEnvMode: null,
             faviconPath: event.payload.faviconPath ?? null,
+            skillShortcuts: event.payload.skillShortcuts,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -525,6 +526,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.faviconPath !== undefined
               ? { faviconPath: event.payload.faviconPath }
+              : {}),
+            ...(event.payload.skillShortcuts !== undefined
+              ? { skillShortcuts: event.payload.skillShortcuts }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,

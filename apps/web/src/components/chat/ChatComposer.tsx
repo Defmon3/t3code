@@ -557,6 +557,7 @@ export interface ChatComposerProps {
   keybindings: ResolvedKeybindingsConfig;
   terminalOpen: boolean;
   gitCwd: string | null;
+  topSlot?: ReactNode;
 
   // Refs the parent needs kept in sync
   promptRef: React.RefObject<string>;
@@ -643,6 +644,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     keybindings,
     terminalOpen,
     gitCwd,
+    topSlot,
     promptRef,
     composerRef,
     composerImagesRef,
@@ -2697,6 +2699,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             scheduleComposerCollapseCheck();
           }}
         >
+          {topSlot}
           {!isComposerCollapsedMobile &&
             (activePendingApproval ? (
               <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
