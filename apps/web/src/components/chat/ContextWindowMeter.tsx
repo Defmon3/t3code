@@ -1,10 +1,7 @@
-import {
-  type ContextWindowSnapshot,
-  formatContextWindowTokens,
-  getContextWindowUsageLevel,
-} from "~/lib/contextWindow";
+import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -18,9 +15,9 @@ function formatPercentage(value: number | null): string | null {
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
-  providerDisplayName?: string | null;
+  modelDisplayName?: string | null;
 }) {
-  const { usage, providerDisplayName } = props;
+  const { usage, modelDisplayName } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
   const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
   const radius = 9.75;
@@ -28,17 +25,10 @@ export function ContextWindowMeter(props: {
   const dashOffset = circumference * (1 - normalizedPercentage / 100);
   const totalProcessedTokens = usage.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
-  const usageLevel = getContextWindowUsageLevel({
-    usedTokens: usage.usedTokens,
-    maxTokens: usage.maxTokens ?? null,
-    providerDisplayName,
-  });
-  const usageColor =
-    usageLevel === "critical"
-      ? "var(--color-error)"
-      : usageLevel === "warning"
-        ? "var(--color-warning)"
-        : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
+  const isOverloaded = normalizedPercentage > 90;
+  const usageColor = isOverloaded
+    ? "var(--color-error)"
+    : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
 
   return (
     <Popover>
@@ -138,7 +128,7 @@ export function ContextWindowMeter(props: {
           ) : null}
           {usage.compactsAutomatically ? (
             <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
-              {providerDisplayName ?? "It"} automatically compacts its context when needed.
+              {formatContextWindowCompactionMessage(modelDisplayName)}
             </div>
           ) : null}
         </div>
