@@ -28,6 +28,8 @@ export const RIGHT_PANEL_KINDS = [
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
+export type RepositoryView = "history" | "issues" | "pull-requests";
+
 export type RightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
@@ -40,7 +42,7 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "git-history"; kind: "git-history" }
+  | { id: "git-history"; kind: "git-history"; view: RepositoryView }
   | { id: "files"; kind: "files" }
   | {
       id: `file:${string}`;
@@ -96,7 +98,7 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the Git History singleton and issue surface kinds.
 // v13 adds the "issues" browser surface and stops persisting the issues list's shared panel.
-const RIGHT_PANEL_STORAGE_VERSION = 13;
+const RIGHT_PANEL_STORAGE_VERSION = 14;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -130,6 +132,10 @@ interface RightPanelStoreState {
     target: { environmentId?: string; projectId: string; repository: string; number: number },
   ) => void;
   openIssues: (ref: ScopedThreadRef) => void;
+  /** Opens the shared repository pane at the requested view. */
+  openRepository: (ref: ScopedThreadRef, view: RepositoryView) => void;
+  /** Changes the active view without creating another right-panel surface. */
+  selectRepositoryView: (ref: ScopedThreadRef, view: RepositoryView) => void;
   /** What the issue browser is showing: an issue, or null for the list it was picked from. */
   selectIssueInPanel: (
     ref: ScopedThreadRef,
@@ -177,7 +183,7 @@ const singletonSurface = (
     case "diff":
       return { id: "diff", kind };
     case "git-history":
-      return { id: "git-history", kind };
+      return { id: "git-history", kind, view: "history" };
     case "files":
       return { id: "files", kind };
     case "agents":
@@ -421,6 +427,13 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         },
                       ];
                     }
+                    if (surface.kind === "git-history") {
+                      const view =
+                        surface.view === "issues" || surface.view === "pull-requests"
+                          ? surface.view
+                          : "history";
+                      return [{ id: "git-history", kind: "git-history", view }];
+                    }
                     if (surface.kind !== "terminal") return [surface];
                     if (
                       !("resourceId" in surface) ||
@@ -525,6 +538,29 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             // tab alone, so this only ever activates the one that is already there.
             upsertSurface(current, { id: "issues", kind: "issues", selected: null }),
           ),
+        })),
+      openRepository: (ref, view) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const surface: RightPanelSurface = { id: "git-history", kind: "git-history", view };
+            const exists = current.surfaces.some((entry) => entry.id === surface.id);
+            return {
+              isOpen: true,
+              activeSurfaceId: surface.id,
+              surfaces: exists
+                ? current.surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
+                : [...current.surfaces, surface],
+            };
+          }),
+        })),
+      selectRepositoryView: (ref, view) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.kind === "git-history" ? { ...surface, view } : surface,
+            ),
+          })),
         })),
       selectIssueInPanel: (ref, target) =>
         set((state) => ({

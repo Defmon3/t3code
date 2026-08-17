@@ -469,7 +469,7 @@ function surfaceTitle(
     case "diff":
       return "Diff";
     case "git-history":
-      return "Git History";
+      return "Repository";
     case "files":
       return "Files";
     case "file":

@@ -447,7 +447,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
-const GitHistoryWithIssuesPanel = lazy(() => import("./GitHistoryWithIssuesPanel"));
+const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -6258,27 +6258,36 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
-    ) : activeRightPanelSurface?.kind === "git-history" && !supportsGitHistory ? (
-      <PullRequestsUnavailableState
-        title="Git History unavailable"
-        error="Update this environment's T3 Code server to browse Git History."
-      />
-    ) : activeRightPanelSurface?.kind === "git-history" &&
-      gitCwd &&
-      activeProject &&
-      activeProjectRef ? (
+    ) : activeRightPanelSurface?.kind === "git-history" && activeProject && activeProjectRef ? (
       <Suspense fallback={null}>
-        <GitHistoryWithIssuesPanel
+        <RepositoryPanel
           environmentId={environmentId}
-          cwd={gitCwd}
+          cwd={gitCwd ?? activeProject.workspaceRoot}
+          gitHistoryCapabilityState={
+            supportsGitHistory && isGitRepo && gitCwd !== null ? "ready" : "unavailable"
+          }
           issuesCapabilityState={issuesSurfaceCapabilityState}
+          pullRequestsCapabilityState={
+            !pullRequestsCapabilityKnown
+              ? "loading"
+              : supportsPullRequests
+                ? "ready"
+                : "unavailable"
+          }
           projectId={activeProject.id}
+          composerDraftTarget={composerDraftTarget}
+          view={activeRightPanelSurface.view}
+          onViewChange={(view) =>
+            useRightPanelStore.getState().selectRepositoryView(activeThreadRef, view)
+          }
           handoffTarget={{
             kind: "existing-thread",
             projectRef: activeProjectRef,
             draftId: composerDraftTarget,
           }}
           onIssueStateChange={handleIssueTabStatusChange}
+          onPullRequestStateChange={handlePullRequestTabStatusChange}
+          onOpenLinkedIssue={openLinkedIssue}
           {...(gitHistoryIssueUrlPrefix ? { issueUrlPrefix: gitHistoryIssueUrlPrefix } : {})}
         />
       </Suspense>

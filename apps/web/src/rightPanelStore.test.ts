@@ -281,9 +281,26 @@ describe("rightPanelStore", () => {
       isOpen: true,
       activeSurfaceId: "git-history",
       surfaces: [
-        { id: "git-history", kind: "git-history" },
+        { id: "git-history", kind: "git-history", view: "history" },
         { id: "agents", kind: "agents" },
       ],
+    });
+  });
+
+  it("opens the shared repository pane directly at pull requests", () => {
+    useRightPanelStore.getState().openRepository(refA, "pull-requests");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "git-history",
+      surfaces: [{ id: "git-history", kind: "git-history", view: "pull-requests" }],
+    });
+
+    useRightPanelStore.getState().selectRepositoryView(refA, "issues");
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "git-history",
+      kind: "git-history",
+      view: "issues",
     });
   });
 
