@@ -76,6 +76,7 @@ function renderTabs(first: DesktopPreviewFavicon | null, second?: DesktopPreview
       onAddTerminal={() => undefined}
       onAddPullRequest={() => undefined}
       onAddGitHistory={() => undefined}
+      onAddIssue={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
@@ -86,6 +87,7 @@ function renderTabs(first: DesktopPreviewFavicon | null, second?: DesktopPreview
       filesAvailable={false}
       pullRequestAvailable={false}
       gitHistoryAvailable={false}
+      issueAvailable={false}
       agentsAvailable={false}
     >
       <div>content</div>

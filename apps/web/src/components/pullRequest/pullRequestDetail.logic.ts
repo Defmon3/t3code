@@ -14,6 +14,35 @@ import type {
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 
+/** Activity changes only when the same host resource reports a newer revision. */
+export function shouldRefreshPullRequestActivity(
+  previous: { readonly key: string; readonly updatedAt: string } | null,
+  next: { readonly key: string; readonly updatedAt: string },
+): boolean {
+  return previous !== null && previous.key === next.key && previous.updatedAt !== next.updatedAt;
+}
+/** Appends fetched pages without replacing fresher comments already in the activity response. */
+export function mergePullRequestThreadComments<T extends { readonly id: string }>(
+  base: ReadonlyArray<T>,
+  loaded: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const seen = new Set(base.map((comment) => comment.id));
+  return [
+    ...base,
+    ...loaded.filter((comment) => {
+      if (seen.has(comment.id)) return false;
+      seen.add(comment.id);
+      return true;
+    }),
+  ];
+}
+
+export function editPullRequestThreadComment<
+  T extends { readonly id: string; readonly body: string },
+>(comments: ReadonlyArray<T>, commentId: string, body: string): ReadonlyArray<T> {
+  return comments.map((comment) => (comment.id === commentId ? { ...comment, body } : comment));
+}
+
 /**
  * Whether the pull request on a right-panel surface is the thread's own one. Repository and
  * number are not enough: one environment can hold two checkouts of the same repository under
@@ -656,6 +685,35 @@ export function buildExplainPullRequestHandoff(input: {
       pullRequestContextComment(input, [
         "Walk through this pull request as if the reader is reviewing it for the first time. Cover, in this order: what the change is for; how it goes about it, file by file where that matters; anything surprising or risky in it; and what is worth reading closely before approving.",
         "Read the diff before answering, and say plainly where you are unsure rather than filling the gap. Explain only. Do not change any code.",
+      ]),
+    ],
+  };
+}
+
+export const LINK_ISSUES_HANDOFF_KIND = "link-issues";
+
+/**
+ * Which issues the change is about, worked out by an agent and written where the host reads them
+ * from. There is no call to make for a link: the host derives one from a closing keyword in the
+ * description, so the description is what gets edited — and saying so is what keeps the agent
+ * from going looking for an API that does not exist.
+ */
+export function buildLinkIssuesHandoff(input: {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+}): FixFindingsHandoff {
+  return {
+    prompt: [
+      "Link this pull request to the issues it addresses.",
+      "Read the change, then read the repository's open issues, and decide which of them this change actually addresses. Record each link the way this host records one — in the pull request's own description: `Closes #12` for an issue the change closes, and a plain `#12` mention for one it only relates to.",
+      "Edit the description and nothing else: keep every word it already has and add only the line carrying the links. Link nothing you are not confident about, and if none of the open issues is what this change is about, change nothing and say so — an empty answer is a valid one.",
+    ].join("\n"),
+    reviewComments: [
+      pullRequestContextComment(input, [
+        "This pull request is the change to link. Do not change any code: the only edit is to its description.",
       ]),
     ],
   };

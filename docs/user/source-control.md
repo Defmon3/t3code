@@ -1,15 +1,15 @@
 # Source Control Integrations
 
-T3 Code connects to your Git hosting provider so you can create pull requests, review code, and manage repositories without leaving the app.
+T3 Code connects to your Git hosting provider so you can create pull requests, review code, track issues, and manage repositories without leaving the app.
 
 ## Supported Providers
 
 T3 Code works with the platforms your team already uses:
 
-- **GitHub** – Pull requests, repository creation, and clone integration
-- **GitLab** – Merge requests, repository publishing, and hosted clones
-- **Bitbucket** – Pull request workflows (via API token authentication)
-- **Azure DevOps** – Pull request support for Microsoft-hosted repositories
+- **GitHub** – Pull requests, issues, repository creation, and clone integration
+- **GitLab** – Merge requests, issues, repository publishing, and hosted clones
+- **Bitbucket** – Pull request and issue workflows (via API token authentication)
+- **Azure DevOps** – Pull request support and work items for Microsoft-hosted repositories
 
 ## What You Can Do
 
@@ -45,17 +45,9 @@ T3 Code works with the platforms your team already uses:
 - Command-click (Control-click on Windows and Linux) a pull request number in the sidebar to open it in your browser instead of in T3 Code
 - Check out a teammate's branch to review code locally
 
-**Fix what you wrote, in place**
-
-- Rewrite a pull request's title and description from the review itself, in Markdown, with a
-  preview before you save
-- Rewrite your own comments the same way, wherever they are shown
-- Works on GitHub, GitLab, and Bitbucket. Azure DevOps takes a new title and description; its
-  comments stay read-only here, as they already were
-
 ### Browse Git History
 
-Open the right panel menu and choose **Git History** to explore the repository without leaving your thread. Use **Tree** for the connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository. Switching to **Issues** and back keeps the Tree view exactly where you left it.
+Open the right panel menu and choose **Git History** to explore the repository without leaving your thread. The history view shows a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository.
 
 Git History is currently available in web and desktop project views. Mobile keeps its existing Git status and actions, but does not yet include this dense history workspace.
 
@@ -64,11 +56,43 @@ Git History is currently available in web and desktop project views. Mobile keep
 - Copy a full commit hash from a row. When a GitHub repository is connected, issue references in commit subjects open the matching issue.
 - Branch rows show ahead and behind counts when an upstream is configured.
 
-For a GitHub repository, **Issues** lists open or closed GitHub issues from the machine running T3 Code. It needs the GitHub CLI (`gh`) to be installed and authenticated there. Search by GitHub query text, then narrow the same server-side result with author, labels, assignee, milestone, issue type, and newest/oldest filters. Results load in pages and are virtualized; GitHub search can expose only the newest or oldest 1,000 matches for one query, and the view says when that limit applies.
-
-Choose a row or **New issue** to open the canonical GitHub page in your browser. T3 Code does not edit issues in this view. Issues is not available for non-GitHub repositories, environments running an older server, or the mobile client.
-
 For large repositories, history is loaded in pages and the commit list is virtualized. The initial browsing window is intentionally bounded so the right panel remains responsive; select a branch or search to narrow the result.
+
+**Fix what you wrote, in place**
+
+- Rewrite a pull request's title and description from the review itself, in Markdown, with a
+  preview before you save
+- Rewrite your own comments the same way, wherever they are shown
+- Works on GitHub, GitLab, and Bitbucket. Azure DevOps takes a new title and description; its
+  comments stay read-only here, as they already were
+
+### Track Issues Beside the Work
+
+**Browse every tracker in one place**
+
+- The **Issues** page lists issues across all the projects in your environment, filtered by state,
+  by whether they are assigned to you, raised by you or mention you, and by project, host or label
+- Free-text search asks the host itself, so it finds issues that are not on screen yet
+- Supports GitHub Issues, GitLab Issues, Bitbucket Issues, and Azure DevOps work items. What each
+  host cannot do is simply not offered rather than failing when pressed
+
+**Read and act on one without leaving T3 Code**
+
+- Open several issues as tabs in the right panel, beside a thread or on the page
+- Read the description and the conversation, comment, close (with a reason where the host
+  records one), reopen, rename, edit the body, and change labels and assignees
+- File a new issue from the **New issue** button
+- The change requests that reference an issue are listed on it, and the issues a pull request
+  cites or closes are listed on the pull request — either one opens the other beside it
+
+**Hand one to an agent**
+
+- **Solve** starts a thread on the issue, with the issue attached as context
+- **Ask** and **Explain** answer a question about the issue without changing any code
+- **Add to composer** attaches the issue to a thread you are already in, rather than starting a
+  new one
+- Everything an issue carries is handed over as untrusted data, so a body written by a stranger on
+  a public tracker cannot instruct the agent
 
 ### Know Your Setup at a Glance
 

@@ -77,6 +77,31 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
+import {
+  IssueActionInput,
+  IssueActivity,
+  IssueAssigneeCandidateList,
+  IssueAssigneesInput,
+  IssueCommentInput,
+  IssueCommentsPageInput,
+  IssueCommentsPageResult,
+  IssueCommentUpdateInput,
+  IssueCreateInput,
+  IssueCreateResult,
+  IssueDetail,
+  IssueInvalidateInput,
+  IssueLabelCandidateList,
+  IssueLabelsInput,
+  IssueListInput,
+  IssueListResult,
+  IssueOperationError,
+  IssueReactionInput,
+  IssueRef,
+  IssueRepositoryRef,
+  IssueTemplateList,
+  IssueUnavailableError,
+  IssueUpdateInput,
+} from "./issue.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -97,6 +122,8 @@ import {
   PullRequestReviewerCandidateList,
   PullRequestReviewerRequestInput,
   PullRequestSubmitReviewInput,
+  PullRequestThreadCommentsInput,
+  PullRequestThreadCommentsResult,
   PullRequestThreadReplyInput,
   PullRequestThreadResolutionInput,
   PullRequestUnavailableError,
@@ -200,13 +227,6 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import {
-  GitHubIssueInvalidateInput,
-  GitHubIssueListInput,
-  GitHubIssueListResult,
-  GitHubIssuesOperationError,
-  GitHubIssuesUnavailableError,
-} from "./githubIssues.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
@@ -304,6 +324,7 @@ export const WS_METHODS = {
   pullRequestsListStats: "pullRequests.listStats",
   pullRequestsDetail: "pullRequests.detail",
   pullRequestsActivity: "pullRequests.activity",
+  pullRequestsThreadComments: "pullRequests.threadComments",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
   pullRequestsRunAction: "pullRequests.runAction",
   pullRequestsUpdate: "pullRequests.update",
@@ -317,9 +338,23 @@ export const WS_METHODS = {
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
 
-  // GitHub issue methods
-  githubIssuesList: "githubIssues.list",
-  githubIssuesInvalidate: "githubIssues.invalidate",
+  // Issue methods
+  issuesList: "issues.list",
+  issuesDetail: "issues.detail",
+  issuesActivity: "issues.activity",
+  issuesCommentsPage: "issues.commentsPage",
+  issuesRunAction: "issues.runAction",
+  issuesComment: "issues.comment",
+  issuesUpdateComment: "issues.updateComment",
+  issuesSetReaction: "issues.setReaction",
+  issuesCreate: "issues.create",
+  issuesUpdate: "issues.update",
+  issuesSetLabels: "issues.setLabels",
+  issuesSetAssignees: "issues.setAssignees",
+  issuesLabelCandidates: "issues.labelCandidates",
+  issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesTemplates: "issues.templates",
+  issuesInvalidate: "issues.invalidate",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -529,6 +564,12 @@ export const WsPullRequestsActivityRpc = Rpc.make(WS_METHODS.pullRequestsActivit
   error: PullRequestRpcError,
 });
 
+export const WsPullRequestsThreadCommentsRpc = Rpc.make(WS_METHODS.pullRequestsThreadComments, {
+  payload: PullRequestThreadCommentsInput,
+  success: PullRequestThreadCommentsResult,
+  error: PullRequestRpcError,
+});
+
 export const WsPullRequestsDiffFileContentsRpc = Rpc.make(WS_METHODS.pullRequestsDiffFileContents, {
   payload: PullRequestDiffFileContentsInput,
   success: PullRequestDiffFileContentsResult,
@@ -592,24 +633,6 @@ export const WsPullRequestsInvalidateRpc = Rpc.make(WS_METHODS.pullRequestsInval
   error: PullRequestRpcError,
 });
 
-const GitHubIssuesRpcError = Schema.Union([
-  GitHubIssuesUnavailableError,
-  GitHubIssuesOperationError,
-  EnvironmentAuthorizationError,
-]);
-
-export const WsGitHubIssuesListRpc = Rpc.make(WS_METHODS.githubIssuesList, {
-  payload: GitHubIssueListInput,
-  success: GitHubIssueListResult,
-  error: GitHubIssuesRpcError,
-});
-
-export const WsGitHubIssuesInvalidateRpc = Rpc.make(WS_METHODS.githubIssuesInvalidate, {
-  payload: GitHubIssueInvalidateInput,
-  success: Schema.Void,
-  error: GitHubIssuesRpcError,
-});
-
 /**
  * Read on its own rather than as part of the detail: the people who may be asked are only wanted
  * once somebody opens the menu, and reading them with every change request would spend a request
@@ -628,6 +651,118 @@ export const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequest
   payload: PullRequestReviewerRequestInput,
   success: Schema.Void,
   error: PullRequestRpcError,
+});
+
+const IssueRpcError = Schema.Union([
+  IssueUnavailableError,
+  IssueOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
+  payload: IssueListInput,
+  success: IssueListResult,
+  error: IssueRpcError,
+});
+
+export const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
+  payload: IssueRef,
+  success: IssueDetail,
+  error: IssueRpcError,
+});
+
+export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
+  payload: IssueRef,
+  success: IssueActivity,
+  error: IssueRpcError,
+});
+
+export const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+  payload: IssueCommentsPageInput,
+  success: IssueCommentsPageResult,
+  error: IssueRpcError,
+});
+
+export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
+  payload: IssueActionInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
+  payload: IssueCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
+  payload: IssueCommentUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
+  payload: IssueReactionInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
+  payload: IssueCreateInput,
+  success: IssueCreateResult,
+  error: IssueRpcError,
+});
+
+export const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
+  payload: IssueUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
+  payload: IssueLabelsInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
+  payload: IssueAssigneesInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+/**
+ * Read on their own rather than as part of the detail: a repository's labels and the people who
+ * may be assigned are only wanted once somebody opens the menu, and reading them with every issue
+ * would spend a request per host on a list nobody looked at.
+ */
+export const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
+  payload: IssueRef,
+  success: IssueLabelCandidateList,
+  error: IssueRpcError,
+});
+
+export const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
+  payload: IssueRef,
+  success: IssueAssigneeCandidateList,
+  error: IssueRpcError,
+});
+
+/**
+ * What this repository offers as a starting point for a new issue, read when somebody opens the
+ * composer rather than with the listing: it is about the repository and not about any issue in it,
+ * which is why it takes a repository rather than a reference.
+ */
+export const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
+  payload: IssueRepositoryRef,
+  success: IssueTemplateList,
+  error: IssueRpcError,
+});
+
+export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
+  payload: IssueInvalidateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -1076,6 +1211,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsListStatsRpc,
   WsPullRequestsDetailRpc,
   WsPullRequestsActivityRpc,
+  WsPullRequestsThreadCommentsRpc,
   WsPullRequestsDiffFileContentsRpc,
   WsPullRequestsRunActionRpc,
   WsPullRequestsUpdateRpc,
@@ -1088,8 +1224,22 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
-  WsGitHubIssuesListRpc,
-  WsGitHubIssuesInvalidateRpc,
+  WsIssuesListRpc,
+  WsIssuesDetailRpc,
+  WsIssuesActivityRpc,
+  WsIssuesRunActionRpc,
+  WsIssuesCommentsPageRpc,
+  WsIssuesCommentRpc,
+  WsIssuesUpdateCommentRpc,
+  WsIssuesSetReactionRpc,
+  WsIssuesCreateRpc,
+  WsIssuesUpdateRpc,
+  WsIssuesSetLabelsRpc,
+  WsIssuesSetAssigneesRpc,
+  WsIssuesLabelCandidatesRpc,
+  WsIssuesAssigneeCandidatesRpc,
+  WsIssuesTemplatesRpc,
+  WsIssuesInvalidateRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

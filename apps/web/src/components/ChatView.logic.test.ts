@@ -27,6 +27,7 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   removeOptimisticUserMessage,
+  resolveSourceControlSurfaceCapability,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   scheduleEnvironmentReconnectWarning,
@@ -61,6 +62,20 @@ describe("failed optimistic sends", () => {
 
     expect(result.messages).toEqual([retained]);
     expect(result.removed).toEqual([failed]);
+  });
+});
+
+describe("source-control surface capability", () => {
+  it.each([
+    { state: "unknown", input: { capabilityKnown: false, supported: false }, expected: "loading" },
+    {
+      state: "unsupported",
+      input: { capabilityKnown: true, supported: false },
+      expected: "unavailable",
+    },
+    { state: "supported", input: { capabilityKnown: true, supported: true }, expected: "ready" },
+  ] as const)("returns $expected for a $state capability", ({ input, expected }) => {
+    expect(resolveSourceControlSurfaceCapability(input)).toBe(expected);
   });
 });
 

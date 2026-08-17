@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  IssueLink,
   PullRequestActor,
   PullRequestComment,
   PullRequestDetailView,
@@ -10,23 +11,22 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   HammerIcon,
+  LinkIcon,
   MessageSquareIcon,
   PencilIcon,
-  SendIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
-import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -35,9 +35,13 @@ import {
   PullRequestCheckStatusIcon,
   pullRequestCheckStatusLabel,
 } from "./pullRequestPresentation";
+import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { CommentComposer } from "../sourceControl/CommentComposer";
+import { SummaryMetaRow } from "../sourceControl/SummaryMetaRow";
 import {
+  LINK_ISSUES_HANDOFF_KIND,
   orderPullRequestComments,
   pullRequestFindingKey,
   type PullRequestFinding,
@@ -47,9 +51,9 @@ import {
   canEditPullRequestComment,
 } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
-import { PullRequestConversationGhost } from "./PullRequestGhosts";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
 /** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
@@ -172,9 +176,14 @@ function CollapsedComment({
           {open ? (
             <div className="px-3 pb-3">
               {comment.path ? (
-                <p className="truncate text-xs text-muted-foreground" title={comment.path}>
-                  {comment.path}
-                </p>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <p className="truncate text-xs text-muted-foreground">{comment.path}</p>
+                    }
+                  />
+                  <TooltipPopup side="top">{comment.path}</TooltipPopup>
+                </Tooltip>
               ) : null}
               <CommentBody className="mt-2" comment={comment} editing={editing} />
               {reactionBar}
@@ -183,26 +192,6 @@ function CollapsedComment({
         </CollapsiblePanel>
       </article>
     </Collapsible>
-  );
-}
-
-function MetaRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 py-1.5 text-xs">
-      <span className="flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-foreground">{children}</span>
-    </div>
   );
 }
 
@@ -279,68 +268,6 @@ function Section({
   );
 }
 
-function CommentComposer({
-  environmentId,
-  detail,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  detail: PullRequestDetailView;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
-
-  const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
-    const result = await postComment({
-      environmentId,
-      input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
-        body: trimmed,
-      },
-    });
-    setPosting(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this pull request"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || posting}
-          onClick={() => void submit()}
-        >
-          <SendIcon className="size-3.5" />
-          {posting ? "Posting..." : "Comment"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /**
  * What a first render of the conversation carries. A pull request with two hundred comments is
  * two hundred markdown documents, and the ones worth arriving for are the recent ones.
@@ -357,6 +284,8 @@ export function PullRequestSummaryTab({
   fixFindingLabel = "Fix in a thread",
   fixCheckLabel = "Fix",
   onFixFinding,
+  onLinkIssues,
+  onOpenLinkedIssue,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -369,6 +298,18 @@ export function PullRequestSummaryTab({
   fixFindingLabel?: string;
   fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  /**
+   * Hands the question of which issues this change is about to an agent. Supplied by whoever
+   * mounted the panel, because only they can open a thread for it; without one the section
+   * offers nothing, which is never a dead control.
+   */
+  onLinkIssues?: () => void;
+  /**
+   * Opens one of the issues this pull request references. Supplied by whoever mounted the panel,
+   * because only they know which thread's panel a peer tab belongs beside; without one the row
+   * opens the issue on its host instead, which is never a dead control.
+   */
+  onOpenLinkedIssue?: (link: IssueLink) => void;
   onRefresh: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
@@ -457,7 +398,7 @@ export function PullRequestSummaryTab({
     <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
       <section className="px-4 py-3">
         <div>
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {detail.reviewers.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -475,6 +416,7 @@ export function PullRequestSummaryTab({
                       >
                         <PullRequestActorLabel
                           actor={actor}
+                          tooltip={false}
                           className="gap-0 [&>img]:ring-2 [&>img]:ring-background [&>span:first-child]:ring-2 [&>span:first-child]:ring-background [&>span:last-child]:sr-only"
                         />
                       </TooltipTrigger>
@@ -502,9 +444,9 @@ export function PullRequestSummaryTab({
                 />
               ) : null}
             </span>
-          </MetaRow>
+          </SummaryMetaRow>
           {detail.labels.length > 0 ? (
-            <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+            <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.map((label) => {
                   const dot = labelDotColor(label.color);
@@ -523,9 +465,9 @@ export function PullRequestSummaryTab({
                   );
                 })}
               </span>
-            </MetaRow>
+            </SummaryMetaRow>
           ) : null}
-          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -533,7 +475,7 @@ export function PullRequestSummaryTab({
                 : detail.commentCount === 1
                   ? "1 comment"
                   : `${detail.commentCount} comments`}
-          </MetaRow>
+          </SummaryMetaRow>
         </div>
       </section>
 
@@ -581,6 +523,68 @@ export function PullRequestSummaryTab({
           />
         </div>
       </Section>
+
+      {/* Absent under a host that never answers this question, rather than empty: an empty
+          section would say this change closes nothing, which such a host cannot know. */}
+      {detail.linkedIssues === undefined ? null : (
+        <Section
+          title="Linked issues"
+          count={detail.linkedIssues.length}
+          // Offered whether or not anything is listed: a change that already closes one issue can
+          // still be about another nobody thought to mention.
+          actions={
+            onLinkIssues ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+                disabled={pendingFinding !== null && pendingFinding !== undefined}
+                onClick={onLinkIssues}
+              >
+                <LinkIcon aria-hidden className="size-3" />
+                {pendingFinding === LINK_ISSUES_HANDOFF_KIND ? "Preparing..." : "Link with agent"}
+              </Button>
+            ) : null
+          }
+        >
+          {detail.linkedIssues.length === 0 ? (
+            <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
+          ) : (
+            <div className="space-y-0.5">
+              {detail.linkedIssues.map((link) => (
+                <button
+                  key={`${link.repository}#${link.number}`}
+                  type="button"
+                  // Beside the change rather than instead of it: reading what a change is for is
+                  // reading the two together.
+                  onClick={() =>
+                    onOpenLinkedIssue === undefined
+                      ? void readLocalApi()?.shell.openExternal(link.url)
+                      : onOpenLinkedIssue(link)
+                  }
+                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+                >
+                  <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
+                  <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                  {link.closesIssue ? (
+                    <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                      closed by this
+                    </span>
+                  ) : null}
+                  <span className="shrink-0 text-muted-foreground tabular-nums">
+                    #{link.number}
+                  </span>
+                </button>
+              ))}
+              {detail.linkedIssuesTruncated === true ? (
+                <p className="px-2 pt-1 text-xs text-muted-foreground">
+                  More linked issues exist on the host.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
@@ -658,9 +662,14 @@ export function PullRequestSummaryTab({
         }
       >
         {activityPending ? (
-          <PullRequestConversationGhost />
+          <ConversationGhost label="Loading pull request conversation" />
         ) : activityError ? (
-          <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
+          <ActivityUnavailableState
+            compact
+            title="Could not load pull request activity"
+            error={activityError}
+            onRetry={onRefresh}
+          />
         ) : (
           <>
             {detail.commentsTruncated ? (
@@ -754,12 +763,16 @@ export function PullRequestSummaryTab({
                         ) : null}
                       </div>
                       {comment.path ? (
-                        <p
-                          className="mt-1 truncate text-xs text-muted-foreground"
-                          title={comment.path}
-                        >
-                          {comment.path}
-                        </p>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <p className="mt-1 truncate text-xs text-muted-foreground">
+                                {comment.path}
+                              </p>
+                            }
+                          />
+                          <TooltipPopup side="top">{comment.path}</TooltipPopup>
+                        </Tooltip>
                       ) : null}
                       <CommentBody className="mt-2" comment={comment} editing={commentEditing} />
                       <PullRequestReactionBar
@@ -784,6 +797,8 @@ export function PullRequestSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            label="Comment on this pull request"
+            command={pullRequestEnvironment.comment}
             onCommented={onRefresh}
           />
         ) : null}

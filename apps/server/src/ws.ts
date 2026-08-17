@@ -108,7 +108,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import * as GitHubIssueService from "./githubIssues/GitHubIssueService.ts";
+import * as IssueService from "./issue/IssueService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -412,8 +412,8 @@ const makeWsRpcLayer = (
       );
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
-      const githubIssues = yield* GitHubIssueService.GitHubIssueService;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const issues = yield* IssueService.IssueService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -1661,6 +1661,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsActivity, pullRequests.activity(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsThreadComments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsThreadComments,
+            pullRequests.threadComments(input),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsDiffFileContents,
@@ -1711,14 +1719,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsInvalidate, pullRequests.invalidate(input), {
             "rpc.aggregate": "pull-requests",
           }),
-        [WS_METHODS.githubIssuesList]: (input) =>
-          observeRpcEffect(WS_METHODS.githubIssuesList, githubIssues.list(input), {
-            "rpc.aggregate": "github-issues",
-          }),
-        [WS_METHODS.githubIssuesInvalidate]: (input) =>
-          observeRpcEffect(WS_METHODS.githubIssuesInvalidate, githubIssues.invalidate(input), {
-            "rpc.aggregate": "github-issues",
-          }),
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReviewerCandidates,
@@ -1731,6 +1731,70 @@ const makeWsRpcLayer = (
             pullRequests.requestReviewers(input),
             { "rpc.aggregate": "pull-requests" },
           ),
+        [WS_METHODS.issuesList]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesList, issues.list(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesDetail]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesDetail, issues.detail(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesActivity]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesActivity, issues.activity(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesCommentsPage]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesCommentsPage, issues.commentsPage(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesRunAction]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesRunAction, issues.runAction(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesComment]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesComment, issues.comment(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesUpdateComment]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesUpdateComment, issues.updateComment(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesSetReaction]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesSetReaction, issues.setReaction(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesCreate]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesCreate, issues.create(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesUpdate]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesUpdate, issues.update(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesSetLabels]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesSetLabels, issues.setLabels(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesSetAssignees]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesSetAssignees, issues.setAssignees(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesLabelCandidates]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesLabelCandidates, issues.labelCandidates(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesAssigneeCandidates]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesAssigneeCandidates, issues.assigneeCandidates(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesTemplates]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesTemplates, issues.templates(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issuesInvalidate]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
+            "rpc.aggregate": "issues",
+          }),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
@@ -2324,8 +2388,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
-    const githubIssues = yield* GitHubIssueService.GitHubIssueService;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const issues = yield* IssueService.IssueService;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2352,7 +2416,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(Layer.succeed(GitHubIssueService.GitHubIssueService, githubIssues)),
+              Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type {
+  IssueLink,
   PullRequestAction,
   PullRequestActor,
   PullRequestBaseComparison,
@@ -22,6 +23,7 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewThread,
+  PullRequestThreadCommentsResult,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
@@ -37,21 +39,28 @@ import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t
  * without knowing which CLI or API produced it.
  *
  * `reason` is the part the service acts on: a missing or unauthenticated tool disables the
- * provider for the whole workspace, while anything else is specific to the request.
+ * provider for the whole workspace, a rate limit pauses its host, and anything else is specific
+ * to the request.
  */
 export class PullRequestProviderError extends Schema.TaggedErrorClass<PullRequestProviderError>()(
   "PullRequestProviderError",
   {
     provider: SourceControlProviderKindSchema,
     operation: Schema.String,
-    reason: Schema.Literals(["missing-tool", "unauthenticated", "failed"]),
+    reason: Schema.Literals(["missing-tool", "unauthenticated", "rate-limited", "failed"]),
     detail: Schema.String,
+    retryAt: Schema.optional(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     return `${this.provider} failed in ${this.operation}: ${this.detail}`;
   }
+}
+
+export interface PullRequestProviderFailure {
+  readonly reason: PullRequestProviderError["reason"];
+  readonly retryAt?: number | undefined;
 }
 
 /** A change request as the provider sees it, before the service attaches project context. */
@@ -152,6 +161,14 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly mergeCapabilities: PullRequestMergeCapabilities;
   readonly viewerPermissions: PullRequestViewerPermissions;
+  /**
+   * The issues this change request closes, and the ones it only cites. Empty where the host has
+   * no notion of the link at all, which is a change request with nothing to show rather than a
+   * read that failed — so a provider never guesses a link out of the words in a body.
+   */
+  readonly linkedIssues: ReadonlyArray<IssueLink>;
+  /** True when the host has more linked issues than this bounded read returned. */
+  readonly linkedIssuesTruncated?: boolean;
   /** Absent from a host that cannot compare the branch with its base, which is most of them. */
   readonly baseComparison?: PullRequestBaseComparison;
   readonly behindBy?: number;
@@ -296,6 +313,15 @@ export interface PullRequestProviderApi {
   readonly getChangeRequestActivity: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestActivity, PullRequestProviderError>;
+
+  /** One explicit page after a reader asks to continue an unfinished review thread. */
+  readonly getReviewThreadComments?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly threadId: string;
+      readonly cursor: string;
+    },
+  ) => Effect.Effect<PullRequestThreadCommentsResult, PullRequestProviderError>;
 
   /**
    * The same answer `getChangeRequest` carries, on its own. Asked before anything is written, so
