@@ -19,12 +19,14 @@ import {
   LayersIcon,
   LoaderIcon,
   PenLineIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { pullRequestEnvironment } from "~/state/pullRequests";
+import { pullRequestEnvironment, usePullRequestListStats } from "~/state/pullRequests";
 import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
 import type { DraftId } from "~/composerDraftStore";
 
 import { ListGhost } from "../sourceControl/ListGhosts";
@@ -33,10 +35,15 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import {
   filterPullRequestsByInvolvement,
+  groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
+  mergePullRequestDiffStats,
+  parsePullRequestQuery,
   pullRequestEntryKey,
   pullRequestEntryViewer,
+  rankPullRequestMatches,
+  withDiffStat,
   type EnvironmentPullRequestEntry,
 } from "./pullRequestList.logic";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
@@ -190,7 +197,17 @@ function PullRequestBrowserList({
 }) {
   const typed = query.trim().slice(0, 200);
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
-  const filterKey = `${filters.state}:${filters.involvement}:${JSON.stringify(filters.extra)}:${sent}`;
+  const typedParsed = useMemo(() => parsePullRequestQuery(typed), [typed]);
+  const sentParsed = useMemo(() => parsePullRequestQuery(sent), [sent]);
+  const requestFilters = useMemo(
+    () => ({ ...filters.extra, ...sentParsed.filters }),
+    [filters.extra, sentParsed.filters],
+  );
+  const localFilters = useMemo(
+    () => ({ ...filters.extra, ...typedParsed.filters }),
+    [filters.extra, typedParsed.filters],
+  );
+  const filterKey = `${filters.state}:${filters.involvement}:${JSON.stringify(requestFilters)}:${sentParsed.text}`;
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
 
@@ -206,8 +223,8 @@ function PullRequestBrowserList({
         involvement: filters.involvement,
         projectId,
         limit: pageSize,
-        ...(Object.keys(filters.extra).length > 0 ? { filters: filters.extra } : {}),
-        ...(sent ? { query: sent } : {}),
+        ...(Object.keys(requestFilters).length > 0 ? { filters: requestFilters } : {}),
+        ...(sentParsed.text ? { query: sentParsed.text } : {}),
         ...(sentCursors === null ? {} : { cursors: sentCursors }),
       },
     }),
@@ -216,6 +233,8 @@ function PullRequestBrowserList({
     if (refreshToken > 0) listQuery.refresh();
   }, [listQuery.refresh, refreshToken]);
   const answered = listQuery.data;
+  const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
+  const [invalidating, setInvalidating] = useState(false);
   const [ordered, setOrdered] = useState<{
     readonly key: string;
     readonly entries: ReadonlyArray<PullRequestListEntry>;
@@ -226,7 +245,11 @@ function PullRequestBrowserList({
     if (answered === null) return;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey || sentCursors === null) {
-        return { key: filterKey, entries: answered.entries, truncated: answered.truncated };
+        return {
+          key: filterKey,
+          entries: rankPullRequestMatches(answered.entries, sentParsed.text),
+          truncated: answered.truncated,
+        };
       }
       const held = new Set(previous.entries.map(pullRequestEntryKey));
       return {
@@ -238,27 +261,71 @@ function PullRequestBrowserList({
         truncated: answered.truncated,
       };
     });
-  }, [answered, filterKey, sentCursors]);
+  }, [answered, filterKey, sentCursors, sentParsed.text]);
 
   const entries = useMemo(() => {
     const held = ordered?.key === filterKey ? ordered.entries : (answered?.entries ?? []);
+    const searchingHosts = new Set(
+      (answered?.providers ?? [])
+        .filter((provider) => provider.searchesOnHost)
+        .map((provider) => provider.host),
+    );
     const narrowed = filterPullRequestsByInvolvement(
       held,
       answered?.viewers ?? {},
       filters.involvement,
     ).filter(
       (entry) =>
-        (typed.length === 0 ||
-          answered?.providers.some((provider) => provider.searchesOnHost) === true ||
-          matchesPullRequestQuery(entry, typed)) &&
+        (typedParsed.text.length === 0 ||
+          searchingHosts.has(entry.host) ||
+          matchesPullRequestQuery(entry, typedParsed.text)) &&
         matchesPullRequestFilters(
           entry,
-          filters.extra,
+          localFilters,
           pullRequestEntryViewer(entry, answered?.viewers ?? {}),
         ),
     );
     return narrowed.map((entry): EnvironmentPullRequestEntry => ({ ...entry, environmentId }));
-  }, [answered, environmentId, filterKey, filters.extra, filters.involvement, ordered, typed]);
+  }, [
+    answered,
+    environmentId,
+    filterKey,
+    filters.involvement,
+    localFilters,
+    ordered,
+    typedParsed.text,
+  ]);
+
+  const statsTargets = useMemo(
+    () =>
+      entries.length === 0
+        ? []
+        : [
+            {
+              environmentId,
+              input: {
+                refs: entries.map((entry) => ({
+                  projectId: entry.projectId,
+                  repository: entry.repository,
+                  number: entry.number,
+                })),
+              },
+            },
+          ],
+    [entries, environmentId],
+  );
+  const statsQuery = usePullRequestListStats(statsTargets);
+  const statsByRow = useMemo(
+    () => mergePullRequestDiffStats(new Map(), statsQuery.stats ?? []),
+    [statsQuery.stats],
+  );
+  const groups = useMemo(
+    () =>
+      filters.involvement === "all"
+        ? groupPullRequestsByInvolvement(entries, answered?.viewers ?? {})
+        : [{ key: "others" as const, label: "", entries }],
+    [answered?.viewers, entries, filters.involvement],
+  );
 
   const truncated = ordered?.key === filterKey ? ordered.truncated : (answered?.truncated ?? false);
   const nextCursors = answered?.nextCursors ?? {};
@@ -311,7 +378,18 @@ function PullRequestBrowserList({
   const narrowed =
     filters.state !== "open" ||
     filters.involvement !== "all" ||
-    Object.keys(filters.extra).length > 0;
+    Object.keys(localFilters).length > 0;
+  const refreshFromHost = useCallback(async () => {
+    setInvalidating(true);
+    try {
+      await invalidate({ environmentId, input: {} });
+    } finally {
+      setInvalidating(false);
+    }
+    listQuery.refresh();
+    statsQuery.refresh();
+  }, [environmentId, invalidate, listQuery.refresh, statsQuery.refresh]);
+  const refreshing = invalidating || listQuery.isPending;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -319,7 +397,7 @@ function PullRequestBrowserList({
         <Input
           value={query}
           aria-label="Search pull requests"
-          placeholder="Search pull requests"
+          placeholder="Search pull requests, or label:bug"
           onChange={(event) => onQuery(event.target.value)}
         />
         <PullRequestFiltersMenu
@@ -344,13 +422,35 @@ function PullRequestBrowserList({
           onProject={() => undefined}
           showProjectScope={false}
         />
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Refresh pull requests"
+          disabled={refreshing}
+          onClick={() => void refreshFromHost()}
+        >
+          <RefreshCwIcon className={refreshing ? "animate-spin" : undefined} />
+        </Button>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-0.5 px-1 pb-2">
           {entries.length === 0 && listQuery.isPending ? (
             <ListGhost rows={7} label="Loading pull requests" />
           ) : listQuery.error !== null && listQuery.data === null ? (
-            <p className="px-2 text-sm text-muted-foreground">{listQuery.error}</p>
+            <div className="space-y-2 px-2 text-sm text-muted-foreground">
+              <p>{listQuery.error}</p>
+              <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                Retry
+              </Button>
+            </div>
+          ) : entries.length === 0 &&
+            (listQuery.error !== null || (answered?.errors.length ?? 0) > 0) ? (
+            <div className="space-y-2 px-2 text-sm text-muted-foreground">
+              <p>Some pull requests could not be loaded.</p>
+              <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                Retry
+              </Button>
+            </div>
           ) : entries.length === 0 ? (
             <div className="space-y-2 px-2">
               <p className="text-sm text-muted-foreground">
@@ -368,16 +468,41 @@ function PullRequestBrowserList({
             </div>
           ) : (
             <>
-              {entries.map((entry) => (
-                <PullRequestRow
-                  key={pullRequestEntryKey(entry)}
-                  entry={entry}
-                  selected={false}
-                  showProjectTitle={false}
-                  showProvider={false}
-                  onSelect={select}
-                />
+              {groups.map((group) => (
+                <div key={group.key} className="space-y-0.5">
+                  {group.label ? (
+                    <h2 className="px-2 pb-0.5 text-xs font-medium text-muted-foreground/70">
+                      {group.label}
+                    </h2>
+                  ) : null}
+                  {group.entries.map((entry) => (
+                    <PullRequestRow
+                      key={pullRequestEntryKey(entry)}
+                      entry={withDiffStat(entry, statsByRow)}
+                      selected={false}
+                      showProjectTitle={false}
+                      showProvider={false}
+                      onSelect={select}
+                    />
+                  ))}
+                </div>
               ))}
+              {answered?.errors.length ? (
+                <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
+                  <span>Some pull requests could not be loaded.</span>
+                  <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
+              {listQuery.error !== null ? (
+                <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
+                  <span>The latest request failed. Showing the last pull requests loaded.</span>
+                  <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
               {truncated ? (
                 <div
                   ref={sentinelRef}

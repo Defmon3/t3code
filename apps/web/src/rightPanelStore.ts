@@ -29,6 +29,11 @@ export const RIGHT_PANEL_KINDS = [
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RepositoryView = "history" | "issues" | "pull-requests";
+export interface RepositoryItemSelection {
+  projectId: string;
+  repository: string;
+  number: number;
+}
 
 export type RightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
@@ -42,7 +47,13 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "git-history"; kind: "git-history"; view: RepositoryView }
+  | {
+      id: "git-history";
+      kind: "git-history";
+      view: RepositoryView;
+      selectedIssue: RepositoryItemSelection | null;
+      selectedPullRequest: RepositoryItemSelection | null;
+    }
   | { id: "files"; kind: "files" }
   | {
       id: `file:${string}`;
@@ -88,7 +99,7 @@ export type RightPanelSurface =
        */
       id: "issues";
       kind: "issues";
-      selected: { projectId: string; repository: string; number: number } | null;
+      selected: RepositoryItemSelection | null;
     }
   | { id: "agents"; kind: "agents" };
 
@@ -98,7 +109,9 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the "issue" surface kind and stops persisting the issues list's shared panel.
 // v13 adds the "issues" browser surface, which carries the issue it is showing.
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+// v14 adds the combined repository view.
+// v15 scopes issue and pull request selections to that repository surface.
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -136,6 +149,11 @@ interface RightPanelStoreState {
   openRepository: (ref: ScopedThreadRef, view: RepositoryView) => void;
   /** Changes the active view without creating another right-panel surface. */
   selectRepositoryView: (ref: ScopedThreadRef, view: RepositoryView) => void;
+  selectRepositoryIssue: (ref: ScopedThreadRef, target: RepositoryItemSelection | null) => void;
+  selectRepositoryPullRequest: (
+    ref: ScopedThreadRef,
+    target: RepositoryItemSelection | null,
+  ) => void;
   /** What the issue browser is showing: an issue, or null for the list it was picked from. */
   selectIssueInPanel: (
     ref: ScopedThreadRef,
@@ -183,7 +201,13 @@ const singletonSurface = (
     case "diff":
       return { id: "diff", kind };
     case "git-history":
-      return { id: "git-history", kind, view: "history" };
+      return {
+        id: "git-history",
+        kind,
+        view: "history",
+        selectedIssue: null,
+        selectedPullRequest: null,
+      };
     case "files":
       return { id: "files", kind };
     case "agents":
@@ -278,8 +302,8 @@ export function issueSurface(target: {
 
 export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
 
-/** A persisted selection is only usable if it still names an issue, so a broken one reads as none. */
-function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
+/** A persisted selection is only usable if it still names an item, so a broken one reads as none. */
+function normalizeRepositoryItemSelection(value: unknown): RepositoryItemSelection | null {
   if (!value || typeof value !== "object") return null;
   const { projectId, repository, number } = value as Record<string, unknown>;
   if (
@@ -423,7 +447,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         {
                           id: "issues",
                           kind: "issues",
-                          selected: normalizeIssueSelection(surface.selected),
+                          selected: normalizeRepositoryItemSelection(surface.selected),
                         },
                       ];
                     }
@@ -432,7 +456,17 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         surface.view === "issues" || surface.view === "pull-requests"
                           ? surface.view
                           : "history";
-                      return [{ id: "git-history", kind: "git-history", view }];
+                      return [
+                        {
+                          id: "git-history",
+                          kind: "git-history",
+                          view,
+                          selectedIssue: normalizeRepositoryItemSelection(surface.selectedIssue),
+                          selectedPullRequest: normalizeRepositoryItemSelection(
+                            surface.selectedPullRequest,
+                          ),
+                        },
+                      ];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -542,12 +576,23 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       openRepository: (ref, view) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            const surface: RightPanelSurface = { id: "git-history", kind: "git-history", view };
-            const exists = current.surfaces.some((entry) => entry.id === surface.id);
+            const existing = current.surfaces.find(
+              (surface): surface is Extract<RightPanelSurface, { kind: "git-history" }> =>
+                surface.kind === "git-history",
+            );
+            const surface: RightPanelSurface = existing
+              ? { ...existing, view }
+              : {
+                  id: "git-history",
+                  kind: "git-history",
+                  view,
+                  selectedIssue: null,
+                  selectedPullRequest: null,
+                };
             return {
               isOpen: true,
               activeSurfaceId: surface.id,
-              surfaces: exists
+              surfaces: existing
                 ? current.surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
                 : [...current.surfaces, surface],
             };
@@ -559,6 +604,28 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             ...current,
             surfaces: current.surfaces.map((surface) =>
               surface.kind === "git-history" ? { ...surface, view } : surface,
+            ),
+          })),
+        })),
+      selectRepositoryIssue: (ref, target) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.kind === "git-history"
+                ? { ...surface, view: "issues", selectedIssue: target }
+                : surface,
+            ),
+          })),
+        })),
+      selectRepositoryPullRequest: (ref, target) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.kind === "git-history"
+                ? { ...surface, view: "pull-requests", selectedPullRequest: target }
+                : surface,
             ),
           })),
         })),

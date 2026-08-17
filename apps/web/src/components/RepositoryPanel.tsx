@@ -1,13 +1,18 @@
-import type { EnvironmentId, IssueLink, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
-import { useState } from "react";
+import type {
+  EnvironmentId,
+  IssueLink,
+  IssueLinkedPullRequest,
+  ProjectId,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 
 import type { DraftId } from "~/composerDraftStore";
-import type { IssuesSurface, RepositoryView } from "~/rightPanelStore";
+import type { RepositoryItemSelection, RepositoryView } from "~/rightPanelStore";
 
 import GitHistoryPanel from "./GitHistoryPanel";
 import type { IssueHandoffTarget } from "./issue/IssueDetailPanel";
 import { IssuesPanel } from "./issue/IssuesPanel";
-import { PullRequestsPanel, type PullRequestPanelSelection } from "./pullRequest/PullRequestsPanel";
+import { PullRequestsPanel } from "./pullRequest/PullRequestsPanel";
 import type { IssueTabStatus, PullRequestTabStatus } from "./RightPanelTabs";
 import { Button } from "./ui/button";
 
@@ -23,16 +28,17 @@ interface RepositoryPanelProps {
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly view: RepositoryView;
   readonly onViewChange: (view: RepositoryView) => void;
+  readonly selectedIssue: RepositoryItemSelection | null;
+  readonly onSelectIssue: (target: RepositoryItemSelection | null) => void;
+  readonly selectedPullRequest: RepositoryItemSelection | null;
+  readonly onSelectPullRequest: (target: RepositoryItemSelection | null) => void;
   readonly onIssueStateChange: (status: IssueTabStatus) => void;
   readonly onPullRequestStateChange: (status: PullRequestTabStatus) => void;
   readonly onOpenLinkedIssue: (link: IssueLink) => void;
+  readonly onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
 }
 
 export default function RepositoryPanel(props: RepositoryPanelProps) {
-  const [selectedIssue, setSelectedIssue] = useState<IssuesSurface["selected"]>(null);
-  const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestPanelSelection | null>(
-    null,
-  );
   const mode = props.view;
 
   return (
@@ -108,10 +114,11 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
             <IssuesPanel
               environmentId={props.environmentId}
               projectId={props.projectId}
-              selected={selectedIssue}
-              onSelect={setSelectedIssue}
+              selected={props.selectedIssue}
+              onSelect={props.onSelectIssue}
               handoffTarget={props.handoffTarget}
               onStateChange={props.onIssueStateChange}
+              onOpenLinkedPullRequest={props.onOpenLinkedPullRequest}
             />
           </div>
         )
@@ -131,8 +138,15 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
             <PullRequestsPanel
               environmentId={props.environmentId}
               projectId={props.projectId}
-              selected={selectedPullRequest}
-              onSelect={setSelectedPullRequest}
+              selected={
+                props.selectedPullRequest === null
+                  ? null
+                  : {
+                      ...props.selectedPullRequest,
+                      projectId: props.selectedPullRequest.projectId as ProjectId,
+                    }
+              }
+              onSelect={props.onSelectPullRequest}
               composerDraftTarget={props.composerDraftTarget}
               onStateChange={props.onPullRequestStateChange}
               onOpenLinkedIssue={props.onOpenLinkedIssue}
