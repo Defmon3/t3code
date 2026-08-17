@@ -54,6 +54,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server exposes Git History browsing RPCs. Absent on older servers, so clients must not
       render the surface or probe the RPCs. */
   gitHistory: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes the issue list, detail, activity, and mutation APIs. Absent on servers from
+      before the issue workspace shipped, so clients must not probe them. */
+  issues: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.settle / thread.unsettle commands. Absent on
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
@@ -77,6 +80,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream self-update progress before acknowledging the
       restart. Clients fall back to server.updateServer when absent. */
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  /** Agent-activity publishes (push notifications and Live Activities)
+      currently leave this environment: the publish opt-in is enabled and the
+      relay link credentials exist. Clients skip seeding a Live Activity when
+      this is false — no update would ever repaint it. Absent on older
+      servers, which may still publish, so only an explicit false skips. */
+  agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

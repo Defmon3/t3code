@@ -1,58 +1,197 @@
-import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  IssueLink,
+  PullRequestActor,
+  PullRequestComment,
+  PullRequestDetailView,
+  PullRequestRef,
+} from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   HammerIcon,
+  LinkIcon,
   MessageSquareIcon,
-  SendIcon,
+  PencilIcon,
+  TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
-import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
+  PullRequestActorAvatar,
   PullRequestActorLabel,
   PullRequestCheckStatusIcon,
-  PullRequestMetaLine,
   pullRequestCheckStatusLabel,
 } from "./pullRequestPresentation";
+import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { CommentComposer } from "../sourceControl/CommentComposer";
+import { SummaryMetaRow } from "../sourceControl/SummaryMetaRow";
 import {
+  LINK_ISSUES_HANDOFF_KIND,
   orderPullRequestComments,
   pullRequestFindingKey,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
+import {
+  canEditPullRequestChangeRequest,
+  canEditPullRequestComment,
+} from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { PullRequestConversationGhost } from "./PullRequestGhosts";
+import { ConversationGhost } from "../sourceControl/ListGhosts";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { PullRequestReactionBar } from "./PullRequestReactions";
+import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
-function MetaRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
+/** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
+function labelDotColor(color: string | null): string | null {
+  const hex = color?.trim().replace(/^#/, "") ?? "";
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
+}
+
+/** The avatar carries the attribution alone; who it is arrives on hover, like the reviewer row. */
+function CommentAuthor({ actor }: { actor: PullRequestActor | null }) {
+  const login = actor?.login ?? "ghost";
   return (
-    <div className="flex items-center gap-2 py-1.5 text-xs">
-      <span className="flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-foreground">{children}</span>
+    <Tooltip>
+      <TooltipTrigger render={<span className="shrink-0 rounded-full" aria-label={login} />}>
+        <PullRequestActorAvatar actor={actor} />
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {actor?.name && actor.name !== login ? `${actor.name} (@${login})` : login}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** "CHANGES_REQUESTED" reads as "Changes requested": one capital, the host's underscores gone. */
+function reviewStateLabel(state: string): string {
+  const words = state.toLowerCase().replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** What every remark in the conversation needs to be rewritten where it sits. */
+interface CommentEditing {
+  readonly cwd: string;
+  readonly canEdit: (comment: PullRequestComment) => boolean;
+  readonly editingId: string | null;
+  readonly saving: boolean;
+  readonly onEdit: (comment: PullRequestComment | null) => void;
+  readonly onSave: (comment: PullRequestComment, body: string) => void;
+}
+
+/**
+ * A remark's words, and the pencil that swaps them for the editor. The pencil is revealed by
+ * hovering the remark, like the reaction bar's own, so the parent must carry `group`.
+ */
+function CommentBody({
+  comment,
+  editing,
+  className,
+}: {
+  comment: PullRequestComment;
+  editing: CommentEditing;
+  className?: string | undefined;
+}) {
+  if (editing.editingId === comment.id) {
+    return (
+      <PullRequestMarkdownEditor
+        className={className}
+        value={comment.body}
+        cwd={editing.cwd}
+        label="Edit comment"
+        saving={editing.saving}
+        onSave={(body) => editing.onSave(comment, body)}
+        onCancel={() => editing.onEdit(null)}
+      />
+    );
+  }
+  return (
+    <div className={cn("flex items-start gap-1", className)}>
+      <PullRequestMarkdown className="min-w-0 flex-1" text={comment.body} cwd={editing.cwd} />
+      {editing.canEdit(comment) ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label="Edit comment"
+          onClick={() => editing.onEdit(comment)}
+        >
+          <PencilIcon className="size-3" />
+        </Button>
+      ) : null}
     </div>
+  );
+}
+
+/** Finished work — a resolved conversation or a dismissed approval — opens collapsed. */
+function CollapsedComment({
+  comment,
+  editing,
+  label,
+  reactionBar,
+}: {
+  comment: PullRequestComment;
+  editing: CommentEditing;
+  label: string;
+  reactionBar: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <article className="group rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
+        <CollapsibleTrigger
+          className={cn(
+            "flex w-full items-center gap-2 p-3 text-left transition-opacity hover:opacity-100",
+            open ? "opacity-100" : "opacity-65",
+          )}
+        >
+          <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
+            <CommentAuthor actor={comment.author} />
+            <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
+            <span>{label}</span>
+          </span>
+          <ChevronDownIcon
+            aria-hidden
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          {open ? (
+            <div className="px-3 pb-3">
+              {comment.path ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <p className="truncate text-xs text-muted-foreground">{comment.path}</p>
+                    }
+                  />
+                  <TooltipPopup side="top">{comment.path}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              <CommentBody className="mt-2" comment={comment} editing={editing} />
+              {reactionBar}
+            </div>
+          ) : null}
+        </CollapsiblePanel>
+      </article>
+    </Collapsible>
   );
 }
 
@@ -72,9 +211,39 @@ function Section({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const headingRef = useRef<HTMLDivElement>(null);
+  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      const heading = headingRef.current;
+      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
+      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
+      if (heading && section && scroller) {
+        const target = sectionCollapseAnchorScrollTop({
+          scrollTop: scroller.scrollTop,
+          viewportTop: scroller.getBoundingClientRect().top,
+          sectionTop: section.getBoundingClientRect().top,
+          headingTop: heading.getBoundingClientRect().top,
+        });
+        // Synchronous with the press: React commits the collapsed height before the browser
+        // paints, so the reader sees the heading they pressed stay put rather than a jump first.
+        if (target !== null) scroller.scrollTop = target;
+      }
+    }
+    setOpen(nextOpen);
+  };
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex w-full items-center border-t border-border/60 pr-4">
+    <Collapsible
+      open={open}
+      onOpenChange={setOpenWithScrollAnchor}
+      data-pull-request-summary-section
+    >
+      {/* The heading rides the top of the scroll box the way a diff's file header does, so a
+          section can be collapsed from wherever its body has been read to rather than only from
+          where it started. Opaque, because the rows it covers scroll beneath it. */}
+      <div
+        ref={headingRef}
+        className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
+      >
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
             with an affordance rather than a tree node. */}
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
@@ -99,68 +268,6 @@ function Section({
   );
 }
 
-function CommentComposer({
-  environmentId,
-  detail,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  detail: PullRequestDetailView;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
-
-  const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
-    const result = await postComment({
-      environmentId,
-      input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
-        body: trimmed,
-      },
-    });
-    setPosting(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this pull request"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || posting}
-          onClick={() => void submit()}
-        >
-          <SendIcon className="size-3.5" />
-          {posting ? "Posting..." : "Comment"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /**
  * What a first render of the conversation carries. A pull request with two hundred comments is
  * two hundred markdown documents, and the ones worth arriving for are the recent ones.
@@ -174,7 +281,11 @@ export function PullRequestSummaryTab({
   activityPending,
   activityError,
   pendingFinding,
+  fixFindingLabel = "Fix in a thread",
+  fixCheckLabel = "Fix",
   onFixFinding,
+  onLinkIssues,
+  onOpenLinkedIssue,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -184,7 +295,21 @@ export function PullRequestSummaryTab({
   activityError: string | null;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
+  fixFindingLabel?: string;
+  fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  /**
+   * Hands the question of which issues this change is about to an agent. Supplied by whoever
+   * mounted the panel, because only they can open a thread for it; without one the section
+   * offers nothing, which is never a dead control.
+   */
+  onLinkIssues?: () => void;
+  /**
+   * Opens one of the issues this pull request references. Supplied by whoever mounted the panel,
+   * because only they know which thread's panel a peer tab belongs beside; without one the row
+   * opens the issue on its host instead, which is never a dead control.
+   */
+  onOpenLinkedIssue?: (link: IssueLink) => void;
   onRefresh: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
@@ -211,11 +336,69 @@ export function PullRequestSummaryTab({
     void readLocalApi()?.shell.openExternal(url);
   };
 
+  const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
+  const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
+    reportFailure: false,
+  });
+  // Keyed by the pull request, like the comment window above it, so an editor left open never
+  // reappears over the next pull request's description.
+  const [bodyScope, setBodyScope] = useState<string | null>(null);
+  const [bodySaving, setBodySaving] = useState(false);
+  // The remark being rewritten, named with the pull request it belongs to: a comment id is the
+  // host's own, and two hosts — or two pull requests on Azure DevOps, which numbers a remark
+  // inside its thread — hand out the same one. Without the pull request beside it, opening a
+  // different one would leave its like-numbered remark sitting open in an editor.
+  const [commentScope, setCommentScope] = useState<{
+    readonly pullRequest: string;
+    readonly commentId: string;
+  } | null>(null);
+  const [commentSaving, setCommentSaving] = useState(false);
+  const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
+
+  const saveBody = async (body: string) => {
+    if (bodySaving) return;
+    setBodySaving(true);
+    const result = await update({ environmentId, input: { ...reference, body } });
+    setBodySaving(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not save the description" });
+      return;
+    }
+    setBodyScope(null);
+    onRefresh();
+  };
+
+  const commentEditing: CommentEditing = {
+    cwd: detail.workspaceRoot,
+    canEdit: (comment) => canEditPullRequestComment(detail, comment),
+    editingId: editingCommentId,
+    saving: commentSaving,
+    onEdit: (comment) =>
+      setCommentScope(comment === null ? null : { pullRequest: detail.url, commentId: comment.id }),
+    onSave: async (comment, body) => {
+      // A review's own summary is not a kind any host rewrites, which is why no pencil is ever
+      // offered on one; the check is here because the comment's own type still allows it.
+      if (commentSaving || comment.kind === "review") return;
+      setCommentSaving(true);
+      const result = await updateComment({
+        environmentId,
+        input: { ...reference, commentId: comment.id, kind: comment.kind, body },
+      });
+      setCommentSaving(false);
+      if (result._tag === "Failure") {
+        toastManager.add({ type: "error", title: "Could not save the comment" });
+        return;
+      }
+      setCommentScope(null);
+      onRefresh();
+    },
+  };
+
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
       <section className="px-4 py-3">
         <div>
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {detail.reviewers.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -233,6 +416,7 @@ export function PullRequestSummaryTab({
                       >
                         <PullRequestActorLabel
                           actor={actor}
+                          tooltip={false}
                           className="gap-0 [&>img]:ring-2 [&>img]:ring-background [&>span:first-child]:ring-2 [&>span:first-child]:ring-background [&>span:last-child]:sr-only"
                         />
                       </TooltipTrigger>
@@ -260,8 +444,30 @@ export function PullRequestSummaryTab({
                 />
               ) : null}
             </span>
-          </MetaRow>
-          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          </SummaryMetaRow>
+          {detail.labels.length > 0 ? (
+            <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+              <span className="flex min-w-0 flex-wrap items-center gap-1">
+                {detail.labels.map((label) => {
+                  const dot = labelDotColor(label.color);
+                  return (
+                    <span
+                      key={label.name}
+                      className="inline-flex max-w-48 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
+                    >
+                      <span
+                        aria-hidden
+                        className="size-2 shrink-0 rounded-full bg-muted-foreground"
+                        {...(dot ? { style: { backgroundColor: dot } } : {})}
+                      />
+                      <span className="truncate">{label.name}</span>
+                    </span>
+                  );
+                })}
+              </span>
+            </SummaryMetaRow>
+          ) : null}
+          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -269,28 +475,130 @@ export function PullRequestSummaryTab({
                 : detail.commentCount === 1
                   ? "1 comment"
                   : `${detail.commentCount} comments`}
-          </MetaRow>
+          </SummaryMetaRow>
         </div>
       </section>
 
       <Section title="Description">
-        <PullRequestMarkdown
-          text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-          cwd={detail.workspaceRoot}
-        />
+        <div className="group">
+          {bodyScope === detail.url ? (
+            <PullRequestMarkdownEditor
+              // Empty is a real answer here: saving nothing is how a description is cleared.
+              allowEmpty
+              value={detail.body}
+              cwd={detail.workspaceRoot}
+              label="Pull request description"
+              placeholder="Describe this pull request"
+              saving={bodySaving}
+              onSave={(body) => void saveBody(body)}
+              onCancel={() => setBodyScope(null)}
+            />
+          ) : (
+            <div className="flex items-start gap-1">
+              <PullRequestMarkdown
+                className="min-w-0 flex-1"
+                text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+                cwd={detail.workspaceRoot}
+              />
+              {canEditPullRequestChangeRequest(detail) ? (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                  aria-label="Edit description"
+                  onClick={() => setBodyScope(detail.url)}
+                >
+                  <PencilIcon className="size-3" />
+                </Button>
+              ) : null}
+            </div>
+          )}
+          <PullRequestReactionBar
+            className="mt-2"
+            reactions={detail.reactions ?? []}
+            canReact={detail.capabilities.reactions === true}
+            environmentId={environmentId}
+            reference={reference}
+            onRefresh={onRefresh}
+          />
+        </div>
       </Section>
+
+      {/* Absent under a host that never answers this question, rather than empty: an empty
+          section would say this change closes nothing, which such a host cannot know. */}
+      {detail.linkedIssues === undefined ? null : (
+        <Section
+          title="Linked issues"
+          count={detail.linkedIssues.length}
+          // Offered whether or not anything is listed: a change that already closes one issue can
+          // still be about another nobody thought to mention.
+          actions={
+            onLinkIssues ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+                disabled={pendingFinding !== null && pendingFinding !== undefined}
+                onClick={onLinkIssues}
+              >
+                <LinkIcon aria-hidden className="size-3" />
+                {pendingFinding === LINK_ISSUES_HANDOFF_KIND ? "Preparing..." : "Link with agent"}
+              </Button>
+            ) : null
+          }
+        >
+          {detail.linkedIssues.length === 0 ? (
+            <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
+          ) : (
+            <div className="space-y-0.5">
+              {detail.linkedIssues.map((link) => (
+                <button
+                  key={`${link.repository}#${link.number}`}
+                  type="button"
+                  // Beside the change rather than instead of it: reading what a change is for is
+                  // reading the two together.
+                  onClick={() =>
+                    onOpenLinkedIssue === undefined
+                      ? void readLocalApi()?.shell.openExternal(link.url)
+                      : onOpenLinkedIssue(link)
+                  }
+                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+                >
+                  <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
+                  <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                  {link.closesIssue ? (
+                    <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                      closed by this
+                    </span>
+                  ) : null}
+                  <span className="shrink-0 text-muted-foreground tabular-nums">
+                    #{link.number}
+                  </span>
+                </button>
+              ))}
+              {detail.linkedIssuesTruncated === true ? (
+                <p className="px-2 pt-1 text-xs text-muted-foreground">
+                  More linked issues exist on the host.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
           <div className="space-y-0.5">
-            {detail.checks.map((check) => {
+            {detail.checks.map((check, index) => {
               const finding = { kind: "check", check } as const;
               const failing = check.status === "failure" || check.status === "cancelled";
               return (
                 <div
-                  key={`${check.name}:${check.url ?? ""}`}
+                  // Position too: the host decides how many runs share a name, and a repeated
+                  // key would be a rendering fault on top of whatever the list already says.
+                  key={`${index}:${check.name}:${check.url ?? ""}`}
                   className="group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/60"
                 >
                   <button
@@ -319,7 +627,9 @@ export function PullRequestSummaryTab({
                       onClick={() => onFixFinding(finding)}
                     >
                       <HammerIcon className="size-3" />
-                      {pendingFinding === pullRequestFindingKey(finding) ? "Preparing..." : "Fix"}
+                      {pendingFinding === pullRequestFindingKey(finding)
+                        ? "Preparing..."
+                        : fixCheckLabel}
                     </Button>
                   ) : null}
                 </div>
@@ -352,9 +662,14 @@ export function PullRequestSummaryTab({
         }
       >
         {activityPending ? (
-          <PullRequestConversationGhost />
+          <ConversationGhost label="Loading pull request conversation" />
         ) : activityError ? (
-          <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
+          <ActivityUnavailableState
+            compact
+            title="Could not load pull request activity"
+            error={activityError}
+            onRetry={onRefresh}
+          />
         ) : (
           <>
             {detail.commentsTruncated ? (
@@ -385,32 +700,51 @@ export function PullRequestSummaryTab({
                 ) : null}
                 {visibleComments.map((comment) => {
                   const thread = threadByCommentId.get(comment.id);
+                  const reviewState = comment.reviewState?.toLowerCase();
+                  if (thread?.isResolved || reviewState === "dismissed") {
+                    return (
+                      <CollapsedComment
+                        key={comment.id}
+                        comment={comment}
+                        editing={commentEditing}
+                        label={thread?.isResolved ? "Resolved" : "Approval dismissed"}
+                        reactionBar={
+                          <PullRequestReactionBar
+                            className="mt-2"
+                            reactions={comment.reactions ?? []}
+                            canReact={detail.capabilities.reactions === true}
+                            subjectId={comment.id}
+                            environmentId={environmentId}
+                            reference={reference}
+                            onRefresh={onRefresh}
+                          />
+                        }
+                      />
+                    );
+                  }
+                  // An approval is a verdict, not a finding: there is nothing in it to fix.
                   const finding: PullRequestFinding | null =
-                    comment.kind !== "review" && comment.kind !== "review-comment"
+                    (comment.kind !== "review" && comment.kind !== "review-comment") ||
+                    reviewState === "approved"
                       ? null
                       : thread === undefined
                         ? { kind: "comment", comment }
-                        : thread.isResolved
-                          ? null
-                          : { kind: "thread", thread };
+                        : { kind: "thread", thread };
                   return (
                     <article
                       key={comment.id}
                       // Offscreen comments skip style, layout and paint. Bot comments carry pages of
                       // highlighted code, and the conversation is below the description either way.
-                      className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                      className="group rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                     >
                       <div className="flex items-start gap-2">
-                        <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
-                          <PullRequestActorLabel
-                            actor={comment.author}
-                            className="font-medium text-foreground"
-                          />
+                        <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
+                          <CommentAuthor actor={comment.author} />
                           <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                           {comment.reviewState ? (
-                            <span>{comment.reviewState.toLowerCase()}</span>
+                            <span>{reviewStateLabel(comment.reviewState)}</span>
                           ) : null}
-                        </PullRequestMetaLine>
+                        </span>
                         {/* Review remarks only. A plain conversation comment is talk, not a finding,
                       and offering to fix one would promise more than it says. */}
                         {onFixFinding && finding ? (
@@ -424,22 +758,31 @@ export function PullRequestSummaryTab({
                             <HammerIcon className="size-3" />
                             {pendingFinding === pullRequestFindingKey(finding)
                               ? "Preparing..."
-                              : "Fix in a thread"}
+                              : fixFindingLabel}
                           </Button>
                         ) : null}
                       </div>
                       {comment.path ? (
-                        <p
-                          className="mt-1 truncate text-xs text-muted-foreground"
-                          title={comment.path}
-                        >
-                          {comment.path}
-                        </p>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <p className="mt-1 truncate text-xs text-muted-foreground">
+                                {comment.path}
+                              </p>
+                            }
+                          />
+                          <TooltipPopup side="top">{comment.path}</TooltipPopup>
+                        </Tooltip>
                       ) : null}
-                      <PullRequestMarkdown
+                      <CommentBody className="mt-2" comment={comment} editing={commentEditing} />
+                      <PullRequestReactionBar
                         className="mt-2"
-                        text={comment.body}
-                        cwd={detail.workspaceRoot}
+                        reactions={comment.reactions ?? []}
+                        canReact={detail.capabilities.reactions === true}
+                        subjectId={comment.id}
+                        environmentId={environmentId}
+                        reference={reference}
+                        onRefresh={onRefresh}
                       />
                     </article>
                   );
@@ -454,6 +797,8 @@ export function PullRequestSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            label="Comment on this pull request"
+            command={pullRequestEnvironment.comment}
             onCommented={onRefresh}
           />
         ) : null}
