@@ -242,6 +242,36 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("upgrades repository surfaces with normalized per-thread selections", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "git-history",
+            surfaces: [{ id: "git-history", kind: "git-history", view: "issues" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "git-history",
+          surfaces: [
+            {
+              id: "git-history",
+              kind: "git-history",
+              view: "issues",
+              selectedIssue: null,
+              selectedPullRequest: null,
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it("open sets the active panel for a thread", () => {
     useRightPanelStore.getState().open(refA, "preview");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("preview");
@@ -281,7 +311,13 @@ describe("rightPanelStore", () => {
       isOpen: true,
       activeSurfaceId: "git-history",
       surfaces: [
-        { id: "git-history", kind: "git-history", view: "history" },
+        {
+          id: "git-history",
+          kind: "git-history",
+          view: "history",
+          selectedIssue: null,
+          selectedPullRequest: null,
+        },
         { id: "agents", kind: "agents" },
       ],
     });
@@ -293,7 +329,15 @@ describe("rightPanelStore", () => {
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
       activeSurfaceId: "git-history",
-      surfaces: [{ id: "git-history", kind: "git-history", view: "pull-requests" }],
+      surfaces: [
+        {
+          id: "git-history",
+          kind: "git-history",
+          view: "pull-requests",
+          selectedIssue: null,
+          selectedPullRequest: null,
+        },
+      ],
     });
 
     useRightPanelStore.getState().selectRepositoryView(refA, "issues");
@@ -301,6 +345,33 @@ describe("rightPanelStore", () => {
       id: "git-history",
       kind: "git-history",
       view: "issues",
+      selectedIssue: null,
+      selectedPullRequest: null,
+    });
+  });
+
+  it("keeps repository selections isolated per thread and switches to the selected item", () => {
+    const issue = { projectId: "project-a", repository: "owner/a", number: 12 };
+    const pullRequest = { projectId: "project-b", repository: "owner/b", number: 34 };
+
+    useRightPanelStore.getState().openRepository(refA, "history");
+    useRightPanelStore.getState().selectRepositoryIssue(refA, issue);
+    useRightPanelStore.getState().openRepository(refB, "history");
+    useRightPanelStore.getState().selectRepositoryPullRequest(refB, pullRequest);
+
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "git-history",
+      kind: "git-history",
+      view: "issues",
+      selectedIssue: issue,
+      selectedPullRequest: null,
+    });
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refB)).toEqual({
+      id: "git-history",
+      kind: "git-history",
+      view: "pull-requests",
+      selectedIssue: null,
+      selectedPullRequest: pullRequest,
     });
   });
 

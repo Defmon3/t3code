@@ -80,7 +80,7 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
-  onAddGitHistory: () => void;
+  onAddRepository: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
@@ -93,7 +93,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
-  gitHistoryAvailable: boolean;
+  repositoryAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
@@ -125,10 +125,10 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  repository: "Repository views are unavailable for this project.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
   agents: "Agents are only available from a thread.",
-  gitHistory: "Git History is only available when a Git repository is open.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -263,7 +263,7 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
-  onAddGitHistory: () => void;
+  onAddRepository: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
@@ -271,7 +271,7 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
-  gitHistoryAvailable: boolean;
+  repositoryAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
@@ -323,6 +323,16 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      label: "Repository",
+      description: "Browse history, issues, and pull requests.",
+      icon: GitGraph,
+      shortcut: "G",
+      available: props.repositoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.repository,
+      onClick: props.onAddRepository,
+      badgeCount: 0,
+    },
+    {
       label: "Pull request",
       description: "Open this branch's pull request.",
       icon: GitPullRequest,
@@ -330,16 +340,6 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
       onClick: props.onAddPullRequest,
-      badgeCount: 0,
-    },
-    {
-      label: "Git History",
-      description: "Browse commits in this repository.",
-      icon: GitGraph,
-      shortcut: "G",
-      available: props.gitHistoryAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
-      onClick: props.onAddGitHistory,
       badgeCount: 0,
     },
     {
@@ -718,12 +718,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddPullRequest,
     },
     {
-      label: "Git History",
+      label: "Repository",
       icon: GitGraph,
-      shortcut: "H",
-      available: props.gitHistoryAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
-      onClick: props.onAddGitHistory,
+      shortcut: "R",
+      available: props.repositoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.repository,
+      onClick: props.onAddRepository,
     },
     {
       label: "Issue",
@@ -1034,7 +1034,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
-            onAddGitHistory={props.onAddGitHistory}
+            onAddRepository={props.onAddRepository}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
@@ -1042,7 +1042,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
-            gitHistoryAvailable={props.gitHistoryAvailable}
+            repositoryAvailable={props.repositoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}

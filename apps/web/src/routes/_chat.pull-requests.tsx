@@ -1573,16 +1573,16 @@ function PullRequestsRouteView() {
             onAddBrowser={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
+            onAddRepository={() => undefined}
             onAddFiles={() => undefined}
-            onAddGitHistory={() => undefined}
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
             onAddAgents={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
+            repositoryAvailable={false}
             filesAvailable={false}
-            gitHistoryAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}
             agentsAvailable={false}

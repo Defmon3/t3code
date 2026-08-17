@@ -28,10 +28,15 @@ describe("RepositoryPanel", () => {
         composerDraftTarget={{ environmentId: "env-1", threadId: "thread-1" } as never}
         view="history"
         onViewChange={() => undefined}
+        selectedIssue={null}
+        onSelectIssue={() => undefined}
+        selectedPullRequest={null}
+        onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
         onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
+        onOpenLinkedPullRequest={() => undefined}
       />,
     );
 
@@ -54,10 +59,15 @@ describe("RepositoryPanel", () => {
         composerDraftTarget={{ environmentId: "env-1", threadId: "thread-1" } as never}
         view="pull-requests"
         onViewChange={() => undefined}
+        selectedIssue={null}
+        onSelectIssue={() => undefined}
+        selectedPullRequest={null}
+        onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
         onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
+        onOpenLinkedPullRequest={() => undefined}
       />,
     );
 

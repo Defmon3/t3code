@@ -195,8 +195,12 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [closeMobileSidebar, navigate, routeThreadRef]);
   const handleIssuesClick = useCallback(() => {
     closeMobileSidebar();
+    if (routeThreadRef !== null) {
+      useRightPanelStore.getState().openRepository(routeThreadRef, "issues");
+      return;
+    }
     void navigate({ to: "/issues", search: { involvement: "all", state: "open" } });
-  }, [closeMobileSidebar, navigate]);
+  }, [closeMobileSidebar, navigate, routeThreadRef]);
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
