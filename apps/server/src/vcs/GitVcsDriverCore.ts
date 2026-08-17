@@ -18,7 +18,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { randomBytes } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -889,12 +889,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   };
   const newCommitFilesCursor = (snapshotId: string, offset: number): string => {
-    const cursor = randomBytes(18).toString("base64url");
+    const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     commitFilesCursors.set(cursor, { snapshotId, offset });
     return cursor;
   };
   const storeCommitFilesSnapshot = (snapshot: GitCommitFilesSnapshot): string => {
-    const snapshotId = randomBytes(18).toString("base64url");
+    const snapshotId = NodeCrypto.randomBytes(18).toString("base64url");
     commitFilesSnapshots.set(snapshotId, snapshot);
     while (commitFilesSnapshots.size > GIT_COMMIT_FILES_SNAPSHOT_MAX_SESSIONS) {
       const oldest = commitFilesSnapshots.keys().next().value;
@@ -910,12 +910,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   };
   const newHistoryCursor = (snapshotId: string, offset: number): string => {
-    const cursor = randomBytes(18).toString("base64url");
+    const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     historyCursors.set(cursor, { snapshotId, offset });
     return cursor;
   };
   const storeHistorySnapshot = (snapshot: GitHistorySnapshot): string => {
-    const snapshotId = randomBytes(18).toString("base64url");
+    const snapshotId = NodeCrypto.randomBytes(18).toString("base64url");
     historySnapshots.set(snapshotId, snapshot);
     while (historySnapshots.size > GIT_HISTORY_SNAPSHOT_MAX_SESSIONS) {
       const oldest = historySnapshots.keys().next().value;
@@ -927,12 +927,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const refSnapshots = new Map<string, GitRefSnapshot>();
   const refCursors = new Map<string, { readonly snapshotId: string; readonly offset: number }>();
   const newRefCursor = (snapshotId: string, offset: number): string => {
-    const cursor = randomBytes(18).toString("base64url");
+    const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     refCursors.set(cursor, { snapshotId, offset });
     return cursor;
   };
   const storeRefSnapshot = (snapshot: GitRefSnapshot): string => {
-    const snapshotId = randomBytes(18).toString("base64url");
+    const snapshotId = NodeCrypto.randomBytes(18).toString("base64url");
     refSnapshots.set(snapshotId, snapshot);
     while (refSnapshots.size > GIT_REF_SNAPSHOT_MAX_SESSIONS) {
       const oldest = refSnapshots.keys().next().value;

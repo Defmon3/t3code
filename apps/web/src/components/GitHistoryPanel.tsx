@@ -72,6 +72,7 @@ interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   issueUrlPrefix?: string;
+  active?: boolean;
 }
 
 export function isWideHistoryLayout(width: number): boolean {
@@ -101,7 +102,7 @@ export function nextCommitFilesRecoveryGeneration(input: {
     : null;
 }
 
-function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
+export function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
   const [isWide, setIsWide] = useState(true);
 
   useEffect(() => {
@@ -433,6 +434,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       setSelectedHash(null);
     }
   }, [history, selectedHash]);
+
+  useEffect(() => {
+    if (props.active === false) setMobilePane(null);
+  }, [props.active]);
 
   useEffect(() => {
     const previous = previousMobilePane.current;
