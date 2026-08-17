@@ -25,7 +25,7 @@ const historyState = vi.hoisted(() => ({
   getCommitDetails: vi.fn(),
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
-  pages: new Map<number | undefined, VcsGetHistoryResult>(),
+  pages: new Map<string | undefined, VcsGetHistoryResult>(),
   refresh: vi.fn(),
   refs: [] as ReadonlyArray<VcsRef>,
   tags: [] as ReadonlyArray<VcsRef>,
@@ -134,7 +134,7 @@ vi.mock("../state/query", () => ({
 
 vi.mock("../state/vcs", () => ({
   vcsEnvironment: {
-    getHistory: (target: { readonly input: { readonly cursor?: number } }) => {
+    getHistory: (target: { readonly input: { readonly cursor?: string } }) => {
       historyState.getHistory(target);
       const value = historyState.pages.get(target.input.cursor);
       if (!value) throw new Error(`Missing history page for cursor ${target.input.cursor}`);
@@ -171,7 +171,7 @@ function commit(hash: string, subject: string, authorName = "Ada Lovelace"): Git
 
 function page(
   commits: ReadonlyArray<GitHistoryCommit>,
-  options?: { readonly hasMore?: boolean; readonly nextCursor?: number | null },
+  options?: { readonly hasMore?: boolean; readonly nextCursor?: string | null },
 ): VcsGetHistoryResult {
   return {
     commits,
@@ -434,9 +434,9 @@ describe("GitHistoryPanel", () => {
 
   it("deduplicates overlapping pages and keeps Load more in the scrolling column footer", () => {
     const duplicate = commit("aaaaaaaa11111111111111111111111111111111", "Initial commit");
-    historyState.pages.set(undefined, page([duplicate], { hasMore: true, nextCursor: 1 }));
+    historyState.pages.set(undefined, page([duplicate], { hasMore: true, nextCursor: "cursor:1" }));
     historyState.pages.set(
-      1,
+      "cursor:1",
       page([duplicate, commit("bbbbbbbb22222222222222222222222222222222", "Second page commit")]),
     );
 
@@ -463,7 +463,7 @@ describe("GitHistoryPanel", () => {
     ]);
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", cursor: 1, limit: 100, queryGeneration: 0 },
+      input: { cwd: "C:/workspace", cursor: "cursor:1", limit: 100, queryGeneration: 0 },
     });
   });
 

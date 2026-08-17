@@ -77,12 +77,14 @@ function renderTabs(first: DesktopPreviewFavicon | null, second?: DesktopPreview
       onAddPullRequest={() => undefined}
       onAddIssue={() => undefined}
       onAddDiff={() => undefined}
+      onAddGitHistory={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
       liveAgentCount={0}
       browserAvailable
       terminalAvailable={false}
       diffAvailable={false}
+      gitHistoryAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
       issueAvailable={false}
