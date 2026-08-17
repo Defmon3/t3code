@@ -1,4 +1,4 @@
-import type { VcsRef } from "@t3tools/contracts";
+import type { VcsHistoryRef } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import {
   ArrowDownIcon,
@@ -154,7 +154,7 @@ export function GitRefsPane(props: {
   onRefFilterChange: (value: string) => void;
   selectedRevision: { label: string; revision: string } | null;
   onSelectAll: () => void;
-  currentRef: VcsRef | null;
+  currentRef: VcsHistoryRef | null;
   onSelectRef: (label: string, revision: string) => void;
   normalizedRefFilter: string;
   localRefTree: ReadonlyArray<GitRefTreeNode>;
@@ -165,6 +165,7 @@ export function GitRefsPane(props: {
   sharedRefTreeProps: Omit<RefTreeProps, "nodes" | "namespace" | "section">;
   hasMoreRefs: boolean;
   isFetchingMoreRefs: boolean;
+  isRefSnapshotComplete: boolean;
   onLoadMoreRefs: () => void;
   refPaginationError: string | null;
   onRetryRefs: () => void;
@@ -225,6 +226,14 @@ export function GitRefsPane(props: {
           aria-label="Filter branches and tags"
         />
       </div>
+      {!props.isRefSnapshotComplete ? (
+        <p
+          role="status"
+          className="shrink-0 border-b border-border/50 px-3 py-1.5 text-[0.625rem] text-muted-foreground"
+        >
+          Showing the first 10,000 matching refs.
+        </p>
+      ) : null}
       <div className="min-h-0 flex-1 px-2 py-1">
         <LegendList<RefPaneRow>
           data={rows}

@@ -282,6 +282,10 @@ export function createVcsEnvironmentAtoms<R, E>(
 
   return {
     historyRevisionAtom: vcsHistoryRevisionAtom,
+    listHistoryRefs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:list-history-refs",
+      tag: WS_METHODS.vcsListHistoryRefs,
+    }),
     getHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:vcs:get-history",
       tag: WS_METHODS.vcsGetHistory,

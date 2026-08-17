@@ -1,10 +1,10 @@
-import type { VcsRef } from "@t3tools/contracts";
+import type { VcsHistoryRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildGitRefTree } from "../../lib/gitRefTree";
 import { buildRefPaneRows } from "./GitHistoryRefsPane";
 
-function ref(name: string, isTag = false): VcsRef {
+function ref(name: string, isTag = false): VcsHistoryRef {
   return {
     current: false,
     isDefault: false,

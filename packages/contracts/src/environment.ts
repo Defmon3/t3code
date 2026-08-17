@@ -54,6 +54,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server exposes the GitHub issue list and cache invalidation APIs. Absent on servers from
       before the GitHub issues workspace shipped, so clients must not probe them. */
   githubIssues: Schema.optionalKey(Schema.Boolean),
+  gitHistory: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.settle / thread.unsettle commands. Absent on
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */

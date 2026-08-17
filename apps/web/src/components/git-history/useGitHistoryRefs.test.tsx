@@ -1,4 +1,4 @@
-import { EnvironmentId, type VcsRef } from "@t3tools/contracts";
+import { EnvironmentId, type VcsHistoryRef } from "@t3tools/contracts";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -6,9 +6,10 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 
 const refState = vi.hoisted(() => ({
-  local: [] as ReadonlyArray<VcsRef>,
-  remote: [] as ReadonlyArray<VcsRef>,
-  tags: [] as ReadonlyArray<VcsRef>,
+  local: [] as ReadonlyArray<VcsHistoryRef>,
+  remote: [] as ReadonlyArray<VcsHistoryRef>,
+  tags: [] as ReadonlyArray<VcsHistoryRef>,
+  isComplete: true,
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -30,7 +31,7 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("../../state/queries", () => ({
-  usePaginatedBranches: (_target: unknown, options: { readonly namespace: string }) => {
+  usePaginatedHistoryRefs: (_target: unknown, options: { readonly namespace: string }) => {
     const refs =
       options.namespace === "local"
         ? refState.local
@@ -38,7 +39,7 @@ vi.mock("../../state/queries", () => ({
           ? refState.remote
           : refState.tags;
     return {
-      data: { currentRef: null, nextCursor: null },
+      data: { currentRef: null, nextCursor: null, isComplete: refState.isComplete },
       refs,
       error: null,
       isFetchingNextPage: false,
@@ -54,7 +55,7 @@ import { useGitHistoryRefs } from "./useGitHistoryRefs";
 
 const environmentId = EnvironmentId.make("environment-local");
 
-function ref(name: string, isRemote = false): VcsRef {
+function ref(name: string, isRemote = false): VcsHistoryRef {
   return { current: false, isDefault: false, isRemote, name, worktreePath: null };
 }
 
@@ -83,13 +84,15 @@ function renderRefs() {
     },
     hasMoreRefs: historyRefs.hasMoreRefs,
     isFetchingMoreRefs: historyRefs.isFetchingMoreRefs,
+    isRefSnapshotComplete: historyRefs.isRefSnapshotComplete,
     onLoadMoreRefs: historyRefs.onLoadMoreRefs,
     refPaginationError: historyRefs.refPaginationError,
     onRetryRefs: historyRefs.onRetryRefs,
   }) as ReactElement<Record<string, unknown>>;
   const list = visitElements(pane, (element) => typeof element.props.keyExtractor === "function");
   expect(list).not.toBeNull();
-  return { historyRefs, rows: list!.props.data as ReadonlyArray<unknown> };
+  const capStatus = visitElements(pane, (element) => element.props.role === "status");
+  return { historyRefs, rows: list!.props.data as ReadonlyArray<unknown>, capStatus };
 }
 
 describe("useGitHistoryRefs", () => {
@@ -98,6 +101,7 @@ describe("useGitHistoryRefs", () => {
     refState.local = Array.from({ length: 5_000 }, (_, index) => ref(`feature-${index}`));
     refState.remote = Array.from({ length: 5_000 }, (_, index) => ref(`origin-${index}`, true));
     refState.tags = [];
+    refState.isComplete = true;
   });
 
   it("preserves ref trees and the 10k-row virtual-list model across unchanged rerenders", () => {
@@ -112,5 +116,13 @@ describe("useGitHistoryRefs", () => {
     expect(second.historyRefs.remoteRefTree).toBe(first.historyRefs.remoteRefTree);
     expect(second.rows).toBe(first.rows);
     expect(second.rows).toHaveLength(10_005);
+  });
+
+  it("states the first-10,000 cap when the server snapshot is incomplete", () => {
+    refState.isComplete = false;
+
+    const rendered = renderRefs();
+
+    expect(rendered.capStatus?.props.children).toBe("Showing the first 10,000 matching refs.");
   });
 });

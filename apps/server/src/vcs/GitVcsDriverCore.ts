@@ -18,7 +18,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { randomBytes } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -33,6 +33,7 @@ import {
   type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
+  type VcsHistoryRef,
   type VcsRef,
 } from "@t3tools/contracts";
 import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
@@ -836,12 +837,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   };
   const newCommitFilesCursor = (snapshotId: string, offset: number): string => {
-    const cursor = randomBytes(18).toString("base64url");
+    const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     commitFilesCursors.set(cursor, { snapshotId, offset });
     return cursor;
   };
   const storeCommitFilesSnapshot = (snapshot: GitCommitFilesSnapshot): string => {
-    const snapshotId = randomBytes(18).toString("base64url");
+    const snapshotId = NodeCrypto.randomBytes(18).toString("base64url");
     commitFilesSnapshots.set(snapshotId, snapshot);
     while (commitFilesSnapshots.size > GIT_COMMIT_FILES_SNAPSHOT_MAX_SESSIONS) {
       const oldest = commitFilesSnapshots.keys().next().value;
@@ -857,12 +858,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   };
   const newHistoryCursor = (snapshotId: string, offset: number): string => {
-    const cursor = randomBytes(18).toString("base64url");
+    const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     historyCursors.set(cursor, { snapshotId, offset });
     return cursor;
   };
   const storeHistorySnapshot = (snapshot: GitHistorySnapshot): string => {
-    const snapshotId = randomBytes(18).toString("base64url");
+    const snapshotId = NodeCrypto.randomBytes(18).toString("base64url");
     historySnapshots.set(snapshotId, snapshot);
     while (historySnapshots.size > GIT_HISTORY_SNAPSHOT_MAX_SESSIONS) {
       const oldest = historySnapshots.keys().next().value;
@@ -874,12 +875,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const refSnapshots = new Map<string, GitRefSnapshot>();
   const refCursors = new Map<string, { readonly snapshotId: string; readonly offset: number }>();
   const newRefCursor = (snapshotId: string, offset: number): string => {
-    const cursor = randomBytes(18).toString("base64url");
+    const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     refCursors.set(cursor, { snapshotId, offset });
     return cursor;
   };
   const storeRefSnapshot = (snapshot: GitRefSnapshot): string => {
-    const snapshotId = randomBytes(18).toString("base64url");
+    const snapshotId = NodeCrypto.randomBytes(18).toString("base64url");
     refSnapshots.set(snapshotId, snapshot);
     while (refSnapshots.size > GIT_REF_SNAPSHOT_MAX_SESSIONS) {
       const oldest = refSnapshots.keys().next().value;
@@ -2834,6 +2835,32 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const listHistoryRefs: GitVcsDriver.GitVcsDriver["Service"]["listHistoryRefs"] = Effect.fn(
+    "listHistoryRefs",
+  )(function* (input) {
+    const page = yield* listRefs({
+      cwd: input.cwd,
+      cursor: input.cursor,
+      namespace: input.namespace,
+      refresh: input.refresh,
+      queryGeneration: input.queryGeneration,
+      limit: input.query === undefined ? input.limit : GIT_REF_SNAPSHOT_MAX_REFS,
+    });
+    const query = input.query?.toLowerCase();
+    const refs: ReadonlyArray<VcsHistoryRef> =
+      query === undefined
+        ? page.refs
+        : page.refs.filter((ref) => ref.name.toLowerCase().includes(query));
+    return {
+      ...page,
+      refs,
+      currentRef: page.currentRef,
+      nextCursor: query === undefined || page.nextCursor === null ? page.nextCursor : null,
+      isComplete:
+        query === undefined ? page.isComplete : page.isComplete && page.nextCursor === null,
+    };
+  });
+
   const getHistory: GitVcsDriver.GitVcsDriver["Service"]["getHistory"] = Effect.fn("getHistory")(
     function* (input) {
       const repositoryPaths = yield* resolveRepositoryPaths(input.cwd).pipe(
@@ -3536,6 +3563,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffFileContents,
     readConfigValue,
     listRefs,
+    listHistoryRefs,
     getHistory,
     getCommitDetails,
     listCommitFiles,

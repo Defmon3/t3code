@@ -353,6 +353,7 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { hasGitHistoryCapability } from "../gitHistoryCapability";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -436,7 +437,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
-const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
+const CustomGitHistoryPanel = lazy(() => import("./CustomGitHistoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -2026,6 +2027,7 @@ function ChatViewContent(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const supportsGitHistory = hasGitHistoryCapability(serverConfig?.environment.capabilities);
   const githubIssuesCapabilityKnown = serverConfig !== null;
   const githubIssuesAvailable = serverConfig?.environment.capabilities.githubIssues === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
@@ -3323,9 +3325,9 @@ function ChatViewContent(props: ChatViewProps) {
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
   const addGitHistorySurface = useCallback(() => {
-    if (!activeThreadRef || !isGitRepo || gitCwd === null) return;
+    if (!activeThreadRef || !supportsGitHistory || !isGitRepo || gitCwd === null) return;
     useRightPanelStore.getState().open(activeThreadRef, "git-history");
-  }, [activeThreadRef, gitCwd, isGitRepo]);
+  }, [activeThreadRef, gitCwd, isGitRepo, supportsGitHistory]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -6169,9 +6171,14 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
+    ) : activeRightPanelSurface?.kind === "git-history" && !supportsGitHistory ? (
+      <PullRequestsUnavailableState
+        title="Git History unavailable"
+        error="Update this environment's T3 Code server to browse Git History."
+      />
     ) : activeRightPanelSurface?.kind === "git-history" && gitCwd ? (
       <Suspense fallback={null}>
-        <GitHistoryPanel
+        <CustomGitHistoryPanel
           environmentId={environmentId}
           cwd={gitCwd}
           githubIssuesCapabilityKnown={githubIssuesCapabilityKnown}
@@ -6716,7 +6723,7 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
-          gitHistoryAvailable={isGitRepo && gitCwd !== null}
+          gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
@@ -6757,7 +6764,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
-            gitHistoryAvailable={isGitRepo && gitCwd !== null}
+            gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable

@@ -27,6 +27,8 @@ import {
   type VcsListCommitFilesResult,
   type VcsGetCommitDiffInput,
   type VcsGetCommitDiffResult,
+  type VcsListHistoryRefsInput,
+  type VcsListHistoryRefsResult,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewResult,
   type ReviewDiffFileContentsInput,
@@ -279,6 +281,9 @@ export class GitVcsDriver extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly listHistoryRefs: (
+      input: VcsListHistoryRefsInput,
+    ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly getHistory: (
       input: VcsGetHistoryInput,
     ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;

@@ -1,9 +1,9 @@
-import type { VcsRef } from "@t3tools/contracts";
+import type { VcsHistoryRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildGitRefTree, filterGitRefTree } from "./gitRefTree";
 
-function ref(name: string, options?: { current?: boolean; isDefault?: boolean }): VcsRef {
+function ref(name: string, options?: { current?: boolean; isDefault?: boolean }): VcsHistoryRef {
   return {
     name,
     current: options?.current ?? false,

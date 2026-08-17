@@ -22,6 +22,8 @@ import {
   type VcsGetCommitDiffResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
+  type VcsListHistoryRefsInput,
+  type VcsListHistoryRefsResult,
   type GitManagerServiceError,
   type GitPreparePullRequestThreadInput,
   type GitPreparePullRequestThreadResult,
@@ -71,6 +73,9 @@ export class GitWorkflowService extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly listHistoryRefs: (
+      input: VcsListHistoryRefsInput,
+    ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly getHistory: (
       input: VcsGetHistoryInput,
     ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
@@ -146,6 +151,17 @@ function nonRepositoryStatus(): VcsStatusResult {
 }
 
 function nonRepositoryListRefs(): VcsListRefsResult {
+  return {
+    refs: [],
+    currentRef: null,
+    isRepo: false,
+    hasPrimaryRemote: false,
+    nextCursor: null,
+    isComplete: true,
+  };
+}
+
+function nonRepositoryListHistoryRefs(): VcsListHistoryRefsResult {
   return {
     refs: [],
     currentRef: null,
@@ -340,6 +356,14 @@ export const make = Effect.gen(function* () {
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
+        ),
+      ),
+    listHistoryRefs: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.listHistoryRefs", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.listHistoryRefs(input)
+            : Effect.succeed(nonRepositoryListHistoryRefs()),
         ),
       ),
     getHistory: (input) =>

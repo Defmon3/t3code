@@ -89,6 +89,9 @@ export const VcsRef = Schema.Struct({
 });
 export type VcsRef = typeof VcsRef.Type;
 
+export const VcsHistoryRef = VcsRef;
+export type VcsHistoryRef = typeof VcsHistoryRef.Type;
+
 const VcsWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
@@ -139,6 +142,19 @@ export const VcsListRefsInput = Schema.Struct({
   ),
 });
 export type VcsListRefsInput = typeof VcsListRefsInput.Type;
+
+export const VcsListHistoryRefsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  namespace: Schema.optional(Schema.Literals(["local", "remote", "tag"])),
+  refresh: Schema.optional(Schema.Boolean),
+  queryGeneration: Schema.optional(NonNegativeInt),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
+  ),
+});
+export type VcsListHistoryRefsInput = typeof VcsListHistoryRefsInput.Type;
 
 export const VcsGetHistoryInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -304,6 +320,16 @@ export const VcsListRefsResult = Schema.Struct({
   isComplete: Schema.Boolean,
 });
 export type VcsListRefsResult = typeof VcsListRefsResult.Type;
+
+export const VcsListHistoryRefsResult = Schema.Struct({
+  refs: Schema.Array(VcsHistoryRef),
+  currentRef: Schema.NullOr(VcsHistoryRef),
+  isRepo: Schema.Boolean,
+  hasPrimaryRemote: Schema.Boolean,
+  nextCursor: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  isComplete: Schema.Boolean,
+});
+export type VcsListHistoryRefsResult = typeof VcsListHistoryRefsResult.Type;
 
 export const GitHistoryCommit = Schema.Struct({
   hash: TrimmedNonEmptyStringSchema,

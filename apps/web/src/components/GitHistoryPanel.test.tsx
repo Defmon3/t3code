@@ -5,7 +5,7 @@ import {
   type GitHistoryCommit,
   type VcsGetHistoryResult,
   type VcsListCommitFilesResult,
-  type VcsRef,
+  type VcsHistoryRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
@@ -50,10 +50,12 @@ const historyState = vi.hoisted(() => ({
   refreshRemoteRefs: vi.fn(),
   refreshTags: vi.fn(),
   toastAdd: vi.fn(),
-  refs: [] as ReadonlyArray<VcsRef>,
-  tags: [] as ReadonlyArray<VcsRef>,
-  status: { aheadCount: 0, behindCount: 0, branchCommitCount: 0 },
+  refs: [] as ReadonlyArray<VcsHistoryRef>,
+  tags: [] as ReadonlyArray<VcsHistoryRef>,
+  status: { aheadCount: 0, behindCount: 0 },
 }));
+
+const fontState = vi.hoisted(() => ({ interfaceSize: 16 }));
 
 vi.mock("../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: (options?: { readonly onError?: (error: Error) => void }) => ({
@@ -63,8 +65,9 @@ vi.mock("../hooks/useCopyToClipboard", () => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({
-  useClientSettings: (selector: (settings: { readonly fontSizeInterface: number }) => unknown) =>
-    selector({ fontSizeInterface: 20 }),
+  useClientSettings: <Value,>(
+    selector: (settings: { readonly fontSizeInterface: number }) => Value,
+  ) => selector({ fontSizeInterface: fontState.interfaceSize }),
 }));
 
 vi.mock("./ui/toast", () => ({
@@ -119,12 +122,10 @@ vi.mock("effect/unstable/reactivity", async (importOriginal) => {
     },
     Atom: {
       ...actual.Atom,
-      make: (create: unknown) => {
-        if (typeof create !== "function") return actual.Atom.make(create);
-        const derive = create as (
-          get: (atom: PageAtom) => PageAtom["result"],
-        ) => ReadonlyArray<PageAtom["result"]>;
-        const value = derive((atom) => atom.result);
+      make: (
+        create: (get: (atom: PageAtom) => PageAtom["result"]) => ReadonlyArray<PageAtom["result"]>,
+      ) => {
+        const value = create((atom) => atom.result);
         return {
           pipe: () => ({ value }),
           value,
@@ -139,16 +140,13 @@ vi.mock("@legendapp/list/react", () => ({
   LegendList: () => null,
 }));
 
-vi.mock("./githubIssues/GitHubIssuesPane", () => ({
-  GitHubIssuesPane: () => null,
-}));
-
 vi.mock("../rpc/atomRegistry", () => ({
   appAtomRegistry: { refresh: historyState.refresh },
 }));
 
 vi.mock("../state/queries", () => ({
-  usePaginatedBranches: (_target: unknown, options?: { readonly namespace?: string }) => {
+  useDebouncedValue: <Value,>(value: Value) => value,
+  usePaginatedHistoryRefs: (_target: unknown, options?: { readonly namespace?: string }) => {
     const refs = options?.namespace === "tag" ? historyState.tags : historyState.refs;
     return {
       data: {
@@ -164,6 +162,7 @@ vi.mock("../state/queries", () => ({
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
+      retry: vi.fn(),
       refresh:
         options?.namespace === "tag"
           ? historyState.refreshTags
@@ -298,7 +297,7 @@ function gitRef(
     readonly isTag?: boolean;
     readonly upstreamName?: string;
   },
-): VcsRef {
+): VcsHistoryRef {
   return {
     name,
     current: options?.current ?? false,
@@ -331,11 +330,11 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
   const list = visitElements(
     panel,
     (element) =>
-      element.props.estimatedItemSize === 37.5 && typeof element.props.keyExtractor === "function",
+      typeof element.props.estimatedItemSize === "number" &&
+      typeof element.props.keyExtractor === "function",
   );
   expect(list).not.toBeNull();
   return list as ReactElement<{
-    readonly estimatedItemSize: number;
     readonly data: ReadonlyArray<{
       readonly commit: GitHistoryCommit;
       readonly graph: { readonly edges: ReadonlyArray<{ readonly kind: string }> };
@@ -346,6 +345,7 @@ function historyList(panel: ReactElement<Record<string, unknown>>) {
         readonly graph: { readonly edges: ReadonlyArray<unknown> };
       };
     }) => ReactElement<Record<string, unknown>>;
+    readonly estimatedItemSize: number;
     readonly onEndReached?: () => void;
   }>;
 }
@@ -401,6 +401,7 @@ function componentElement(
 describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
+    fontState.interfaceSize = 16;
     effectQueue.cursor = 0;
     effectQueue.dependencies.length = 0;
     effectQueue.effects.length = 0;
@@ -428,7 +429,7 @@ describe("GitHistoryPanel", () => {
     historyState.toastAdd.mockReset();
     historyState.refs = [];
     historyState.tags = [];
-    historyState.status = { aheadCount: 0, behindCount: 0, branchCommitCount: 0 };
+    historyState.status = { aheadCount: 0, behindCount: 0 };
   });
 
   it("restarts the first history page after a typed continuation expiry", () => {
@@ -533,7 +534,7 @@ describe("GitHistoryPanel", () => {
     });
   });
 
-  it("scales row, graph, and virtualizer geometry with the interface font", () => {
+  it("keeps row separators out of the graph column", () => {
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
 
@@ -543,7 +544,41 @@ describe("GitHistoryPanel", () => {
       historyRow,
       (element) => typeof element.type === "function" && element.type.name === "GraphCell",
     );
-    const graphSvg = visitElements(renderComponent(graph!), (element) => element.type === "svg");
+    const content = visitElements(
+      historyRow,
+      (element) =>
+        typeof element.props.className === "string" &&
+        element.props.className.includes("grid-cols-") &&
+        element.props.className.includes("border-b"),
+    );
+
+    expect(historyRow.props.className).not.toContain("border-b");
+    expect(graph).not.toBeNull();
+    expect(content).not.toBeNull();
+
+    const graphRoot = renderComponent(graph!);
+    const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
+    expect(graphRoot.props.className).not.toContain("overflow-visible");
+    expect(graphSvg).not.toBeNull();
+    expect(graphSvg!.props.className).toBe("absolute inset-0");
+    expect(graphSvg!.props.height).toBe(30);
+    expect(graphSvg!.props.viewBox).toBe("0 0 44 30");
+  });
+
+  it("scales the list and graph geometry with the interface font size", () => {
+    fontState.interfaceSize = 20;
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const graph = visitElements(
+      historyRow,
+      (element) => typeof element.type === "function" && element.type.name === "GraphCell",
+    );
+    expect(graph).not.toBeNull();
+    const graphRoot = renderComponent(graph!);
+    const graphSvg = visitElements(graphRoot, (element) => element.type === "svg");
 
     expect(list.props.estimatedItemSize).toBe(37.5);
     expect(historyRow.props.style).toMatchObject({ height: 37.5 });
@@ -551,7 +586,8 @@ describe("GitHistoryPanel", () => {
     expect(graphSvg!.props.viewBox).toBe("0 0 44 37.5");
   });
 
-  it("joins solid graph lanes inside adjacent paint-contained rows", () => {
+  it("keeps graph paths within each paint-contained row while joining adjacent lanes", () => {
+    fontState.interfaceSize = 20;
     const parent = commit("bbbbbbbb22222222222222222222222222222222", "Parent");
     const child = {
       ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
@@ -569,7 +605,9 @@ describe("GitHistoryPanel", () => {
       expect(graph).not.toBeNull();
       return renderComponent(graph!);
     });
-    const childParent = visitElements(
+    const childSvg = visitElements(graphRoots[0], (element) => element.type === "svg");
+    const parentSvg = visitElements(graphRoots[1], (element) => element.type === "svg");
+    const childParentEdge = visitElements(
       graphRoots[0],
       (element) => element.props["data-edge-kind"] === "parent",
     );
@@ -578,12 +616,18 @@ describe("GitHistoryPanel", () => {
       (element) => element.type === "line" && element.props.y1 === "0",
     );
 
-    expect(childParent!.props.d).toContain("L 11.5 37.5");
-    expect(childParent!.props.strokeLinecap).toBe("square");
+    expect(childSvg).not.toBeNull();
+    expect(parentSvg).not.toBeNull();
+    expect(childSvg!.props.className).toBe("absolute inset-0");
+    expect(childSvg!.props.viewBox).toBe("0 0 44 37.5");
+    expect(childSvg!.props.height).toBe(37.5);
+    expect(childParentEdge!.props.d).toContain("L 11.5 37.5");
+    expect(childParentEdge!.props.strokeLinecap).toBe("square");
+    expect(parentIncoming).not.toBeNull();
     expect(parentIncoming!.props.strokeLinecap).toBe("square");
   });
 
-  it("leaves missing-parent graph boundaries dashed", () => {
+  it("keeps missing-parent graph paths dashed without boundary overlays", () => {
     const child = {
       ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
       parentHashes: ["bbbbbbbb22222222222222222222222222222222"],
@@ -603,6 +647,7 @@ describe("GitHistoryPanel", () => {
       (element) =>
         element.props["data-edge-kind"] === "parent" && element.props.strokeDasharray === "3 2",
     );
+
     expect(missingParent).not.toBeNull();
     expect(missingParent!.props.strokeLinecap).toBe("butt");
   });
@@ -876,7 +921,7 @@ describe("GitHistoryPanel", () => {
       }),
       gitRef("main"),
     ];
-    historyState.status = { aheadCount: 3, behindCount: 2, branchCommitCount: 10 };
+    historyState.status = { aheadCount: 3, behindCount: 2 };
 
     const initial = renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({

@@ -1,4 +1,4 @@
-import type { VcsRef } from "@t3tools/contracts";
+import type { VcsHistoryRef } from "@t3tools/contracts";
 
 export type GitRefTreeNode =
   | {
@@ -10,19 +10,19 @@ export type GitRefTreeNode =
   | {
       readonly kind: "ref";
       readonly name: string;
-      readonly ref: VcsRef;
+      readonly ref: VcsHistoryRef;
     };
 
 interface MutableFolder {
   readonly folders: Map<string, MutableFolder>;
-  readonly refs: VcsRef[];
+  readonly refs: VcsHistoryRef[];
 }
 
 function createFolder(): MutableFolder {
   return { folders: new Map(), refs: [] };
 }
 
-function compareRefs(left: VcsRef, right: VcsRef): number {
+function compareRefs(left: VcsHistoryRef, right: VcsHistoryRef): number {
   if (left.current !== right.current) return left.current ? -1 : 1;
   if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1;
   return left.name.localeCompare(right.name);
@@ -50,7 +50,7 @@ function materialize(folder: MutableFolder, parentPath: string): GitRefTreeNode[
   return [...pinned, ...folders, ...ordinary];
 }
 
-export function buildGitRefTree(refs: ReadonlyArray<VcsRef>): ReadonlyArray<GitRefTreeNode> {
+export function buildGitRefTree(refs: ReadonlyArray<VcsHistoryRef>): ReadonlyArray<GitRefTreeNode> {
   const root = createFolder();
   for (const ref of refs) {
     const segments = ref.name.split("/").filter((segment) => segment.length > 0);

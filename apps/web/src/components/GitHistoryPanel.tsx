@@ -43,7 +43,6 @@ import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Sheet, SheetPopup, SheetTitle } from "./ui/sheet";
-import { GitHubIssuesPane } from "./githubIssues/GitHubIssuesPane";
 
 const HISTORY_PAGE_SIZE = 100;
 const MAX_HISTORY_PAGES = 10;
@@ -73,8 +72,7 @@ interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   issueUrlPrefix?: string;
-  githubIssuesCapabilityKnown?: boolean;
-  githubIssuesAvailable?: boolean;
+  active?: boolean;
 }
 
 export function isWideHistoryLayout(width: number): boolean {
@@ -104,7 +102,7 @@ export function nextCommitFilesRecoveryGeneration(input: {
     : null;
 }
 
-function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
+export function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
   const [isWide, setIsWide] = useState(true);
 
   useEffect(() => {
@@ -226,8 +224,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<"refs" | "details" | null>(null);
-  const [mode, setMode] = useState<"tree" | "issues">("tree");
-  const [issuesVisited, setIssuesVisited] = useState(false);
   const previousMobilePane = useRef<typeof mobilePane>(null);
   const branchesButtonRef = useRef<HTMLButtonElement | null>(null);
   const detailsButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -327,6 +323,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     expandedRefKeys,
     hasMoreRefs,
     isFetchingMoreRefs,
+    isRefSnapshotComplete,
     localRefTree,
     localRefs,
     normalizedRefFilter,
@@ -385,6 +382,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     sharedRefTreeProps,
     hasMoreRefs,
     isFetchingMoreRefs,
+    isRefSnapshotComplete,
     onLoadMoreRefs,
     onRetryRefs,
     refPaginationError,
@@ -438,6 +436,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   }, [history, selectedHash]);
 
   useEffect(() => {
+    if (props.active === false) setMobilePane(null);
+  }, [props.active]);
+
+  useEffect(() => {
     const previous = previousMobilePane.current;
     previousMobilePane.current = mobilePane;
     if (mobilePane !== null || previous === null) return;
@@ -463,398 +465,334 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
     if (failedPageAtom) appAtomRegistry.refresh(failedPageAtom);
   }, [pageAtoms, results]);
-  const selectMode = (next: "tree" | "issues") => {
-    if (next === "issues") {
-      setMobilePane(null);
-      setIssuesVisited(true);
-    }
-    setMode(next);
-  };
 
   return (
     <section
       ref={panelRef}
       className="@container/history-list flex size-full min-h-0 min-w-0 flex-col bg-background"
-      aria-label="Repository history and issues"
+      aria-label="Git history"
     >
-      <div
-        className="flex shrink-0 items-center gap-1 border-b border-border/70 px-3 py-1.5"
-        role="tablist"
-        aria-label="Repository views"
+      <header
+        className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3 py-2"
+        inert={mobilePane !== null ? true : undefined}
       >
-        <Button
-          size="xs"
-          variant={mode === "tree" ? "secondary" : "ghost"}
-          role="tab"
-          aria-selected={mode === "tree"}
-          onClick={() => selectMode("tree")}
-        >
-          Tree
-        </Button>
-        <Button
-          size="xs"
-          variant={mode === "issues" ? "secondary" : "ghost"}
-          role="tab"
-          aria-selected={mode === "issues"}
-          onClick={() => selectMode("issues")}
-        >
-          Issues
-        </Button>
-      </div>
-      <div
-        hidden={mode !== "tree"}
-        aria-hidden={mode !== "tree"}
-        inert={mode !== "tree" ? true : undefined}
-        className="flex min-h-0 flex-1 flex-col"
-        aria-label="Git history"
-      >
-        <header
-          className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3 py-2"
-          inert={mobilePane !== null ? true : undefined}
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <Badge
-              variant="outline"
-              className="min-w-0 max-w-64"
-              title={selectedRevision?.label ?? "All refs"}
-            >
-              <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
-              <span className="truncate">{selectedRevision?.label ?? "All refs"}</span>
-            </Badge>
-            {history.length > 0 ? (
-              <span className="hidden text-[0.6875rem] tabular-nums text-muted-foreground min-[440px]:inline">
-                {history.length} commits
-              </span>
-            ) : null}
-          </div>
-          {!isWideLayout ? (
-            <>
-              <Button
-                ref={branchesButtonRef}
-                variant="ghost"
-                size="xs"
-                onClick={() =>
-                  mode === "tree" && setMobilePane((pane) => (pane === "refs" ? null : "refs"))
-                }
-                aria-controls="git-history-refs-panel"
-                aria-expanded={mobilePane === "refs"}
-              >
-                <GitBranchIcon className="size-3.5" /> Branches
-              </Button>
-              <Button
-                ref={detailsButtonRef}
-                variant="ghost"
-                size="xs"
-                onClick={() =>
-                  mode === "tree" &&
-                  setMobilePane((pane) => (pane === "details" ? null : "details"))
-                }
-                disabled={selectedHash === null}
-                aria-controls="git-history-details-panel"
-                aria-expanded={mobilePane === "details"}
-              >
-                <FileIcon className="size-3.5" /> Details
-              </Button>
-            </>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={refresh}
-            disabled={isPending}
-            aria-label="Refresh Git history"
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Badge
+            variant="outline"
+            className="min-w-0 max-w-64"
+            title={selectedRevision?.label ?? "All refs"}
           >
-            <RefreshCwIcon className={cn("size-3.5", isPending && "animate-spin")} />
-          </Button>
-        </header>
-        {commitDiffRequest ? (
-          <CommitDiffView
-            hash={commitDiffRequest.hash}
-            {...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {})}
-            files={selectedCommitFiles}
-            diff={commitDiffQuery.data?.diff ?? null}
-            truncated={commitDiffQuery.data?.truncated ?? false}
-            isPending={commitDiffQuery.isPending}
-            error={commitDiffQuery.error}
-            onBack={() => setCommitDiffRequest(null)}
-            onSelectFile={(filePath) =>
-              setCommitDiffRequest(
-                filePath
-                  ? { hash: commitDiffRequest.hash, filePath }
-                  : { hash: commitDiffRequest.hash },
-              )
-            }
-            onRetry={commitDiffQuery.refresh}
-          />
-        ) : isInitialLoad ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
-            <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading history…
-          </div>
-        ) : error && history.length === 0 ? (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-            <p className="text-xs text-destructive">{error}</p>
-            <Button size="sm" variant="outline" onClick={refresh}>
-              Retry
-            </Button>
-          </div>
-        ) : !isRepo ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
-            This folder is not a Git repository.
-          </div>
-        ) : history.length === 0 ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
-            This repository has no commits yet.
-          </div>
-        ) : (
-          <div className="relative flex min-h-0 flex-1">
-            {isWideLayout ? (
-              <GitRefsPane
-                className="!border-r-0"
-                style={{
-                  width: refsPaneWidth,
-                  minWidth: refsPaneWidth,
-                  maxWidth: refsPaneWidth,
-                  flexBasis: refsPaneWidth,
-                }}
-                {...refPaneProps}
-              />
-            ) : null}
-            {isWideLayout ? (
-              <PaneResizeHandle
-                label="Resize branches pane"
-                value={refsPaneWidth}
-                min={REFS_PANE_MIN_WIDTH}
-                max={REFS_PANE_MAX_WIDTH}
-                onMove={(delta) =>
-                  setRefsPaneWidth((width) =>
-                    Math.min(REFS_PANE_MAX_WIDTH, Math.max(REFS_PANE_MIN_WIDTH, width + delta)),
-                  )
-                }
-                onReset={() => setRefsPaneWidth(256)}
-              />
-            ) : null}
-            <div
-              className="@container min-h-0 min-w-0 flex-1 overflow-hidden"
-              inert={mobilePane !== null ? true : undefined}
+            <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
+            <span className="truncate">{selectedRevision?.label ?? "All refs"}</span>
+          </Badge>
+          {history.length > 0 ? (
+            <span className="hidden text-[0.6875rem] tabular-nums text-muted-foreground min-[440px]:inline">
+              {history.length} commits
+            </span>
+          ) : null}
+        </div>
+        {!isWideLayout ? (
+          <>
+            <Button
+              ref={branchesButtonRef}
+              variant="ghost"
+              size="xs"
+              onClick={() => setMobilePane((pane) => (pane === "refs" ? null : "refs"))}
+              aria-controls="git-history-refs-panel"
+              aria-expanded={mobilePane === "refs"}
             >
-              <div className="flex h-full min-w-0 flex-col">
-                <div className="relative shrink-0 border-b border-border/60 p-2">
-                  <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    ref={searchInputRef}
-                    className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-[0.6875rem] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
-                    value={filter}
-                    onChange={(event) => setFilter(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Escape" || filter.length === 0) return;
-                      event.preventDefault();
+              <GitBranchIcon className="size-3.5" /> Branches
+            </Button>
+            <Button
+              ref={detailsButtonRef}
+              variant="ghost"
+              size="xs"
+              onClick={() => setMobilePane((pane) => (pane === "details" ? null : "details"))}
+              disabled={selectedHash === null}
+              aria-controls="git-history-details-panel"
+              aria-expanded={mobilePane === "details"}
+            >
+              <FileIcon className="size-3.5" /> Details
+            </Button>
+          </>
+        ) : null}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={refresh}
+          disabled={isPending}
+          aria-label="Refresh Git history"
+        >
+          <RefreshCwIcon className={cn("size-3.5", isPending && "animate-spin")} />
+        </Button>
+      </header>
+      {commitDiffRequest ? (
+        <CommitDiffView
+          hash={commitDiffRequest.hash}
+          {...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {})}
+          files={selectedCommitFiles}
+          diff={commitDiffQuery.data?.diff ?? null}
+          truncated={commitDiffQuery.data?.truncated ?? false}
+          isPending={commitDiffQuery.isPending}
+          error={commitDiffQuery.error}
+          onBack={() => setCommitDiffRequest(null)}
+          onSelectFile={(filePath) =>
+            setCommitDiffRequest(
+              filePath
+                ? { hash: commitDiffRequest.hash, filePath }
+                : { hash: commitDiffRequest.hash },
+            )
+          }
+          onRetry={commitDiffQuery.refresh}
+        />
+      ) : isInitialLoad ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
+          <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading history…
+        </div>
+      ) : error && history.length === 0 ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-xs text-destructive">{error}</p>
+          <Button size="sm" variant="outline" onClick={refresh}>
+            Retry
+          </Button>
+        </div>
+      ) : !isRepo ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
+          This folder is not a Git repository.
+        </div>
+      ) : history.length === 0 ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
+          This repository has no commits yet.
+        </div>
+      ) : (
+        <div className="relative flex min-h-0 flex-1">
+          {isWideLayout ? (
+            <GitRefsPane
+              className="!border-r-0"
+              style={{
+                width: refsPaneWidth,
+                minWidth: refsPaneWidth,
+                maxWidth: refsPaneWidth,
+                flexBasis: refsPaneWidth,
+              }}
+              {...refPaneProps}
+            />
+          ) : null}
+          {isWideLayout ? (
+            <PaneResizeHandle
+              label="Resize branches pane"
+              value={refsPaneWidth}
+              min={REFS_PANE_MIN_WIDTH}
+              max={REFS_PANE_MAX_WIDTH}
+              onMove={(delta) =>
+                setRefsPaneWidth((width) =>
+                  Math.min(REFS_PANE_MAX_WIDTH, Math.max(REFS_PANE_MIN_WIDTH, width + delta)),
+                )
+              }
+              onReset={() => setRefsPaneWidth(256)}
+            />
+          ) : null}
+          <div
+            className="@container min-h-0 min-w-0 flex-1 overflow-hidden"
+            inert={mobilePane !== null ? true : undefined}
+          >
+            <div className="flex h-full min-w-0 flex-col">
+              <div className="relative shrink-0 border-b border-border/60 p-2">
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  ref={searchInputRef}
+                  className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-[0.6875rem] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape" || filter.length === 0) return;
+                    event.preventDefault();
+                    setFilter("");
+                  }}
+                  placeholder="Text or hash"
+                  aria-label="Filter Git history"
+                />
+                {filter.length > 0 ? (
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    className="absolute top-1/2 right-3 size-5 -translate-y-1/2 rounded-sm text-muted-foreground"
+                    aria-label="Clear Git history search"
+                    onClick={() => {
                       setFilter("");
+                      searchInputRef.current?.focus();
                     }}
-                    placeholder="Text or hash"
-                    aria-label="Filter Git history"
-                  />
-                  {filter.length > 0 ? (
+                  >
+                    <XIcon className="size-3" />
+                  </Button>
+                ) : null}
+              </div>
+              {error ? (
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[0.6875rem] text-destructive">
+                  <span className="truncate">{error}</span>
+                  <Button size="xs" variant="ghost" className="shrink-0" onClick={refresh}>
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
+              <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/20 text-[0.625rem] font-medium text-muted-foreground">
+                <div className="shrink-0" style={{ width: graphColumnWidth(laneCount) }} />
+                <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] gap-x-3 pr-3 @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
+                  <span>Subject</span>
+                  <span className="@max-[720px]:hidden" />
+                  <span className="@max-[720px]:hidden">Author</span>
+                  <span className="@max-[720px]:hidden">Date</span>
+                  <span>Hash</span>
+                </div>
+              </div>
+              {filteredRows.length === 0 ? (
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground">
+                  <span className={error ? "text-destructive" : undefined}>
+                    {error ?? "No loaded commits match this filter."}
+                  </span>
+                  {error || hasMore ? (
                     <Button
-                      type="button"
-                      size="icon-xs"
-                      variant="ghost"
-                      className="absolute top-1/2 right-3 size-5 -translate-y-1/2 rounded-sm text-muted-foreground"
-                      aria-label="Clear Git history search"
-                      onClick={() => {
-                        setFilter("");
-                        searchInputRef.current?.focus();
-                      }}
+                      size="xs"
+                      variant="outline"
+                      onClick={error ? retryFailedPage : loadNext}
+                      disabled={isFetchingNextPage}
                     >
-                      <XIcon className="size-3" />
+                      {isFetchingNextPage
+                        ? "Searching older commits…"
+                        : error
+                          ? "Retry older commits"
+                          : "Search older commits"}
                     </Button>
                   ) : null}
                 </div>
-                {error ? (
-                  <div className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[0.6875rem] text-destructive">
-                    <span className="truncate">{error}</span>
-                    <Button size="xs" variant="ghost" className="shrink-0" onClick={refresh}>
-                      Retry
-                    </Button>
-                  </div>
-                ) : null}
-                <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/20 text-[0.625rem] font-medium text-muted-foreground">
-                  <div className="shrink-0" style={{ width: graphColumnWidth(laneCount) }} />
-                  <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] gap-x-3 pr-3 @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
-                    <span>Subject</span>
-                    <span className="@max-[720px]:hidden" />
-                    <span className="@max-[720px]:hidden">Author</span>
-                    <span className="@max-[720px]:hidden">Date</span>
-                    <span>Hash</span>
-                  </div>
+              ) : (
+                <LegendList<GitHistoryRow>
+                  data={filteredRows}
+                  keyExtractor={(row) => row.commit.hash}
+                  renderItem={({ item }) => (
+                    <CommitRow
+                      row={item}
+                      laneCount={laneCount}
+                      rowHeight={rowHeight}
+                      refKinds={commitRefKinds}
+                      {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
+                      selected={item.commit.hash === selectedHash}
+                      onSelect={setSelectedHash}
+                    />
+                  )}
+                  estimatedItemSize={rowHeight}
+                  drawDistance={rowHeight * 8}
+                  className="min-h-0 flex-1 overscroll-y-contain"
+                />
+              )}
+              {filteredRows.length > 0 && (hasMore || isFetchingNextPage) ? (
+                <div className="flex shrink-0 justify-center border-t border-border/50 p-2">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={loadNext}
+                    disabled={isFetchingNextPage}
+                  >
+                    {isFetchingNextPage ? "Loading more…" : "Load more"}
+                  </Button>
                 </div>
-                {filteredRows.length === 0 ? (
-                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground">
-                    <span className={error ? "text-destructive" : undefined}>
-                      {error ?? "No loaded commits match this filter."}
-                    </span>
-                    {error || hasMore ? (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={error ? retryFailedPage : loadNext}
-                        disabled={isFetchingNextPage}
-                      >
-                        {isFetchingNextPage
-                          ? "Searching older commits…"
-                          : error
-                            ? "Retry older commits"
-                            : "Search older commits"}
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <LegendList<GitHistoryRow>
-                    data={filteredRows}
-                    keyExtractor={(row) => row.commit.hash}
-                    renderItem={({ item }) => (
-                      <CommitRow
-                        row={item}
-                        laneCount={laneCount}
-                        rowHeight={rowHeight}
-                        refKinds={commitRefKinds}
-                        {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
-                        selected={item.commit.hash === selectedHash}
-                        onSelect={setSelectedHash}
-                      />
-                    )}
-                    estimatedItemSize={rowHeight}
-                    drawDistance={rowHeight * 8}
-                    className="min-h-0 flex-1 overscroll-y-contain"
-                  />
-                )}
-                {filteredRows.length > 0 && (hasMore || isFetchingNextPage) ? (
-                  <div className="flex shrink-0 justify-center border-t border-border/50 p-2">
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={loadNext}
-                      disabled={isFetchingNextPage}
-                    >
-                      {isFetchingNextPage ? "Loading more…" : "Load more"}
-                    </Button>
-                  </div>
-                ) : null}
-                {filteredRows.length > 0 && historyLimitReached && hasMoreFromServer ? (
-                  <div className="shrink-0 border-t border-border/50 px-3 py-2 text-center text-[0.6875rem] text-muted-foreground">
-                    Showing the first {HISTORY_PAGE_SIZE * MAX_HISTORY_PAGES} commits. Choose a
-                    branch or refine the search to keep history responsive.
-                  </div>
-                ) : null}
-              </div>
+              ) : null}
+              {filteredRows.length > 0 && historyLimitReached && hasMoreFromServer ? (
+                <div className="shrink-0 border-t border-border/50 px-3 py-2 text-center text-[0.6875rem] text-muted-foreground">
+                  Showing the first {HISTORY_PAGE_SIZE * MAX_HISTORY_PAGES} commits. Choose a branch
+                  or refine the search to keep history responsive.
+                </div>
+              ) : null}
             </div>
-            {isWideLayout ? (
-              <PaneResizeHandle
-                label="Resize commit details pane"
-                value={detailsPaneWidth}
-                min={DETAILS_PANE_MIN_WIDTH}
-                max={DETAILS_PANE_MAX_WIDTH}
-                onMove={(delta) =>
-                  setDetailsPaneWidth((width) =>
-                    Math.min(
-                      DETAILS_PANE_MAX_WIDTH,
-                      Math.max(DETAILS_PANE_MIN_WIDTH, width - delta),
-                    ),
-                  )
-                }
-                onReset={() => setDetailsPaneWidth(384)}
-              />
-            ) : null}
-            {isWideLayout ? (
-              <CommitDetailsPane
-                className="!border-l-0"
-                style={{
-                  width: detailsPaneWidth,
-                  minWidth: detailsPaneWidth,
-                  maxWidth: detailsPaneWidth,
-                  flexBasis: detailsPaneWidth,
-                }}
-                details={selectedCommitDetails}
-                files={selectedCommitFiles}
-                filesCapped={commitFilesCapped}
-                filesHasMore={commitFilesHasMore}
-                filesError={commitFilesQuery.error !== null}
-                filesLoading={commitFilesQuery.isPending}
-                onLoadMoreFiles={loadMoreCommitFiles}
-                onRetryFiles={() => void commitFilesQuery.refresh()}
-                isPending={commitDetailsQuery.isPending}
-                hasError={commitDetailsQuery.error !== null}
-                hasSelection={selectedHash !== null}
-                onRetry={commitDetailsQuery.refresh}
-                onShowDiff={(hash, filePath) =>
-                  setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-                }
-              />
-            ) : null}
-            {!isWideLayout && mobilePane === "refs" ? (
-              <Sheet
-                open={mobilePane === "refs"}
-                onOpenChange={(open) => !open && mode === "tree" && setMobilePane(null)}
-              >
-                <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none p-0">
-                  <SheetTitle className="sr-only">Branches and tags</SheetTitle>
-                  <GitRefsPane
-                    id="git-history-refs-panel"
-                    className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
-                    {...refPaneProps}
-                    onClose={() => setMobilePane(null)}
-                  />
-                </SheetPopup>
-              </Sheet>
-            ) : null}
-            {!isWideLayout && mobilePane === "details" ? (
-              <Sheet
-                open={mobilePane === "details"}
-                onOpenChange={(open) => !open && mode === "tree" && setMobilePane(null)}
-              >
-                <SheetPopup side="right" showCloseButton className="w-full max-w-none p-0">
-                  <SheetTitle className="sr-only">Commit details</SheetTitle>
-                  <CommitDetailsPane
-                    id="git-history-details-panel"
-                    className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
-                    details={selectedCommitDetails}
-                    files={selectedCommitFiles}
-                    filesCapped={commitFilesCapped}
-                    filesHasMore={commitFilesHasMore}
-                    filesError={commitFilesQuery.error !== null}
-                    filesLoading={commitFilesQuery.isPending}
-                    onLoadMoreFiles={loadMoreCommitFiles}
-                    onRetryFiles={() => void commitFilesQuery.refresh()}
-                    isPending={commitDetailsQuery.isPending}
-                    hasError={commitDetailsQuery.error !== null}
-                    hasSelection={selectedHash !== null}
-                    onRetry={commitDetailsQuery.refresh}
-                    onShowDiff={(hash, filePath) =>
-                      setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-                    }
-                  />
-                </SheetPopup>
-              </Sheet>
-            ) : null}
           </div>
-        )}
-      </div>
-      {mode === "issues" ? (
-        props.githubIssuesCapabilityKnown === false ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-            Checking whether this environment supports GitHub Issues…
-          </div>
-        ) : props.githubIssuesAvailable !== true ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-            Update the environment server to browse GitHub Issues here.
-          </div>
-        ) : issuesVisited ? (
-          <GitHubIssuesPane
-            environmentId={props.environmentId}
-            cwd={props.cwd}
-            wide={isWideLayout}
-          />
-        ) : null
-      ) : null}
+          {isWideLayout ? (
+            <PaneResizeHandle
+              label="Resize commit details pane"
+              value={detailsPaneWidth}
+              min={DETAILS_PANE_MIN_WIDTH}
+              max={DETAILS_PANE_MAX_WIDTH}
+              onMove={(delta) =>
+                setDetailsPaneWidth((width) =>
+                  Math.min(DETAILS_PANE_MAX_WIDTH, Math.max(DETAILS_PANE_MIN_WIDTH, width - delta)),
+                )
+              }
+              onReset={() => setDetailsPaneWidth(384)}
+            />
+          ) : null}
+          {isWideLayout ? (
+            <CommitDetailsPane
+              className="!border-l-0"
+              style={{
+                width: detailsPaneWidth,
+                minWidth: detailsPaneWidth,
+                maxWidth: detailsPaneWidth,
+                flexBasis: detailsPaneWidth,
+              }}
+              details={selectedCommitDetails}
+              files={selectedCommitFiles}
+              filesCapped={commitFilesCapped}
+              filesHasMore={commitFilesHasMore}
+              filesError={commitFilesQuery.error !== null}
+              filesLoading={commitFilesQuery.isPending}
+              onLoadMoreFiles={loadMoreCommitFiles}
+              onRetryFiles={() => void commitFilesQuery.refresh()}
+              isPending={commitDetailsQuery.isPending}
+              hasError={commitDetailsQuery.error !== null}
+              hasSelection={selectedHash !== null}
+              onRetry={commitDetailsQuery.refresh}
+              onShowDiff={(hash, filePath) =>
+                setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+              }
+            />
+          ) : null}
+          {!isWideLayout && mobilePane === "refs" ? (
+            <Sheet
+              open={mobilePane === "refs"}
+              onOpenChange={(open) => !open && setMobilePane(null)}
+            >
+              <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none p-0">
+                <SheetTitle className="sr-only">Branches and tags</SheetTitle>
+                <GitRefsPane
+                  id="git-history-refs-panel"
+                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
+                  {...refPaneProps}
+                  onClose={() => setMobilePane(null)}
+                />
+              </SheetPopup>
+            </Sheet>
+          ) : null}
+          {!isWideLayout && mobilePane === "details" ? (
+            <Sheet
+              open={mobilePane === "details"}
+              onOpenChange={(open) => !open && setMobilePane(null)}
+            >
+              <SheetPopup side="right" showCloseButton className="w-full max-w-none p-0">
+                <SheetTitle className="sr-only">Commit details</SheetTitle>
+                <CommitDetailsPane
+                  id="git-history-details-panel"
+                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
+                  details={selectedCommitDetails}
+                  files={selectedCommitFiles}
+                  filesCapped={commitFilesCapped}
+                  filesHasMore={commitFilesHasMore}
+                  filesError={commitFilesQuery.error !== null}
+                  filesLoading={commitFilesQuery.isPending}
+                  onLoadMoreFiles={loadMoreCommitFiles}
+                  onRetryFiles={() => void commitFilesQuery.refresh()}
+                  isPending={commitDetailsQuery.isPending}
+                  hasError={commitDetailsQuery.error !== null}
+                  hasSelection={selectedHash !== null}
+                  onRetry={commitDetailsQuery.refresh}
+                  onShowDiff={(hash, filePath) =>
+                    setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+                  }
+                />
+              </SheetPopup>
+            </Sheet>
+          ) : null}
+        </div>
+      )}
     </section>
   );
 }

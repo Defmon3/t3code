@@ -40,6 +40,8 @@ import {
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
+  VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -229,6 +231,7 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
+  vcsListHistoryRefs: "vcs.listHistoryRefs",
   vcsGetHistory: "vcs.getHistory",
   vcsGetCommitDetails: "vcs.getCommitDetails",
   vcsListCommitFiles: "vcs.listCommitFiles",
@@ -742,6 +745,12 @@ export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsListHistoryRefsRpc = Rpc.make(WS_METHODS.vcsListHistoryRefs, {
+  payload: VcsListHistoryRefsInput,
+  success: VcsListHistoryRefsResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsGetHistoryRpc = Rpc.make(WS_METHODS.vcsGetHistory, {
   payload: VcsGetHistoryInput,
   success: VcsGetHistoryResult,
@@ -1099,6 +1108,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
+  WsVcsListHistoryRefsRpc,
   WsVcsGetHistoryRpc,
   WsVcsGetCommitDetailsRpc,
   WsVcsListCommitFilesRpc,

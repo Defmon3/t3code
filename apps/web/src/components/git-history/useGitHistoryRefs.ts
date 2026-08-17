@@ -1,8 +1,8 @@
-import type { EnvironmentId, VcsRef } from "@t3tools/contracts";
+import type { EnvironmentId, VcsHistoryRef } from "@t3tools/contracts";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import { buildGitRefTree, filterGitRefTree } from "../../lib/gitRefTree";
-import { usePaginatedBranches } from "../../state/queries";
+import { usePaginatedHistoryRefs } from "../../state/queries";
 
 export interface GitHistoryRevision {
   readonly label: string;
@@ -21,17 +21,17 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
   const shouldLoadRemote = deferredRefFilter.length > 0 || expandedRefKeys.has("section:remote");
   const shouldLoadTags = deferredRefFilter.length > 0 || expandedRefKeys.has("section:tags");
-  const refs = usePaginatedBranches(
+  const refs = usePaginatedHistoryRefs(
     { environmentId, cwd, query: deferredRefFilter },
     { limit: 200, namespace: "local" },
   );
-  const remote = usePaginatedBranches(
+  const remote = usePaginatedHistoryRefs(
     shouldLoadRemote
       ? { environmentId, cwd, query: deferredRefFilter }
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "remote" },
   );
-  const tags = usePaginatedBranches(
+  const tags = usePaginatedHistoryRefs(
     shouldLoadTags
       ? { environmentId, cwd, query: deferredRefFilter }
       : { environmentId: null, cwd: null },
@@ -40,8 +40,8 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
   const mergedRefs = useMemo(() => [...refs.refs, ...remote.refs], [refs.refs, remote.refs]);
   const tagRefs = tags.refs;
   const { localRefs, remoteRefs } = useMemo(() => {
-    const local: VcsRef[] = [];
-    const remote: VcsRef[] = [];
+    const local: VcsHistoryRef[] = [];
+    const remote: VcsHistoryRef[] = [];
     for (const ref of mergedRefs) {
       if (ref.isRemote) remote.push(ref);
       else if (!ref.isTag) local.push(ref);
@@ -97,6 +97,10 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string) {
       (tags.data?.nextCursor !== null && tags.data?.nextCursor !== undefined),
     isFetchingMoreRefs:
       refs.isFetchingNextPage || remote.isFetchingNextPage || tags.isFetchingNextPage,
+    isRefSnapshotComplete:
+      refs.data?.isComplete !== false &&
+      remote.data?.isComplete !== false &&
+      tags.data?.isComplete !== false,
     localRefTree,
     localRefs,
     normalizedRefFilter,

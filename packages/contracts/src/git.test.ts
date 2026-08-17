@@ -7,6 +7,7 @@ import {
   GitRunStackedActionResult,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
+  VcsListHistoryRefsInput,
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
@@ -16,6 +17,20 @@ const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsInput);
+
+describe("VCS history ref contracts", () => {
+  it("accepts the opaque cursor and text query used by Git History", () => {
+    expect(
+      decodeListHistoryRefsInput({
+        cwd: "/repo",
+        cursor: "opaque-cursor",
+        query: "Release",
+        namespace: "tag",
+      }),
+    ).toEqual({ cwd: "/repo", cursor: "opaque-cursor", query: "Release", namespace: "tag" });
+  });
+});
 
 describe("VcsCreateWorktreeInput", () => {
   it("accepts omitted newRefName for existing-refName worktrees", () => {
