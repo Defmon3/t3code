@@ -1,13 +1,14 @@
 import type {
-  PullRequestActor,
   PullRequestCheck,
   PullRequestCheckStatus,
+  PullRequestChecksState,
   PullRequestMergeability,
   PullRequestState,
 } from "@t3tools/contracts";
 import {
   CircleCheckIcon,
   CircleDashedIcon,
+  CircleDotIcon,
   CircleXIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
@@ -16,11 +17,19 @@ import {
   LoaderIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { Children, isValidElement, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
+import {
+  SourceControlActorAvatar,
+  SourceControlActorLabel,
+  SourceControlMetaLine,
+} from "../sourceControl/actorPresentation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
+export const PullRequestActorAvatar = SourceControlActorAvatar;
+export const PullRequestActorLabel = SourceControlActorLabel;
+export const PullRequestMetaLine = SourceControlMetaLine;
 
 interface StatePresentation {
   readonly label: string;
@@ -144,52 +153,49 @@ export function PullRequestCheckStatusIcon({ status }: { status: PullRequestChec
   );
 }
 
-export function PullRequestActorAvatar({
-  actor,
-  className,
-}: {
-  actor: PullRequestActor | null;
-  className?: string;
-}) {
-  const login = actor?.login ?? "ghost";
-  const avatarUrl = actor?.avatarUrl ?? null;
-  return avatarUrl === null ? (
-    // Not every host reports an avatar, so the initial stands in where none arrives.
-    <span
-      aria-hidden
-      className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground",
-        className,
-      )}
-    >
-      {login.slice(0, 1).toUpperCase()}
-    </span>
-  ) : (
-    <img
-      aria-hidden
-      alt=""
-      src={avatarUrl}
-      loading="lazy"
-      className={cn("size-4 shrink-0 rounded-full bg-muted object-cover", className)}
-    />
-  );
+/**
+ * The rollup a listing row carries, which is one word rather than the checks behind it. The
+ * headline is GitHub's own wording, so a reader who knows that page reads this one the same way.
+ */
+const CHECKS_STATE_PRESENTATION = {
+  passing: {
+    label: "All checks have passed",
+    Icon: CircleCheckIcon,
+    toneClassName: "text-emerald-600 dark:text-emerald-300/90",
+  },
+  failing: {
+    label: "Some checks were not successful",
+    Icon: CircleXIcon,
+    toneClassName: "text-destructive",
+  },
+  pending: {
+    label: "Some checks haven't completed yet",
+    Icon: CircleDotIcon,
+    toneClassName: "text-amber-600 dark:text-amber-400/90",
+  },
+} as const satisfies Record<
+  PullRequestChecksState,
+  { label: string; Icon: typeof CircleCheckIcon; toneClassName: string }
+>;
+
+export function pullRequestChecksStatePresentation(state: PullRequestChecksState) {
+  return CHECKS_STATE_PRESENTATION[state];
 }
 
-/** GitHub attributes work from a deleted account to "ghost"; say the same word everywhere. */
-export function PullRequestActorLabel({
-  actor,
-  className,
-}: {
-  actor: PullRequestActor | null;
-  className?: string;
-}) {
-  const login = actor?.login ?? "ghost";
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5", className)} title={login}>
-      <PullRequestActorAvatar actor={actor} />
-      <span className="truncate">{login}</span>
-    </span>
-  );
+/**
+ * The same rollup the server sends with a listing row, worked out here from the checks a detail
+ * already holds — so the header shows the icon without a second field travelling with it.
+ *
+ * Null for a change request with no checks: nothing to show beats a tick nobody earned.
+ */
+export function pullRequestChecksState(
+  checks: ReadonlyArray<PullRequestCheck>,
+): PullRequestChecksState | null {
+  if (checks.length === 0) return null;
+  const statuses = checks.map((check) => check.status);
+  if (statuses.includes("failure") || statuses.includes("cancelled")) return "failing";
+  if (statuses.includes("pending")) return "pending";
+  return statuses.includes("success") ? "passing" : null;
 }
 
 /** Added and removed lines, coloured the way every host colours them. */
@@ -213,45 +219,6 @@ export function PullRequestDiffStat({
         +{additions.toLocaleString()}
       </span>
       <span className="text-destructive">-{deletions.toLocaleString()}</span>
-    </span>
-  );
-}
-
-/**
- * Dot-separated metadata. It owns the separator, and draws one only between the segments that
- * survive, so a caller can render `{condition ? <span/> : null}` without leaving a stray dot.
- * `Children.toArray` drops the nullish entries and keys what remains, which a plain array
- * check would not do for a single child or a fragment. A separator borrows the key of the
- * segment it precedes, so it stays stable without counting positions.
- */
-function separatorKey(segment: ReactNode): string {
-  return `separator:${isValidElement(segment) ? String(segment.key) : String(segment)}`;
-}
-
-export function PullRequestMetaLine({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  const segments = Children.toArray(children);
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
-      {segments.flatMap((segment, index) =>
-        index === 0
-          ? segment
-          : [
-              <span
-                aria-hidden
-                className="shrink-0 text-muted-foreground/50"
-                key={separatorKey(segment)}
-              >
-                ·
-              </span>,
-              segment,
-            ],
-      )}
     </span>
   );
 }

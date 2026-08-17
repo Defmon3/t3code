@@ -1,25 +1,44 @@
 import * as Effect from "effect/Effect";
 import type {
+  IssueLink,
   PullRequestActor,
   PullRequestCapabilities,
+  PullRequestReaction,
   PullRequestViewerPermissions,
 } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
   PullRequestProviderError,
+  type PullRequestProviderFailure,
   type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
 import type { GitHubViewerAccess } from "./gitHubPullRequestJson.ts";
+import {
+  mergeIssueLinks,
+  parseIssueReferences,
+  unlinkedIssueReferences,
+} from "./issueReferences.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
-  actions: ["merge", "ready", "draft", "close", "reopen"],
+  actions: [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "update-branch",
+    "enable-auto-merge",
+    "disable-auto-merge",
+  ],
   mergeMethods: ["merge", "squash", "rebase"],
+  updateMethods: ["merge", "rebase"],
   search: true,
+  reactions: true,
   review: {
     inlineComment: true,
     reply: true,
@@ -27,6 +46,7 @@ const CAPABILITIES: PullRequestCapabilities = {
     verdicts: ["comment", "approve", "request-changes"],
   },
   reviewers: { request: true, listCandidates: true },
+  edit: { changeRequest: true, comment: true },
 };
 
 /**
@@ -49,8 +69,13 @@ const CAPABILITIES: PullRequestCapabilities = {
 export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequestViewerPermissions {
   return {
     actions: [
-      ...(access.canWrite ? (["merge"] as const) : []),
+      // Arming a merge and taking the arming back are the merge, deferred: whoever may not
+      // merge here may not leave an instruction to merge later either.
+      ...(access.canWrite ? (["merge", "enable-auto-merge", "disable-auto-merge"] as const) : []),
       ...(access.canUpdate ? (["ready", "draft", "close", "reopen"] as const) : []),
+      // Whether this viewer may update the branch is GitHub's own answer, read with the
+      // comparison; without it the action is offered to nobody rather than to everybody.
+      ...(access.canUpdateBranch === true ? (["update-branch"] as const) : []),
     ],
     comment: true,
     resolve: access.canWrite || access.didAuthor,
@@ -59,16 +84,21 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
     // leaves them commenting, which is what an author has to say about their own change anyway.
     verdicts: access.didAuthor ? (["comment"] as const) : CAPABILITIES.review.verdicts,
     requestReviewers: access.canWrite,
+    ...(access.canUpdateBranch === true ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
-function reasonFor(
+export function gitHubProviderFailure(
   error: GitHubPullRequestCli.GitHubPullRequestCliError,
-): PullRequestProviderError["reason"] {
-  if (error._tag === "GitHubCliUnavailableError") return "missing-tool";
-  if (error._tag === "GitHubCliAuthenticationError") return "unauthenticated";
-  return "failed";
+): PullRequestProviderFailure {
+  if (error._tag === "GitHubCliUnavailableError") return { reason: "missing-tool" };
+  if (error._tag === "GitHubCliAuthenticationError") return { reason: "unauthenticated" };
+  if (error._tag === "GitHubCliRateLimitError") return { reason: "rate-limited" };
+  if (error._tag === "SourceControlRateLimitPausedError") {
+    return { reason: "rate-limited", retryAt: error.retryAt };
+  }
+  return { reason: "failed" };
 }
 
 /**
@@ -98,6 +128,10 @@ export function loginAvatarUrl(login: string, host: string): string | null {
   return /^[a-z0-9][a-z0-9-]{0,38}$/iu.test(login) ? `https://${host}/${login}.png?size=80` : null;
 }
 
+/** True where markdown would render nothing: whitespace, or only HTML comments. */
+const rendersEmpty = (body: string): boolean =>
+  body.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
+
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
@@ -105,10 +139,41 @@ export const make = Effect.gen(function* () {
     new PullRequestProviderError({
       provider: "github",
       operation,
-      reason: reasonFor(error),
+      ...gitHubProviderFailure(error),
       detail: error.detail,
       cause: error,
     });
+
+  /**
+   * The issues the pull request's own words name, resolved before any of them is shown: a number
+   * in a body is not proof that an issue exists, and a dead row in this section is worse than an
+   * absent one.
+   *
+   * Weaker than what GitHub itself reported, so a lookup that fails leaves the section with the
+   * host's own links rather than taking the detail down with it. What the host already reported is
+   * dropped first, which is what keeps an ordinary `Closes #12` from costing a request at all.
+   */
+  const citedIssues = (
+    input: { readonly cwd: string; readonly repository: string; readonly host: string },
+    pullRequest: { readonly title: string; readonly body: string },
+    hostLinks: ReadonlyArray<IssueLink>,
+  ): Effect.Effect<ReadonlyArray<IssueLink>> => {
+    const references = unlinkedIssueReferences(
+      parseIssueReferences({
+        kind: "github",
+        host: input.host,
+        repository: input.repository,
+        title: pullRequest.title,
+        body: pullRequest.body,
+      }),
+      hostLinks,
+    );
+    return references.length === 0
+      ? Effect.succeed([])
+      : cli
+          .listCitedIssues({ cwd: input.cwd, host: input.host, references })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => []));
+  };
 
   const provider: PullRequestProviderApi = {
     kind: "github",
@@ -129,6 +194,7 @@ export const make = Effect.gen(function* () {
           limit: input.limit,
           query: input.query,
           cursor: input.cursor,
+          filters: input.filters,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequests")),
@@ -172,6 +238,7 @@ export const make = Effect.gen(function* () {
           limit: input.limit,
           query: input.query,
           cursor: input.cursor,
+          filters: input.filters,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequestsAcross")),
@@ -196,7 +263,24 @@ export const make = Effect.gen(function* () {
     getChangeRequest: (input) =>
       Effect.all(
         [
-          cli.getPullRequestDetail(input),
+          cli.getPullRequestDetail(input).pipe(
+            Effect.flatMap((pullRequest) =>
+              // Only an open pull request can be behind anything worth saying so about, and only
+              // one whose head repository is known can be compared at all. A comparison that
+              // fails is left unknown: the banner is an offer, never a blocker.
+              pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
+                ? Effect.succeed({ pullRequest, comparison: null })
+                : cli
+                    .getPullRequestBaseComparison({
+                      ...input,
+                      headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                    })
+                    .pipe(
+                      Effect.map((comparison) => ({ pullRequest, comparison })),
+                      Effect.orElseSucceed(() => ({ pullRequest, comparison: null })),
+                    ),
+            ),
+          ),
           cli.getRepositoryAccess({
             cwd: input.cwd,
             repository: input.repository,
@@ -205,21 +289,44 @@ export const make = Effect.gen(function* () {
           // A small permissions query replaces the deeply paginated review-thread walk on the
           // core path. Writes ask again immediately before mutating, so this is presentation.
           cli.getViewerAccess(input),
+          // A section of links is worth less than the pull request it hangs off: an install that
+          // answers nothing useful here leaves the section empty rather than blanking the detail.
+          cli
+            .listLinkedIssues(input)
+            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: false }))),
         ],
-        { concurrency: 3 },
+        { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
-        Effect.map(
-          ([pullRequest, repository, viewerAccess]): ProviderChangeRequestDetail => ({
-            ...pullRequest,
-            reviewers: pullRequest.reviewRequestLogins.map((login) => ({
-              login,
-              name: null,
-              avatarUrl: null,
-            })),
-            mergeCapabilities: repository.mergeCapabilities,
-            viewerPermissions: gitHubViewerPermissions(viewerAccess),
-          }),
+        Effect.flatMap(([detail, repository, viewerAccess, linkedIssues]) =>
+          citedIssues(input, detail.pullRequest, linkedIssues.links).pipe(
+            Effect.map(
+              (cited): ProviderChangeRequestDetail => ({
+                ...detail.pullRequest,
+                reviewers: detail.pullRequest.reviewRequestLogins.map((login) => ({
+                  login,
+                  name: null,
+                  avatarUrl: null,
+                })),
+                mergeCapabilities: repository.mergeCapabilities,
+                viewerPermissions: gitHubViewerPermissions({
+                  ...viewerAccess,
+                  canUpdateBranch: detail.comparison?.viewerCanUpdate === true,
+                }),
+                linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
+                linkedIssuesTruncated: linkedIssues.truncated,
+                baseComparison:
+                  detail.comparison === null || detail.comparison.behindBy === null
+                    ? "unknown"
+                    : detail.comparison.behindBy > 0
+                      ? "behind"
+                      : "up-to-date",
+                ...(detail.comparison?.behindBy == null
+                  ? {}
+                  : { behindBy: detail.comparison.behindBy }),
+              }),
+            ),
+          ),
         ),
       ),
 
@@ -232,6 +339,9 @@ export const make = Effect.gen(function* () {
           cli.listReviewThreadComments(input).pipe(
             Effect.orElseSucceed(() => ({
               comments: [],
+              dismissalsByReviewId: new Map<string, string>(),
+              reactions: [],
+              reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
               reviewThreads: [],
               commentCount: 0,
               truncated: true,
@@ -253,6 +363,7 @@ export const make = Effect.gen(function* () {
           ([pullRequest, reviewThreads]): ProviderChangeRequestActivity => ({
             author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
             reviewers: reviewThreads.reviewers,
+            reactions: reviewThreads.reactions,
             commits: (reviewThreads.commits.length > 0
               ? reviewThreads.commits
               : pullRequest.commits
@@ -266,7 +377,20 @@ export const make = Effect.gen(function* () {
             comments: [...pullRequest.comments, ...reviewThreads.comments]
               .map((comment) => ({
                 ...comment,
+                // GitHub keeps the dismissal reason on the timeline event, not on the review,
+                // so a dismissed review with nothing visible of its own reads its words from
+                // there. "Visible" and not "empty": bot reviews often carry only an HTML
+                // marker comment, which markdown renders as nothing.
+                body:
+                  comment.kind === "review" &&
+                  comment.reviewState?.toUpperCase() === "DISMISSED" &&
+                  rendersEmpty(comment.body)
+                    ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
+                    : comment.body,
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+                // A comment out of `gh pr view --json` carries none of its own: that read
+                // reports no reaction at all, so they arrive from the GraphQL page by node id.
+                reactions: comment.reactions ?? reviewThreads.reactionsById.get(comment.id) ?? [],
               }))
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             // `gh pr view --json comments,reviews` follows GitHub's cursors itself, so those two
@@ -284,10 +408,39 @@ export const make = Effect.gen(function* () {
         ),
       ),
 
+    getReviewThreadComments: (input) =>
+      cli.getReviewThreadComments(input).pipe(Effect.mapError(fail("getReviewThreadComments"))),
+
     getViewerPermissions: (input) =>
-      cli
-        .getViewerAccess(input)
-        .pipe(Effect.mapError(fail("getViewerPermissions")), Effect.map(gitHubViewerPermissions)),
+      Effect.all(
+        [
+          cli.getViewerAccess({ ...input, allowReserve: true }),
+          // Whether this viewer may update the branch is only on the comparison, and the
+          // comparison only resolves through the head ref the detail carries. A failure here
+          // withholds that one action rather than the whole answer, the way the detail path
+          // leaves the banner unknown.
+          cli.getPullRequestDetail(input).pipe(
+            Effect.flatMap((pullRequest) =>
+              pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
+                ? Effect.succeed(false)
+                : cli
+                    .getPullRequestBaseComparison({
+                      ...input,
+                      headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                      allowReserve: true,
+                    })
+                    .pipe(Effect.map((comparison) => comparison.viewerCanUpdate === true)),
+            ),
+            Effect.orElseSucceed(() => false),
+          ),
+        ],
+        { concurrency: 2 },
+      ).pipe(
+        Effect.mapError(fail("getViewerPermissions")),
+        Effect.map(([access, canUpdateBranch]) =>
+          gitHubViewerPermissions({ ...access, canUpdateBranch }),
+        ),
+      ),
 
     getDiff: (input) => cli.getPullRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
 
@@ -318,10 +471,36 @@ export const make = Effect.gen(function* () {
           number: input.number,
           action: input.action,
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+          ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),
 
+    updateChangeRequest: (input) =>
+      cli
+        .updatePullRequest({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.body === undefined ? {} : { body: input.body }),
+        })
+        .pipe(Effect.mapError(fail("updateChangeRequest"))),
+
     comment: (input) => cli.commentOnPullRequest(input).pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) =>
+      cli
+        .updateComment({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          commentId: input.commentId,
+          kind: input.kind,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateComment"))),
 
     submitReview: (input) => cli.submitReview(input).pipe(Effect.mapError(fail("submitReview"))),
 
@@ -335,6 +514,19 @@ export const make = Effect.gen(function* () {
           body: input.body,
         })
         .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setReaction: (input) =>
+      cli
+        .setReaction({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
+          content: input.content,
+          reacted: input.reacted,
+        })
+        .pipe(Effect.mapError(fail("setReaction"))),
 
     setThreadResolution: (input) =>
       cli

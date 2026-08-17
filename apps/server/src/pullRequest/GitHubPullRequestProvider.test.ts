@@ -1,6 +1,7 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { IssueLink, PullRequestReaction } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
@@ -9,7 +10,16 @@ import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 describe("gitHubViewerPermissions", () => {
   it("offers everything to a viewer who can write to the repository", () => {
     expect(gitHubViewerPermissions({ canWrite: true, canUpdate: true, didAuthor: false })).toEqual({
-      actions: ["merge", "ready", "draft", "close", "reopen"],
+      // Arming a merge for later is the merge, so it travels with it.
+      actions: [
+        "merge",
+        "enable-auto-merge",
+        "disable-auto-merge",
+        "ready",
+        "draft",
+        "close",
+        "reopen",
+      ],
       comment: true,
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
@@ -34,7 +44,7 @@ describe("gitHubViewerPermissions", () => {
 
   it("keeps an author's own pull request theirs to close, with read access and no more", () => {
     expect(gitHubViewerPermissions({ canWrite: false, canUpdate: true, didAuthor: true })).toEqual({
-      // Merging is the one thing writing is needed for; the rest an author may do.
+      // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,
@@ -71,17 +81,20 @@ describe("gitHubViewerPermissions", () => {
               title: "Pull request 7",
               url: "https://github.com/acme/web/pull/7",
               author: null,
+              headRepositoryOwner: null,
               headBranch: "feat/page",
               baseBranch: "main",
               state: "open",
               isDraft: false,
               mergeability: "mergeable",
+              reviewDecision: null,
               additions: 1,
               deletions: 1,
               createdAt: "2026-07-01T00:00:00Z",
               updatedAt: "2026-07-02T00:00:00Z",
               reviewRequestLogins: [],
               hasTeamReviewRequest: false,
+              checksState: null,
               labels: [],
               body: "",
               changedFiles: 1,
@@ -98,6 +111,282 @@ describe("gitHubViewerPermissions", () => {
             }),
           getViewerAccess: () =>
             Effect.succeed({ canWrite: false, canUpdate: true, didAuthor: false }),
+          listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
+        }),
+      ),
+    ),
+  );
+});
+
+describe("getChangeRequest linked issues", () => {
+  const issue = (number: number, closesIssue: boolean): IssueLink => ({
+    repository: "acme/web",
+    number,
+    title: `Issue ${number}`,
+    url: `https://github.com/acme/web/issues/${number}`,
+    state: "open",
+    closesIssue,
+  });
+
+  const detailWith = (body: string) => ({
+    authorId: null,
+    number: 7,
+    title: "Open an issue beside a thread",
+    url: "https://github.com/acme/web/pull/7",
+    author: null,
+    headRepositoryOwner: null,
+    headBranch: "feat/page",
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    reviewDecision: null,
+    additions: 1,
+    deletions: 1,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    reviewRequestLogins: [],
+    hasTeamReviewRequest: false,
+    checksState: null,
+    labels: [],
+    body,
+    changedFiles: 1,
+    mergedAt: null,
+    closedAt: null,
+    checks: [],
+    comments: [],
+    commits: [],
+  });
+
+  const layerWith = (input: {
+    readonly body: string;
+    readonly linked: ReadonlyArray<IssueLink>;
+    readonly listCitedIssues: GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"];
+  }) =>
+    Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      getPullRequestDetail: () => Effect.succeed(detailWith(input.body)),
+      getRepositoryAccess: () =>
+        Effect.succeed({
+          canWrite: true,
+          mergeCapabilities: { merge: true, squash: true, rebase: true },
+        }),
+      getViewerAccess: () => Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
+      listLinkedIssues: () => Effect.succeed({ links: input.linked, truncated: false }),
+      listCitedIssues: input.listCitedIssues,
+    });
+
+  const read = Effect.gen(function* () {
+    const provider = yield* make;
+    return yield* provider.getChangeRequest({
+      cwd: "/w",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+    });
+  });
+
+  it.effect("adds an issue the body only cites, once GitHub confirms it is one", () => {
+    const listCitedIssues = vi.fn<
+      GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"]
+    >(() => Effect.succeed([issue(34, false)]));
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
+          [12, true],
+          [34, false],
+        ]);
+        // The one GitHub already reported is not asked about again.
+        expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual([
+          { repository: "acme/web", number: 34 },
+        ]);
+      }),
+      Effect.provide(
+        layerWith({
+          body: "Closes #12. Part of #34.",
+          linked: [issue(12, true)],
+          listCitedIssues,
+        }),
+      ),
+    );
+  });
+
+  it.effect("asks nothing when the words name only what the host already reported", () => {
+    const listCitedIssues = vi.fn<
+      GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"]
+    >(() => Effect.succeed([]));
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(listCitedIssues).not.toHaveBeenCalled();
+        // The host's own claim survives: only it can say what merging closes.
+        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
+          [12, true],
+        ]);
+      }),
+      Effect.provide(
+        layerWith({ body: "Closes #12.", linked: [issue(12, true)], listCitedIssues }),
+      ),
+    );
+  });
+
+  it.effect("drops a reference GitHub answered nothing for", () =>
+    read.pipe(
+      // `#404` is a number in a body and no more than that: a dead row here is worse than
+      // an absent one.
+      Effect.map((detail) => expect(detail.linkedIssues).toEqual([])),
+      Effect.provide(
+        layerWith({
+          body: "Part of #404.",
+          linked: [],
+          listCitedIssues: () => Effect.succeed([]),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("keeps the host's own links when the lookup fails", () =>
+    read.pipe(
+      Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)])),
+      Effect.provide(
+        layerWith({
+          body: "Part of #34.",
+          linked: [issue(12, true)],
+          listCitedIssues: () =>
+            Effect.fail(
+              new GitHubPullRequestCli.GitHubPullRequestReadError({
+                command: "gh",
+                cwd: "/w",
+                operation: "listCitedIssues",
+                cause: new Error("GraphQL: Could not resolve to an issue"),
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+});
+
+describe("getViewerPermissions", () => {
+  const openDetail = {
+    authorId: null,
+    number: 7,
+    title: "Pull request 7",
+    url: "https://github.com/acme/web/pull/7",
+    author: null,
+    headRepositoryOwner: "acme",
+    headBranch: "feat/page",
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    reviewDecision: null,
+    additions: 1,
+    deletions: 1,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    reviewRequestLogins: [],
+    hasTeamReviewRequest: false,
+    checksState: null,
+    labels: [],
+    body: "",
+    changedFiles: 1,
+    mergedAt: null,
+    closedAt: null,
+    checks: [],
+    comments: [],
+    commits: [],
+  };
+
+  const layerWithComparison = (
+    comparison: Effect.Effect<{
+      readonly behindBy: number | null;
+      readonly viewerCanUpdate: boolean;
+    }>,
+  ) =>
+    Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      getPullRequestDetail: () => Effect.succeed(openDetail),
+      getPullRequestBaseComparison: () => comparison,
+      getViewerAccess: () => Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
+    });
+
+  it.effect("offers update-branch when the comparison grants it", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const permissions = yield* provider.getViewerPermissions({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(permissions.actions).toContain("update-branch");
+      expect(permissions.updateMethods).toEqual(["merge", "rebase"]);
+    }).pipe(
+      Effect.provide(layerWithComparison(Effect.succeed({ behindBy: 3, viewerCanUpdate: true }))),
+    ),
+  );
+
+  it.effect("uses the GraphQL reserve for manual permission checks", () => {
+    let viewerAllowReserve: boolean | undefined;
+    let comparisonAllowReserve: boolean | undefined;
+    return Effect.gen(function* () {
+      const provider = yield* make;
+      yield* provider.getViewerPermissions({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(viewerAllowReserve).toBe(true);
+      expect(comparisonAllowReserve).toBe(true);
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          getPullRequestDetail: () => Effect.succeed(openDetail),
+          getPullRequestBaseComparison: (input) =>
+            Effect.sync(() => {
+              comparisonAllowReserve = input.allowReserve;
+              return { behindBy: 3, viewerCanUpdate: true };
+            }),
+          getViewerAccess: (input) =>
+            Effect.sync(() => {
+              viewerAllowReserve = input.allowReserve;
+              return { canWrite: true, canUpdate: true, didAuthor: false };
+            }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("withholds update-branch when the comparison cannot be read", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const permissions = yield* provider.getViewerPermissions({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(permissions.actions).not.toContain("update-branch");
+      expect(permissions.updateMethods).toBeUndefined();
+      // The rest of the answer survives a comparison nobody could make.
+      expect(permissions.actions).toContain("merge");
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          getPullRequestDetail: () => Effect.succeed(openDetail),
+          getPullRequestBaseComparison: () =>
+            Effect.fail(
+              new GitHubPullRequestCli.GitHubPullRequestReadError({
+                command: "gh",
+                cwd: "/w",
+                operation: "getPullRequestBaseComparison",
+                cause: new Error("unreadable"),
+              }),
+            ),
+          getViewerAccess: () =>
+            Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
         }),
       ),
     ),
@@ -122,6 +411,7 @@ describe("getChangeRequest commits", () => {
     updatedAt: "2026-07-02T00:00:00Z",
     reviewRequestLogins: [],
     hasTeamReviewRequest: false,
+    checksState: null,
     labels: [],
     body: "",
     changedFiles: 1,
@@ -133,9 +423,12 @@ describe("getChangeRequest commits", () => {
 
   const baseThreadComments = {
     comments: [],
+    dismissalsByReviewId: new Map<string, string>(),
     reviewThreads: [],
     commentCount: 0,
     truncated: false,
+    reactions: [],
+    reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
     reviewers: [],
     avatarsByLogin: new Map<string, string>(),
     commitStats: new Map<string, { readonly additions: number; readonly deletions: number }>(),
@@ -197,6 +490,122 @@ describe("getChangeRequest commits", () => {
 
       expect(detail.commits.map((commit) => commit.oid)).toEqual(["view-oldest"]);
     }).pipe(Effect.provide(layerWith([]))),
+  );
+});
+
+describe("getChangeRequestActivity dismissed reviews", () => {
+  const dismissedReview = (body: string) => ({
+    id: "PRR_1",
+    kind: "review" as const,
+    author: null,
+    body,
+    createdAt: "2026-07-03T00:00:00Z",
+    url: null,
+    path: null,
+    reviewState: "DISMISSED",
+  });
+  const threadComments: GitHubReviewThreadComments = {
+    comments: [],
+    dismissalsByReviewId: new Map([["PRR_1", "Dismissing prior approval to re-evaluate 9b66581"]]),
+    reviewThreads: [],
+    commentCount: 0,
+    truncated: false,
+    reactions: [],
+    reactionsById: new Map(),
+    reviewers: [],
+    avatarsByLogin: new Map(),
+    commitStats: new Map(),
+    commits: [],
+    viewer: { canUpdate: true, didAuthor: false },
+  };
+  const layerFor = (body: string) =>
+    Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      getPullRequestActivity: () =>
+        Effect.succeed({ author: null, comments: [dismissedReview(body)], commits: [] }),
+      listReviewThreadComments: () => Effect.succeed(threadComments),
+    });
+  const readActivity = Effect.gen(function* () {
+    const provider = yield* make;
+    return yield* provider.getChangeRequestActivity({
+      cwd: "/w",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+    });
+  });
+
+  it.effect("fills a marker-only dismissed review with the timeline's reason", () =>
+    // Macroscope's approvals carry only an HTML comment, which markdown renders as nothing —
+    // an empty-string check misses them and the card opens onto nothing.
+    readActivity.pipe(
+      Effect.map((activity) => {
+        expect(activity.comments[0]?.body).toBe("Dismissing prior approval to re-evaluate 9b66581");
+      }),
+      Effect.provide(layerFor("<!-- Macroscope (Approvability) review body marker -->")),
+    ),
+  );
+
+  it.effect("keeps the words of a dismissed review that has its own", () =>
+    readActivity.pipe(
+      Effect.map((activity) => {
+        expect(activity.comments[0]?.body).toBe("These findings still stand.");
+      }),
+      Effect.provide(layerFor("These findings still stand.")),
+    ),
+  );
+});
+
+describe("editing", () => {
+  const rewrites: Array<unknown> = [];
+
+  it.effect("hands a rewrite to the CLI as the request named it", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+
+      expect(provider.capabilities.edit).toEqual({ changeRequest: true, comment: true });
+      yield* provider.updateChangeRequest!({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        title: "A better title",
+      });
+      yield* provider.updateComment!({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commentId: "IC_1",
+        kind: "review-comment",
+        body: "Reworded.",
+      });
+
+      expect(rewrites).toEqual([
+        {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          title: "A better title",
+        },
+        {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          commentId: "IC_1",
+          kind: "review-comment",
+          body: "Reworded.",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          updatePullRequest: (input) => Effect.sync(() => void rewrites.push(input)),
+          updateComment: (input) => Effect.sync(() => void rewrites.push(input)),
+        }),
+      ),
+    ),
   );
 });
 
