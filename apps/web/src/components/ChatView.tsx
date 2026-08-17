@@ -447,7 +447,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
-const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
+const GitHistoryWithIssuesPanel = lazy(() => import("./GitHistoryWithIssuesPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -6263,11 +6263,22 @@ function ChatViewContent(props: ChatViewProps) {
         title="Git History unavailable"
         error="Update this environment's T3 Code server to browse Git History."
       />
-    ) : activeRightPanelSurface?.kind === "git-history" && gitCwd ? (
+    ) : activeRightPanelSurface?.kind === "git-history" &&
+      gitCwd &&
+      activeProject &&
+      activeProjectRef ? (
       <Suspense fallback={null}>
-        <GitHistoryPanel
+        <GitHistoryWithIssuesPanel
           environmentId={environmentId}
           cwd={gitCwd}
+          issuesCapabilityState={issuesSurfaceCapabilityState}
+          projectId={activeProject.id}
+          handoffTarget={{
+            kind: "existing-thread",
+            projectRef: activeProjectRef,
+            draftId: composerDraftTarget,
+          }}
+          onIssueStateChange={handleIssueTabStatusChange}
           {...(gitHistoryIssueUrlPrefix ? { issueUrlPrefix: gitHistoryIssueUrlPrefix } : {})}
         />
       </Suspense>
