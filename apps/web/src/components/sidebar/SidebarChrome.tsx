@@ -5,12 +5,15 @@ import {
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
-import { memo, useCallback } from "react";
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { memo, useCallback, useMemo } from "react";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
+import { useRightPanelStore } from "../../rightPanelStore";
+import { resolveActiveThreadRouteRef, resolveThreadRouteTarget } from "../../threadRoutes";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -132,6 +135,17 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
             : null,
   });
   const { environments } = useEnvironments();
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+  const routeDraftThread = useComposerDraftStore((store) =>
+    routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
+  );
+  const routeThreadRef = useMemo(
+    () => resolveActiveThreadRouteRef(routeTarget, routeDraftThread),
+    [routeDraftThread, routeTarget],
+  );
   // The pages read every connected server, so one of them offering a surface is enough for
   // its link to lead somewhere.
   const pullRequestsSupported = environments.some(
@@ -147,8 +161,12 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [isMobile, setOpenMobile]);
   const handlePullRequestsClick = useCallback(() => {
     closeMobileSidebar();
+    if (routeThreadRef !== null) {
+      useRightPanelStore.getState().openRepository(routeThreadRef, "pull-requests");
+      return;
+    }
     void navigate({ to: "/pull-requests", search: { involvement: "all", state: "open" } });
-  }, [closeMobileSidebar, navigate]);
+  }, [closeMobileSidebar, navigate, routeThreadRef]);
   const handleIssuesClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/issues", search: { involvement: "all", state: "open" } });
