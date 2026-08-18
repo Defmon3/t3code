@@ -16,6 +16,7 @@ interface ImportMetaEnv {
   readonly APP_VERSION: string;
   readonly T3CODE_COMMIT_HASH: string;
   readonly T3CODE_BUILD_TIME: string;
+  readonly T3CODE_CUSTOM_BUILD: boolean;
 }
 
 interface ImportMeta {

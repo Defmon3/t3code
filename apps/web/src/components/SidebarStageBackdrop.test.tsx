@@ -38,24 +38,12 @@ describe("SidebarStageBackdrop", () => {
   it.each(["Latest", "Alpha", ""])(
     "resolves a custom client build independently of the %s server stage",
     (stageLabel) => {
-      expect(
-        resolveEnvironmentIdentificationPillLabel(stageLabel, {
-          version: "0.0.34-nightly.20260813.1000",
-          commitHash: "b1b5c80c00e68cf4",
-          buildTime: "2026-08-13T10:00:00.000Z",
-        }),
-      ).toBe("Custom");
+      expect(resolveEnvironmentIdentificationPillLabel(stageLabel, true)).toBe("Custom");
     },
   );
 
-  it("does not identify an ordinary stable build as custom", () => {
-    expect(
-      resolveEnvironmentIdentificationPillLabel("Latest", {
-        version: "0.0.34",
-        commitHash: "b1b5c80c00e68cf4",
-        buildTime: "2026-08-13T10:00:00.000Z",
-      }),
-    ).toBeNull();
+  it("does not identify a main branch build as custom", () => {
+    expect(resolveEnvironmentIdentificationPillLabel("Latest", false)).toBeNull();
   });
 
   it("matches the focus-ring offset to each artwork palette", () => {
