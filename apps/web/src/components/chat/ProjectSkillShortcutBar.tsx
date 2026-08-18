@@ -21,12 +21,20 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 
+export const projectSkillShortcutBarClassName =
+  "flex h-9 w-full gap-1 overflow-x-auto overflow-y-hidden rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-0.5 sm:px-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+
 export function normalizeProjectSkillShortcut(value: string): string | null {
-  const trimmed = value
-    .trim()
-    .replace(/^[$/]+/, "")
-    .trim();
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+export function resolveProjectSkillShortcutText(shortcut: string, provider: string): string {
+  const marker = shortcut[0];
+  if ((marker !== "/" && marker !== "$") || shortcut.length === 1) return shortcut;
+  if (provider === "claudeAgent") return `/${shortcut.slice(1)}`;
+  if (provider === "codex") return `$${shortcut.slice(1)}`;
+  return shortcut;
 }
 
 export function addProjectSkillShortcut(shortcuts: readonly string[], value: string): string[] {
@@ -147,10 +155,7 @@ export function ProjectSkillShortcutBar(props: {
     );
   };
   return (
-    <div
-      className="flex h-9 w-full gap-1 overflow-x-auto rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4"
-      aria-label="Project skill shortcuts"
-    >
+    <div className={projectSkillShortcutBarClassName} aria-label="Project quick slots">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={shortcuts} strategy={horizontalListSortingStrategy}>
           {shortcuts.map((shortcut) => (
@@ -174,13 +179,13 @@ export function ProjectSkillShortcutBar(props: {
           onKeyDown={onKeyDown}
           onBlur={cancel}
           className="h-7 min-w-28 shrink-0 rounded-md border border-border bg-background px-2 text-xs"
-          aria-label="Skill name"
+          aria-label="Quick slot text"
         />
       ) : (
         <button
           type="button"
           className="flex size-7 shrink-0 items-center justify-center rounded-md border border-dashed border-border text-muted-foreground hover:bg-accent"
-          aria-label="Add skill shortcut"
+          aria-label="Add quick slot"
           onClick={() => setAdding(true)}
         >
           <PlusIcon className="size-3.5" />

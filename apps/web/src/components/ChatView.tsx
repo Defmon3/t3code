@@ -258,7 +258,10 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
-import { ProjectSkillShortcutBar } from "./chat/ProjectSkillShortcutBar";
+import {
+  ProjectSkillShortcutBar,
+  resolveProjectSkillShortcutText,
+} from "./chat/ProjectSkillShortcutBar";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -6683,7 +6686,10 @@ function ChatViewContent(props: ChatViewProps) {
                                   }
                                   onInvoke={(shortcut) =>
                                     void onSend(undefined, undefined, {
-                                      standaloneText: `$${shortcut}`,
+                                      standaloneText: resolveProjectSkillShortcutText(
+                                        shortcut,
+                                        selectedProvider,
+                                      ),
                                     })
                                   }
                                 />
