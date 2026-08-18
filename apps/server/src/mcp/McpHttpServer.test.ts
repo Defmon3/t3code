@@ -2,15 +2,17 @@ import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { WorkspaceSetWorktreeTool } from "./toolkits/workspace/tools.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -49,6 +51,18 @@ it("normalizes empty successful notification responses to accepted", () => {
     HttpServerResponse.jsonUnsafe({ jsonrpc: "2.0", id: 1, result: {} }),
   );
   expect(resultResponse.status).toBe(200);
+});
+
+it("defines the thread workspace setter as an idempotent closed-world state change", () => {
+  expect(WorkspaceSetWorktreeTool.name).toBe("workspace_set_worktree");
+  expect(Context.get(WorkspaceSetWorktreeTool.annotations, Tool.Readonly)).toBe(false);
+  expect(Context.get(WorkspaceSetWorktreeTool.annotations, Tool.Destructive)).toBe(false);
+  expect(Context.get(WorkspaceSetWorktreeTool.annotations, Tool.Idempotent)).toBe(true);
+  expect(Context.get(WorkspaceSetWorktreeTool.annotations, Tool.OpenWorld)).toBe(false);
+  expect(Tool.getJsonSchema(WorkspaceSetWorktreeTool)).toMatchObject({
+    type: "object",
+    required: ["path"],
+  });
 });
 
 it.effect("returns bounded structural preview snapshot failures", () =>
