@@ -10,6 +10,7 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../../branding", () => ({
   APP_BUILD_TIME: "2026-08-13T10:00:00.000Z",
   APP_COMMIT_HASH: "b1b5c80c00e68cf4",
+  APP_IS_CUSTOM_BUILD: true,
   APP_VERSION: "0.0.34-nightly.20260813.1000",
 }));
 vi.mock("../../hooks/useSettings", () => ({
@@ -18,19 +19,8 @@ vi.mock("../../hooks/useSettings", () => ({
 vi.mock("../../state/environments", () => ({ useEnvironments: () => ({ environments: [] }) }));
 vi.mock("../SidebarStageBackdrop", () => ({
   formatBuildIdentityLabel: () => "Custom build",
-  resolveEnvironmentIdentificationPillLabel: (
-    _stageLabel: string,
-    buildIdentity: {
-      readonly version: string;
-      readonly commitHash: string | null;
-      readonly buildTime: string | null;
-    },
-  ) =>
-    buildIdentity.commitHash &&
-    buildIdentity.buildTime &&
-    /-nightly\.\d{8}\.\d+$/.test(buildIdentity.version)
-      ? "Custom"
-      : null,
+  resolveEnvironmentIdentificationPillLabel: (_stageLabel: string, isCustomBuild: boolean) =>
+    isCustomBuild ? "Custom" : null,
   resolveSidebarStageBackdropVariant: () => null,
   resolveSidebarStageFocusRingOffsetClass: () => "",
   SidebarStageBackdrop: () => null,

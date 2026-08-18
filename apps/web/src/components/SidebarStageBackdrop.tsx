@@ -45,19 +45,9 @@ export function resolveSidebarStageFocusRingOffsetClass(
 
 export function resolveEnvironmentIdentificationPillLabel(
   stageLabel: string,
-  buildIdentity?: {
-    readonly version: string;
-    readonly commitHash: string | null;
-    readonly buildTime: string | null;
-  },
+  isCustomBuild = false,
 ): EnvironmentIdentificationPillLabel | null {
-  if (
-    buildIdentity?.commitHash &&
-    buildIdentity.buildTime &&
-    /-nightly\.\d{8}\.\d+$/.test(buildIdentity.version)
-  ) {
-    return "Custom";
-  }
+  if (isCustomBuild) return "Custom";
 
   const normalized = stageLabel.trim().toLowerCase();
   if (normalized === "dev") return "Dev";

@@ -10,7 +10,7 @@ import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-route
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_VERSION } from "../../branding";
+import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_IS_CUSTOM_BUILD, APP_VERSION } from "../../branding";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
 import { useRightPanelStore } from "../../rightPanelStore";
@@ -48,11 +48,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     stageLabel,
     environmentIdentificationMode === "artwork",
   );
-  const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel, {
-    version: APP_VERSION,
-    commitHash: APP_COMMIT_HASH,
-    buildTime: APP_BUILD_TIME,
-  });
+  const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(
+    stageLabel,
+    APP_IS_CUSTOM_BUILD,
+  );
   const pillLabel =
     resolvedPillLabel === "Custom" || environmentIdentificationMode === "pill"
       ? resolvedPillLabel

@@ -42,6 +42,7 @@ const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() |
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
 const configuredCommitHash = process.env.T3CODE_COMMIT_HASH?.trim() || "";
 const configuredBuildTime = process.env.T3CODE_BUILD_TIME?.trim() || "";
+const configuredCustomBuild = process.env.T3CODE_CUSTOM_BUILD?.trim() === "1";
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
@@ -206,6 +207,7 @@ export default defineConfig(() => {
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
       "import.meta.env.T3CODE_COMMIT_HASH": JSON.stringify(configuredCommitHash),
       "import.meta.env.T3CODE_BUILD_TIME": JSON.stringify(configuredBuildTime),
+      "import.meta.env.T3CODE_CUSTOM_BUILD": JSON.stringify(configuredCustomBuild),
     },
     resolve: {
       tsconfigPaths: true,

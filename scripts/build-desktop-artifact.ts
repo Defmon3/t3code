@@ -703,6 +703,27 @@ const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRo
   return hash.toLowerCase();
 });
 
+export function isCustomDesktopBuildBranch(branchName: string): boolean {
+  const normalizedBranch = branchName.trim();
+  return normalizedBranch.length > 0 && normalizedBranch !== "main";
+}
+
+const resolveGitBranchName = Effect.fn("resolveGitBranchName")(function* (repoRoot: string) {
+  const result = yield* spawnAndCollectOutput(
+    ChildProcess.make("git", ["branch", "--show-current"], {
+      cwd: repoRoot,
+    }),
+  ).pipe(
+    Effect.orElseSucceed(() => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 1,
+    })),
+  );
+
+  return result.exitCode === 0 ? result.stdout.trim() : "";
+});
+
 const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2703,6 +2724,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
+  const isCustomBuild = isCustomDesktopBuildBranch(yield* resolveGitBranchName(repoRoot));
   const buildTime = DateTime.formatIso(yield* DateTime.now);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
@@ -2729,6 +2751,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           APP_VERSION: appVersion,
           T3CODE_COMMIT_HASH: commitHash,
           T3CODE_BUILD_TIME: buildTime,
+          T3CODE_CUSTOM_BUILD: isCustomBuild ? "1" : "0",
         },
         shell: spawnCommand.shell,
       }),
