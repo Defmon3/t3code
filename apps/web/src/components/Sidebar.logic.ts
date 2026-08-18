@@ -342,6 +342,19 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   return [...ordered, ...remaining];
 }
 
+export function orderThreadsByPreferredIds<TItem, TId>(input: {
+  items: readonly TItem[];
+  preferredIds: readonly TId[];
+  getId: (item: TItem) => TId;
+}): TItem[] {
+  const preferredIds = new Set(input.preferredIds);
+  const ordered = orderItemsByPreferredIds(input);
+  return [
+    ...ordered.filter((item) => !preferredIds.has(input.getId(item))),
+    ...ordered.filter((item) => preferredIds.has(input.getId(item))),
+  ];
+}
+
 export function getVisibleSidebarThreadIds<TThreadId>(
   renderedProjects: readonly {
     shouldShowThreadPanel?: boolean;
