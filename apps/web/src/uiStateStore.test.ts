@@ -10,6 +10,7 @@ import {
   type PersistedUiState,
   persistState,
   reorderProjects,
+  reorderThreads,
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
@@ -21,6 +22,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
+    threadOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -116,6 +118,27 @@ describe("uiStateStore pure functions", () => {
     );
   });
 
+  it("persists a complete thread order after moving one thread", () => {
+    const currentOrder = ["env:thread-a", "env:thread-b", "env:thread-c"];
+
+    const next = reorderThreads(makeUiState(), currentOrder, "env:thread-a", "env:thread-c");
+
+    expect(next.threadOrder).toEqual(["env:thread-b", "env:thread-c", "env:thread-a"]);
+    expect(reorderThreads(next, currentOrder, "env:missing", "env:thread-c")).toBe(next);
+    expect(reorderThreads(next, currentOrder, "env:thread-b", "env:thread-b")).toBe(next);
+  });
+
+  it("preserves remembered threads hidden by the current project scope", () => {
+    const next = reorderThreads(
+      makeUiState({ threadOrder: ["env:thread-a", "other:hidden", "env:thread-b"] }),
+      ["env:thread-a", "env:thread-b"],
+      "env:thread-a",
+      "env:thread-b",
+    );
+
+    expect(next.threadOrder).toEqual(["env:thread-b", "other:hidden", "env:thread-a"]);
+  });
+
   it("stores explicit changed-file expansion choices", () => {
     const threadId = ThreadId.make("thread-1");
     const collapsed = setThreadChangedFilesExpanded(makeUiState(), threadId, "turn-1", false);
@@ -154,6 +177,7 @@ describe("parsePersistedState", () => {
         invalid: "no" as unknown as boolean,
       },
       projectOrder: ["physical-b", "", "physical-a", "physical-b"],
+      threadOrder: ["environment:thread-2", "", "environment:thread-1", "environment:thread-2"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
@@ -173,6 +197,7 @@ describe("parsePersistedState", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      threadOrder: ["environment:thread-2", "environment:thread-1"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -270,6 +295,7 @@ describe("uiStateStore persistence", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      threadOrder: ["environment:thread-2", "environment:thread-1"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -292,6 +318,7 @@ describe("uiStateStore persistence", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      threadOrder: ["environment:thread-2", "environment:thread-1"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
