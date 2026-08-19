@@ -2812,6 +2812,7 @@ it.effect("carries an armed auto-merge through to the detail, and silence as sil
                   closedAt: null,
                   reviewers: [],
                   checks: [],
+                  linkedIssues: [],
                   mergeCapabilities: { merge: true, squash: true, rebase: true },
                   viewerPermissions: {
                     actions: ["merge"],
@@ -3317,6 +3318,7 @@ it.effect("forgets the cached detail after a rewrite, like the other mutations",
               closedAt: null,
               reviewers: [],
               checks: [],
+              linkedIssues: [],
               mergeCapabilities: { merge: true, squash: true, rebase: true },
               viewerPermissions: {
                 actions: ["merge"],
@@ -3365,6 +3367,7 @@ it.effect("names the signed-in account in the detail, and says nothing where the
           closedAt: null,
           reviewers: [],
           checks: [],
+          linkedIssues: [],
           mergeCapabilities: { merge: true, squash: true, rebase: true },
           viewerPermissions: {
             actions: ["merge"],
