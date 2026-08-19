@@ -14,6 +14,7 @@ import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/source
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
@@ -279,7 +280,12 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(IssueProviderRegistry, make).pipe(
-  Layer.provide(GitHubIssueCli.layer.pipe(Layer.provide(GitHubCli.layer))),
+  Layer.provide(
+    GitHubIssueCli.layer.pipe(
+      Layer.provide(GitHubCli.layer),
+      Layer.provide(GitHubGraphQlBudget.layer),
+    ),
+  ),
   Layer.provide(GitLabIssueCli.layer.pipe(Layer.provide(GitLabCli.layer))),
   Layer.provide(BitbucketIssueApi.layer.pipe(Layer.provide(BitbucketApi.layer))),
   Layer.provide(AzureDevOpsIssueCli.layer.pipe(Layer.provide(AzureDevOpsCli.layer))),
