@@ -48,6 +48,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
+import * as Schedule from "effect/Schedule";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -115,6 +116,7 @@ const DIAGNOSTIC_BUFFER_LIMIT = 200;
 const MAX_ARTIFACT_SITE_SLUG_LENGTH = 80;
 const AGENT_CURSOR_MOVE_MS = 160;
 const AGENT_CURSOR_CLICK_LEAD_MS = 40;
+const AUTOMATION_SNAPSHOT_CAPTURE_RETRY_DELAY_MS = 100;
 const encodeUnknownJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const DEFAULT_ANNOTATION_THEME: DesktopPreviewAnnotationTheme = {
   colorScheme: "light",
@@ -541,6 +543,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       try: evaluate,
       catch: (cause) => new PreviewOperationError({ ...errorContext, cause }),
     });
+  const isUnknownVizError = (cause: unknown) =>
+    cause instanceof Error && cause.message.includes("UnknownVizError");
   const currentIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const currentMillis = Clock.currentTimeMillis;
   const encodeJson = (errorContext: PreviewOperationContext, value: unknown) =>
@@ -2939,6 +2943,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             webContentsId: wc.id,
           },
           () => wc.capturePage(),
+        ).pipe(
+          Effect.retry({
+            while: (error) => isUnknownVizError(error.cause),
+            schedule: Schedule.spaced(`${AUTOMATION_SNAPSHOT_CAPTURE_RETRY_DELAY_MS} millis`).pipe(
+              Schedule.upTo({ times: 1 }),
+            ),
+          }),
         ),
         Ref.get(diagnosticsRef),
         Ref.get(actionTimelineRef),

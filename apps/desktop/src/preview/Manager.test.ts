@@ -1102,6 +1102,7 @@ describe("PreviewManager", () => {
           getURL: () => "https://example.com",
           getTitle: () => "Example",
           isLoading: () => false,
+          isDevToolsOpened: () => false,
           getZoomFactor: () => 1,
           setZoomFactor,
           on: vi.fn(),
@@ -1489,6 +1490,95 @@ describe("PreviewManager", () => {
           _tag: "PreviewOperationError",
           operation: "captureScreenshot.capturePage",
           tabId: "tab_1",
+          webContentsId: 42,
+          cause: captureCause,
+        });
+      }),
+    ),
+  );
+
+  effectIt.effect("retries a cold hidden-tab automation snapshot capture", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const png = Buffer.from("recovered-automation-snapshot");
+        const capturePage = vi.fn(async () => ({
+          getSize: () => ({ width: 1280, height: 720 }),
+          resize: () => undefined,
+          toPNG: () => png,
+        }));
+        capturePage.mockRejectedValueOnce(new Error("UnknownVizError"));
+        const sendCommand = vi.fn(async (method: string) => {
+          if (method === "Runtime.evaluate") {
+            return {
+              result: {
+                value: {
+                  url: "https://example.com",
+                  title: "Example",
+                  loading: false,
+                  visibleText: "Example",
+                  interactiveElements: [],
+                },
+              },
+            };
+          }
+          return method === "Accessibility.getFullAXTree" ? { nodes: [] } : undefined;
+        });
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+          isDevToolsOpened: () => false,
+          capturePage,
+        } as never);
+
+        yield* manager.createTab("tab_cold_snapshot");
+        yield* manager.registerWebview("tab_cold_snapshot", 42);
+        const snapshotFiber = yield* manager
+          .automationSnapshot("tab_cold_snapshot")
+          .pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* TestClock.adjust(200);
+        yield* TestClock.adjust(100);
+
+        const snapshot = yield* Fiber.join(snapshotFiber);
+        expect(capturePage).toHaveBeenCalledTimes(2);
+        expect(snapshot.screenshot).toEqual({
+          mimeType: "image/png",
+          data: png.toString("base64"),
+          width: 1280,
+          height: 720,
+        });
+
+        const captureCause = new Error("capture failed");
+        capturePage.mockRejectedValueOnce(captureCause);
+        const exit = yield* Effect.exit(manager.automationSnapshot("tab_cold_snapshot"));
+
+        expect(capturePage).toHaveBeenCalledTimes(3);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) return;
+        const error = Option.getOrThrow(Cause.findErrorOption(exit.cause));
+        expect(error).toMatchObject({
+          _tag: "PreviewOperationError",
+          operation: "automationSnapshot.capturePage",
+          tabId: "tab_cold_snapshot",
           webContentsId: 42,
           cause: captureCause,
         });
