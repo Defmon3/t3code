@@ -23,6 +23,7 @@ import {
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
+  isCustomDesktopBuildBranch,
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
@@ -78,6 +79,15 @@ function mockProcess(exitCode: number) {
     getOutputFd: () => Stream.empty,
   });
 }
+
+it("identifies non-main branch builds as custom without inspecting the version", () => {
+  assert.isTrue(isCustomDesktopBuildBranch("custom-main"));
+  assert.isTrue(isCustomDesktopBuildBranch("custom-tweaks"));
+  assert.isTrue(isCustomDesktopBuildBranch("feat/worktree-adoption"));
+  assert.isFalse(isCustomDesktopBuildBranch("main"));
+  assert.isFalse(isCustomDesktopBuildBranch(""));
+  assert.isFalse(isCustomDesktopBuildBranch("   "));
+});
 
 function iconResizeSpawnerLayer(
   commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>,
