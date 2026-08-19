@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  formatBuildIdentityLabel,
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
   resolveSidebarStageFocusRingOffsetClass,
@@ -10,6 +11,16 @@ import {
 } from "./SidebarStageBackdrop";
 
 describe("SidebarStageBackdrop", () => {
+  it("formats custom build metadata for the identification pill", () => {
+    expect(
+      formatBuildIdentityLabel({
+        stageLabel: "Custom",
+        commitHash: "f0a8937d8d41cafe",
+        buildTime: "2026-08-10T17:20:31.000Z",
+      }),
+    ).toBe("Custom · 2026-08-10 17:20Z · f0a8937d");
+  });
+
   it("resolves stage artwork only when enabled", () => {
     expect(resolveSidebarStageBackdropVariant("Dev")).toBe("dev");
     expect(resolveSidebarStageBackdropVariant("Nightly")).toBe("nightly");
@@ -22,6 +33,17 @@ describe("SidebarStageBackdrop", () => {
     expect(resolveEnvironmentIdentificationPillLabel("nightly")).toBe("Nightly");
     expect(resolveEnvironmentIdentificationPillLabel("Latest")).toBeNull();
     expect(resolveEnvironmentIdentificationPillLabel("Alpha")).toBeNull();
+  });
+
+  it.each(["Latest", "Alpha", ""])(
+    "resolves a custom client build independently of the %s server stage",
+    (stageLabel) => {
+      expect(resolveEnvironmentIdentificationPillLabel(stageLabel, true)).toBe("Custom");
+    },
+  );
+
+  it("does not identify a main branch build as custom", () => {
+    expect(resolveEnvironmentIdentificationPillLabel("Latest", false)).toBeNull();
   });
 
   it("matches the focus-ring offset to each artwork palette", () => {

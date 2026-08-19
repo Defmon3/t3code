@@ -37,6 +37,7 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -699,6 +700,27 @@ const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRo
     return "unknown";
   }
   return hash.toLowerCase();
+});
+
+export function isCustomDesktopBuildBranch(branchName: string): boolean {
+  const normalizedBranch = branchName.trim();
+  return normalizedBranch.length > 0 && normalizedBranch !== "main";
+}
+
+const resolveGitBranchName = Effect.fn("resolveGitBranchName")(function* (repoRoot: string) {
+  const result = yield* spawnAndCollectOutput(
+    ChildProcess.make("git", ["branch", "--show-current"], {
+      cwd: repoRoot,
+    }),
+  ).pipe(
+    Effect.orElseSucceed(() => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 1,
+    })),
+  );
+
+  return result.exitCode === 0 ? result.stdout.trim() : "";
 });
 
 const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* () {
@@ -2683,6 +2705,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
+  const isCustomBuild = isCustomDesktopBuildBranch(yield* resolveGitBranchName(repoRoot));
+  const buildTime = DateTime.formatIso(yield* DateTime.now);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
     prefix: `t3code-desktop-${options.platform}-stage-`,
@@ -2703,6 +2727,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
+        env: {
+          ...process.env,
+          APP_VERSION: appVersion,
+          T3CODE_COMMIT_HASH: commitHash,
+          T3CODE_BUILD_TIME: buildTime,
+          T3CODE_CUSTOM_BUILD: isCustomBuild ? "1" : "0",
+        },
         shell: spawnCommand.shell,
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
