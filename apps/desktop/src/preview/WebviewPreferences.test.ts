@@ -43,10 +43,14 @@ function parseWebPreferences(input: string): Record<string, unknown> {
 describe("PREVIEW_WEBVIEW_PREFERENCES", () => {
   const parsed = parseWebPreferences(PREVIEW_WEBVIEW_PREFERENCES);
 
-  it("contains exactly the three security-critical keys", () => {
+  it("keeps inactive preview guests unthrottled for compositor-backed automation", () => {
     expect(Object.keys(parsed).toSorted()).toEqual(
-      ["contextIsolation", "nodeIntegration", "sandbox"].toSorted(),
+      ["backgroundThrottling", "contextIsolation", "nodeIntegration", "sandbox"].toSorted(),
     );
+  });
+
+  it("disables background throttling so an offscreen guest keeps its compositor alive", () => {
+    expect(parsed["backgroundThrottling"]).toBe("false");
   });
 
   it("uses canonical JS-boolean string literals (not yes/no, on/off, 1/0)", () => {

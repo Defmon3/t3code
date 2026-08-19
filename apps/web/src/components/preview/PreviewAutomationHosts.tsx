@@ -72,18 +72,9 @@ import {
   resolvePreviewAutomationOpenTab,
   resolvePreviewAutomationTarget,
 } from "./previewAutomationTarget";
+import { waitForPreviewPresentation } from "./previewPresentationReadiness";
 import { isPreviewViewportReady } from "./previewViewportReadiness";
 import { shouldRollbackPreviewViewport } from "./previewViewportRollback";
-
-const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
-
-const waitForPreviewPresentation = async (runtimeTabId: string): Promise<void> => {
-  const deadline = Date.now() + PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS;
-  while (Date.now() <= deadline) {
-    if (useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible) return;
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-  }
-};
 
 const waitForDesktopOverlay = async (
   threadRef: ScopedThreadRef,
@@ -303,6 +294,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
 
   const handleRequest = useCallback(
     async (request: PreviewAutomationRequest): Promise<unknown> => {
+      const requestDeadline = Date.now() + request.timeoutMs;
       const threadRef: ScopedThreadRef = {
         environmentId,
         threadId: request.threadId,
@@ -451,11 +443,15 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               );
             }
             if (shouldPresentPreview) {
-              // React commits the thread-bound surface asynchronously. Settle
-              // briefly so active-thread opens report visible=true, without
+              // React commits the thread-bound surface asynchronously. Wait
+              // through the request deadline for active-thread visibility, without
               // turning a background thread's offscreen mini player into an
               // operation failure.
-              await waitForPreviewPresentation(activeRuntimeTabId);
+              await waitForPreviewPresentation({
+                deadline: requestDeadline,
+                isVisible: () =>
+                  useBrowserSurfaceStore.getState().byTabId[activeRuntimeTabId]?.visible ?? false,
+              });
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
