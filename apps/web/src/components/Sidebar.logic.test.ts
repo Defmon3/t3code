@@ -15,6 +15,7 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  orderThreadsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
@@ -544,6 +545,32 @@ describe("orderItemsByPreferredIds", () => {
       "physical-a",
       "physical-b",
     ]);
+  });
+});
+
+describe("orderThreadsByPreferredIds", () => {
+  it("keeps newly-created threads above the remembered manual order", () => {
+    const threads = [{ id: "new" }, { id: "second" }, { id: "first" }];
+
+    expect(
+      orderThreadsByPreferredIds({
+        items: threads,
+        preferredIds: ["first", "second"],
+        getId: (thread) => thread.id,
+      }),
+    ).toEqual([{ id: "new" }, { id: "first" }, { id: "second" }]);
+  });
+
+  it("ignores stale remembered ids", () => {
+    const threads = [{ id: "second" }, { id: "first" }];
+
+    expect(
+      orderThreadsByPreferredIds({
+        items: threads,
+        preferredIds: ["missing", "first", "second"],
+        getId: (thread) => thread.id,
+      }),
+    ).toEqual([{ id: "first" }, { id: "second" }]);
   });
 });
 
