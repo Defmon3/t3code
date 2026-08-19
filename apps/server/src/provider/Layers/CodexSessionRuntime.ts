@@ -38,6 +38,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import type { T3HookPlan } from "../../hooks/T3HookRunner.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
@@ -107,6 +108,7 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly hookPlan?: T3HookPlan;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -211,6 +213,7 @@ interface PendingApproval {
   readonly requestKind: ProviderRequestKind;
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
+  readonly source?: "hook";
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
 }
 
@@ -262,7 +265,10 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
-function runtimeModeToThreadConfig(input: RuntimeMode): {
+function runtimeModeToThreadConfig(
+  input: RuntimeMode,
+  interceptApprovals = false,
+): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
   // Always explicit: omitting the field on resume keeps the thread's previous
@@ -291,7 +297,7 @@ function runtimeModeToThreadConfig(input: RuntimeMode): {
     case "full-access":
     default:
       return {
-        approvalPolicy: "never",
+        approvalPolicy: interceptApprovals ? "untrusted" : "never",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       };
@@ -303,8 +309,9 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
+  readonly interceptApprovals?: boolean;
 }): EffectCodexSchema.V2ThreadStartParams {
-  const config = runtimeModeToThreadConfig(input.runtimeMode);
+  const config = runtimeModeToThreadConfig(input.runtimeMode, input.interceptApprovals);
   return {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
@@ -375,6 +382,7 @@ export function buildTurnStartParams(input: {
   readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean;
+  readonly interceptApprovals?: boolean;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -390,7 +398,7 @@ export function buildTurnStartParams(input: {
     turnInput.push(attachment);
   }
 
-  const config = runtimeModeToThreadConfig(input.runtimeMode);
+  const config = runtimeModeToThreadConfig(input.runtimeMode, input.interceptApprovals);
   const collaborationMode = buildCodexCollaborationMode({
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -468,6 +476,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly interceptApprovals?: boolean;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -475,6 +484,9 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
+    ...(input.interceptApprovals !== undefined
+      ? { interceptApprovals: input.interceptApprovals }
+      : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -908,6 +920,36 @@ export const makeCodexSessionRuntime = (
     const collabChildLiveTurnsRef = yield* Ref.make(new Map<string, string>());
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
+    const allowHookApprovalsForSessionRef = yield* Ref.make(false);
+    const interceptApprovalsAtStart = options.hookPlan?.hasPreToolUseHooks === true;
+
+    const evaluatePreToolUseHook = Effect.fn("CodexSessionRuntime.evaluatePreToolUseHook")(
+      function* (toolName: string, toolInput: unknown) {
+        if (!options.hookPlan || (yield* Ref.get(allowHookApprovalsForSessionRef))) {
+          return { decision: "allow" as const };
+        }
+        return yield* options.hookPlan
+          .evaluatePreToolUse({
+            provider: PROVIDER,
+            threadId: options.threadId,
+            toolName,
+            toolInput,
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.succeed({
+                decision: "ask" as const,
+                title: "T3 hook failed",
+                description: undefined,
+                reason:
+                  cause instanceof Error
+                    ? cause.message
+                    : "A T3 project hook failed before this tool could run.",
+              }),
+            ),
+          );
+      },
+    );
 
     // `~` is not shell-expanded when env vars are set via
     // `child_process.spawn`; `expandHomePath` lets a configured
@@ -1492,6 +1534,14 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
+        const hookDecision = options.hookPlan
+          ? yield* evaluatePreToolUseHook("Bash", payload)
+          : undefined;
+        if (hookDecision && hookDecision.decision !== "ask") {
+          return {
+            decision: hookDecision.decision === "allow" ? "accept" : "decline",
+          } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
+        }
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4("command-approval-request"));
         const turnId = TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
@@ -1505,6 +1555,7 @@ export const makeCodexSessionRuntime = (
             requestKind: "command",
             turnId,
             itemId,
+            ...(hookDecision ? { source: "hook" } : {}),
             decision,
           });
           return next;
@@ -1528,7 +1579,18 @@ export const makeCodexSessionRuntime = (
           requestKind: "command",
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
-          payload,
+          payload:
+            hookDecision?.decision === "ask"
+              ? {
+                  ...payload,
+                  approvalSource: "hook",
+                  ...(hookDecision.title ? { approvalTitle: hookDecision.title } : {}),
+                  ...(hookDecision.description
+                    ? { approvalDescription: hookDecision.description }
+                    : {}),
+                  approvalReason: hookDecision.reason,
+                }
+              : payload,
         });
 
         const resolved = yield* Deferred.await(decision).pipe(
@@ -1548,6 +1610,14 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
+        const hookDecision = options.hookPlan
+          ? yield* evaluatePreToolUseHook("Edit", payload)
+          : undefined;
+        if (hookDecision && hookDecision.decision !== "ask") {
+          return {
+            decision: hookDecision.decision === "allow" ? "accept" : "decline",
+          } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+        }
         const requestId = ApprovalRequestId.make(
           yield* randomUUIDv4("file-change-approval-request"),
         );
@@ -1563,6 +1633,7 @@ export const makeCodexSessionRuntime = (
             requestKind: "file-change",
             turnId,
             itemId,
+            ...(hookDecision ? { source: "hook" } : {}),
             decision,
           });
           return next;
@@ -1586,7 +1657,18 @@ export const makeCodexSessionRuntime = (
           requestKind: "file-change",
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
-          payload,
+          payload:
+            hookDecision?.decision === "ask"
+              ? {
+                  ...payload,
+                  approvalSource: "hook",
+                  ...(hookDecision.title ? { approvalTitle: hookDecision.title } : {}),
+                  ...(hookDecision.description
+                    ? { approvalDescription: hookDecision.description }
+                    : {}),
+                  approvalReason: hookDecision.reason,
+                }
+              : payload,
         });
 
         const resolved = yield* Deferred.await(decision).pipe(
@@ -1753,6 +1835,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        interceptApprovals: interceptApprovalsAtStart,
       });
 
       const providerThreadId = opened.thread.id;
@@ -1818,6 +1901,9 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
+          const interceptApprovals = options.hookPlan
+            ? yield* options.hookPlan.hasPreToolUseHooksNow
+            : false;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
@@ -1831,6 +1917,7 @@ export const makeCodexSessionRuntime = (
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.
             browserToolsAvailable: hasConfiguredMcpServer(options.appServerArgs),
+            interceptApprovals,
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
@@ -1927,6 +2014,9 @@ export const makeCodexSessionRuntime = (
             next.delete(requestId);
             return next;
           });
+          if (decision === "acceptForSession" && pending.source === "hook") {
+            yield* Ref.set(allowHookApprovalsForSessionRef, true);
+          }
           yield* Deferred.succeed(pending.decision, decision);
           yield* emitEvent({
             kind: "notification",

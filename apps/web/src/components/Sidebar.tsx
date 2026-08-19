@@ -833,9 +833,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     status === "working" || status === "monitoring" || status === "approval" || status === "input";
   const shouldRecede =
     (status === "ready" || isInFlight) && !isUnread && !isWoke && !props.isActive && !isSelected;
-  // Status hues follow the system-wide convention set by sidebar v1 and the
-  // mobile Live Activity/widgets (amber approval, indigo input, sky working)
-  // so a thread reads the same color everywhere it surfaces.
+  // Approval is the only in-flight state that requires immediate user action,
+  // so it uses the same red attention cue in both the row and project rollup.
   const topStatus =
     status === "working"
       ? {
@@ -860,7 +859,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           ? {
               label: "Approval",
               icon: null,
-              className: "text-amber-700 dark:text-amber-300",
+              className: "text-red-700 dark:text-red-300",
             }
           : status === "input"
             ? {
@@ -1100,9 +1099,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
         ? "bg-sidebar-row-selected text-sidebar-foreground"
-        : shouldRecede
-          ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-          : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+        : status === "approval"
+          ? "bg-red-500/[0.08] text-sidebar-foreground hover:bg-red-500/[0.12]"
+          : shouldRecede
+            ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
     isInFlight &&
       !props.isActive &&
       !isSelected &&
