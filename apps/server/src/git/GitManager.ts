@@ -28,7 +28,6 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   VcsStatusResult,
-  VcsSnapshotExpiredError,
   ModelSelection,
   SourceControlProviderError,
   type SourceControlWritingStyleSettings,
@@ -542,6 +541,7 @@ function toStatusPr(pr: PullRequestInfo): {
   headRef: string;
   state: "open" | "closed" | "merged";
   completedAt?: string;
+  updatedAt: string | null;
 } {
   return {
     number: pr.number,
@@ -551,6 +551,10 @@ function toStatusPr(pr: PullRequestInfo): {
     headRef: pr.headRefName,
     state: pr.state,
     ...(pr.completedAt !== null ? { completedAt: pr.completedAt } : {}),
+    updatedAt: Option.match(pr.updatedAt, {
+      onNone: () => null,
+      onSome: (updatedAt) => DateTime.formatIso(updatedAt),
+    }),
   };
 }
 
@@ -909,11 +913,24 @@ export const make = Effect.gen(function* () {
         prLookupEpochByCwd.set(cacheKey, prLookupEpoch(cacheKey) + 1);
       }),
     );
-  // Cache keys are NUL-joined [cwd, branch, upstreamRef, epoch] — none of the
+  // Cache keys are NUL-joined [cwd, branch, upstreamRef, defaultBranch, epoch] — none of the
   // segments can contain a NUL byte, and refs are never empty, so "" decodes
-  // back to a null upstreamRef.
-  const prLookupCacheKey = (cwd: string, details: { branch: string; upstreamRef: string | null }) =>
-    [cwd, details.branch, details.upstreamRef ?? "", String(prLookupEpoch(cwd))].join("\u0000");
+  // back to a null ref.
+  const prLookupCacheKey = (
+    cwd: string,
+    details: {
+      branch: string;
+      upstreamRef: string | null;
+      defaultBranch: string | null;
+    },
+  ) =>
+    [
+      cwd,
+      details.branch,
+      details.upstreamRef ?? "",
+      details.defaultBranch ?? "",
+      String(prLookupEpoch(cwd)),
+    ].join("\u0000");
   // Consecutive failures per cache key, so a branch that keeps failing waits
   // longer before the next attempt. Cleared as soon as a lookup succeeds.
   const prLookupFailureStreakByKey = new Map<string, number>();
@@ -933,13 +950,29 @@ export const make = Effect.gen(function* () {
   };
   const prLookupCache = yield* Cache.makeWith(
     (key: string) => {
-      const [cwd = "", branch = "", upstreamRef = ""] = key.split("\u0000");
+      const [cwd = "", branch = "", upstreamRef = "", defaultBranch = ""] = key.split("\u0000");
       const details = {
         branch,
         upstreamRef: upstreamRef.length > 0 ? upstreamRef : null,
+        defaultBranch: defaultBranch.length > 0 ? defaultBranch : null,
       };
       return Effect.gen(function* () {
         const headContext = yield* resolveBranchHeadContext(cwd, details);
+        const upstreamHeadIsDefault =
+          headContext.headBranch === details.defaultBranch ||
+          (details.defaultBranch === null &&
+            (headContext.headBranch === "main" || headContext.headBranch === "master"));
+        // `git worktree add -b feature origin/main` makes the new local branch
+        // track origin/main. That upstream is the branch's base, not its
+        // published PR head. Looking up PRs for it can attach an old reverse
+        // merge from main and auto-settle an unrelated feature thread.
+        if (
+          headContext.headBranch !== details.branch &&
+          upstreamHeadIsDefault &&
+          !headContext.isCrossRepository
+        ) {
+          return { latest: null, headContext };
+        }
         // Only skip when the branch is untracked as well: anything carrying an
         // upstream keeps the old behaviour.
         if (details.upstreamRef === null && (yield* isUnpublishedBranch(cwd, headContext))) {
@@ -1020,7 +1053,12 @@ export const make = Effect.gen(function* () {
   };
   const lookupStatusPr = Effect.fn("lookupStatusPr")(function* (
     cwd: string,
-    details: { branch: string; upstreamRef: string | null; isDefaultBranch: boolean },
+    details: {
+      branch: string;
+      upstreamRef: string | null;
+      defaultBranch: string | null;
+      isDefaultBranch: boolean;
+    },
   ) {
     // Keyed by (cwd, branch) only: the upstream ref changing (e.g. a first
     // `push -u`) must not orphan the fallback value for the same branch.
@@ -1094,6 +1132,7 @@ export const make = Effect.gen(function* () {
         ? yield* lookupStatusPr(cwd, {
             branch: details.branch,
             upstreamRef: details.upstreamRef,
+            defaultBranch: details.defaultBranch,
             isDefaultBranch: details.isDefaultBranch,
           })
         : null;
@@ -1159,6 +1198,12 @@ export const make = Effect.gen(function* () {
     details: { branch: string; upstreamRef: string | null },
   ) {
     const remoteName = yield* readConfigValueNullable(cwd, `branch.${details.branch}.remote`);
+    const headBranchFromUpstream = details.upstreamRef
+      ? extractBranchNameFromRemoteRef(details.upstreamRef, { remoteName })
+      : "";
+    const headBranch = headBranchFromUpstream.length > 0 ? headBranchFromUpstream : details.branch;
+    const shouldProbeLocalBranchSelector =
+      headBranchFromUpstream.length === 0 || headBranch === details.branch;
 
     const [remoteRepository, originRepository] = yield* Effect.all(
       [
@@ -1176,15 +1221,6 @@ export const make = Effect.gen(function* () {
         : remoteName !== null &&
           remoteName !== "origin" &&
           remoteRepository.repositoryNameWithOwner !== null;
-
-    const headBranchFromUpstream = details.upstreamRef
-      ? extractBranchNameFromRemoteRef(details.upstreamRef, { remoteName })
-      : "";
-    const headBranch =
-      isCrossRepository && headBranchFromUpstream.length > 0
-        ? headBranchFromUpstream
-        : details.branch;
-    const shouldProbeLocalBranchSelector = headBranch === details.branch;
 
     const ownerHeadSelector =
       remoteRepository.ownerLogin && headBranch.length > 0

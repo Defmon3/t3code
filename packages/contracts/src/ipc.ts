@@ -67,10 +67,15 @@ import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationHost,
   PreviewAutomationHostFocus,
+  PreviewAutomationObservationRead,
+  PreviewAutomationObservationStatus,
+  PreviewAutomationObservationStopResult,
+  PreviewAutomationObserveStopInput,
   PreviewAutomationPressInput,
   PreviewAutomationResponse,
   PreviewAutomationScrollInput,
   PreviewAutomationSnapshot,
+  PreviewAutomationSnapshotInput,
   PreviewAutomationStatus,
   PreviewAutomationStreamEvent,
   PreviewAutomationTypeInput,
@@ -558,6 +563,19 @@ export interface DesktopPreviewTabState {
   /** Whether this tab is currently mirrored into a desktop picture-in-picture window. */
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
+  /**
+   * Whether the user has silenced this tab. Per tab rather than per origin, so
+   * two tabs on the same site mute independently. Survives navigation and
+   * webview swaps, but is dropped when the tab closes.
+   */
+  audioMuted: boolean;
+  /**
+   * Whether the guest is currently emitting audio. Observed from Chromium, and
+   * independent of {@link audioMuted}: a muted tab that is playing still reports
+   * `true`, which is what lets the tab strip distinguish "muted and making
+   * sound" from "muted and silent".
+   */
+  audible: boolean;
   controller: "human" | "agent" | "none";
   favicon?: DesktopPreviewFavicon;
   updatedAt: string;
@@ -597,6 +615,8 @@ export const DesktopPreviewTabStateSchema: Schema.Codec<DesktopPreviewTabState> 
   zoomFactor: Schema.Number,
   pictureInPicture: Schema.Boolean,
   colorScheme: DesktopPreviewColorSchemeSchema,
+  audioMuted: Schema.Boolean,
+  audible: Schema.Boolean,
   controller: Schema.Literals(["human", "agent", "none"]),
   favicon: Schema.optionalKey(DesktopPreviewFaviconSchema),
   updatedAt: Schema.String,
@@ -993,6 +1013,11 @@ export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
   colorScheme: DesktopPreviewColorSchemeSchema,
 });
 
+export const DesktopPreviewSetAudioMutedInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  audioMuted: Schema.Boolean,
+});
+
 export const DesktopPreviewAnnotationThemeInputSchema = Schema.Struct({
   theme: DesktopPreviewAnnotationThemeSchema,
 });
@@ -1010,6 +1035,16 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
 export const DesktopPreviewAutomationClickInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationClickInput,
+});
+
+export const DesktopPreviewAutomationSnapshotInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  input: PreviewAutomationSnapshotInput,
+});
+
+export const DesktopPreviewAutomationObserveStopInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  input: PreviewAutomationObserveStopInput,
 });
 
 export const DesktopPreviewAutomationTypeInputSchema = Schema.Struct({
@@ -1144,6 +1179,12 @@ export interface DesktopPreviewBridge {
    * override). Persists per tab and is re-applied across webview swaps.
    */
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
+  /**
+   * Silence the tab's audio output. Persists per tab and is re-applied across
+   * webview swaps, but is dropped when the tab closes. Muting a silent tab is
+   * allowed; it simply takes effect once the page plays something.
+   */
+  setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
@@ -1186,7 +1227,16 @@ export interface DesktopPreviewBridge {
   };
   automation: {
     status: (tabId: string) => Promise<PreviewAutomationStatus>;
-    snapshot: (tabId: string) => Promise<PreviewAutomationSnapshot>;
+    snapshot: (
+      tabId: string,
+      input: PreviewAutomationSnapshotInput,
+    ) => Promise<PreviewAutomationSnapshot>;
+    observeStart: (tabId: string) => Promise<PreviewAutomationObservationStatus>;
+    observeRead: (tabId: string) => Promise<PreviewAutomationObservationRead>;
+    observeStop: (
+      tabId: string,
+      input: PreviewAutomationObserveStopInput,
+    ) => Promise<PreviewAutomationObservationStopResult>;
     click: (tabId: string, input: PreviewAutomationClickInput) => Promise<void>;
     type: (tabId: string, input: PreviewAutomationTypeInput) => Promise<void>;
     press: (tabId: string, input: PreviewAutomationPressInput) => Promise<void>;

@@ -3,6 +3,12 @@ import {
   PreviewAutomationError,
   PreviewAutomationEvaluateInput,
   PreviewAutomationNavigateInput,
+  PreviewAutomationObservationRead,
+  PreviewAutomationObservationStatus,
+  PreviewAutomationObservationStopResult,
+  PreviewAutomationObserveReadInput,
+  PreviewAutomationObserveStartInput,
+  PreviewAutomationObserveStopInput,
   PreviewAutomationOpenInput,
   PreviewAutomationPressInput,
   PreviewAutomationRecordingArtifact,
@@ -13,6 +19,7 @@ import {
   PreviewAutomationSetColorSchemeInput,
   PreviewAutomationSetColorSchemeResult,
   PreviewAutomationSnapshot,
+  PreviewAutomationSnapshotInput,
   PreviewAutomationStatus,
   PreviewAutomationTabTargetInput,
   PreviewAutomationTypeInput,
@@ -109,11 +116,44 @@ export const PreviewSnapshotTool = readonlyBrowserTool(
   Tool.make("preview_snapshot", {
     description:
       "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, and a PNG screenshot.",
-    parameters: PreviewAutomationTabTargetInput,
+    parameters: PreviewAutomationSnapshotInput,
     success: PreviewAutomationSnapshot,
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Inspect browser page"),
+);
+
+export const PreviewObserveStartTool = safeBrowserTool(
+  Tool.make("preview_observe_start", {
+    description:
+      "Start a bounded CDP console and network observation session before navigation or reproduction. This resets the tab's observation cursor and establishes a clean baseline.",
+    parameters: PreviewAutomationObserveStartInput,
+    success: PreviewAutomationObservationStatus,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Start preview observation"),
+);
+
+export const PreviewObserveReadTool = safeBrowserTool(
+  Tool.make("preview_observe_read", {
+    description:
+      "Read only the console, exception, log, request, response, failure, completion, timing, and initiator events generated since the preceding read for this tab.",
+    parameters: PreviewAutomationObserveReadInput,
+    success: PreviewAutomationObservationRead,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Read preview observation"),
+);
+
+export const PreviewObserveStopTool = safeBrowserTool(
+  Tool.make("preview_observe_stop", {
+    description:
+      "Stop the tab's observation session. Set saveHar=true to save a sanitized HAR with secrets, request headers, response headers, cookies, and request bodies omitted.",
+    parameters: PreviewAutomationObserveStopInput,
+    success: PreviewAutomationObservationStopResult,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Stop preview observation"),
 );
 
 export const PreviewClickTool = browserTool(
@@ -211,6 +251,9 @@ export const PreviewToolkit = Toolkit.make(
   PreviewResizeTool,
   PreviewSetAppearanceTool,
   PreviewSnapshotTool,
+  PreviewObserveStartTool,
+  PreviewObserveReadTool,
+  PreviewObserveStopTool,
   PreviewClickTool,
   PreviewTypeTool,
   PreviewPressTool,
@@ -227,6 +270,9 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewNavigateTool,
   PreviewResizeTool,
   PreviewSetAppearanceTool,
+  PreviewObserveStartTool,
+  PreviewObserveReadTool,
+  PreviewObserveStopTool,
   PreviewClickTool,
   PreviewTypeTool,
   PreviewPressTool,

@@ -2,6 +2,9 @@ import * as Effect from "effect/Effect";
 import type {
   PreviewAutomationOperation,
   PreviewAutomationOpenInput,
+  PreviewAutomationObservationRead,
+  PreviewAutomationObservationStatus,
+  PreviewAutomationObservationStopResult,
   PreviewAutomationRecordingArtifact,
   PreviewAutomationRecordingStatus,
   PreviewAutomationResizeResult,
@@ -78,6 +81,12 @@ const handlers = {
   preview_set_appearance: (input) =>
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   preview_snapshot: (input) => invokeTargeted<PreviewAutomationSnapshot>("snapshot", input ?? {}),
+  preview_observe_start: (input) =>
+    invokeTargeted<PreviewAutomationObservationStatus>("observeStart", input ?? {}),
+  preview_observe_read: (input) =>
+    invokeTargeted<PreviewAutomationObservationRead>("observeRead", input ?? {}),
+  preview_observe_stop: (input) =>
+    invokeTargeted<PreviewAutomationObservationStopResult>("observeStop", input ?? {}),
   preview_click: (input) =>
     invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as({})),
   preview_type: (input) => invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as({})),
