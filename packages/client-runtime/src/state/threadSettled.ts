@@ -19,7 +19,7 @@ export function resolveThreadPr(input: {
   if (
     pr === null ||
     pr.state === "open" ||
-    threadCreatedAt === null ||
+    threadCreatedAt == null ||
     updatedAtValue === null ||
     updatedAtValue === undefined
   ) {
