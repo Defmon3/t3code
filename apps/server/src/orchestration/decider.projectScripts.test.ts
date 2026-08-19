@@ -39,6 +39,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       const event = Array.isArray(result) ? result[0] : result;
       expect(event.type).toBe("project.created");
       expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
+      expect((event.payload as { skillShortcuts: unknown[] }).skillShortcuts).toEqual([]);
     }),
   );
 
@@ -62,6 +63,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Scripts",
           workspaceRoot: "/tmp/scripts",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -94,6 +96,51 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
     }),
   );
 
+  it.effect("propagates ordered skill shortcuts in project.meta.update payload", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const readModel = yield* projectEvent(createEmptyReadModel(now), {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-shortcuts"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-shortcuts"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-shortcuts"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-shortcuts"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-shortcuts"),
+          title: "Shortcuts",
+          workspaceRoot: "/tmp/shortcuts",
+          defaultModelSelection: null,
+          skillShortcuts: [],
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-project-update-shortcuts"),
+          projectId: asProjectId("project-shortcuts"),
+          skillShortcuts: ["review", "deploy"],
+        },
+        readModel,
+      });
+
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("project.meta-updated");
+      expect((event.payload as { skillShortcuts?: unknown[] }).skillShortcuts).toEqual([
+        "review",
+        "deploy",
+      ]);
+    }),
+  );
+
   it.effect("propagates a project favicon path in project.meta.update", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
@@ -113,6 +160,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Favicon",
           workspaceRoot: "/tmp/favicon",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -155,6 +203,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -201,6 +250,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "First",
           workspaceRoot: "/tmp/project-first",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -222,6 +272,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Second",
           workspaceRoot: "/tmp/project-second",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -266,6 +317,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -363,6 +415,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -441,6 +494,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
+          skillShortcuts: [],
           scripts: [],
           createdAt: now,
           updatedAt: now,
