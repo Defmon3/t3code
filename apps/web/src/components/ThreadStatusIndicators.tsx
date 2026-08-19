@@ -3,6 +3,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import { resolveThreadPr, type ThreadPr } from "@t3tools/client-runtime/state/thread-settled";
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
@@ -35,7 +36,7 @@ export interface TerminalStatusIndicator {
   pulse: boolean;
 }
 
-export type ThreadPr = VcsStatusResult["pr"];
+export { resolveThreadPr, type ThreadPr };
 
 export function settledPrHoverColorClass(state: NonNullable<ThreadPr>["state"]): string {
   switch (state) {
@@ -110,22 +111,6 @@ export function PrStatusTooltipContent({ status }: { status: PrStatusIndicator }
       <span className="min-w-0 truncate pl-2">{status.tooltipTitle}</span>
     </span>
   );
-}
-
-export function resolveThreadPr(input: {
-  threadBranch: string | null;
-  gitStatus: VcsStatusResult | null;
-}): ThreadPr | null {
-  const { threadBranch, gitStatus } = input;
-  if (gitStatus === null) {
-    return null;
-  }
-
-  if (threadBranch === null || gitStatus.refName !== threadBranch) {
-    return null;
-  }
-
-  return gitStatus.pr ?? null;
 }
 
 /**
@@ -203,11 +188,18 @@ export function setThreadChangeRequestSnapshot(
  */
 export function nextThreadChangeRequestSnapshot(input: {
   threadBranch: string | null;
+  threadCreatedAt?: string | null;
   gitStatus: VcsStatusResult | null;
   snapshot: ThreadChangeRequestSnapshot | null | undefined;
   retainTerminalOnBranchMismatch: boolean;
 }): ThreadChangeRequestSnapshot | null | undefined {
-  const { threadBranch, gitStatus, snapshot, retainTerminalOnBranchMismatch } = input;
+  const {
+    threadBranch,
+    threadCreatedAt = null,
+    gitStatus,
+    snapshot,
+    retainTerminalOnBranchMismatch,
+  } = input;
   if (gitStatus === null) {
     return undefined;
   }
@@ -221,7 +213,11 @@ export function nextThreadChangeRequestSnapshot(input: {
       ? undefined
       : null;
   }
-  if (gitStatus.pr == null) {
+  const pr = resolveThreadPr({ threadBranch, threadCreatedAt, gitStatus });
+  if (pr == null) {
+    if (gitStatus.pr != null) {
+      return null;
+    }
     if (
       retainTerminalOnBranchMismatch &&
       snapshot != null &&
@@ -233,7 +229,7 @@ export function nextThreadChangeRequestSnapshot(input: {
   }
   return {
     branch: threadBranch,
-    pr: gitStatus.pr,
+    pr,
     sourceControlProvider: gitStatus.sourceControlProvider,
   };
 }
@@ -247,18 +243,24 @@ export function nextThreadChangeRequestSnapshot(input: {
  */
 export function resolveDisplayedThreadPr(input: {
   threadBranch: string | null;
+  threadCreatedAt?: string | null;
   gitStatus: VcsStatusResult | null;
   snapshot: ThreadChangeRequestSnapshot | null | undefined;
   retainTerminalOnBranchMismatch: boolean;
 }): ThreadPr | null {
-  const { threadBranch, gitStatus, snapshot, retainTerminalOnBranchMismatch } = input;
-  if (
-    threadBranch !== null &&
-    gitStatus !== null &&
-    gitStatus.refName === threadBranch &&
-    gitStatus.pr != null
-  ) {
-    return gitStatus.pr;
+  const {
+    threadBranch,
+    threadCreatedAt = null,
+    gitStatus,
+    snapshot,
+    retainTerminalOnBranchMismatch,
+  } = input;
+  const pr = resolveThreadPr({ threadBranch, threadCreatedAt, gitStatus });
+  if (pr != null) {
+    return pr;
+  }
+  if (gitStatus?.pr != null && gitStatus.refName === threadBranch) {
+    return null;
   }
 
   if (
@@ -275,18 +277,24 @@ export function resolveDisplayedThreadPr(input: {
 
 export function resolveDisplayedThreadPrProvider(input: {
   threadBranch: string | null;
+  threadCreatedAt?: string | null;
   gitStatus: VcsStatusResult | null;
   snapshot: ThreadChangeRequestSnapshot | null | undefined;
   retainTerminalOnBranchMismatch: boolean;
 }): VcsStatusResult["sourceControlProvider"] | undefined {
-  const { threadBranch, gitStatus, snapshot, retainTerminalOnBranchMismatch } = input;
-  if (
-    threadBranch !== null &&
-    gitStatus !== null &&
-    gitStatus.refName === threadBranch &&
-    gitStatus.pr != null
-  ) {
-    return gitStatus.sourceControlProvider;
+  const {
+    threadBranch,
+    threadCreatedAt = null,
+    gitStatus,
+    snapshot,
+    retainTerminalOnBranchMismatch,
+  } = input;
+  const pr = resolveThreadPr({ threadBranch, threadCreatedAt, gitStatus });
+  if (pr != null) {
+    return gitStatus?.sourceControlProvider;
+  }
+  if (gitStatus?.pr != null && gitStatus.refName === threadBranch) {
+    return undefined;
   }
 
   if (
@@ -300,7 +308,6 @@ export function resolveDisplayedThreadPrProvider(input: {
 
   return undefined;
 }
-
 export function terminalStatusFromRunningIds(
   runningTerminalIds: ReadonlyArray<string>,
 ): TerminalStatusIndicator | null {
@@ -427,6 +434,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
   );
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
     gitStatus: gitStatus.data,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
