@@ -1,14 +1,3 @@
-Set-PSReadLineOption: C:\Users\defmon3\Documents\PowerShell\Microsoft.PowerShell_profile.ps1:104
-Line |
- 104 |  Set-PSReadLineOption -PredictionSource HistoryAndPlugin
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | The predictive suggestion feature cannot be enabled because the console output doesn't support virtual terminal
-     | processing or it's redirected.
-Set-PSReadLineOption: C:\Users\defmon3\Documents\PowerShell\Microsoft.PowerShell_profile.ps1:105
-Line |
- 105 |  Set-PSReadLineOption -PredictionViewStyle ListView
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | The handle is invalid.
 import type { IssueReaction, IssueReactionContent } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import * as Exit from "effect/Exit";
