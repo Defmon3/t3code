@@ -146,6 +146,7 @@ const projectCreatedEvent = (input: {
     workspaceRoot: `/tmp/${input.slug}`,
     defaultModelSelection: null,
     scripts: [],
+    skillShortcuts: [],
     createdAt: input.occurredAt,
     updatedAt: input.occurredAt,
   },
