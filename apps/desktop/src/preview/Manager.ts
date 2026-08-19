@@ -23,8 +23,13 @@ import type {
   PreviewAutomationEvaluateInput,
   PreviewAutomationPressInput,
   PreviewAutomationNetworkEntry,
+  PreviewAutomationObservationRead,
+  PreviewAutomationObservationStatus,
+  PreviewAutomationObservationStopResult,
+  PreviewAutomationObserveStopInput,
   PreviewAutomationScrollInput,
   PreviewAutomationSnapshot,
+  PreviewAutomationSnapshotInput,
   PreviewAutomationStatus,
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
@@ -65,6 +70,13 @@ import {
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
 import { playwrightInjectedRuntimeInstallExpression } from "./PlaywrightInjectedRuntime.ts";
 import { makePreviewAutomationKeySequence } from "./PreviewKeyboard.ts";
+import {
+  capturePreviewObservationEvent,
+  makeSanitizedHar,
+  readPreviewObservation,
+  startPreviewObservation,
+  type PreviewObservationState,
+} from "./PreviewObservation.ts";
 import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./FaviconCapture.ts";
 
 export type PreviewNavStatus =
@@ -508,6 +520,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     ReadonlyMap<number, BrowserControlSession>
   >(new Map());
   const diagnosticsRef = yield* Ref.make<ReadonlyMap<number, BrowserDiagnostics>>(new Map());
+  const observationsRef = yield* Ref.make<ReadonlyMap<string, PreviewObservationState>>(new Map());
   const expectedAgentInputsRef = yield* Ref.make<
     ReadonlyMap<string, ReadonlyArray<ExpectedAgentInput>>
   >(new Map());
@@ -842,6 +855,23 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     params: Record<string, unknown>,
   ) {
     const timestamp = yield* currentIso;
+    const observationTabId = yield* tabIdForWebContents(webContentsId);
+    if (observationTabId) {
+      yield* Ref.update(observationsRef, (observations) => {
+        const observation = observations.get(observationTabId);
+        if (!observation) return observations;
+        const nextObservation = capturePreviewObservationEvent(
+          observation,
+          method,
+          params,
+          timestamp,
+        );
+        if (nextObservation === observation) return observations;
+        return replaceMap(observations, (copy) => {
+          copy.set(observationTabId, nextObservation);
+        });
+      });
+    }
     yield* Ref.update(diagnosticsRef, (allDiagnostics) => {
       const current = allDiagnostics.get(webContentsId);
       if (!current) return allDiagnostics;
@@ -1812,9 +1842,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         cancelPickElement(tabId),
         closePictureInPicture(tabId),
         stopFrameCapture(tabId, "recording"),
+        Ref.update(observationsRef, (observations) =>
+          replaceMap(observations, (copy) => {
+            copy.delete(tabId);
+          }),
+        ),
       ],
       {
-        concurrency: 3,
+        concurrency: 4,
         discard: true,
       },
     );
@@ -3063,8 +3098,124 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         };
   });
 
+  const automationObserveStart = Effect.fn("PreviewManager.automationObserveStart")(function* (
+    tabId: string,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    yield* ensureControlSession(wc);
+    const startedAt = yield* currentIso;
+    yield* Ref.update(observationsRef, (observations) =>
+      replaceMap(observations, (copy) => {
+        copy.set(tabId, startPreviewObservation(startedAt));
+      }),
+    );
+    return { tabId, observing: true, cursor: 0, startedAt };
+  });
+
+  const automationObserveRead = Effect.fn("PreviewManager.automationObserveRead")(function* (
+    tabId: string,
+  ) {
+    yield* requireWebContents(tabId);
+    return yield* Ref.modify(observationsRef, (observations) => {
+      const observation = observations.get(tabId);
+      if (!observation) {
+        return [
+          {
+            tabId,
+            observing: false,
+            cursor: 0,
+            startedAt: null,
+            droppedEvents: 0,
+            events: [],
+          },
+          observations,
+        ];
+      }
+      const [result, next] = readPreviewObservation(tabId, observation);
+      return [
+        result,
+        replaceMap(observations, (copy) => {
+          copy.set(tabId, next);
+        }),
+      ];
+    });
+  });
+
+  const automationObserveStop = Effect.fn("PreviewManager.automationObserveStop")(function* (
+    tabId: string,
+    input: PreviewAutomationObserveStopInput,
+  ) {
+    yield* requireWebContents(tabId);
+    const observation = yield* Ref.modify(observationsRef, (observations) => [
+      observations.get(tabId),
+      replaceMap(observations, (copy) => {
+        copy.delete(tabId);
+      }),
+    ]);
+    if (!observation) {
+      return { tabId, observing: false, cursor: 0, startedAt: null };
+    }
+    if (!input.saveHar) {
+      return {
+        tabId,
+        observing: false,
+        cursor: observation.nextCursor - 1,
+        startedAt: observation.startedAt,
+      };
+    }
+    const [createdAt, millis] = yield* Effect.all([currentIso, currentMillis]);
+    const id = `browser-observation-${millis.toString(36)}`;
+    const artifactPath = path.join(resolvedArtifactDirectory, `${id}.har`);
+    const encodedHar = yield* encodeJson(
+      { operation: "automationObserveStop.encodeHar", tabId },
+      makeSanitizedHar(observation),
+    );
+    const data = new TextEncoder().encode(encodedHar);
+    yield* fileSystem.makeDirectory(resolvedArtifactDirectory, { recursive: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PreviewOperationError({
+            operation: "automationObserveStop.makeDirectory",
+            tabId,
+            artifactPath,
+            cause,
+          }),
+      ),
+    );
+    yield* fileSystem.writeFile(artifactPath, data).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PreviewOperationError({
+            operation: "automationObserveStop.writeFile",
+            tabId,
+            artifactPath,
+            cause,
+          }),
+      ),
+    );
+    return {
+      tabId,
+      observing: false,
+      cursor: observation.nextCursor - 1,
+      startedAt: observation.startedAt,
+      artifact: {
+        id,
+        tabId,
+        path: artifactPath,
+        mimeType: "application/har+json" as const,
+        sizeBytes: data.byteLength,
+        createdAt,
+      },
+    };
+  });
+
   const captureAutomationSnapshot = Effect.fn("PreviewManager.captureAutomationSnapshot")(
-    function* (tabId: string, wc: Electron.WebContents, send: SendCommand) {
+    function* (
+      tabId: string,
+      wc: Electron.WebContents,
+      send: SendCommand,
+      input: PreviewAutomationSnapshotInput,
+    ) {
       yield* Effect.all([send("Runtime.enable"), send("Accessibility.enable")], {
         concurrency: 2,
         discard: true,
@@ -3131,6 +3282,62 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         })()`,
         true,
       );
+      const highlight = input.highlight
+        ? yield* Effect.gen(function* () {
+            yield* ensurePlaywrightInjected(tabId, send);
+            const locatorJson = yield* encodeJson(
+              { operation: "automationSnapshot.encodeHighlightLocator", tabId },
+              input.highlight!.locator,
+            );
+            const bounds = yield* evaluateWithDebugger<
+              | {
+                  x: number;
+                  y: number;
+                  width: number;
+                  height: number;
+                  viewportWidth: number;
+                  viewportHeight: number;
+                }
+              | { invalidSelector: true; message: string }
+              | { notFound: true }
+            >(
+              tabId,
+              send,
+              `(() => {
+                try {
+                  const injected = globalThis.__t3PlaywrightInjected;
+                  const parsed = injected.parseSelector(${locatorJson});
+                  const element = injected.querySelector(parsed, document, true);
+                  if (!element || !injected.elementState(element, "visible").matches) return { notFound: true };
+                  const rect = element.getBoundingClientRect();
+                  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+                } catch (error) {
+                  return { invalidSelector: true, message: String(error) };
+                }
+              })()`,
+              true,
+            );
+            if ("invalidSelector" in bounds) {
+              return yield* new PreviewAutomationInvalidSelectorError({
+                operation: "snapshot",
+                tabId,
+                selectorKind: "locator",
+                selectorLength: input.highlight!.locator.length,
+                reasonLength: bounds.message.length,
+                cause: bounds,
+              });
+            }
+            if ("notFound" in bounds) {
+              return yield* new PreviewAutomationTargetNotFoundError({
+                operation: "snapshot",
+                tabId,
+                selectorKind: "locator",
+                selectorLength: input.highlight!.locator.length,
+              });
+            }
+            return bounds;
+          })
+        : null;
       const [accessibility, sourceImage, diagnostics, timelines] = yield* Effect.all([
         send("Accessibility.getFullAXTree"),
         attemptPromise(
@@ -3150,6 +3357,65 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           ? sourceImage.resize({ width: MAX_SCREENSHOT_WIDTH })
           : sourceImage;
       const size = image.getSize();
+      const screenshotData = image.toPNG().toString("base64");
+      const annotatedData = highlight
+        ? yield* Effect.gen(function* () {
+            const imageJson = yield* encodeJson(
+              { operation: "automationSnapshot.encodeScreenshot", tabId },
+              screenshotData,
+            );
+            const boundsJson = yield* encodeJson(
+              { operation: "automationSnapshot.encodeHighlightBounds", tabId },
+              highlight,
+            );
+            const labelJson = yield* encodeJson(
+              { operation: "automationSnapshot.encodeHighlightLabel", tabId },
+              input.highlight!.label,
+            );
+            return yield* evaluateWithDebugger<string>(
+              tabId,
+              send,
+              `(async () => {
+                const source = atob(${imageJson});
+                const sourceBytes = Uint8Array.from(source, (character) => character.charCodeAt(0));
+                const bitmap = await createImageBitmap(new Blob([sourceBytes], { type: "image/png" }));
+                const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+                const context = canvas.getContext("2d");
+                context.drawImage(bitmap, 0, 0);
+                const bounds = ${boundsJson};
+                const scaleX = bitmap.width / bounds.viewportWidth;
+                const scaleY = bitmap.height / bounds.viewportHeight;
+                const x = Math.max(0, bounds.x * scaleX);
+                const y = Math.max(0, bounds.y * scaleY);
+                const width = Math.min(bitmap.width - x, bounds.width * scaleX);
+                const height = Math.min(bitmap.height - y, bounds.height * scaleY);
+                const lineWidth = Math.max(3, Math.round(Math.min(scaleX, scaleY) * 3));
+                context.strokeStyle = "#ff2d8d";
+                context.lineWidth = lineWidth;
+                context.strokeRect(x, y, width, height);
+                const label = ${labelJson};
+                const fontSize = Math.max(14, Math.round(16 * Math.min(scaleX, scaleY)));
+                context.font = "600 " + fontSize + "px system-ui, sans-serif";
+                const padding = Math.max(5, Math.round(fontSize * 0.4));
+                const labelWidth = Math.min(bitmap.width, context.measureText(label).width + padding * 2);
+                const labelHeight = fontSize + padding * 2;
+                const labelY = y >= labelHeight ? y - labelHeight : Math.min(bitmap.height - labelHeight, y + height);
+                context.fillStyle = "#ff2d8d";
+                context.fillRect(x, labelY, labelWidth, labelHeight);
+                context.fillStyle = "#ffffff";
+                context.fillText(label, x + padding, labelY + padding + fontSize * 0.8);
+                const blob = await canvas.convertToBlob({ type: "image/png" });
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                let binary = "";
+                for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+                  binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+                }
+                return btoa(binary);
+              })()`,
+              true,
+            );
+          })
+        : screenshotData;
       const browserDiagnostics = diagnostics.get(wc.id);
       return {
         ...page,
@@ -3159,7 +3425,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         actionTimeline: [...(timelines.get(tabId) ?? [])],
         screenshot: {
           mimeType: "image/png" as const,
-          data: image.toPNG().toString("base64"),
+          data: annotatedData,
           width: size.width,
           height: size.height,
         },
@@ -3169,10 +3435,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
 
   const automationSnapshot = Effect.fn("PreviewManager.automationSnapshot")(function* (
     tabId: string,
+    input: PreviewAutomationSnapshotInput,
   ) {
     const wc = yield* requireWebContents(tabId);
     return yield* withControlSession(tabId, wc, "snapshot", (send) =>
-      captureAutomationSnapshot(tabId, wc, send),
+      captureAutomationSnapshot(tabId, wc, send, input),
     );
   });
 
@@ -3722,6 +3989,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     automationPress,
     automationScroll,
     automationSnapshot,
+    automationObserveStart,
+    automationObserveRead,
+    automationObserveStop,
     automationStatus,
     automationType,
     automationWaitFor,
@@ -4092,7 +4362,18 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<PreviewAutomationStatus, PreviewManagerError>;
     readonly automationSnapshot: (
       tabId: string,
+      input: PreviewAutomationSnapshotInput,
     ) => Effect.Effect<PreviewAutomationSnapshot, PreviewManagerError>;
+    readonly automationObserveStart: (
+      tabId: string,
+    ) => Effect.Effect<PreviewAutomationObservationStatus, PreviewManagerError>;
+    readonly automationObserveRead: (
+      tabId: string,
+    ) => Effect.Effect<PreviewAutomationObservationRead, PreviewManagerError>;
+    readonly automationObserveStop: (
+      tabId: string,
+      input: PreviewAutomationObserveStopInput,
+    ) => Effect.Effect<PreviewAutomationObservationStopResult, PreviewManagerError>;
     readonly automationClick: (
       tabId: string,
       input: PreviewAutomationClickInput,
@@ -4200,6 +4481,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     saveRecording: operations.saveRecording,
     automationStatus: operations.automationStatus,
     automationSnapshot: operations.automationSnapshot,
+    automationObserveStart: operations.automationObserveStart,
+    automationObserveRead: operations.automationObserveRead,
+    automationObserveStop: operations.automationObserveStop,
     automationClick: operations.automationClick,
     automationType: operations.automationType,
     automationPress: operations.automationPress,
