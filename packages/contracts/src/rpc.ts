@@ -72,6 +72,9 @@ import {
   IssueAssigneeCandidateList,
   IssueAssigneesInput,
   IssueCommentInput,
+  IssueCommentUpdateInput,
+  IssueCommentsPageInput,
+  IssueCommentsPageResult,
   IssueCreateInput,
   IssueCreateResult,
   IssueDetail,
@@ -81,6 +84,7 @@ import {
   IssueListInput,
   IssueListResult,
   IssueOperationError,
+  IssueReactionInput,
   IssueRef,
   IssueRepositoryRef,
   IssueTemplateList,
@@ -322,8 +326,11 @@ export const WS_METHODS = {
   issuesList: "issues.list",
   issuesDetail: "issues.detail",
   issuesActivity: "issues.activity",
+  issuesCommentsPage: "issues.commentsPage",
   issuesRunAction: "issues.runAction",
   issuesComment: "issues.comment",
+  issuesUpdateComment: "issues.updateComment",
+  issuesSetReaction: "issues.setReaction",
   issuesCreate: "issues.create",
   issuesUpdate: "issues.update",
   issuesSetLabels: "issues.setLabels",
@@ -654,6 +661,12 @@ export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
   error: IssueRpcError,
 });
 
+export const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+  payload: IssueCommentsPageInput,
+  success: IssueCommentsPageResult,
+  error: IssueRpcError,
+});
+
 export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
   payload: IssueActionInput,
   success: Schema.Void,
@@ -662,6 +675,18 @@ export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
 
 export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
   payload: IssueCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
+  payload: IssueCommentUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
+  payload: IssueReactionInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -1156,8 +1181,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesListRpc,
   WsIssuesDetailRpc,
   WsIssuesActivityRpc,
+  WsIssuesCommentsPageRpc,
   WsIssuesRunActionRpc,
   WsIssuesCommentRpc,
+  WsIssuesUpdateCommentRpc,
+  WsIssuesSetReactionRpc,
   WsIssuesCreateRpc,
   WsIssuesUpdateRpc,
   WsIssuesSetLabelsRpc,
