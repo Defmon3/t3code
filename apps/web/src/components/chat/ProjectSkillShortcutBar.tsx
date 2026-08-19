@@ -9,7 +9,7 @@ import {
 } from "@dnd-kit/core";
 import {
   arrayMove,
-  horizontalListSortingStrategy,
+  rectSortingStrategy,
   sortableKeyboardCoordinates,
   SortableContext,
   useSortable,
@@ -22,7 +22,7 @@ import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 
 export const projectSkillShortcutBarClassName =
-  "flex h-9 w-full gap-1 overflow-x-auto overflow-y-hidden rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-0.5 sm:px-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+  "flex min-h-9 w-full flex-wrap content-center gap-1 overflow-hidden rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
 
 export function normalizeProjectSkillShortcut(value: string): string | null {
   const trimmed = value.trim();
@@ -157,7 +157,7 @@ export function ProjectSkillShortcutBar(props: {
   return (
     <div className={projectSkillShortcutBarClassName} aria-label="Project quick slots">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <SortableContext items={shortcuts} strategy={horizontalListSortingStrategy}>
+        <SortableContext items={shortcuts} strategy={rectSortingStrategy}>
           {shortcuts.map((shortcut) => (
             <SortableShortcut
               key={shortcut}
