@@ -16,6 +16,7 @@ import { resolveStorage } from "./lib/storage";
 
 export const RIGHT_PANEL_KINDS = [
   "diff",
+  "git-history",
   "files",
   "file",
   "preview",
@@ -37,6 +38,7 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
+  | { id: "git-history"; kind: "git-history" }
   | { id: "files"; kind: "files" }
   | {
       id: `file:${string}`;
@@ -132,6 +134,8 @@ const singletonSurface = (
   switch (kind) {
     case "diff":
       return { id: "diff", kind };
+    case "git-history":
+      return { id: "git-history", kind };
     case "files":
       return { id: "files", kind };
     case "agents":
