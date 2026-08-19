@@ -124,6 +124,7 @@ import { buildTemporaryWorktreeBranchName, normalizeWorktreeBranchName } from "@
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
+  issueSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
@@ -148,10 +149,12 @@ import {
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
 import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
+import { IssueDetailPanel } from "./issue/IssueDetailPanel";
+import { IssuesPanel } from "./issue/IssuesPanel";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import {
   deriveAgentPanelModel,
@@ -1645,6 +1648,15 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activePullRequestSurfaceId],
   );
+  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
+  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
+    const id = issueSurfaceId(status);
+    setIssueTabStatuses((current) =>
+      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
+        ? current
+        : { ...current, [id]: status },
+    );
+  }, []);
   const activeFileSurface =
     activeRightPanelSurface?.kind === "file" ? activeRightPanelSurface : null;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
@@ -2044,6 +2056,7 @@ function ChatViewContent(props: ChatViewProps) {
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const supportsGitHistory = hasGitHistoryCapability(serverConfig?.environment.capabilities);
+  const supportsIssues = serverConfig?.environment.capabilities.issues === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -3378,6 +3391,22 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeProject, activeThreadRef, supportsPullRequests, threadRepository],
   );
+  /**
+   * An issue opened as its own tab in this thread's panel, referenced by a pull request already
+   * open beside it. Only this view knows which thread's panel that is, which is why the panel is
+   * told rather than asking.
+   */
+  const openLinkedIssue = useCallback(
+    (link: { repository: string; number: number }) => {
+      if (!supportsIssues || !activeThreadRef || !activeProject) return;
+      useRightPanelStore.getState().openIssue(activeThreadRef, {
+        projectId: activeProject.id,
+        repository: link.repository,
+        number: link.number,
+      });
+    },
+    [activeProject, activeThreadRef, supportsIssues],
+  );
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
     if (previewPanelOpen) {
@@ -4214,6 +4243,21 @@ function ChatViewContent(props: ChatViewProps) {
         : { state: activeThreadPrState, updatedAt: activeThreadPrUpdatedAt },
     [activeThreadPrState, activeThreadPrUpdatedAt],
   );
+  // Which issue is not something the chooser can know, so it opens the browser and the reader
+  // picks inside it — in the same tab, rather than as one more of them.
+  const addIssueSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().openIssues(activeThreadRef);
+  }, [activeThreadRef]);
+  const selectIssueInPanel = useCallback(
+    (target: { projectId: string; repository: string; number: number } | null) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().selectIssueInPanel(activeThreadRef, target);
+    },
+    [activeThreadRef],
+  );
+  const issueSurfaceAvailable =
+    supportsIssues && activeProject !== null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -6285,6 +6329,43 @@ function ChatViewContent(props: ChatViewProps) {
         chromeVariant="collapse"
         composerDraftTarget={composerDraftTarget}
         onStateChange={handlePullRequestTabStatusChange}
+        onOpenLinkedIssue={openLinkedIssue}
+      />
+    ) : activeRightPanelSurface?.kind === "issue" && activeProjectRef ? (
+      // Same as the pull request above: the surface tab's own X owns closing. What is different
+      // is where a hand-off lands — "Solve this issue", Ask, Explain and Add to composer write
+      // into the thread this panel is open beside, so reading an issue and acting on it stay one
+      // conversation instead of stranding the reader in a thread they did not ask for.
+      <IssueDetailPanel
+        key={`${activeRightPanelSurface.repository}#${activeRightPanelSurface.number}`}
+        environmentId={activeThread.environmentId}
+        reference={{
+          projectId: activeRightPanelSurface.projectId as ProjectId,
+          repository: activeRightPanelSurface.repository,
+          number: activeRightPanelSurface.number,
+        }}
+        context="thread"
+        chromeVariant="full"
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
+        onOpenLinkedPullRequest={(link) => openThreadPullRequest(link.number)}
+      />
+    ) : activeRightPanelSurface?.kind === "issues" && activeProject && activeProjectRef ? (
+      <IssuesPanel
+        environmentId={activeThread.environmentId}
+        projectId={activeProject.id}
+        selected={activeRightPanelSurface.selected}
+        onSelect={selectIssueInPanel}
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
       />
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
@@ -6791,6 +6872,7 @@ function ChatViewContent(props: ChatViewProps) {
           onAddGitHistory={addGitHistorySurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
+          onAddIssue={addIssueSurface}
           onAddAgents={addAgentsSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
@@ -6798,8 +6880,10 @@ function ChatViewContent(props: ChatViewProps) {
           gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
+          issueAvailable={issueSurfaceAvailable}
           agentsAvailable
           pullRequestStatuses={pullRequestTabStatuses}
+          issueStatuses={issueTabStatuses}
           liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
@@ -6833,6 +6917,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddGitHistory={addGitHistorySurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
+            onAddIssue={addIssueSurface}
             onAddAgents={addAgentsSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
@@ -6840,8 +6925,10 @@ function ChatViewContent(props: ChatViewProps) {
             gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
+            issueAvailable={issueSurfaceAvailable}
             agentsAvailable
             pullRequestStatuses={pullRequestTabStatuses}
+            issueStatuses={issueTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}

@@ -1576,6 +1576,7 @@ function PullRequestsRouteView() {
             onAddFiles={() => undefined}
             onAddGitHistory={() => undefined}
             onAddPullRequest={() => undefined}
+            onAddIssue={() => undefined}
             onAddAgents={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
@@ -1583,6 +1584,7 @@ function PullRequestsRouteView() {
             filesAvailable={false}
             gitHistoryAvailable={false}
             pullRequestAvailable={false}
+            issueAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
@@ -1605,6 +1607,20 @@ function PullRequestsRouteView() {
                 reviewingQuery.refresh();
               }}
               onStateChange={handlePullRequestTabStatusChange}
+              // This panel only holds pull requests, so a linked issue opens on the issues page
+              // rather than as a peer tab here — still inside T3 Code, which is the point.
+              onOpenLinkedIssue={(link) => {
+                void navigate({
+                  to: "/issues",
+                  search: {
+                    involvement: "all",
+                    state: "all",
+                    repository: link.repository,
+                    number: link.number,
+                    selectedProjectId: activePullRequestSurface.projectId as ProjectId,
+                  },
+                });
+              }}
               chromeVariant="collapse"
             />
           </RightPanelTabs>
