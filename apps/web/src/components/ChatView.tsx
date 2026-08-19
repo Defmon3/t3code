@@ -6714,6 +6714,15 @@ function ChatViewContent(props: ChatViewProps) {
                                       ),
                                     })
                                   }
+                                  onInsert={(shortcut) => {
+                                    const text = resolveProjectSkillShortcutText(
+                                      shortcut,
+                                      selectedProvider,
+                                    );
+                                    composerRef.current?.insertTextAtEnd(text, {
+                                      ensureLeadingBoundary: true,
+                                    });
+                                  }}
                                 />
                               ) : null
                             }

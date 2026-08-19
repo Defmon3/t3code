@@ -16,13 +16,13 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { PlusIcon } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 
 export const projectSkillShortcutBarClassName =
-  "flex min-h-9 w-full flex-wrap content-center gap-1 overflow-hidden rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
+  "flex h-auto min-h-9 w-full flex-wrap items-center gap-1 overflow-visible rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
 
 export function normalizeProjectSkillShortcut(value: string): string | null {
   const trimmed = value.trim();
@@ -35,6 +35,10 @@ export function resolveProjectSkillShortcutText(shortcut: string, provider: stri
   if (provider === "claudeAgent") return `/${shortcut.slice(1)}`;
   if (provider === "codex") return `$${shortcut.slice(1)}`;
   return shortcut;
+}
+
+export function resolveProjectSkillShortcutActivation(altKey: boolean): "insert" | "send" {
+  return altKey ? "insert" : "send";
 }
 
 export function addProjectSkillShortcut(shortcuts: readonly string[], value: string): string[] {
@@ -68,6 +72,7 @@ function shortcutsEqual(left: readonly string[], right: readonly string[]): bool
 function SortableShortcut(props: {
   shortcut: string;
   onInvoke: (shortcut: string) => void;
+  onInsert: (shortcut: string) => void;
   onRemove: (shortcut: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -81,8 +86,15 @@ function SortableShortcut(props: {
         "shrink-0 whitespace-nowrap rounded-md border border-border/70 bg-background px-2 py-1 text-xs font-medium hover:bg-accent",
         isDragging && "opacity-50",
       )}
+      title="Click to send; Alt-click to add to composer"
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      onClick={() => props.onInvoke(props.shortcut)}
+      onClick={(event: MouseEvent<HTMLButtonElement>) => {
+        if (resolveProjectSkillShortcutActivation(event.altKey) === "insert") {
+          props.onInsert(props.shortcut);
+          return;
+        }
+        props.onInvoke(props.shortcut);
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         const localApi = readLocalApi();
@@ -105,6 +117,7 @@ export function ProjectSkillShortcutBar(props: {
   shortcuts: readonly string[];
   onChange: (shortcuts: string[]) => void;
   onInvoke: (shortcut: string) => void;
+  onInsert: (shortcut: string) => void;
 }) {
   const [shortcuts, setShortcuts] = useState(() => [...props.shortcuts]);
   const shortcutsRef = useRef(shortcuts);
@@ -163,6 +176,7 @@ export function ProjectSkillShortcutBar(props: {
               key={shortcut}
               shortcut={shortcut}
               onInvoke={props.onInvoke}
+              onInsert={props.onInsert}
               onRemove={(value) =>
                 updateShortcuts((current) => removeProjectSkillShortcut(current, value))
               }

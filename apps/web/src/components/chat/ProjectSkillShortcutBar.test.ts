@@ -6,15 +6,18 @@ import {
   projectSkillShortcutBarClassName,
   removeProjectSkillShortcut,
   reorderProjectSkillShortcuts,
+  resolveProjectSkillShortcutActivation,
   resolveProjectSkillShortcutText,
 } from "./ProjectSkillShortcutBar";
 
 describe("project skill shortcuts", () => {
   it("defines a wrapping shortcut layout without scrollbars", () => {
     expect(projectSkillShortcutBarClassName).toContain("flex-wrap");
+    expect(projectSkillShortcutBarClassName).toContain("h-auto");
     expect(projectSkillShortcutBarClassName).toContain("min-h-9");
-    expect(projectSkillShortcutBarClassName).toContain("overflow-hidden");
+    expect(projectSkillShortcutBarClassName).toContain("overflow-visible");
     expect(projectSkillShortcutBarClassName).not.toContain("overflow-x-auto");
+    expect(projectSkillShortcutBarClassName).not.toContain("overflow-hidden");
     expect(projectSkillShortcutBarClassName).not.toContain("scrollbar");
   });
 
@@ -36,6 +39,11 @@ describe("project skill shortcuts", () => {
     expect(resolveProjectSkillShortcutText("/review", "cursor")).toBe("/review");
     expect(resolveProjectSkillShortcutText("/", "codex")).toBe("/");
     expect(resolveProjectSkillShortcutText("$", "claudeAgent")).toBe("$");
+  });
+
+  it("inserts Alt-clicked shortcuts and sends ordinary clicks", () => {
+    expect(resolveProjectSkillShortcutActivation(true)).toBe("insert");
+    expect(resolveProjectSkillShortcutActivation(false)).toBe("send");
   });
 
   it("removes and reorders shortcuts as full ordered replacements", () => {
