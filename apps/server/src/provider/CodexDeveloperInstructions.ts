@@ -6,7 +6,17 @@ const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
 
-For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
+For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Prefer snapshot-provided locators over coordinates.
+
+Use this evidence loop for browser reproduction and verification:
+1. Call \`preview_snapshot\` and visually inspect its screenshot.
+2. Call \`preview_observe_start\` before navigation or reproduction to establish a clean console/network baseline.
+3. Click through the visible UI with the focused preview interaction tools.
+4. Call \`preview_snapshot\` again and visually inspect the resulting screenshot.
+5. Call \`preview_observe_read\` to inspect only the new console and network events.
+6. Call \`preview_observe_stop\`; set \`saveHar=true\` when a sanitized HAR is needed.
+
+Do not treat DOM, accessibility, or console output alone as visual proof. Use \`preview_snapshot.highlight\` when an exact visible element should be marked in the captured PNG.
 
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
 `;

@@ -43,6 +43,9 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
   ...PREVIEW_AUTOMATION_V1_OPERATIONS,
   "resize",
   "setColorScheme",
+  "observeStart",
+  "observeRead",
+  "observeStop",
 ] as const;
 
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
@@ -284,6 +287,22 @@ const Locator = TrimmedNonEmptyString.annotate({
   description:
     "Playwright selector, preferably role/text based, for example role=button[name='Send'] or text=Continue. Use snapshot first to inspect the page.",
 });
+
+export const PreviewAutomationSnapshotInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  highlight: Schema.optional(
+    Schema.Struct({
+      locator: Locator,
+      label: TrimmedNonEmptyString.check(Schema.isMaxLength(160)).annotate({
+        description: "Short label drawn beside the highlighted element in the captured PNG.",
+      }),
+    }),
+  ).annotate({
+    description:
+      "Optional element annotation applied to the PNG after capture without modifying the live page DOM.",
+  }),
+});
+export type PreviewAutomationSnapshotInput = typeof PreviewAutomationSnapshotInput.Type;
 
 const LegacySelector = TrimmedNonEmptyString.annotate({
   description:
@@ -545,6 +564,88 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   }),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
+
+const ObservationCursor = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+export const PreviewAutomationObserveStartInput = PreviewAutomationTabTargetInput;
+export type PreviewAutomationObserveStartInput = typeof PreviewAutomationObserveStartInput.Type;
+
+export const PreviewAutomationObserveReadInput = PreviewAutomationTabTargetInput;
+export type PreviewAutomationObserveReadInput = typeof PreviewAutomationObserveReadInput.Type;
+
+export const PreviewAutomationObserveStopInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  saveHar: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Save a sanitized HAR artifact containing the observed requests. Defaults to false.",
+    }),
+  ),
+});
+export type PreviewAutomationObserveStopInput = typeof PreviewAutomationObserveStopInput.Type;
+
+export const PreviewAutomationObservationEvent = Schema.Struct({
+  cursor: ObservationCursor,
+  kind: Schema.Literals([
+    "console",
+    "exception",
+    "log",
+    "request",
+    "response",
+    "loadingFailed",
+    "loadingFinished",
+  ]),
+  timestamp: Schema.String,
+  requestId: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+  method: Schema.optional(Schema.String),
+  resourceType: Schema.optional(Schema.String),
+  initiator: Schema.optional(Schema.Unknown),
+  level: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Number),
+  statusText: Schema.optional(Schema.String),
+  mimeType: Schema.optional(Schema.String),
+  protocol: Schema.optional(Schema.String),
+  failed: Schema.optional(Schema.Boolean),
+  canceled: Schema.optional(Schema.Boolean),
+  errorText: Schema.optional(Schema.String),
+  encodedDataLength: Schema.optional(Schema.Number),
+  durationMs: Schema.optional(Schema.Number),
+});
+export type PreviewAutomationObservationEvent = typeof PreviewAutomationObservationEvent.Type;
+
+export const PreviewAutomationObservationStatus = Schema.Struct({
+  tabId: PreviewTabId,
+  observing: Schema.Boolean,
+  cursor: ObservationCursor,
+  startedAt: Schema.NullOr(Schema.String),
+});
+export type PreviewAutomationObservationStatus = typeof PreviewAutomationObservationStatus.Type;
+
+export const PreviewAutomationObservationRead = Schema.Struct({
+  ...PreviewAutomationObservationStatus.fields,
+  droppedEvents: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  events: Schema.Array(PreviewAutomationObservationEvent),
+});
+export type PreviewAutomationObservationRead = typeof PreviewAutomationObservationRead.Type;
+
+export const PreviewAutomationHarArtifact = Schema.Struct({
+  id: Schema.String,
+  tabId: PreviewTabId,
+  path: Schema.String,
+  mimeType: Schema.Literal("application/har+json"),
+  sizeBytes: Schema.Int,
+  createdAt: Schema.String,
+});
+export type PreviewAutomationHarArtifact = typeof PreviewAutomationHarArtifact.Type;
+
+export const PreviewAutomationObservationStopResult = Schema.Struct({
+  ...PreviewAutomationObservationStatus.fields,
+  artifact: Schema.optional(PreviewAutomationHarArtifact),
+});
+export type PreviewAutomationObservationStopResult =
+  typeof PreviewAutomationObservationStopResult.Type;
 
 export const PreviewAutomationRecordingStatus = Schema.Struct({
   tabId: PreviewTabId,
