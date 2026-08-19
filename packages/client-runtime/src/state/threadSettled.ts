@@ -7,7 +7,7 @@ export type ThreadPr = VcsStatusResult["pr"];
 
 export function resolveThreadPr(input: {
   readonly threadBranch: string | null;
-  readonly threadCreatedAt: string | null;
+  readonly threadCreatedAt?: string | null;
   readonly gitStatus: Pick<VcsStatusResult, "refName" | "pr"> | null;
 }): ThreadPr | null {
   const { threadBranch, threadCreatedAt, gitStatus } = input;
@@ -15,19 +15,19 @@ export function resolveThreadPr(input: {
     return null;
   }
   const pr = gitStatus.pr;
-  const completedAtValue = pr?.completedAt;
+  const updatedAtValue = pr?.updatedAt;
   if (
     pr === null ||
     pr.state === "open" ||
     threadCreatedAt === null ||
-    completedAtValue === null ||
-    completedAtValue === undefined
+    updatedAtValue === null ||
+    updatedAtValue === undefined
   ) {
     return pr;
   }
   const createdAt = Date.parse(threadCreatedAt);
-  const completedAt = Date.parse(completedAtValue);
-  return Number.isNaN(createdAt) || Number.isNaN(completedAt) || completedAt >= createdAt
+  const updatedAt = Date.parse(updatedAtValue);
+  return Number.isNaN(createdAt) || Number.isNaN(updatedAt) || updatedAt >= createdAt
     ? pr
     : null;
 }
