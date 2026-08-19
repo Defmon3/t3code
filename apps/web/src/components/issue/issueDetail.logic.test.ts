@@ -6,11 +6,15 @@ import {
   buildAttachIssueContext,
   buildExplainIssueHandoff,
   buildIssueTimeline,
+  canEditIssueComment,
   buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
   describeIssueEvent,
   groupIssueTimelineConversations,
   issueHandoffReviewComments,
+  issueCommentEditId,
+  mergeEarlierIssueComments,
+  shouldRefreshIssueActivity,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
@@ -45,6 +49,79 @@ const TIMELINE_SOURCE: Pick<IssueDetailView, "createdAt" | "author" | "comments"
   comments: [comment()],
   events: [event()],
 };
+describe("issue activity refresh", () => {
+  const first = {
+    key: "project:acme/web#7",
+    updatedAt: "2026-08-13T13:00:00Z",
+  };
+
+  it("refreshes activity only after the same issue changes", () => {
+    expect(
+      shouldRefreshIssueActivity(first, {
+        ...first,
+        updatedAt: "2026-08-13T13:01:00Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not duplicate the first activity read or carry a revision across issues", () => {
+    expect(shouldRefreshIssueActivity(null, first)).toBe(false);
+    expect(shouldRefreshIssueActivity(first, first)).toBe(false);
+    expect(
+      shouldRefreshIssueActivity(first, {
+        key: "project:acme/web#8",
+        updatedAt: "2026-08-13T13:01:00Z",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("issue comment pages", () => {
+  it("prepends older comments once while keeping host order", () => {
+    expect(
+      mergeEarlierIssueComments(
+        [comment({ id: "c2", body: "updated" }), comment({ id: "c3", body: "third" })],
+        [comment({ id: "c1", body: "first" }), comment({ id: "c2", body: "old" })],
+      ).map(({ id, body }) => [id, body]),
+    ).toEqual([
+      ["c1", "first"],
+      ["c2", "updated"],
+      ["c3", "third"],
+    ]);
+  });
+});
+
+describe("issue comment editing", () => {
+  it("closes an editor when another issue reuses the comment id", () => {
+    const scope = { issue: "https://example.test/issues/7", id: "42" };
+
+    expect(issueCommentEditId(scope, "https://example.test/issues/7")).toBe("42");
+    expect(issueCommentEditId(scope, "https://example.test/issues/8")).toBeNull();
+  });
+
+  const detail = {
+    capabilities: { editComment: true },
+    viewer: "bilal",
+  } as Pick<IssueDetailView, "capabilities" | "viewer">;
+
+  it("allows only the signed-in author on a host that supports comment edits", () => {
+    expect(canEditIssueComment(detail, comment())).toBe(true);
+    expect(
+      canEditIssueComment(detail, comment({ author: { ...AUTHOR, login: "someone-else" } })),
+    ).toBe(false);
+  });
+
+  it("matches host logins without case and refuses missing identity or capability", () => {
+    expect(canEditIssueComment({ ...detail, viewer: "BiLaL" }, comment())).toBe(true);
+    expect(canEditIssueComment({ ...detail, viewer: undefined }, comment())).toBe(false);
+    expect(
+      canEditIssueComment(
+        { ...detail, capabilities: { ...detail.capabilities, editComment: false } },
+        comment(),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("issue events", () => {
   it("reads as a sentence whether or not the host named a subject", () => {
@@ -146,6 +223,24 @@ describe("issue timeline", () => {
       ["event", "created"],
       ["comments", "early-1", "early-2", "late-1", "late-2"],
       ["event", "closed"],
+    ]);
+  });
+
+  it("keeps a conversation identity when its display order reverses", () => {
+    const entries = buildIssueTimeline({
+      ...TIMELINE_SOURCE,
+      comments: [
+        comment({ id: "early", createdAt: "2026-07-03T00:00:00Z" }),
+        comment({ id: "late", createdAt: "2026-07-04T00:00:00Z" }),
+      ],
+      events: [],
+    }).filter((entry) => entry.kind === "comment");
+
+    expect(groupIssueTimelineConversations(entries)).toMatchObject([
+      { kind: "comments", key: "early" },
+    ]);
+    expect(groupIssueTimelineConversations(entries.toReversed())).toMatchObject([
+      { kind: "comments", key: "early" },
     ]);
   });
 });

@@ -149,6 +149,13 @@ export class BitbucketIssueApi extends Context.Service<
       readonly body: string;
     }) => Effect.Effect<void, BitbucketIssueApiError>;
 
+    readonly updateComment: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, BitbucketIssueApiError>;
+
     /**
      * Bitbucket's issue tracker takes one assignee, not a set: null clears it, and the first name
      * of a written set becomes it — the rest are dropped rather than making a write that would
@@ -308,7 +315,6 @@ export const make = Effect.gen(function* () {
         .request({
           method: "PUT",
           url: `${path}/issues/${input.number}`,
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           body: JSON.stringify(input.body),
         })
         .pipe(Effect.asVoid),
@@ -388,7 +394,6 @@ export const make = Effect.gen(function* () {
           .request({
             method: "POST",
             url: `${path}/issues`,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify({
               title: input.title,
               content: { raw: input.body },
@@ -435,7 +440,17 @@ export const make = Effect.gen(function* () {
           .request({
             method: "POST",
             url: `${path}/issues/${input.number}/comments`,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            body: JSON.stringify({ content: { raw: input.body } }),
+          })
+          .pipe(Effect.asVoid),
+      ),
+
+    updateComment: (input) =>
+      withRepository(input.repository, (path) =>
+        bitbucket
+          .request({
+            method: "PUT",
+            url: `${path}/issues/${input.number}/comments/${encodeURIComponent(input.commentId)}`,
             body: JSON.stringify({ content: { raw: input.body } }),
           })
           .pipe(Effect.asVoid),

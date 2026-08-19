@@ -21,7 +21,7 @@ import {
   Minimize2Icon,
   PlusIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { isMacPlatform } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
@@ -49,6 +49,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * A list written by hand, since a new issue has no reference for the candidate reads a picker
@@ -316,6 +317,11 @@ export function IssueCreateDialog({
   const [labels, setLabels] = useState("");
   const [assignees, setAssignees] = useState("");
   const [filing, setFiling] = useState(false);
+  /**
+   * The same "already filing" as `filing`, kept where a second press can read it. State is only
+   * true after a render, and two ⌘ Enters land inside one — which is two issues on the host.
+   */
+  const filingRef = useRef(false);
   const [expanded, setExpanded] = useState(false);
   const [createMore, setCreateMore] = useState(false);
   const create = useAtomCommand(issueEnvironment.create, { reportFailure: false });
@@ -359,11 +365,17 @@ export function IssueCreateDialog({
   // A host with no templates to report, and a read that failed, both leave the blank form — which
   // is what a repository with no templates offers anyway. Filing must never wait on the chooser.
   const offer = templatesQuery.data ?? {
+    capabilities: undefined,
     templates: [],
     contactLinks: [],
     blankIssuesEnabled: true,
     contributingGuidelinesUrl: undefined,
   };
+  // What the host takes on a new issue, which the offer is the only read that answers before the
+  // issue exists. A read that failed — and a server from before the offer carried it — leaves
+  // everything offered, exactly where this stood before the host could say: the host then refuses
+  // what it cannot do, and says why, which is better than a form nobody can reach.
+  const can = offer.capabilities ?? { create: true, labels: true, assignees: true };
   // Nothing to choose between is not a choice: a repository with no templates and nowhere else to
   // send a question opens straight onto the form, exactly as the host itself does.
   const hasChoice = offer.templates.length > 0 || offer.contactLinks.length > 0;
@@ -395,18 +407,34 @@ export function IssueCreateDialog({
     );
   };
 
-  // Closing puts the chooser back: the form is a step inside this dialog, and reopening it should
-  // start where the host's own composer starts.
+  // Closing throws the draft away with the chooser: a draft that was abandoned is not one this
+  // dialog keeps, and the next "New issue" is a new issue — on the chooser, on whatever project
+  // the page is scoped to by then, with nothing of the last one still in the boxes.
   const setOpen = (next: boolean) => {
-    if (!next) setChosen(null);
+    if (!next) {
+      setChosen(null);
+      setSelectedId(null);
+      resetDraft(undefined);
+    }
     onOpenChange(next);
   };
 
   const complete = issueTemplateAnswersComplete(fields, answers);
-  const canFile = selected !== undefined && trimmedTitle.length > 0 && complete && !filing;
+  /** Whether a draft is being written at all, which a host that files nothing never gets to. */
+  const composing = choice !== null && can.create;
+  // Nothing has been started on the chooser, so there is nothing to file from it: the Create
+  // button is absent there, but the keyboard reaches this from every step of the dialog.
+  const canFile =
+    selected !== undefined &&
+    can.create &&
+    choice !== null &&
+    trimmedTitle.length > 0 &&
+    complete &&
+    !filing;
 
   const submit = async () => {
-    if (selected === undefined || !canFile) return;
+    if (selected === undefined || !canFile || filingRef.current) return;
+    filingRef.current = true;
     setFiling(true);
     const result = await create({
       environmentId,
@@ -417,10 +445,13 @@ export function IssueCreateDialog({
         // A form is filed as the markdown its answers make, which is what the host would have
         // built from the same answers; a markdown template is filed as what the reader wrote.
         body: fields.length > 0 ? buildIssueTemplateBody(fields, answers) : body,
-        labels: parseList(labels),
-        assignees: parseList(assignees),
+        // Nothing the host does not take: a set it has no notion of is dropped here rather than
+        // sent and thrown away where nobody sees it happen.
+        labels: can.labels ? parseList(labels) : [],
+        assignees: can.assignees ? parseList(assignees) : [],
       },
     });
+    filingRef.current = false;
     setFiling(false);
     if (result._tag === "Failure") {
       // The host's own sentence: a label that does not exist, a tracker switched off for this
@@ -483,9 +514,9 @@ export function IssueCreateDialog({
             </Button>
           ) : null}
           <DialogTitle className="min-w-0 flex-1 truncate pe-20 text-lg">
-            {choice === null || selected === undefined
-              ? "Create new issue"
-              : `Create new issue in ${selected.repository}${template ? `: ${template.name}` : ""}`}
+            {composing && selected !== undefined
+              ? `Create new issue in ${selected.repository}${template ? `: ${template.name}` : ""}`
+              : "Create new issue"}
           </DialogTitle>
           {choice === null ? (
             <DialogDescription>
@@ -512,8 +543,12 @@ export function IssueCreateDialog({
                   value={selected.id}
                   onValueChange={(value) => {
                     setSelectedId(value as ProjectId);
-                    // Another repository asks for other things, so its own chooser comes back.
+                    // Another repository asks for other things, so its own chooser comes back —
+                    // and the answers go with it. A repository that offers nothing derives
+                    // straight to the blank form, which never passes the chooser that would
+                    // otherwise have cleared them, so they are cleared here instead.
                     setChosen(null);
+                    resetDraft(undefined);
                   }}
                 >
                   <SelectTrigger id="issue-project" className="w-full" aria-label="Project">
@@ -529,14 +564,24 @@ export function IssueCreateDialog({
                 </Select>
                 {/* Read-only, because it is the project's own remote rather than a choice: filing
                     against another repository is choosing another project. */}
-                <p className="truncate text-xs text-muted-foreground" title={selected.repository}>
-                  {selected.repository}
-                </p>
+                <Tooltip>
+                  <TooltipTrigger render={<p className="truncate text-xs text-muted-foreground" />}>
+                    {selected.repository}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{selected.repository}</TooltipPopup>
+                </Tooltip>
               </div>
 
               {templatesQuery.isPending ? (
                 <p className="text-sm text-muted-foreground">
                   Reading what this repository asks a new issue to start from…
+                </p>
+              ) : !can.create ? (
+                // The host said it files nothing, so there is no form to fill in: a composer here
+                // would be typing into a refusal.
+                <p className="text-sm text-muted-foreground">
+                  {selected.repository} is on a host that does not take new issues from here. Open
+                  it on the host to file one.
                 </p>
               ) : choice === null ? (
                 // Hairlines rather than boxes, and the whole row is the target: this is a list to
@@ -668,43 +713,49 @@ export function IssueCreateDialog({
                         ))}
                       </div>
                     ) : null
-                  ) : (
+                  ) : can.labels || can.assignees ? (
                     /* Typed rather than picked: a repository's labels and the people who may be
                     assigned are read against an issue, and this one does not exist yet. Both are
-                    optional, and anything the host does not recognise it refuses by name. */
+                    optional, and anything the host does not recognise it refuses by name. Each is
+                    shown only where the host has the notion at all: a box whose contents are
+                    dropped on the way out is worse than no box. */
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <label
-                          className="text-xs font-medium text-muted-foreground"
-                          htmlFor="issue-labels"
-                        >
-                          Labels
-                        </label>
-                        <Input
-                          id="issue-labels"
-                          disabled={filing}
-                          value={labels}
-                          placeholder="bug, good first issue"
-                          onChange={(event) => setLabels(event.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label
-                          className="text-xs font-medium text-muted-foreground"
-                          htmlFor="issue-assignees"
-                        >
-                          Assignees
-                        </label>
-                        <Input
-                          id="issue-assignees"
-                          disabled={filing}
-                          value={assignees}
-                          placeholder="octocat, hubot"
-                          onChange={(event) => setAssignees(event.target.value)}
-                        />
-                      </div>
+                      {can.labels ? (
+                        <div className="space-y-1.5">
+                          <label
+                            className="text-xs font-medium text-muted-foreground"
+                            htmlFor="issue-labels"
+                          >
+                            Labels
+                          </label>
+                          <Input
+                            id="issue-labels"
+                            disabled={filing}
+                            value={labels}
+                            placeholder="bug, good first issue"
+                            onChange={(event) => setLabels(event.target.value)}
+                          />
+                        </div>
+                      ) : null}
+                      {can.assignees ? (
+                        <div className="space-y-1.5">
+                          <label
+                            className="text-xs font-medium text-muted-foreground"
+                            htmlFor="issue-assignees"
+                          >
+                            Assignees
+                          </label>
+                          <Input
+                            id="issue-assignees"
+                            disabled={filing}
+                            value={assignees}
+                            placeholder="octocat, hubot"
+                            onChange={(event) => setAssignees(event.target.value)}
+                          />
+                        </div>
+                      ) : null}
                     </div>
-                  )}
+                  ) : null}
 
                   {/* Only where the repository really keeps one: the host reported the file, so
                       this link goes somewhere rather than to a 404 with a book next to it. */}
@@ -731,7 +782,7 @@ export function IssueCreateDialog({
           )}
         </DialogPanel>
         <DialogFooter>
-          {choice === null ? null : (
+          {composing ? (
             <label className="flex items-center gap-2 text-sm sm:me-auto">
               <Checkbox
                 disabled={filing}
@@ -740,19 +791,19 @@ export function IssueCreateDialog({
               />
               Create more
             </label>
-          )}
+          ) : null}
           <Button variant="ghost" disabled={filing} onClick={() => setOpen(false)}>
             Cancel
           </Button>
           {/* Absent on the chooser rather than disabled: nothing has been started yet, so there is
-              nothing this would file. */}
-          {choice === null ? null : (
+              nothing this would file — and on a host that files nothing there never will be. */}
+          {composing ? (
             <Button disabled={!canFile} onClick={() => void submit()}>
               <PlusIcon />
               {filing ? "Creating..." : "Create"}
               <Kbd>{submitLabel}</Kbd>
             </Button>
-          )}
+          ) : null}
         </DialogFooter>
       </DialogPopup>
     </Dialog>

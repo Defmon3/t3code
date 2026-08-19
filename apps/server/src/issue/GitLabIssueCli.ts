@@ -5,6 +5,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
   IssueAction,
+  IssueAssigneeCandidate,
   IssueAssigneeCandidateList,
   IssueComment,
   IssueEvent,
@@ -12,16 +13,23 @@ import type {
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
   IssueListState,
+  IssueReaction,
+  IssueReactionContent,
   IssueTemplate,
   IssueTemplateList,
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
+  decodeOwnGitLabAwardPageJson,
+  gitLabAwardName,
+} from "../sourceControl/gitLabReactionJson.ts";
+import {
   decodeCreatedIssueJson,
   decodeIssueDetailJson,
   decodeIssueListJson,
   decodeIssueNotesJson,
+  decodeIssueAwardEmojiJson,
   decodeIssueTemplateEntriesJson,
   decodeIssueTemplateJson,
   decodeLabelEventsJson,
@@ -29,6 +37,7 @@ import {
   decodeProjectLabelsJson,
   decodeProjectMembersJson,
   decodeViewerJson,
+  ISSUE_AWARD_EMOJI_GRAPHQL_QUERY,
   type GitLabIssue,
   type GitLabIssueDetail,
   type GitLabIssueTemplateEntry,
@@ -87,6 +96,12 @@ const MAX_PAGE_SIZE = 100;
  * walk that ends whatever the host has.
  */
 const CONVERSATION_PAGES = 10;
+/**
+ * Pages of merge request links to follow, per endpoint — five hundred of them, which no issue a
+ * person opens has. The panel shows the links rather than counting them, so the bound is here to
+ * end the walk rather than to be reached.
+ */
+const LINKED_PAGES = 5;
 
 /**
  * Templates whose body is fetched, and how many of those reads run at once. Each one is a request
@@ -107,6 +122,7 @@ export interface GitLabIssueActivity {
   readonly comments: ReadonlyArray<IssueComment>;
   readonly events: ReadonlyArray<IssueEvent>;
   readonly truncated: boolean;
+  readonly reactions: ReadonlyArray<IssueReaction>;
 }
 
 export class GitLabIssueCli extends Context.Service<
@@ -183,6 +199,23 @@ export class GitLabIssueCli extends Context.Service<
       readonly body: string;
     }) => Effect.Effect<void, GitLabIssueCliError>;
 
+    readonly updateComment: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, GitLabIssueCliError>;
+
+    readonly setReaction: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: IssueReactionContent;
+      readonly reacted: boolean;
+    }) => Effect.Effect<void, GitLabIssueCliError>;
+
     readonly setLabels: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -243,7 +276,8 @@ function involvementParams(input: {
       return [["author_username", input.viewer]];
     // GitLab's project issue listing cannot express "mentioned" — its `scope` narrows to the
     // issues the viewer created or is assigned, which is a different question. The unnarrowed
-    // page is answered rather than a filter that means something else, and the service narrows.
+    // page is answered rather than a filter that means something else, and nothing between here
+    // and the reader narrows it back down: a `mentioned` listing is every issue in the project.
     case "mentioned":
     case "all":
       return [];
@@ -253,6 +287,20 @@ function involvementParams(input: {
 function searchParams(search: string | undefined): ReadonlyArray<readonly [string, string]> {
   const trimmed = search?.trim() ?? "";
   return trimmed.length === 0 ? [] : [["search", trimmed]];
+}
+
+/**
+ * Where a continuation carries on from, as the instant the last slice ended on and everything
+ * before it. Without it the next request would offset into the list as it stands now, and an issue
+ * touched between the two reads shifts every row past the boundary — sending some of them twice and
+ * hiding others for good. GitLab's filter is inclusive, like the one every other host here is given:
+ * rows sharing the boundary instant are ordinary, and the service drops the ones it has already sent
+ * rather than asking for strictly older and losing their neighbours.
+ */
+function cursorParams(
+  cursor: ProviderListCursor | undefined,
+): ReadonlyArray<readonly [string, string]> {
+  return cursor === undefined ? [] : [["updated_before", cursor.updatedBefore]];
 }
 
 function query(params: ReadonlyArray<readonly [string, string]>): string {
@@ -324,17 +372,11 @@ export const make = Effect.gen(function* () {
     readonly collected: ReadonlyArray<GitLabIssue>;
     readonly cursorAdvance: number;
   }): Effect.Effect<GitLabIssueListBatch, GitLabIssueCliError> => {
-    // A continuation uses GitLab's offset pagination. Its timestamp filter is inclusive and has
-    // no tie-breaker, so a page where many rows share the boundary would otherwise return the
-    // same prefix forever. `delivered` is the stable offset the service has already handed over.
-    const delivered = input.cursor?.delivered ?? 0;
     const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
-    const firstPage = Math.floor(delivered / perPage) + 1;
-    const skipOnFirstPage = input.page === firstPage ? delivered % perPage : 0;
     // A page made entirely of malformed rows has no item from which the service can build a
     // continuation. Bound the walk to the raw span this request asked for rather than recursing
     // forever on a host that keeps returning full unusable pages.
-    const lastPage = Math.floor((delivered + input.limit) / perPage) + 1;
+    const lastPage = Math.floor(input.limit / perPage) + 1;
     return api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues?${query([
@@ -345,6 +387,7 @@ export const make = Effect.gen(function* () {
         // URL-encoded like every other value here, so no text in it can become a parameter of
         // its own.
         ...searchParams(input.query),
+        ...cursorParams(input.cursor),
         ["order_by", "updated_at"],
         ["sort", "desc"],
         ["per_page", String(perPage)],
@@ -366,28 +409,19 @@ export const make = Effect.gen(function* () {
             readError({ cwd: input.cwd, operation: "listIssues" })(decoded.failure),
           );
         }
-        const pageItems: GitLabIssue[] = [];
-        const pageRawIndexes: number[] = [];
-        for (const [index, item] of decoded.success.items.entries()) {
-          const rawIndex = decoded.success.rawIndexes[index]!;
-          if (rawIndex < skipOnFirstPage) continue;
-          pageItems.push(item);
-          pageRawIndexes.push(rawIndex);
-        }
         const remaining = input.limit - input.collected.length;
-        const lastItemRawIndex = pageRawIndexes[remaining - 1];
+        const lastItemRawIndex = decoded.success.rawIndexes[remaining - 1];
         if (lastItemRawIndex !== undefined) {
-          const consumed = lastItemRawIndex + 1 - skipOnFirstPage;
           return Effect.succeed({
-            items: [...input.collected, ...pageItems.slice(0, remaining)],
+            items: [...input.collected, ...decoded.success.items.slice(0, remaining)],
             truncated:
               lastItemRawIndex + 1 < decoded.success.rawCount ||
               decoded.success.rawCount === perPage,
-            cursorAdvance: input.cursorAdvance + consumed,
+            cursorAdvance: input.cursorAdvance + lastItemRawIndex + 1,
           });
         }
-        const collected = [...input.collected, ...pageItems];
-        const consumed = Math.max(0, decoded.success.rawCount - skipOnFirstPage);
+        const collected = [...input.collected, ...decoded.success.items];
+        const consumed = decoded.success.rawCount;
         // Counted before decoding, so a skipped malformed row cannot end paging early.
         const exhausted = decoded.success.rawCount < perPage;
         if (exhausted) {
@@ -446,7 +480,14 @@ export const make = Effect.gen(function* () {
     readonly page: number;
     readonly comments: ReadonlyArray<IssueComment>;
     readonly events: ReadonlyArray<IssueEvent>;
-  }): Effect.Effect<GitLabIssueActivity, GitLabIssueCliError> =>
+  }): Effect.Effect<
+    {
+      readonly comments: ReadonlyArray<IssueComment>;
+      readonly events: ReadonlyArray<IssueEvent>;
+      readonly truncated: boolean;
+    },
+    GitLabIssueCliError
+  > =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes?${query([
@@ -474,14 +515,21 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  /** The labellings, walked the same way and stopped by the same bound. */
+  /**
+   * The labellings, walked the same way and stopped by the same bound — and reporting that bound
+   * the same way too: an issue relabelled more often than the walk follows has a history as
+   * incomplete as one talked over more than the walk reads.
+   */
   const labelEventsPage = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
     readonly collected: ReadonlyArray<IssueEvent>;
-  }): Effect.Effect<ReadonlyArray<IssueEvent>, GitLabIssueCliError> =>
+  }): Effect.Effect<
+    { readonly events: ReadonlyArray<IssueEvent>; readonly truncated: boolean },
+    GitLabIssueCliError
+  > =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues/${
@@ -499,34 +547,52 @@ export const make = Effect.gen(function* () {
           );
         }
         const collected = [...input.collected, ...decoded.success.events];
-        return decoded.success.rawCount < MAX_PAGE_SIZE || input.page >= CONVERSATION_PAGES
-          ? Effect.succeed(collected)
+        if (decoded.success.rawCount < MAX_PAGE_SIZE) {
+          return Effect.succeed({ events: collected, truncated: false });
+        }
+        return input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({ events: collected, truncated: true })
           : labelEventsPage({ ...input, page: input.page + 1, collected });
       }),
     );
 
+  /**
+   * One endpoint's links, a page at a time. Both endpoints page by offset like the rest of GitLab,
+   * so a single page would drop every link past the first hundred on an issue a whole release
+   * branched off. The walk is bounded like the conversation's: a short page ends it, and
+   * `LINKED_PAGES` ends it anyway.
+   */
   const linkedMergeRequests = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
     readonly endpoint: "closed_by" | "related_merge_requests";
+    readonly page: number;
+    readonly collected: ReadonlyArray<IssueLinkedPullRequest>;
   }): Effect.Effect<ReadonlyArray<IssueLinkedPullRequest>, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}/${
         input.endpoint
-      }?${query([["per_page", String(MAX_PAGE_SIZE)]])}`,
+      }?${query([
+        ["per_page", String(MAX_PAGE_SIZE)],
+        ["page", String(input.page)],
+      ])}`,
     }).pipe(
       Effect.flatMap((result) => {
         const decoded = decodeLinkedMergeRequestsJson(
           result.stdout.trim(),
           input.endpoint === "closed_by",
         );
-        return Result.isSuccess(decoded)
-          ? Effect.succeed(decoded.success)
-          : Effect.fail(
-              readError({ cwd: input.cwd, operation: "listLinkedMergeRequests" })(decoded.failure),
-            );
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "listLinkedMergeRequests" })(decoded.failure),
+          );
+        }
+        const collected = [...input.collected, ...decoded.success.links];
+        return decoded.success.rawCount < MAX_PAGE_SIZE || input.page >= LINKED_PAGES
+          ? Effect.succeed(collected)
+          : linkedMergeRequests({ ...input, page: input.page + 1, collected });
       }),
     );
 
@@ -613,52 +679,144 @@ export const make = Effect.gen(function* () {
       method: "PUT",
       // A JSON body rather than a `--raw-field`: glab coerces a field that reads as a literal
       // `true` or a number, and a title or a description is text either way.
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       stdin: JSON.stringify(input.body),
     }).pipe(Effect.asVoid);
 
-  return GitLabIssueCli.of({
-    getViewerUsername: (input) =>
-      api({ cwd: input.cwd, path: "user" }).pipe(
-        Effect.flatMap((result): Effect.Effect<string, GitLabIssueCliError> => {
-          const decoded = decodeViewerJson(result.stdout.trim());
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              readError({ cwd: input.cwd, operation: "getViewerUsername" })(decoded.failure),
-            );
-          }
-          return decoded.success === null
-            ? Effect.fail(
-                new GitLabIssueViewerUnavailableError({ command: "glab", cwd: input.cwd }),
-              )
-            : Effect.succeed(decoded.success);
-        }),
-      ),
+  const viewerUsername = (input: { readonly cwd: string }) =>
+    api({ cwd: input.cwd, path: "user" }).pipe(
+      Effect.flatMap((result): Effect.Effect<string, GitLabIssueCliError> => {
+        const decoded = decodeViewerJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "getViewerUsername" })(decoded.failure),
+          );
+        }
+        return decoded.success === null
+          ? Effect.fail(new GitLabIssueViewerUnavailableError({ command: "glab", cwd: input.cwd }))
+          : Effect.succeed(decoded.success);
+      }),
+    );
 
-    listIssues: (input) => {
-      const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
-      const page = Math.floor((input.cursor?.delivered ?? 0) / perPage) + 1;
-      return listPage({ ...input, page, collected: [], cursorAdvance: 0 });
+  const awardSubjectPath = (input: {
+    readonly repository: string;
+    readonly number: number;
+    readonly subjectId?: string | undefined;
+  }) => {
+    const issue = `projects/${projectPath(input.repository)}/issues/${input.number}`;
+    return input.subjectId === undefined
+      ? `${issue}/award_emoji`
+      : `${issue}/notes/${encodeURIComponent(input.subjectId)}/award_emoji`;
+  };
+
+  const ownAwardId = (input: {
+    readonly cwd: string;
+    readonly subject: string;
+    readonly content: IssueReactionContent;
+    readonly viewer: string;
+    readonly page: number;
+  }): Effect.Effect<number | null, GitLabIssueCliError> =>
+    api({
+      cwd: input.cwd,
+      path:
+        input.subject +
+        "?" +
+        query([
+          ["per_page", String(MAX_PAGE_SIZE)],
+          ["page", String(input.page)],
+        ]),
+    }).pipe(
+      Effect.flatMap((listed) => {
+        const decoded = decodeOwnGitLabAwardPageJson(listed.stdout.trim(), input);
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "setReaction" })(decoded.failure),
+          );
+        }
+        return decoded.success.id !== null || decoded.success.rawCount < MAX_PAGE_SIZE
+          ? Effect.succeed(decoded.success.id)
+          : ownAwardId({ ...input, page: input.page + 1 });
+      }),
+    );
+
+  const awardsPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly cursor: string | null;
+    readonly page: number;
+    readonly collected: Map<string, ReadonlyArray<IssueReaction>>;
+  }): Effect.Effect<
+    {
+      readonly reactions: ReadonlyArray<IssueReaction>;
+      readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<IssueReaction>>;
     },
+    GitLabIssueCliError
+  > =>
+    api({
+      cwd: input.cwd,
+      path: "graphql",
+      method: "POST",
+      stdin: JSON.stringify({
+        query: ISSUE_AWARD_EMOJI_GRAPHQL_QUERY,
+        variables: { fullPath: input.repository, iid: String(input.number), cursor: input.cursor },
+      }),
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeIssueAwardEmojiJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "listActivity" })(decoded.failure),
+          );
+        }
+        for (const [id, reactions] of decoded.success.reactionsByNoteId) {
+          input.collected.set(id, reactions);
+        }
+        return decoded.success.nextCursor === null || input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({
+              reactions: decoded.success.reactions,
+              reactionsByNoteId: input.collected,
+            })
+          : awardsPage({
+              ...input,
+              cursor: decoded.success.nextCursor,
+              page: input.page + 1,
+            });
+      }),
+    );
+
+  return GitLabIssueCli.of({
+    getViewerUsername: viewerUsername,
+
+    // Every read starts at the first page: a continuation is the boundary instant, not an offset
+    // into a list that moves under it.
+    listIssues: (input) => listPage({ ...input, page: 1, collected: [], cursorAdvance: 0 }),
 
     getIssueDetail: issueDetail,
 
     listLinkedMergeRequests: (input) =>
       Effect.all(
         [
-          linkedMergeRequests({ ...input, endpoint: "closed_by" }),
-          linkedMergeRequests({ ...input, endpoint: "related_merge_requests" }),
+          linkedMergeRequests({ ...input, endpoint: "closed_by", page: 1, collected: [] }),
+          linkedMergeRequests({
+            ...input,
+            endpoint: "related_merge_requests",
+            page: 1,
+            collected: [],
+          }),
         ],
         { concurrency: 2 },
       ).pipe(
         Effect.map(([closing, related]) => {
           // The two endpoints overlap: a merge request that closes the issue also mentions it.
           // The closing answer wins, so the stronger of the two relationships is the one shown.
-          const seen = new Set(closing.map((link) => `${link.repository}!${link.number}`));
-          return [
-            ...closing,
-            ...related.filter((link) => !seen.has(`${link.repository}!${link.number}`)),
-          ];
+          // One pass over both, so a link a paged endpoint repeats is dropped as well.
+          const seen = new Set<string>();
+          return [...closing, ...related].filter((link) => {
+            const key = `${link.repository}!${link.number}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
         }),
       ),
 
@@ -667,17 +825,24 @@ export const make = Effect.gen(function* () {
         [
           notesPage({ ...input, page: 1, comments: [], events: [] }),
           labelEventsPage({ ...input, page: 1, collected: [] }),
+          awardsPage({ ...input, cursor: null, page: 1, collected: new Map() }),
         ],
         { concurrency: 2 },
       ).pipe(
-        Effect.map(([notes, labelEvents]) => ({
-          comments: notes.comments,
+        Effect.map(([notes, labelEvents, awards]) => ({
+          comments: notes.comments.map((comment) => ({
+            ...comment,
+            reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+          })),
           // Two reads, so the merged history is ordered here rather than left interleaved by
           // whichever of them answered first.
-          events: [...notes.events, ...labelEvents].sort((left, right) =>
+          events: [...notes.events, ...labelEvents.events].sort((left, right) =>
             left.createdAt === right.createdAt ? 0 : left.createdAt < right.createdAt ? -1 : 1,
           ),
-          truncated: notes.truncated,
+          // Either walk hitting its bound leaves the timeline short, and a history missing its
+          // labellings is no more complete than one missing its remarks.
+          truncated: notes.truncated || labelEvents.truncated,
+          reactions: awards.reactions,
         })),
       ),
 
@@ -686,7 +851,6 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues`,
         method: "POST",
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         stdin: JSON.stringify({
           title: input.title,
           description: input.body,
@@ -724,9 +888,39 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes`,
         method: "POST",
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
+
+    updateComment: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes/${encodeURIComponent(input.commentId)}`,
+        method: "PUT",
+        stdin: JSON.stringify({ body: input.body }),
+      }).pipe(Effect.asVoid),
+
+    setReaction: (input) =>
+      Effect.gen(function* () {
+        const subject = awardSubjectPath(input);
+        if (input.reacted) {
+          yield* api({
+            cwd: input.cwd,
+            path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
+            method: "POST",
+          });
+          return;
+        }
+        const viewer = yield* viewerUsername({ cwd: input.cwd });
+        const own = yield* ownAwardId({
+          cwd: input.cwd,
+          subject,
+          content: input.content,
+          viewer,
+          page: 1,
+        });
+        if (own === null) return;
+        yield* api({ cwd: input.cwd, path: subject + "/" + own, method: "DELETE" });
+      }),
 
     setLabels: (input) =>
       updateIssue({
@@ -758,14 +952,20 @@ export const make = Effect.gen(function* () {
     listAssigneeCandidates: (input) =>
       Effect.all([issueDetail(input), projectMembers(input)], { concurrency: 2 }).pipe(
         Effect.map(([issue, members]) => {
-          // Matched by handle: the issue names its assignees, and only the member list carries
-          // the numeric id an assignment is written with.
-          const assigned = new Set(issue.assignees.map((assignee) => assignee.login));
+          // Whoever already has the issue leads the list, ahead of the member page and whatever
+          // that page left out. The set is written whole and can only be spelled from here, so an
+          // assignee the members walk never reached would come off the issue on the next write —
+          // silently, and off somebody the reader was never shown.
+          const candidates = new Map<string, IssueAssigneeCandidate>();
+          for (const assignee of issue.assigneeCandidates) {
+            candidates.set(assignee.login, { ...assignee, isAssigned: true });
+          }
+          for (const member of members.members) {
+            if (candidates.has(member.login)) continue;
+            candidates.set(member.login, { ...member, isAssigned: false });
+          }
           return {
-            candidates: members.members.map((member) => ({
-              ...member,
-              isAssigned: assigned.has(member.login),
-            })),
+            candidates: [...candidates.values()],
             truncated: members.rawCount >= MAX_PAGE_SIZE,
           };
         }),

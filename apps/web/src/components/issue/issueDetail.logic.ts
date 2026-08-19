@@ -1,13 +1,23 @@
-import type {
-  IssueComment,
-  IssueDetailView,
-  IssueEvent,
-  SourceControlActor,
-} from "@t3tools/contracts";
+import type { IssueComment, IssueDetailView, IssueEvent, IssueActor } from "@t3tools/contracts";
 
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 import { handoffReviewComments } from "../sourceControl/handoff";
+/** Activity changes only when the same host resource reports a newer revision. */
+export function shouldRefreshIssueActivity(
+  previous: { readonly key: string; readonly updatedAt: string } | null,
+  next: { readonly key: string; readonly updatedAt: string },
+): boolean {
+  return previous !== null && previous.key === next.key && previous.updatedAt !== next.updatedAt;
+}
+
+export function mergeEarlierIssueComments(
+  current: ReadonlyArray<IssueComment>,
+  earlier: ReadonlyArray<IssueComment>,
+): ReadonlyArray<IssueComment> {
+  const currentIds = new Set(current.map((comment) => comment.id));
+  return [...earlier.filter((comment) => !currentIds.has(comment.id)), ...current];
+}
 
 export interface IssueTimelineEntry {
   readonly id: string;
@@ -19,7 +29,29 @@ export interface IssueTimelineEntry {
   /** Markdown, and only ever a comment's: nobody writes words for the rest of the history. */
   readonly body: string | null;
   readonly url: string | null;
-  readonly actor: SourceControlActor | null;
+  readonly actor: IssueActor | null;
+}
+
+export interface IssueCommentEditScope {
+  readonly issue: string;
+  readonly id: string;
+}
+
+export function issueCommentEditId(
+  scope: IssueCommentEditScope | null,
+  issue: string,
+): string | null {
+  return scope?.issue === issue ? scope.id : null;
+}
+
+export function canEditIssueComment(
+  detail: Pick<IssueDetailView, "capabilities" | "viewer">,
+  comment: Pick<IssueComment, "author">,
+): boolean {
+  if (detail.capabilities.editComment !== true) return false;
+  const viewer = detail.viewer?.trim().toLowerCase();
+  const author = comment.author?.login.trim().toLowerCase();
+  return viewer !== undefined && author !== undefined && viewer === author;
 }
 
 /**
@@ -107,7 +139,11 @@ export function buildIssueTimeline(
 
 export type IssueTimelineRow =
   | { readonly kind: "event"; readonly entry: IssueTimelineEntry }
-  | { readonly kind: "comments"; readonly entries: ReadonlyArray<IssueTimelineEntry> };
+  | {
+      readonly kind: "comments";
+      readonly key: string;
+      readonly entries: ReadonlyArray<IssueTimelineEntry>;
+    };
 
 /**
  * Consecutive comments are one conversation section. Labellings, assignments and the close split
@@ -125,9 +161,13 @@ export function groupIssueTimelineConversations(
     }
     const last = rows.at(-1);
     if (last?.kind === "comments") {
-      rows[rows.length - 1] = { kind: "comments", entries: [...last.entries, entry] };
+      rows[rows.length - 1] = {
+        kind: "comments",
+        key: entry.id < last.key ? entry.id : last.key,
+        entries: [...last.entries, entry],
+      };
     } else {
-      rows.push({ kind: "comments", entries: [entry] });
+      rows.push({ kind: "comments", key: entry.id, entries: [entry] });
     }
   }
   return rows;

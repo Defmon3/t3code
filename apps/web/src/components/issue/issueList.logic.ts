@@ -1,7 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { IssueListEntry, IssueListResult } from "@t3tools/contracts";
-import type { IssueInvolvement, IssueListState } from "@t3tools/contracts";
+import { IssueListEntry, IssueListResult, issueSourceKey } from "@t3tools/contracts";
+import type { IssueInvolvement, IssueListSort, IssueListState } from "@t3tools/contracts";
+
+import { normalizeLogin } from "../sourceControl/listHelpers";
+import {
+  readListSnapshot,
+  writeListSnapshot,
+  type SnapshotStorage,
+} from "../sourceControl/listSnapshot";
 
 export type IssueGroupKey = "assigned" | "authored" | "others";
 
@@ -11,7 +18,15 @@ export interface IssueGroup {
   readonly entries: ReadonlyArray<IssueListEntry>;
 }
 
-/** The signed-in account per host, as the listing reports it. */
+export function issueListOrderLabels(
+  sort: IssueListSort,
+): readonly [ascending: string, descending: string] {
+  return sort === "comments" || sort.startsWith("reactions")
+    ? ["Ascending", "Descending"]
+    : ["Oldest", "Newest"];
+}
+
+/** The signed-in account per adapter and host, as the listing reports it. */
 export type IssueViewers = IssueListResult["viewers"];
 
 const GROUP_LABELS: Record<IssueGroupKey, string> = {
@@ -20,26 +35,20 @@ const GROUP_LABELS: Record<IssueGroupKey, string> = {
   others: "Others",
 };
 
-function normalize(value: string | null | undefined): string | null {
-  const trimmed = value?.trim().toLowerCase() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-/**
- * Involvement is per host, not per provider kind: the same list can hold issues from GitHub,
- * GitLab and a GitHub Enterprise install, and the account that owns one says nothing about the
- * others.
- */
-function isAuthoredByViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
-  return viewer !== null && normalize(entry.author?.login) === viewer;
+function issueViewer(entry: IssueListEntry, viewers: IssueViewers): string | null {
+  return normalizeLogin(viewers[issueSourceKey(entry.provider, entry.host)] ?? viewers[entry.host]);
 }
 
 function isAssignedToViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
+  const viewer = issueViewer(entry, viewers);
   return (
-    viewer !== null && entry.assignees.some((assignee) => normalize(assignee.login) === viewer)
+    viewer !== null && entry.assignees.some((assignee) => normalizeLogin(assignee.login) === viewer)
   );
+}
+
+function isAuthoredByViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
+  const viewer = issueViewer(entry, viewers);
+  return viewer !== null && normalizeLogin(entry.author?.login) === viewer;
 }
 
 /** Free-text filter over the fields a row actually shows, plus `#123` / `123`. */
@@ -144,19 +153,26 @@ export function issueEntryKey(entry: IssueListEntry): string {
  * move it above rows already read. Here the partitions come whole from their own server-filtered
  * reads, the feed fills "Others" in its own order, and a continuation can only append — a row it
  * carries that a partition already holds is dropped rather than moved.
+ *
+ * The partitions answer their own question of the hosts, so whatever narrowed the feed afterwards
+ * never touched them. `keep` is that narrowing, said again here: without it a label filter takes
+ * rows out of "Others" and leaves the very same rows sitting under "Assigned to you".
  */
 export function partitionIssuesWithPriority(
   entries: ReadonlyArray<IssueListEntry>,
   authored: ReadonlyArray<IssueListEntry>,
   assigned: ReadonlyArray<IssueListEntry>,
+  keep: (entry: IssueListEntry) => boolean,
 ): ReadonlyArray<IssueGroup> {
-  const assignedByKey = new Map(assigned.map((entry) => [issueEntryKey(entry), entry]));
+  const assignedByKey = new Map(
+    assigned.filter(keep).map((entry) => [issueEntryKey(entry), entry]),
+  );
   // An issue can be both filed and taken on by the same person; assigned wins, as the local
   // grouping has it, because what is on somebody's plate matters more than who put it there.
   const authoredByKey = new Map(
     authored.flatMap((entry) => {
       const key = issueEntryKey(entry);
-      return assignedByKey.has(key) ? [] : [[key, entry] as const];
+      return assignedByKey.has(key) || !keep(entry) ? [] : [[key, entry] as const];
     }),
   );
   const others: IssueListEntry[] = [];
@@ -184,22 +200,15 @@ export function partitionIssuesWithPriority(
     .map((group) => ({ ...group, label: GROUP_LABELS[group.key] }));
 }
 
-/** One page is what the list itself starts with, and all a cold start needs to look warm. */
-const SNAPSHOT_MAX_ENTRIES = 99;
-
-type SnapshotStorage = Pick<Storage, "getItem" | "setItem">;
-
-const snapshotStorageKey = (environmentId: string) => `t3.issues.list:${environmentId}`;
-
 /**
  * The priority groups' own server-filtered answers, carried with the feed. An issue assigned to
  * the reader but older than the feed's first page lives only in these, so a snapshot without them
  * cold-starts into an Assigned group missing exactly the rows that made it worth having.
  */
-export interface IssuePartitionsSnapshot {
+export type IssuePartitionsSnapshot = {
   readonly authored: ReadonlyArray<IssueListEntry>;
   readonly assigned: ReadonlyArray<IssueListEntry>;
-}
+};
 
 export interface IssueListSnapshot {
   readonly scope: string;
@@ -207,45 +216,25 @@ export interface IssueListSnapshot {
   readonly partitions?: IssuePartitionsSnapshot | undefined;
 }
 
-/**
- * Decoded with the contract's own schema rather than trusted from a cast: storage is writable
- * by anything in the origin and by any past version of this app, and one malformed row would
- * otherwise crash the list on every reload until the key is cleared. A snapshot from before a
- * schema change is rejected the same way, which is exactly the cold start it would have broken.
- */
-const decodeSnapshot = Schema.decodeUnknownOption(
-  Schema.Struct({
-    scope: Schema.String,
-    data: IssueListResult,
-    // Optional so a snapshot written before the partitions existed still hydrates the feed.
-    partitions: Schema.optional(
-      Schema.Struct({
-        authored: Schema.Array(IssueListEntry),
-        assigned: Schema.Array(IssueListEntry),
-      }),
-    ),
-  }),
-);
+const SNAPSHOT_KEY_PREFIX = "t3.issues.list";
 
-/**
- * The last list answered for this environment, brought back across a reload. The registry the
- * queries live in is recreated with the renderer, so without this a revisit cold-starts into
- * skeletons even though almost every row is unchanged; hydrated, the stale rows render at once
- * and the live read reconciles them in place by key. Errors are not carried — a failure is
- * never cached, and yesterday's is not this morning's.
- */
+const SnapshotSchema = Schema.Struct({
+  scope: Schema.String,
+  data: IssueListResult,
+  // Optional so a snapshot written before the partitions existed still hydrates the feed.
+  partitions: Schema.optional(
+    Schema.Struct({
+      authored: Schema.Array(IssueListEntry),
+      assigned: Schema.Array(IssueListEntry),
+    }),
+  ),
+});
+
 export function readIssueListSnapshot(
   storage: SnapshotStorage | undefined,
   environmentId: string,
 ): IssueListSnapshot | null {
-  try {
-    const raw = storage?.getItem(snapshotStorageKey(environmentId));
-    if (!raw) return null;
-    const decoded = decodeSnapshot(JSON.parse(raw));
-    return decoded._tag === "Some" ? decoded.value : null;
-  } catch {
-    return null;
-  }
+  return readListSnapshot(storage, SnapshotSchema, SNAPSHOT_KEY_PREFIX, environmentId);
 }
 
 export function writeIssueListSnapshot(
@@ -253,32 +242,7 @@ export function writeIssueListSnapshot(
   environmentId: string,
   snapshot: IssueListSnapshot,
 ): void {
-  try {
-    storage?.setItem(
-      snapshotStorageKey(environmentId),
-      JSON.stringify({
-        scope: snapshot.scope,
-        data: {
-          ...snapshot.data,
-          entries: snapshot.data.entries.slice(0, SNAPSHOT_MAX_ENTRIES),
-          // A failure is never cached and yesterday's is not this morning's; a cursor names a
-          // position in a listing the host has long since forgotten.
-          errors: [],
-          nextCursors: {},
-        },
-        ...(snapshot.partitions === undefined
-          ? {}
-          : {
-              partitions: {
-                authored: snapshot.partitions.authored.slice(0, SNAPSHOT_MAX_ENTRIES),
-                assigned: snapshot.partitions.assigned.slice(0, SNAPSHOT_MAX_ENTRIES),
-              },
-            }),
-      }),
-    );
-  } catch {
-    // Storage can be full or denied; the snapshot is a convenience, not a record.
-  }
+  writeListSnapshot(storage, SNAPSHOT_KEY_PREFIX, environmentId, snapshot);
 }
 
 export { resolveProjectScope } from "../sourceControl/projectScope";

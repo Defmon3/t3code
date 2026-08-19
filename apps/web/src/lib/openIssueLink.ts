@@ -137,8 +137,10 @@ function claim(host: string, match: RegExpExecArray | null): IssueUrlLink | null
  * github.com and an Enterprise install stay apart.
  *
  * An Azure DevOps work item names only its team project, not a repository below it, so its link
- * also matches a repository identity that merely starts with that project's path: the work item
- * is the same one whichever repository under the project opens it.
+ * alone also matches a repository identity that merely starts with that project's path: the work
+ * item is the same one whichever repository under the project opens it. Every other host writes
+ * the whole repository path into the link, so there the match is exact — a nested GitLab project
+ * is a different repository from the group above it, not the same one seen from further down.
  */
 export function findProjectForIssue(
   projects: ReadonlyArray<EnvironmentProject>,
@@ -157,7 +159,64 @@ export function findProjectForIssue(
     }
     const lowerRepository = repository.toLowerCase();
     const linkRepository = link.repository.toLowerCase();
-    return lowerRepository === linkRepository || lowerRepository.startsWith(`${linkRepository}/`);
+    return (
+      lowerRepository === linkRepository ||
+      (kind === "azure-devops" && lowerRepository.startsWith(`${linkRepository}/`))
+    );
+  });
+}
+
+export function repositoryForProjectLink(project: EnvironmentProject, fallback: string): string {
+  return project.repositoryIdentity?.displayName ?? fallback;
+}
+
+/**
+ * The project a linked issue or change request belongs to, or nothing. A link carries the
+ * repository it was filed in, which need not be the one on screen — a cross-repository reference
+ * keeps its own — so the project is resolved from that repository rather than assumed from the
+ * open surface: pairing one repository with another project's id makes a reference the server
+ * refuses to read.
+ *
+ * The host comes from the link's own URL, because a repository path alone cannot tell two hosts
+ * apart. A host nothing here is checked out from matches no project, and the caller falls back to
+ * the browser, exactly as it would for a lookalike.
+ */
+export function findProjectForLink(
+  projects: ReadonlyArray<EnvironmentProject>,
+  link: { readonly repository: string; readonly number: number; readonly url: string },
+): EnvironmentProject | undefined {
+  let host: string;
+  try {
+    host = new URL(link.url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  return findProjectForIssue(projects, { host, repository: link.repository, number: link.number });
+}
+
+/**
+ * Hands a link to the system browser, which is where one this workspace cannot place belongs, and
+ * says so when the desktop bridge is missing rather than swallowing the press.
+ */
+export function openLinkInBrowser(targetUrl: string): void {
+  const api = readLocalApi();
+  if (!api) {
+    toastManager.add({
+      type: "error",
+      title: "Link opening is unavailable.",
+    });
+    return;
+  }
+
+  void openIssueLink(api.shell, targetUrl).catch((error) => {
+    console.error(error);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Unable to open issue link",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
   });
 }
 
@@ -200,31 +259,13 @@ export function useOpenIssueLink(threadRef?: ScopedThreadRef) {
           projectId: project.id,
           // The identity's own spelling, not the one read out of the URL: the panel asks the
           // provider for this repository, while matching a link only ever compares lower case.
-          repository: project.repositoryIdentity?.displayName ?? parsed.repository,
+          repository: repositoryForProjectLink(project, parsed.repository),
           number: parsed.number,
         });
         return true;
       }
 
-      const api = readLocalApi();
-      if (!api) {
-        toastManager.add({
-          type: "error",
-          title: "Link opening is unavailable.",
-        });
-        return false;
-      }
-
-      void openIssueLink(api.shell, issueUrl).catch((error) => {
-        console.error(error);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to open issue link",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      });
+      openLinkInBrowser(issueUrl);
       return false;
     },
     [allProjects, primaryEnvironmentId, serverConfigs, threadRef],

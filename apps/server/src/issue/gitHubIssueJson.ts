@@ -13,15 +13,22 @@ import type {
   IssueEventKind,
   IssueLabelCandidate,
   IssueLinkedPullRequest,
+  IssueReaction,
   IssueState,
   IssueTemplate,
   IssueTemplateField,
   IssueTemplateList,
-  SourceControlActor,
-  SourceControlLabel,
+  IssueActor,
+  IssueLabel,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parse as parseYamlDocument } from "yaml";
+
+import {
+  GITHUB_REACTION_GROUPS_FIELDS,
+  GitHubReactionGroupsSchema,
+  toGitHubReactions,
+} from "../sourceControl/gitHubReactionJson.ts";
 
 /**
  * Enum-ish GitHub fields are decoded as plain strings and normalized here: a `gh` release or a
@@ -64,6 +71,7 @@ const RawIssueSchema = Schema.Struct({
   assignees: Schema.optional(Schema.NullOr(Schema.Array(RawActorSchema))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(RawLabelSchema))),
   milestone: Schema.optional(Schema.NullOr(RawMilestoneSchema)),
+  reactionGroups: GitHubReactionGroupsSchema,
   body: Schema.optional(Schema.String),
 });
 
@@ -84,6 +92,7 @@ const RawSearchItemSchema = Schema.Struct({
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
   repository: Schema.optional(Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String }))),
   milestone: Schema.optional(Schema.NullOr(RawMilestoneSchema)),
+  reactionGroups: GitHubReactionGroupsSchema,
   comments: Schema.optional(Schema.NullOr(Schema.Struct({ totalCount: Schema.Int }))),
   assignees: Schema.optional(
     Schema.NullOr(
@@ -101,21 +110,23 @@ const RawSearchItemSchema = Schema.Struct({
   ),
 });
 
+/** Where a connection carries on from, which is what the comment and search walks below follow. */
+const RawPageInfoSchema = Schema.Struct({
+  hasNextPage: Schema.optional(Schema.Boolean),
+  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+  hasPreviousPage: Schema.optional(Schema.Boolean),
+  startCursor: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const RawSearchSchema = Schema.Struct({
   data: Schema.Struct({
     search: Schema.Struct({
-      pageInfo: Schema.optional(Schema.NullOr(Schema.Struct({ hasNextPage: Schema.Boolean }))),
+      pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
       // Row by row, like the listing's own: a node that is not an issue — or one field GitHub
       // changes — is skipped rather than blanking every repository at once.
       nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
     }),
   }),
-});
-
-/** Where a connection carries on from, which is what the comment walk below follows. */
-const RawPageInfoSchema = Schema.Struct({
-  hasNextPage: Schema.optional(Schema.Boolean),
-  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 /**
@@ -167,6 +178,7 @@ const RawCommentSchema = Schema.Struct({
   body: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   url: Schema.optional(Schema.NullOr(Schema.String)),
+  reactionGroups: GitHubReactionGroupsSchema,
 });
 
 const RawCommentsSchema = Schema.Struct({
@@ -225,10 +237,12 @@ const RawViewerPermissionsSchema = Schema.Struct({
 
 const RawActivitySchema = Schema.Struct({
   data: Schema.Struct({
+    viewer: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
     repository: Schema.Struct({
       issue: Schema.NullOr(
         Schema.Struct({
           author: Schema.optional(Schema.NullOr(RawActorSchema)),
+          reactionGroups: GitHubReactionGroupsSchema,
           comments: Schema.optional(Schema.NullOr(RawCommentsSchema)),
           timelineItems: Schema.optional(
             Schema.NullOr(
@@ -245,6 +259,7 @@ const RawActivitySchema = Schema.Struct({
 
 const RawCommentPageSchema = Schema.Struct({
   data: Schema.Struct({
+    viewer: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
     repository: Schema.Struct({
       issue: Schema.NullOr(Schema.Struct({ comments: Schema.optional(RawCommentsSchema) })),
     }),
@@ -416,7 +431,7 @@ const RawCreatedIssueSchema = Schema.Struct({
  * this read reports no conversation size; the search below carries GitHub's own count instead.
  */
 export const ISSUE_LIST_JSON_FIELDS =
-  "number,title,url,author,state,stateReason,createdAt,updatedAt,closedAt,assignees,labels,milestone";
+  "number,title,url,author,state,stateReason,createdAt,updatedAt,closedAt,assignees,labels,milestone,reactionGroups";
 
 export const ISSUE_DETAIL_JSON_FIELDS = `${ISSUE_LIST_JSON_FIELDS},body`;
 
@@ -428,6 +443,13 @@ const GRAPHQL_PAGE_SIZE = 100;
  * bound the pull request search runs into.
  */
 export const ISSUE_SEARCH_MAX_ROWS = GRAPHQL_PAGE_SIZE;
+
+/**
+ * How far GitHub lets a search be paged at all: the thousandth result is the last one it will
+ * answer with, whichever way it is asked for. A read that has taken this many rows has taken
+ * everything the host has to give for that query, so there is nothing further to carry on to.
+ */
+export const ISSUE_SEARCH_MAX_RESULTS = 1000;
 
 /** Timeline events kept per issue, newest last. An issue with more history than this is a bot log,
  *  and the recent end of it is the part anybody reads. */
@@ -447,11 +469,14 @@ const TIMELINE_ITEMS = GRAPHQL_PAGE_SIZE;
  *
  * `first` on the two inner connections is a bound rather than a page: an issue with more than
  * twenty labels shows twenty, and one assigned to more than twenty people is past what a row says.
+ *
+ * `after` is how a slice reads on past the page GitHub's ceiling cuts it at, which is what lets one
+ * instant holding more issues than a page be handed over whole.
  */
 export function issueSearchGraphQlQuery(rows: number): string {
-  return `query($q: String!) {
-  search(query: $q, type: ISSUE, first: ${Math.min(Math.max(Math.trunc(rows), 1), ISSUE_SEARCH_MAX_ROWS)}) {
-    pageInfo { hasNextPage }
+  return `query($q: String!, $cursor: String) {
+  search(query: $q, type: ISSUE, first: ${Math.min(Math.max(Math.trunc(rows), 1), ISSUE_SEARCH_MAX_ROWS)}, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on Issue {
         number
@@ -466,6 +491,7 @@ export function issueSearchGraphQlQuery(rows: number): string {
         repository { nameWithOwner }
         milestone { title }
         comments { totalCount }
+        ${GITHUB_REACTION_GROUPS_FIELDS}
         assignees(first: 20) { nodes { login name avatarUrl } }
         labels(first: 20) { nodes { name color } }
       }
@@ -534,17 +560,19 @@ export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $n
  * timeline at all.
  *
  * The events are the newest hundred: an issue with more state changes than that has been machine
- * driven, and the recent end is the part a reader is looking at. The comments are paged from the
- * start instead, which is the order a conversation is read in.
+ * driven, and the recent end is the part a reader is looking at. Comments start there too; older
+ * pages are read only when the reader asks for them.
  */
 export const ISSUE_ACTIVITY_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
       author { login avatarUrl }
-      comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
+      ${GITHUB_REACTION_GROUPS_FIELDS}
+      comments(last: ${GRAPHQL_PAGE_SIZE}, before: $cursor) {
         totalCount
-        pageInfo { hasNextPage endCursor }
-        nodes { id author { login avatarUrl } body createdAt url }
+        pageInfo { hasPreviousPage startCursor }
+        nodes { id author { login avatarUrl } body createdAt url ${GITHUB_REACTION_GROUPS_FIELDS} }
       }
       timelineItems(last: ${TIMELINE_ITEMS}, itemTypes: [CLOSED_EVENT, REOPENED_EVENT, LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, RENAMED_TITLE_EVENT, CROSS_REFERENCED_EVENT, MILESTONED_EVENT, LOCKED_EVENT, UNLOCKED_EVENT]) {
         nodes {
@@ -573,15 +601,65 @@ export const ISSUE_ACTIVITY_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
 
 /** The rest of a long conversation, without the history the first page already delivered. */
 export const ISSUE_COMMENTS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
-      comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
+      comments(last: ${GRAPHQL_PAGE_SIZE}, before: $cursor) {
         totalCount
-        pageInfo { hasNextPage endCursor }
-        nodes { id author { login avatarUrl } body createdAt url }
+        pageInfo { hasPreviousPage startCursor }
+        nodes { id author { login avatarUrl } body createdAt url ${GITHUB_REACTION_GROUPS_FIELDS} }
       }
     }
   }
+}`;
+
+export const ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $commentId: ID!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { id } }
+  node(id: $commentId) { ... on IssueComment { issue { id } } }
+}`;
+
+export const ISSUE_NODE_ID_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { id } }
+}`;
+
+const RawIssueNodeIdSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({ issue: Schema.Struct({ id: Schema.String }) }),
+  }),
+});
+
+const decodeIssueNodeId = decodeJsonResult(RawIssueNodeIdSchema);
+
+export function decodeIssueNodeIdJson(raw: string): Result.Result<string, DecodeFailure> {
+  const decoded = decodeIssueNodeId(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  return Result.succeed(decoded.success.data.repository.issue.id);
+}
+
+const RawIssueCommentScopeSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.NullOr(
+      Schema.Struct({ issue: Schema.NullOr(Schema.Struct({ id: Schema.String })) }),
+    ),
+    node: Schema.NullOr(
+      Schema.Struct({ issue: Schema.optional(Schema.Struct({ id: Schema.String })) }),
+    ),
+  }),
+});
+
+const decodeIssueCommentScope = decodeJsonResult(RawIssueCommentScopeSchema);
+
+/** A comment id is global, so confirm it hangs off the issue named by the request. */
+export function decodeIssueCommentScopeJson(raw: string): Result.Result<boolean, DecodeFailure> {
+  const decoded = decodeIssueCommentScope(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const expected = decoded.success.data.repository?.issue?.id ?? null;
+  const actual = decoded.success.data.node?.issue?.id ?? null;
+  return Result.succeed(expected !== null && expected === actual);
+}
+
+export const UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION = `mutation($commentId: ID!, $body: String!) {
+  updateIssueComment(input: { id: $commentId, body: $body }) { issueComment { id } }
 }`;
 
 /**
@@ -708,16 +786,17 @@ export interface GitHubIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   readonly stateReason: IssueCloseReason | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
-  readonly labels: ReadonlyArray<SourceControlLabel>;
+  readonly assignees: ReadonlyArray<IssueActor>;
+  readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
+  readonly reactions: ReadonlyArray<IssueReaction>;
 }
 
 export interface GitHubIssueDetail extends GitHubIssue {
@@ -767,9 +846,16 @@ function nextCursorOf(
   return pageInfo?.hasNextPage === true ? trimmed(pageInfo.endCursor) : null;
 }
 
+/** Where a newest-first connection carries on into older rows. */
+function previousCursorOf(
+  pageInfo: Schema.Schema.Type<typeof RawPageInfoSchema> | null | undefined,
+): string | null {
+  return pageInfo?.hasPreviousPage === true ? trimmed(pageInfo.startCursor) : null;
+}
+
 function toActor(
   raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined,
-): SourceControlActor | null {
+): IssueActor | null {
   const login = trimmed(raw?.login);
   return login === null
     ? null
@@ -778,7 +864,7 @@ function toActor(
 
 function toActors(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawActorSchema> | null> | null | undefined,
-): ReadonlyArray<SourceControlActor> {
+): ReadonlyArray<IssueActor> {
   return (raw ?? []).flatMap((entry) => {
     const actor = toActor(entry);
     return actor === null ? [] : [actor];
@@ -787,7 +873,7 @@ function toActors(
 
 function toLabels(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawLabelSchema> | null> | null | undefined,
-): ReadonlyArray<SourceControlLabel> {
+): ReadonlyArray<IssueLabel> {
   return (raw ?? []).flatMap((label) => {
     const name = trimmed(label?.name);
     return name === null ? [] : [{ name, color: trimmed(label?.color) }];
@@ -945,6 +1031,7 @@ function toIssue(raw: Schema.Schema.Type<typeof RawIssueSchema>): GitHubIssue {
     milestone: trimmed(raw.milestone?.title),
     // The listing has no count that is not the whole conversation; the search below has one.
     commentCount: 0,
+    reactions: toGitHubReactions(raw.reactionGroups, null),
   };
 }
 
@@ -1021,6 +1108,8 @@ export interface GitHubIssueSearchBatch {
   readonly rawCount: number;
   /** More rows than this slice asked for, which is truncation for every repository in it. */
   readonly hasNextPage: boolean;
+  /** Where the next page of the same search starts, or null once the search has nothing further. */
+  readonly nextCursor: string | null;
 }
 
 /**
@@ -1058,10 +1147,12 @@ export function decodeIssueSearchJson(
       repository,
     });
   }
+  const pageInfo = decoded.success.data.search.pageInfo;
   return Result.succeed({
     items,
     rawCount: nodes.length,
-    hasNextPage: decoded.success.data.search.pageInfo?.hasNextPage ?? false,
+    hasNextPage: pageInfo?.hasNextPage ?? false,
+    nextCursor: nextCursorOf(pageInfo),
   });
 }
 
@@ -1132,17 +1223,19 @@ export function decodeIssueViewerPermissionsJson(
 
 export interface GitHubIssueActivityPage {
   /** Richer than the listing's author: this read carries the avatar no `gh` JSON field does. */
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly comments: ReadonlyArray<IssueComment>;
   /** GitHub's own count of the conversation, which a bounded read can fall short of. */
   readonly commentCount: number;
   /** Where the rest of the conversation carries on from, or null once it is whole. */
   readonly nextCursor: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
+  readonly reactions: ReturnType<typeof toGitHubReactions>;
 }
 
 function toComments(
   raw: Schema.Schema.Type<typeof RawCommentsSchema> | null | undefined,
+  viewer: string | null,
 ): ReadonlyArray<IssueComment> {
   return (raw?.nodes ?? []).flatMap((comment) => {
     const id = trimmed(comment?.id);
@@ -1154,6 +1247,7 @@ function toComments(
         body: comment.body ?? "",
         createdAt: comment.createdAt,
         url: trimmed(comment.url),
+        reactions: toGitHubReactions(comment.reactionGroups, viewer),
       },
     ];
   });
@@ -1168,6 +1262,7 @@ export function decodeIssueActivityJson(
     return Result.fail(decoded.failure);
   }
   const issue = decoded.success.data.repository.issue;
+  const viewer = trimmed(decoded.success.data.viewer?.login);
   const events: IssueEvent[] = [];
   for (const entry of issue?.timelineItems?.nodes ?? []) {
     const decodedItem = decodeTimelineItem(entry);
@@ -1187,10 +1282,11 @@ export function decodeIssueActivityJson(
   }
   return Result.succeed({
     author: toActor(issue?.author),
-    comments: toComments(issue?.comments),
+    comments: toComments(issue?.comments, viewer),
     commentCount: Math.max(0, issue?.comments?.totalCount ?? 0),
-    nextCursor: nextCursorOf(issue?.comments?.pageInfo),
+    nextCursor: previousCursorOf(issue?.comments?.pageInfo),
     events,
+    reactions: toGitHubReactions(issue?.reactionGroups, viewer),
   });
 }
 
@@ -1207,9 +1303,10 @@ export function decodeIssueCommentsJson(raw: string): Result.Result<
     return Result.fail(decoded.failure);
   }
   const comments = decoded.success.data.repository.issue?.comments;
+  const viewer = trimmed(decoded.success.data.viewer?.login);
   return Result.succeed({
-    comments: toComments(comments),
-    nextCursor: nextCursorOf(comments?.pageInfo),
+    comments: toComments(comments, viewer),
+    nextCursor: previousCursorOf(comments?.pageInfo),
   });
 }
 
@@ -1338,7 +1435,8 @@ function toTemplateField(
   const label = attributes?.label ?? "";
   const description = attributes?.description ?? "";
   const required = raw.validations?.required === true;
-  // A form need not name a question. Where it does not, the place it is asked in files the answer.
+  // A form need not name a question. Where it does not, the place it is asked in files the answer —
+  // a stand-in the caller moves aside if the form names it somewhere else.
   const id = trimmed(raw.id) ?? `field-${index}`;
   // Every kind but `markdown` is a heading in the filed body, so one with nothing to head is not a
   // question anybody could answer.
@@ -1400,6 +1498,29 @@ function toTemplateField(
 }
 
 /**
+ * An id no other question of this form answers to.
+ *
+ * Answers are held by id, so two questions sharing one share an answer: the second control writes
+ * over the first, and the issue is filed with one answer twice and the other not at all. A question
+ * the form names keeps its name; only a stand-in — or the second of two questions the form named
+ * the same thing — is moved out of the way, and it is moved past every name the form uses rather
+ * than past the ones read so far, so a question further down still gets its own.
+ */
+function freeFieldId(
+  candidate: string,
+  named: ReadonlySet<string>,
+  taken: ReadonlySet<string>,
+): string {
+  let id = candidate;
+  let attempt = 2;
+  while (named.has(id) || taken.has(id)) {
+    id = `${candidate}-${attempt}`;
+    attempt += 1;
+  }
+  return id;
+}
+
+/**
  * One `.github/ISSUE_TEMPLATE/*.yml` as the template it describes, or null for a file that is not a
  * form at all — a config, half-written YAML, something else that landed in the directory. Null
  * rather than a failure, because a repository's other templates and the blank issue filing falls
@@ -1417,6 +1538,29 @@ export function decodeIssueFormYaml(filename: string, raw: string): IssueTemplat
   const key = trimmed(filename);
   const name = trimmed(form.value.name);
   if (key === null || name === null) return null;
+  const decoded = form.value.body.map((entry) => {
+    const field = decodeFormField(entry);
+    return Exit.isFailure(field) ? null : field.value;
+  });
+  // Every id the form names, read before any question is handed one, so a stand-in can be kept off
+  // a name a question further down the form answers to.
+  const named = new Set(
+    decoded.flatMap((raw) => {
+      const id = raw === null ? null : trimmed(raw.id);
+      return id === null ? [] : [id];
+    }),
+  );
+  const taken = new Set<string>();
+  const fields = decoded.flatMap((raw, index): ReadonlyArray<IssueTemplateField> => {
+    if (raw === null) return [];
+    const mapped = toTemplateField(raw, index);
+    if (mapped === null) return [];
+    if (mapped.kind === "markdown") return [mapped];
+    const own = trimmed(raw.id);
+    const id = own !== null && !taken.has(own) ? own : freeFieldId(mapped.id, named, taken);
+    taken.add(id);
+    return [{ ...mapped, id }];
+  });
   return {
     key,
     name,
@@ -1424,12 +1568,7 @@ export function decodeIssueFormYaml(filename: string, raw: string): IssueTemplat
     title: form.value.title ?? "",
     // A form has no draft to write over: its body is built from the answers instead.
     body: "",
-    fields: form.value.body.flatMap((entry, index) => {
-      const field = decodeFormField(entry);
-      if (Exit.isFailure(field)) return [];
-      const mapped = toTemplateField(field.value, index);
-      return mapped === null ? [] : [mapped];
-    }),
+    fields,
     labels: toNameList(form.value.labels).slice(0, TEMPLATE_LABELS),
     assignees: toNameList(form.value.assignees).slice(0, TEMPLATE_ASSIGNEES),
   };

@@ -1,10 +1,11 @@
-import type { IssueListEntry } from "@t3tools/contracts";
+import { issueSourceKey, type IssueListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   filterIssuesByInvolvement,
   groupIssuesByInvolvement,
   issueEntryKey,
+  issueListOrderLabels,
   matchesIssueQuery,
   narrowIssuesToFilters,
   partitionIssuesWithPriority,
@@ -15,7 +16,7 @@ import {
   resolveProjectScope,
 } from "./issueList.logic";
 
-const VIEWERS = { "github.com": "Bilal" } as const;
+const VIEWERS = { [issueSourceKey("github", "github.com")]: "Bilal" } as const;
 const NO_VIEWERS = {} as const;
 
 const actor = (login: string) => ({ login, name: null, avatarUrl: null });
@@ -43,6 +44,19 @@ function entry(overrides: Partial<IssueListEntry> & Pick<IssueListEntry, "number
   } as IssueListEntry;
 }
 
+describe("issue sort order labels", () => {
+  it.each([
+    ["created", "Oldest", "Newest"],
+    ["updated", "Oldest", "Newest"],
+    ["best-match", "Oldest", "Newest"],
+    ["comments", "Ascending", "Descending"],
+    ["reactions", "Ascending", "Descending"],
+    ["reactions-heart", "Ascending", "Descending"],
+  ] as const)("labels %s order as %s then %s", (sort, ascending, descending) => {
+    expect(issueListOrderLabels(sort)).toEqual([ascending, descending]);
+  });
+});
+
 describe("issue involvement filtering", () => {
   const entries = [
     entry({ number: 1, author: actor("Bilal") }),
@@ -53,6 +67,14 @@ describe("issue involvement filtering", () => {
   it("matches the viewer's own issues case-insensitively", () => {
     expect(
       filterIssuesByInvolvement(entries, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
+  });
+
+  it("reads the host-only viewer key from an older server", () => {
+    expect(
+      filterIssuesByInvolvement(entries, { "github.com": "Bilal" }, "authored").map(
+        (item) => item.number,
+      ),
     ).toEqual([1]);
   });
 
@@ -99,6 +121,20 @@ describe("issue involvement filtering", () => {
     expect(
       filterIssuesByInvolvement(mixed, VIEWERS, "assigned").map((item) => item.number),
     ).toEqual([1]);
+  });
+
+  it("keeps two adapters on one host as two accounts", () => {
+    const mixed = [
+      entry({ number: 1, author: actor("Bilal") }),
+      entry({ number: 2, provider: "jira", author: actor("Jira User") }),
+    ];
+    const viewers = {
+      [issueSourceKey("github", "github.com")]: "Bilal",
+      [issueSourceKey("jira", "github.com")]: "Jira User",
+    };
+    expect(
+      filterIssuesByInvolvement(mixed, viewers, "authored").map((item) => item.number),
+    ).toEqual([1, 2]);
   });
 });
 
@@ -281,15 +317,20 @@ describe("issue row keys", () => {
 });
 
 describe("partitioning with the hosts' own priority reads", () => {
+  const KEEP_ALL = () => true;
   const assignedRow = (number: number, updatedAt: string) =>
     entry({ number, updatedAt, assignees: [actor("Bilal")] });
+  const labelled = (row: IssueListEntry, name: string) => ({
+    ...row,
+    labels: [{ name, color: null }],
+  });
 
   it("keeps Others in feed order when a continuation lands a row already partitioned", () => {
     const older = entry({ number: 1, updatedAt: "2026-07-05T00:00:00Z" });
     const newer = entry({ number: 2, updatedAt: "2026-07-06T00:00:00Z" });
     const mine = assignedRow(3, "2026-07-04T00:00:00Z");
     // The assigned partition already holds the row the continuation carries.
-    const groups = partitionIssuesWithPriority([newer, older, mine], [], [mine]);
+    const groups = partitionIssuesWithPriority([newer, older, mine], [], [mine], KEEP_ALL);
     expect(groups.map((group) => group.key)).toEqual(["assigned", "others"]);
     expect(groups[0]!.entries.map((item) => item.number)).toEqual([3]);
     expect(groups[1]!.entries.map((item) => item.number)).toEqual([2, 1]);
@@ -298,7 +339,7 @@ describe("partitioning with the hosts' own priority reads", () => {
   it("appends a row the partition page missed to Others rather than moving it up", () => {
     const shown = entry({ number: 1, updatedAt: "2026-07-06T00:00:00Z" });
     const olderMine = assignedRow(9, "2026-01-01T00:00:00Z");
-    const groups = partitionIssuesWithPriority([shown, olderMine], [], []);
+    const groups = partitionIssuesWithPriority([shown, olderMine], [], [], KEEP_ALL);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.entries.map((item) => item.number)).toEqual([1, 9]);
   });
@@ -307,7 +348,7 @@ describe("partitioning with the hosts' own priority reads", () => {
     const both = assignedRow(1, "2026-07-01T00:00:00Z");
     const filed = entry({ number: 2, updatedAt: "2026-07-02T00:00:00Z" });
     const filedOlder = entry({ number: 3, updatedAt: "2026-06-02T00:00:00Z" });
-    const groups = partitionIssuesWithPriority([], [both, filedOlder, filed], [both]);
+    const groups = partitionIssuesWithPriority([], [both, filedOlder, filed], [both], KEEP_ALL);
     expect(groups.map((group) => group.key)).toEqual(["assigned", "authored"]);
     expect(groups[0]!.entries.map((item) => item.number)).toEqual([1]);
     expect(groups[1]!.entries.map((item) => item.number)).toEqual([2, 3]);
@@ -316,8 +357,20 @@ describe("partitioning with the hosts' own priority reads", () => {
   it("lets the feed's copy of a partitioned row replace the partition's", () => {
     const stale = assignedRow(1, "2026-07-01T00:00:00Z");
     const fresh = { ...stale, title: "Retitled" };
-    const groups = partitionIssuesWithPriority([fresh], [], [stale]);
+    const groups = partitionIssuesWithPriority([fresh], [], [stale], KEEP_ALL);
     expect(groups[0]!.entries[0]!.title).toBe("Retitled");
+  });
+
+  it("narrows the partitions by whatever narrowed the feed", () => {
+    // The label filter runs on the page, after the partitions answered their own question.
+    const wanted = labelled(assignedRow(1, "2026-07-03T00:00:00Z"), "bug");
+    const unwanted = labelled(assignedRow(2, "2026-07-04T00:00:00Z"), "docs");
+    const filed = labelled(entry({ number: 3, updatedAt: "2026-07-05T00:00:00Z" }), "docs");
+    const groups = partitionIssuesWithPriority([wanted], [filed], [wanted, unwanted], (row) =>
+      row.labels.some((label) => label.name === "bug"),
+    );
+    expect(groups.map((group) => group.key)).toEqual(["assigned"]);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([1]);
   });
 });
 
@@ -331,7 +384,7 @@ describe("the list snapshot across a reload", () => {
   };
   const data = {
     entries: [entry({ number: 1 })],
-    viewers: { "github.com": "Bilal" },
+    viewers: { [issueSourceKey("github", "github.com")]: "Bilal" },
     providers: [],
     errors: [{ projectId: "project-1", projectTitle: "t3code", message: "boom" }],
     truncated: true,

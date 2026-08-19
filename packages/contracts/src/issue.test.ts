@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildIssueTemplateBody,
+  issueSourceKey,
   IssueCreateInput,
   IssueDetail,
   IssueListInput,
@@ -19,9 +20,11 @@ const decodeCreate = Schema.decodeUnknownSync(IssueCreateInput);
 const decodeUpdate = Schema.decodeUnknownSync(IssueUpdateInput);
 const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
+const GITHUB_SOURCE = issueSourceKey("github", "github.com");
+const GITLAB_SOURCE = issueSourceKey("gitlab", "gitlab.com");
 
 const LIST_RESULT: IssueListResult = {
-  viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
+  viewers: { [GITHUB_SOURCE]: "bilal", [GITLAB_SOURCE]: "bilal.hassan" },
   providers: [
     {
       host: "github.com",
@@ -81,14 +84,17 @@ describe("IssueListResult", () => {
     expect(decoded).toStrictEqual(LIST_RESULT);
   });
 
-  it("keys a viewer by host, so two hosts of one kind stay separate accounts", () => {
+  it("keys a viewer by adapter and host, so accounts never cross", () => {
+    const enterprise = issueSourceKey("github", "github.acme.dev");
+    const jira = issueSourceKey("jira", "github.com");
     const decoded = decodeListResult({
       ...LIST_RESULT,
-      viewers: { "github.com": "bilal", "github.acme.dev": "b.hassan" },
+      viewers: { [GITHUB_SOURCE]: "bilal", [enterprise]: "b.hassan", [jira]: "jira-user" },
     });
 
-    expect(decoded.viewers["github.com"]).toBe("bilal");
-    expect(decoded.viewers["github.acme.dev"]).toBe("b.hassan");
+    expect(decoded.viewers[GITHUB_SOURCE]).toBe("bilal");
+    expect(decoded.viewers[enterprise]).toBe("b.hassan");
+    expect(decoded.viewers[jira]).toBe("jira-user");
   });
 
   it("keeps why an issue was closed, which is not the same as that it was closed", () => {
@@ -98,9 +104,31 @@ describe("IssueListResult", () => {
       "not-planned",
     );
   });
+
+  it("accepts issues from adapters that are not source control providers", () => {
+    const decoded = decodeListResult({
+      ...LIST_RESULT,
+      providers: [{ ...LIST_RESULT.providers[0], kind: "jira", host: "acme.atlassian.net" }],
+      entries: [{ ...LIST_RESULT.entries[0], provider: "jira", host: "acme.atlassian.net" }],
+    });
+
+    expect(decoded.providers[0]?.kind).toBe("jira");
+    expect(decoded.entries[0]?.provider).toBe("jira");
+  });
 });
 
 describe("IssueListInput", () => {
+  it("accepts GitHub-style sort choices", () => {
+    const input = decodeListInput({
+      state: "open",
+      sort: "reactions-thumbs-up",
+      order: "desc",
+    });
+
+    expect(input.sort).toBe("reactions-thumbs-up");
+    expect(input.order).toBe("desc");
+  });
+
   it("trims a search, so what is sent is what was typed", () => {
     expect(decodeListInput({ state: "open", query: "  refresh  " }).query).toBe("refresh");
   });
@@ -223,6 +251,21 @@ describe("IssueDetail", () => {
 
 describe("IssueTemplateList", () => {
   const TEMPLATES: IssueTemplateList = {
+    capabilities: {
+      comment: true,
+      actions: ["close", "reopen"],
+      closeReasons: ["completed", "not-planned"],
+      create: true,
+      issueTemplates: true,
+      edit: true,
+      labels: true,
+      assignees: true,
+      listLabelCandidates: true,
+      listAssigneeCandidates: true,
+      search: true,
+      linkedPullRequests: true,
+      timelineEvents: true,
+    },
     templates: [
       {
         key: "bug_report.md",
@@ -324,6 +367,7 @@ describe("IssueTemplateList", () => {
 
   it("takes a repository that offers nothing, which is where the blank form comes from", () => {
     const decoded = decodeTemplates({
+      capabilities: TEMPLATES.capabilities,
       templates: [],
       contactLinks: [],
       blankIssuesEnabled: true,
@@ -331,6 +375,18 @@ describe("IssueTemplateList", () => {
 
     expect(decoded.templates).toEqual([]);
     expect(decoded.blankIssuesEnabled).toBe(true);
+  });
+
+  // A server from before capabilities travelled here still answers the offer, and a composer that
+  // reads none is where it stood before: everything offered, and the host refuses what it cannot do.
+  it("takes an offer from a server that says nothing about what the host can do", () => {
+    const decoded = decodeTemplates({
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
+
+    expect(decoded.capabilities).toBeUndefined();
   });
 
   // A markdown template supplies no questions, which is how the composer tells the two apart.
@@ -466,6 +522,18 @@ describe("buildIssueTemplateBody", () => {
   it("leaves the fence off a rendered answer nobody wrote", () => {
     expect(buildIssueTemplateBody([FIELDS[4]!], { logs: "   " })).toBe(
       "### Relevant log output\n\n_No response_",
+    );
+  });
+
+  // Four spaces are a code block, so an answer trimmed at the front is filed as prose the reader
+  // never wrote. Only what follows the last word goes, which the blank line between blocks and the
+  // closing fence would otherwise file as an empty line.
+  it("files an indented answer with the indentation it was written with", () => {
+    expect(buildIssueTemplateBody([FIELDS[3]!], { "what-happened": "    boom()\n\n" })).toBe(
+      "### What happened?\n\n    boom()",
+    );
+    expect(buildIssueTemplateBody([FIELDS[4]!], { logs: "  Error: boom  \n" })).toBe(
+      "### Relevant log output\n\n```shell\n  Error: boom\n```",
     );
   });
 

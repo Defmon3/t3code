@@ -11,10 +11,12 @@ import type {
   IssueLabelCandidate,
   IssueLinkedPullRequest,
   IssueState,
-  SourceControlActor,
-  SourceControlLabel,
+  IssueActor,
+  IssueLabel,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+
+import { GitLabAwardNodesSchema, toGitLabReactions } from "../sourceControl/gitLabReactionJson.ts";
 
 /**
  * GitLab's REST enums are decoded as plain strings and normalized here: a GitLab release that
@@ -105,21 +107,28 @@ export interface GitLabIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   /** GitLab records nothing about why an issue was closed, so there is never a reason to report. */
   readonly stateReason: null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
-  readonly labels: ReadonlyArray<SourceControlLabel>;
+  readonly assignees: ReadonlyArray<IssueActor>;
+  readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
 }
 
 export interface GitLabIssueDetail extends GitLabIssue {
   readonly body: string;
+  /**
+   * The assignees a second time, carrying the numeric id GitLab writes an assignment by. An actor
+   * has no room for it and the handle is not something GitLab would take, so without this whoever
+   * already has the issue can only be named by the member listing — and the assignee standing past
+   * the end of that listing would come off the issue the next time the set is written.
+   */
+  readonly assigneeCandidates: ReadonlyArray<Omit<IssueAssigneeCandidate, "isAssigned">>;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -134,18 +143,28 @@ function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefine
     : { login, name: trimmed(raw?.name), avatarUrl: trimmed(raw?.avatar_url) };
 }
 
+/**
+ * The same person as somebody an assignment can be written to. GitLab addresses them by numeric
+ * id there and by nothing else, so one it named no id for is dropped rather than offered under a
+ * handle the write would discard.
+ */
+function toCandidate(
+  raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefined,
+): Omit<IssueAssigneeCandidate, "isAssigned"> | null {
+  const actor = toActor(raw);
+  return actor === null || raw?.id === undefined ? null : { ...actor, id: String(raw.id) };
+}
+
 function toActors(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawUserSchema>> | null | undefined,
-): ReadonlyArray<SourceControlActor> {
+): ReadonlyArray<IssueActor> {
   return (raw ?? []).flatMap((user) => {
     const actor = toActor(user);
     return actor === null ? [] : [actor];
   });
 }
 
-function toLabels(
-  raw: ReadonlyArray<string> | null | undefined,
-): ReadonlyArray<SourceControlLabel> {
+function toLabels(raw: ReadonlyArray<string> | null | undefined): ReadonlyArray<IssueLabel> {
   // GitLab returns label names only on an issue, so there is no colour to carry.
   return (raw ?? []).flatMap((label) => {
     const name = trimmed(label);
@@ -220,7 +239,14 @@ export function decodeIssueDetailJson(
 ): Result.Result<GitLabIssueDetail, DecodeFailure> {
   const decoded = decodeIssue(raw);
   return Result.isSuccess(decoded)
-    ? Result.succeed({ ...toIssue(decoded.success), body: decoded.success.description ?? "" })
+    ? Result.succeed({
+        ...toIssue(decoded.success),
+        body: decoded.success.description ?? "",
+        assigneeCandidates: (decoded.success.assignees ?? []).flatMap((user) => {
+          const candidate = toCandidate(user);
+          return candidate === null ? [] : [candidate];
+        }),
+      })
     : Result.fail(decoded.failure);
 }
 
@@ -379,6 +405,12 @@ function toChangeRequestState(value: string | null | undefined): ChangeRequestSt
   }
 }
 
+export interface GitLabLinkedMergeRequests {
+  readonly links: ReadonlyArray<IssueLinkedPullRequest>;
+  /** Rows GitLab returned, counted before decoding, so a skipped row cannot hide a next page. */
+  readonly rawCount: number;
+}
+
 /**
  * The merge requests GitLab reports against an issue. `closesIssue` is the caller's, not the
  * payload's: GitLab answers the same shape for the ones that merely mention the issue and the
@@ -390,7 +422,7 @@ function toChangeRequestState(value: string | null | undefined): ChangeRequestSt
 export function decodeLinkedMergeRequestsJson(
   raw: string,
   closesIssue: boolean,
-): Result.Result<ReadonlyArray<IssueLinkedPullRequest>, DecodeFailure> {
+): Result.Result<GitLabLinkedMergeRequests, DecodeFailure> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
@@ -414,7 +446,7 @@ export function decodeLinkedMergeRequestsJson(
       closesIssue,
     });
   }
-  return Result.succeed(links);
+  return Result.succeed({ links, rawCount: decoded.success.length });
 }
 
 export interface GitLabProjectLabels {
@@ -466,10 +498,9 @@ export function decodeProjectMembersJson(
   const members: Array<Omit<IssueAssigneeCandidate, "isAssigned">> = [];
   for (const entry of decoded.success) {
     const user = decodeUserEntry(entry);
-    if (Exit.isFailure(user) || user.value.id === undefined) continue;
-    const actor = toActor(user.value);
-    if (actor === null) continue;
-    members.push({ ...actor, id: String(user.value.id) });
+    if (Exit.isFailure(user)) continue;
+    const member = toCandidate(user.value);
+    if (member !== null) members.push(member);
   }
   return Result.succeed({ members, rawCount: decoded.success.length });
 }
@@ -508,4 +539,75 @@ export function decodeIssueTemplateJson(raw: string): Result.Result<string, Deco
   return Result.isSuccess(decoded)
     ? Result.succeed(decoded.success.content ?? "")
     : Result.fail(decoded.failure);
+}
+
+export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: String!, $cursor: String) {
+  currentUser { username }
+  project(fullPath: $fullPath) {
+    issue(iid: $iid) {
+      awardEmoji { nodes { name user { username } } }
+      notes(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id awardEmoji { nodes { name user { username } } } }
+      }
+    }
+  }
+}`;
+
+const RawIssueAwardPageSchema = Schema.Struct({
+  data: Schema.Struct({
+    currentUser: Schema.optional(
+      Schema.NullOr(Schema.Struct({ username: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
+    project: Schema.NullOr(
+      Schema.Struct({
+        issue: Schema.NullOr(
+          Schema.Struct({
+            awardEmoji: GitLabAwardNodesSchema,
+            notes: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  pageInfo: Schema.optional(
+                    Schema.Struct({
+                      hasNextPage: Schema.optional(Schema.Boolean),
+                      endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+                    }),
+                  ),
+                  nodes: Schema.Array(
+                    Schema.NullOr(
+                      Schema.Struct({
+                        id: Schema.optional(Schema.NullOr(Schema.String)),
+                        awardEmoji: GitLabAwardNodesSchema,
+                      }),
+                    ),
+                  ),
+                }),
+              ),
+            ),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+const decodeIssueAwardPage = decodeJsonResult(RawIssueAwardPageSchema);
+
+export function decodeIssueAwardEmojiJson(raw: string) {
+  const decoded = decodeIssueAwardPage(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const viewer = trimmed(decoded.success.data.currentUser?.username);
+  const issue = decoded.success.data.project?.issue;
+  const byNoteId = new Map<string, ReturnType<typeof toGitLabReactions>>();
+  for (const note of issue?.notes?.nodes ?? []) {
+    const id = trimmed(note?.id)?.split("/").at(-1) ?? null;
+    if (id === null || !/^\d+$/.test(id)) continue;
+    const reactions = toGitLabReactions(note?.awardEmoji, viewer);
+    if (reactions.length > 0) byNoteId.set(id, reactions);
+  }
+  const pageInfo = issue?.notes?.pageInfo;
+  return Result.succeed({
+    reactions: toGitLabReactions(issue?.awardEmoji, viewer),
+    reactionsByNoteId: byNoteId,
+    nextCursor: pageInfo?.hasNextPage === true ? (trimmed(pageInfo.endCursor) ?? null) : null,
+  });
 }

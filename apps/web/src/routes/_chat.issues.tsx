@@ -2,7 +2,10 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
+  IssueProviderKind,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueListEntry,
   IssueListResult,
   IssueListState,
@@ -39,19 +42,23 @@ import {
 } from "../components/issue/issueList.logic";
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
-import { IssueListGhost } from "../components/issue/IssueGhosts";
+import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
+import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
 import {
-  IssueFiltersMenu,
-  IssueSearchInput,
-  issueHostLabel,
-  type IssueExpectedHost,
-  type IssueFilterOption,
-} from "../components/issue/IssueListFilters";
+  ListSearchInput,
+  type ListFilterHost,
+  type ListFilterOption,
+} from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
+import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
-import { RightPanelTabs } from "../components/RightPanelTabs";
+import {
+  RightPanelTabs,
+  type IssueTabStatus,
+  type PullRequestTabStatus,
+} from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -63,11 +70,13 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
+  issueSurfaceId,
+  pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
   useRightPanelStore,
-  type IssueSurface,
+  type RightPanelSurface,
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
@@ -76,7 +85,7 @@ import { issueEnvironment } from "../state/issues";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 export interface IssuesSearch {
@@ -99,6 +108,8 @@ export interface IssuesSearch {
    */
   readonly label?: string;
   readonly q?: string;
+  readonly sort?: IssueListSort;
+  readonly order?: IssueListOrder;
 }
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
@@ -107,13 +118,34 @@ const INVOLVEMENT_TABS = [
   { value: "assigned", label: "Assigned", Icon: UserCheckIcon },
   { value: "authored", label: "Authored", Icon: PenLineIcon },
   { value: "mentioned", label: "Mentioned", Icon: AtSignIcon },
-] as const satisfies ReadonlyArray<IssueFilterOption<IssueInvolvement>>;
+] as const satisfies ReadonlyArray<ListFilterOption<IssueInvolvement>>;
 
 const STATE_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "open", label: "Open", Icon: CircleDotIcon },
   { value: "closed", label: "Closed", Icon: CircleCheckIcon },
-] as const satisfies ReadonlyArray<IssueFilterOption<IssueListState>>;
+] as const satisfies ReadonlyArray<ListFilterOption<IssueListState>>;
+
+function issueListSort(value: unknown): IssueListSort | undefined {
+  switch (value) {
+    case "best-match":
+    case "created":
+    case "updated":
+    case "comments":
+    case "reactions":
+    case "reactions-thumbs-up":
+    case "reactions-thumbs-down":
+    case "reactions-rocket":
+    case "reactions-hooray":
+    case "reactions-eyes":
+    case "reactions-heart":
+    case "reactions-laugh":
+    case "reactions-confused":
+      return value;
+    default:
+      return undefined;
+  }
+}
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -130,34 +162,40 @@ const EMPTY_VIEWERS: IssueListResult["viewers"] = {};
 /** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
 const ISSUES_PANEL_ID = ThreadId.make("issues-panel");
 const EMPTY_PREVIEW_SESSIONS = {};
+const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 
 export const Route = createFileRoute("/_chat/issues")({
-  validateSearch: (raw: Record<string, unknown>): IssuesSearch => ({
-    involvement:
-      raw.involvement === "assigned" ||
-      raw.involvement === "authored" ||
-      raw.involvement === "mentioned"
-        ? raw.involvement
-        : "all",
-    state: raw.state === "closed" || raw.state === "all" ? raw.state : "open",
-    ...(typeof raw.repository === "string" && raw.repository
-      ? { repository: raw.repository.slice(0, 200) }
-      : {}),
-    ...(typeof raw.number === "number" && Number.isInteger(raw.number) && raw.number > 0
-      ? { number: raw.number }
-      : {}),
-    ...(typeof raw.projectId === "string" && raw.projectId
-      ? { projectId: raw.projectId as ProjectId }
-      : {}),
-    ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
-    ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
-      ? { selectedProjectId: raw.selectedProjectId as ProjectId }
-      : {}),
-    ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
-    ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
-  }),
+  validateSearch: (raw: Record<string, unknown>): IssuesSearch => {
+    const sort = issueListSort(raw.sort);
+    return {
+      involvement:
+        raw.involvement === "assigned" ||
+        raw.involvement === "authored" ||
+        raw.involvement === "mentioned"
+          ? raw.involvement
+          : "all",
+      state: raw.state === "closed" || raw.state === "all" ? raw.state : "open",
+      ...(typeof raw.repository === "string" && raw.repository
+        ? { repository: raw.repository.slice(0, 200) }
+        : {}),
+      ...(typeof raw.number === "number" && Number.isInteger(raw.number) && raw.number > 0
+        ? { number: raw.number }
+        : {}),
+      ...(typeof raw.projectId === "string" && raw.projectId
+        ? { projectId: raw.projectId as ProjectId }
+        : {}),
+      ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
+      ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
+        ? { selectedProjectId: raw.selectedProjectId as ProjectId }
+        : {}),
+      ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
+      ...(sort === undefined ? {} : { sort }),
+      ...(raw.order === "asc" || raw.order === "desc" ? { order: raw.order } : {}),
+      ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+    };
+  },
   component: IssuesRouteView,
 });
 
@@ -209,9 +247,35 @@ function IssuesRouteView() {
   const selectedRightPanelSurface = useRightPanelStore((state) =>
     selectSelectedRightPanelSurface(state.byThreadKey, rightPanelRef),
   );
-  const selectedIssueSurface =
-    selectedRightPanelSurface?.kind === "issue" ? selectedRightPanelSurface : null;
-  const activeIssueSurface = rightPanelState.isOpen ? selectedIssueSurface : null;
+  // A change request opened from an issue reads beside it as a peer tab, so this panel holds
+  // both kinds; only the issue tabs answer for the row highlighted in the list behind it.
+  const activeSurface =
+    rightPanelState.isOpen &&
+    (selectedRightPanelSurface?.kind === "issue" ||
+      selectedRightPanelSurface?.kind === "pull-request")
+      ? selectedRightPanelSurface
+      : null;
+  const activeIssueSurface = activeSurface?.kind === "issue" ? activeSurface : null;
+  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
+  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
+    const id = issueSurfaceId(status);
+    setIssueTabStatuses((current) =>
+      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
+        ? current
+        : { ...current, [id]: status },
+    );
+  }, []);
+  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
+    Record<string, PullRequestTabStatus>
+  >({});
+  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
+    const id = pullRequestSurfaceId(status);
+    setPullRequestTabStatuses((current) =>
+      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
+        ? current
+        : { ...current, [id]: status },
+    );
+  }, []);
 
   const updateSearch = useCallback(
     (patch: {
@@ -231,6 +295,8 @@ function IssuesRouteView() {
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.q ? { q: next.q } : {}),
+            ...(next.sort ? { sort: next.sort } : {}),
+            ...(next.order ? { order: next.order } : {}),
           };
         },
         replace: true,
@@ -261,9 +327,11 @@ function IssuesRouteView() {
   const typedQuery = (search.q ?? "").trim();
   const sentQuery = useDebouncedValue(typedQuery, SEARCH_DEBOUNCE_MS);
   const querySettled = typedQuery === sentQuery;
+  const sort: IssueListSort = search.sort ?? (sentQuery ? "best-match" : "updated");
+  const order: IssueListOrder = search.order ?? "desc";
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${sort}:${order}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -295,6 +363,8 @@ function IssuesRouteView() {
             // everything with the answer somewhere further down it.
             involvement: search.involvement,
             limit: pageSize,
+            sort,
+            order,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
             ...(sentQuery ? { query: sentQuery } : {}),
@@ -322,6 +392,8 @@ function IssuesRouteView() {
             state: search.state,
             involvement: search.involvement,
             limit: PAGE_SIZE,
+            sort: search.sort ?? "updated",
+            order: search.order ?? "desc",
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -333,7 +405,11 @@ function IssuesRouteView() {
   // below what is already on screen. A search re-ranks the whole list by match, so no partitions
   // are read for one. These are the same atoms the Authored and Assigned tabs ask for, so
   // switching to either is answered from cache.
-  const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
+  const partitionsWanted =
+    search.involvement === "all" &&
+    typedQuery.length === 0 &&
+    sort === "updated" &&
+    order === "desc";
   const authoredQuery = useEnvironmentQuery(
     issueEnvironmentId === null || !partitionsWanted
       ? null
@@ -343,6 +419,8 @@ function IssuesRouteView() {
             state: search.state,
             involvement: "authored",
             limit: PAGE_SIZE,
+            sort: search.sort ?? "updated",
+            order: search.order ?? "desc",
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -357,6 +435,8 @@ function IssuesRouteView() {
             state: search.state,
             involvement: "assigned",
             limit: PAGE_SIZE,
+            sort: search.sort ?? "updated",
+            order: search.order ?? "desc",
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -499,10 +579,9 @@ function IssuesRouteView() {
   // A grown page is read by the list and nothing else: the baseline always asks for one page, so
   // a host with no cursor to continue from — where "more" means asking for a longer page — would
   // have its extra rows thrown away for the ninety-nine the baseline keeps answering with.
+  const baselineVisible = sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE;
   const answered =
-    (sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE
-      ? baselineQuery.data
-      : listQuery.data) ??
+    (baselineVisible ? baselineQuery.data : listQuery.data) ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
   // Clearing a search returns to a list that has already been read, so it comes back at once
   // rather than after another round trip: the search was the temporary state, not the list.
@@ -527,9 +606,16 @@ function IssuesRouteView() {
   } | null>(null);
   useEffect(() => {
     if (!answered) return;
+    const hostOrdered =
+      sort === "best-match" && answered.providers.some((provider) => provider.kind !== "github")
+        ? rankIssueMatches(answered.entries, sentQuery)
+        : answered.entries;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey) {
-        return { key: filterKey, entries: rankIssueMatches(answered.entries, sentQuery) };
+        return {
+          key: filterKey,
+          entries: hostOrdered,
+        };
       }
       if (sentCursors !== null) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
@@ -538,18 +624,17 @@ function IssuesRouteView() {
         // next rows can be newer than another's last — lands under it.
         const held = new Set(previous.entries.map(issueEntryKey));
         const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
-        const appended = rankIssueMatches(
-          arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-          sentQuery,
-        );
-        return { key: filterKey, entries: [...previous.entries, ...appended] };
+        return { key: filterKey, entries: [...previous.entries, ...arrived] };
       }
       // A whole-page answer replaces the order outright: the host answers in the order the page
       // reads, so its order stands, and an issue opened since the last read belongs at the top
       // rather than wherever the previous page happened to leave room for it.
-      return { key: filterKey, entries: rankIssueMatches(answered.entries, sentQuery) };
+      return {
+        key: filterKey,
+        entries: hostOrdered,
+      };
     });
-  }, [answered, filterKey, sentCursors, sentQuery]);
+  }, [answered, filterKey, order, sentCursors, sentQuery, sort]);
 
   // Carrying on where the last answer stopped, and only raising the page size for the hosts that
   // could not say where that was.
@@ -576,7 +661,7 @@ function IssuesRouteView() {
   // merge above bring every row up to date in place.
   const refreshList = () => {
     if (sentCursors === null) {
-      listQuery.refresh();
+      (baselineVisible ? baselineQuery : listQuery).refresh();
       return;
     }
     const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
@@ -591,13 +676,12 @@ function IssuesRouteView() {
   };
 
   // The list goes stale the same way the detail does: somebody files an issue, comments on one,
-  // closes another. So it reads again on the way back to the window, and once a minute while
+  // closes another. So it reads again on the way back to the window, and every five minutes while
   // somebody is reading it. Those reads go through the server's cache and stop when the reader
   // stops, which is what keeps a page left open from spending a night of the host's rate limit.
   useLiveRefresh(
     () => {
       refreshList();
-      baselineQuery.refresh();
       authoredQuery.refresh();
       assignedQuery.refresh();
     },
@@ -712,7 +796,14 @@ function IssuesRouteView() {
   ]);
 
   const groups = useMemo(() => {
-    if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
+    if (
+      search.involvement !== "all" ||
+      sort !== "updated" ||
+      order !== "desc" ||
+      typedQuery.length > 0
+    ) {
+      return [{ key: "others" as const, label: "", entries }];
+    }
     // Until both partitions have answered, the snapshot's stand in — they are yesterday's
     // groups, but whole ones, where grouping the feed's first page locally loses every
     // authored row older than it. Once the live reads land they take over; with neither,
@@ -726,16 +817,28 @@ function IssuesRouteView() {
     if (authored === undefined || assigned === undefined) {
       return groupIssuesByInvolvement(entries, viewers);
     }
-    return partitionIssuesWithPriority(entries, authored, assigned);
+    // The label is narrowed here rather than on the hosts, so the partitions arrived without it.
+    return partitionIssuesWithPriority(
+      entries,
+      authored,
+      assigned,
+      (entry) =>
+        search.label === undefined ||
+        entry.labels.some((entryLabel) => entryLabel.name === search.label),
+    );
   }, [
     assignedQuery.data?.entries,
     authoredQuery.data?.entries,
     entries,
     environmentId,
     loaded,
+    order,
     partitionsWanted,
     scopeKey,
     search.involvement,
+    search.label,
+    sort,
+    typedQuery.length,
     viewers,
   ]);
 
@@ -792,15 +895,17 @@ function IssuesRouteView() {
         }
       : null;
 
-  const selectSurfaceInUrl = (surface: IssueSurface | null) =>
+  // The URL's selection is an issue and is read back as one, so a change request tab leaves it
+  // empty rather than naming a number this page would reopen as the issue of that number.
+  const selectSurfaceInUrl = (surface: RightPanelSurface | null) =>
     updateSearch(
-      surface === null
-        ? clearedSelection
-        : {
+      surface?.kind === "issue"
+        ? {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
-          },
+          }
+        : clearedSelection,
     );
 
   const toggleRightPanel = () => {
@@ -810,9 +915,9 @@ function IssuesRouteView() {
       updateSearch(clearedSelection);
       return;
     }
-    if (selectedIssueSurface === null) return;
+    if (selectedRightPanelSurface === null) return;
     useRightPanelStore.getState().show(rightPanelRef);
-    selectSurfaceInUrl(selectedIssueSurface);
+    selectSurfaceInUrl(selectedRightPanelSurface);
   };
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
@@ -833,7 +938,7 @@ function IssuesRouteView() {
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, IssueExpectedHost>();
+    const byHost = new Map<string, ListFilterHost<IssueProviderKind>>();
     for (const project of projects) {
       const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
       if (kind === undefined) continue;
@@ -865,7 +970,8 @@ function IssuesRouteView() {
 
   const [creating, setCreating] = useState(false);
   const searchInput = (
-    <IssueSearchInput
+    <ListSearchInput
+      label="Search issues"
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateSearch({ q: query || undefined })}
@@ -900,18 +1006,18 @@ function IssuesRouteView() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <IssueListGhost rows={7} />
+        <ListGhost rows={7} label="Loading issues" />
       ) : !issuesSupported ? (
         <IssuesUnavailableState
           title="Issues unavailable"
           error="Update this environment's T3 Code server to browse issues."
         />
       ) : firstLoad ? (
-        <IssueListGhost rows={7} />
+        <ListGhost rows={7} label="Loading issues" />
       ) : listQuery.error && listData === null ? (
         <IssuesUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
       ) : carriedToNothing ? (
-        <IssueListGhost rows={7} />
+        <ListGhost rows={7} label="Loading issues" />
       ) : entries.length === 0 ? (
         <IssueListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}
@@ -945,6 +1051,7 @@ function IssuesRouteView() {
                   entry={entry}
                   showProjectTitle
                   showProvider={showProvider}
+                  reactionSort={sort}
                   selected={
                     selected?.repository === entry.repository && selected.number === entry.number
                   }
@@ -980,42 +1087,77 @@ function IssuesRouteView() {
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuOptions: ReadonlyArray<IssueFilterOption<string>> = [
+  const hostMenuEntries = hostEntries.filter(
+    (entry, index) => hostEntries.findIndex((other) => other.host === entry.host) === index,
+  );
+  const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
-    ...hostEntries.map((entry) => {
+    ...hostMenuEntries.map((entry) => {
+      const presentation = getIssueProviderPresentation(entry.kind);
+      const sharesKind = hostEntries.some((host) => host !== entry && host.kind === entry.kind);
+      const sharesHost = hostEntries.some((host) => host !== entry && host.host === entry.host);
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
       // unreadable yet; once the summaries arrive they carry whether each one could be read.
-      const summary = hosts.find((host) => host.host === entry.host);
+      const summaries = hosts.filter((host) => host.host === entry.host);
+      const unavailable = summaries.length > 0 && summaries.every((summary) => !summary.configured);
       return {
         value: entry.host,
-        label: issueHostLabel(hostEntries, entry),
-        Icon: getSourceControlPresentationForKind(entry.kind).Icon,
-        ...(summary === undefined || summary.configured
+        label: sharesKind || sharesHost ? entry.host : presentation.providerName,
+        Icon: presentation.Icon,
+        ...(!unavailable
           ? {}
-          : { unavailable: summary.detail ?? "This host could not be read." }),
+          : { unavailable: summaries[0]?.detail ?? "This host could not be read." }),
       };
     }),
   ];
+  const availableSortingHosts =
+    scopedProjectId === undefined ? hostEntries : (answered?.providers ?? []);
+  const sortingHosts = search.host
+    ? availableSortingHosts.filter((entry) => entry.host === search.host)
+    : availableSortingHosts;
+  const githubSortingAvailable =
+    sortingHosts.length > 0 && sortingHosts.every((entry) => entry.kind === "github");
   const filtersMenu = (
-    <IssueFiltersMenu
-      state={search.state}
-      stateOptions={STATE_TABS}
-      onState={(state) => updateListScope({ state })}
-      involvement={search.involvement}
-      involvementOptions={INVOLVEMENT_TABS}
-      onInvolvement={(involvement) => updateListScope({ involvement })}
-      host={search.host}
-      hostOptions={hostMenuOptions}
-      onHost={(host) => updateListScope({ host })}
-      environmentId={environmentId}
-      projects={scopedProjects}
-      projectId={scopedProjectId}
-      unavailable={unavailableProjects}
-      onProject={(projectId) => updateListScope({ projectId })}
-      label={search.label}
-      labels={labelOptions}
-      onLabel={(label) => updateListScope({ label })}
-    />
+    <div className="flex shrink-0 items-center gap-1">
+      <IssueFiltersMenu
+        state={search.state}
+        stateOptions={STATE_TABS}
+        onState={(state) => updateListScope({ state })}
+        involvement={search.involvement}
+        involvementOptions={INVOLVEMENT_TABS}
+        onInvolvement={(involvement) => updateListScope({ involvement })}
+        hostFilter={{
+          host: search.host,
+          hostOptions: hostMenuOptions,
+          onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
+        }}
+        projectFilter={{
+          environmentId,
+          projects: scopedProjects,
+          projectId: scopedProjectId,
+          unavailable: unavailableProjects,
+          onProject: (projectId) =>
+            updateListScope({ projectId, sort: undefined, order: undefined }),
+        }}
+        label={search.label}
+        labels={labelOptions}
+        onLabel={(label) => updateListScope({ label })}
+      />
+      {githubSortingAvailable ? (
+        <IssueSortMenu
+          sort={sort}
+          order={order}
+          onSort={(nextSort) =>
+            updateListScope({
+              sort: nextSort === "updated" && sentQuery.length === 0 ? undefined : nextSort,
+            })
+          }
+          onOrder={(nextOrder) =>
+            updateListScope({ order: nextOrder === "desc" ? undefined : nextOrder })
+          }
+        />
+      ) : null}
+    </div>
   );
   const columnProps = {
     refreshing,
@@ -1027,7 +1169,8 @@ function IssuesRouteView() {
     hostMenuOptions,
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
     onState: (state: IssueListState) => updateListScope({ state }),
-    onHost: (host: string | undefined) => updateListScope({ host }),
+    onHost: (host: string | undefined) =>
+      updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
     // Filing an issue needs a repository to file it against, so the button waits for the
@@ -1043,33 +1186,33 @@ function IssuesRouteView() {
     listBody,
   };
 
-  const activateSurface = (surface: IssueSurface) => {
+  const activateSurface = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().activateSurface(rightPanelRef, surface.id);
     selectSurfaceInUrl(surface);
   };
-  const closeSurface = (surface: IssueSurface) => {
+  const closeSurface = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeSurface(rightPanelRef, surface.id);
     const next = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    selectSurfaceInUrl(next?.kind === "issue" ? next : null);
+    selectSurfaceInUrl(next);
   };
-  const closeOtherSurfaces = (surface: IssueSurface) => {
+  const closeOtherSurfaces = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeOtherSurfaces(rightPanelRef, surface.id);
     selectSurfaceInUrl(surface);
   };
-  const closeSurfacesToRight = (surface: IssueSurface) => {
+  const closeSurfacesToRight = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeSurfacesToRight(rightPanelRef, surface.id);
     const next = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    selectSurfaceInUrl(next?.kind === "issue" ? next : null);
+    selectSurfaceInUrl(next);
   };
   const closeAllSurfaces = () => {
     if (rightPanelRef === null) return;
@@ -1083,7 +1226,7 @@ function IssuesRouteView() {
         {issuesSupported && rightPanelState.isOpen ? openPanelControls : null}
         <IssuesColumn {...columnProps} />
 
-        {rightPanelState.isOpen && activeIssueSurface && issueEnvironmentId !== null ? (
+        {rightPanelState.isOpen && activeSurface && issueEnvironmentId !== null ? (
           <RightPanelTabs
             mode="inline"
             widthStorageKey="t3code:issue-panel-width"
@@ -1092,27 +1235,21 @@ function IssuesRouteView() {
             // so fall back to a reasonable width.
             defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
             surfaces={rightPanelState.surfaces}
-            activeSurfaceId={activeIssueSurface.id}
+            activeSurfaceId={activeSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
             previewSessions={EMPTY_PREVIEW_SESSIONS}
+            desktopByTabId={EMPTY_PREVIEW_DESKTOP_STATE}
             terminalLabelsById={EMPTY_TERMINAL_LABELS}
-            onActivate={(surface) => {
-              if (surface.kind === "issue") activateSurface(surface);
-            }}
-            onCloseSurface={(surface) => {
-              if (surface.kind === "issue") closeSurface(surface);
-            }}
-            onCloseOtherSurfaces={(surface) => {
-              if (surface.kind === "issue") closeOtherSurfaces(surface);
-            }}
-            onCloseSurfacesToRight={(surface) => {
-              if (surface.kind === "issue") closeSurfacesToRight(surface);
-            }}
+            onActivate={activateSurface}
+            onCloseSurface={closeSurface}
+            onCloseOtherSurfaces={closeOtherSurfaces}
+            onCloseSurfacesToRight={closeSurfacesToRight}
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
+            onAddGitHistory={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
@@ -1120,48 +1257,87 @@ function IssuesRouteView() {
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
+            gitHistoryAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}
+            pullRequestStatuses={pullRequestTabStatuses}
+            issueStatuses={issueTabStatuses}
           >
-            <IssueDetailPanel
-              key={activeIssueSurface.id}
-              environmentId={issueEnvironmentId}
-              reference={{
-                projectId: activeIssueSurface.projectId as ProjectId,
-                repository: activeIssueSurface.repository,
-                number: activeIssueSurface.number,
-              }}
-              refreshToken={detailRefreshToken}
-              // There is no thread behind this panel, so handing an issue to an agent starts
-              // one rather than continuing whatever the reader last had open.
-              handoffTarget={{ kind: "new-thread" }}
-              // This panel only holds issues, so the change request that closes one opens on the
-              // pull requests page rather than as a peer tab here — still inside T3 Code.
-              onOpenLinkedPullRequest={(link) => {
-                void navigate({
-                  to: "/pull-requests",
-                  search: {
-                    involvement: "all",
-                    state: "all",
+            {activeSurface.kind === "pull-request" ? (
+              <PullRequestDetailPanel
+                key={activeSurface.id}
+                environmentId={issueEnvironmentId}
+                reference={{
+                  projectId: activeSurface.projectId as ProjectId,
+                  repository: activeSurface.repository,
+                  number: activeSurface.number,
+                }}
+                refreshToken={detailRefreshToken}
+                // Merging or closing one of these can close the issue it was opened from, so the
+                // list behind it is out of date the moment the host takes the action.
+                onActed={() => {
+                  refreshList();
+                  baselineQuery.refresh();
+                  authoredQuery.refresh();
+                  assignedQuery.refresh();
+                }}
+                onStateChange={handlePullRequestTabStatusChange}
+                onOpenLinkedIssue={(link) => {
+                  if (rightPanelRef === null) return;
+                  const target = {
+                    projectId: activeSurface.projectId,
                     repository: link.repository,
                     number: link.number,
-                    selectedProjectId: activeIssueSurface.projectId as ProjectId,
-                  },
-                });
-              }}
-              // Closing or reopening changes the row this panel was opened from, so the list
-              // behind it is out of date the moment the host takes the action.
-              onActed={() => {
-                refreshList();
-                baselineQuery.refresh();
-                authoredQuery.refresh();
-                assignedQuery.refresh();
-              }}
-              chromeVariant="collapse"
-            />
+                  };
+                  useRightPanelStore.getState().openIssue(rightPanelRef, target);
+                  updateSearch({
+                    repository: target.repository,
+                    number: target.number,
+                    selectedProjectId: target.projectId as ProjectId,
+                  });
+                }}
+                chromeVariant="collapse"
+              />
+            ) : (
+              <IssueDetailPanel
+                key={activeSurface.id}
+                environmentId={issueEnvironmentId}
+                reference={{
+                  projectId: activeSurface.projectId as ProjectId,
+                  repository: activeSurface.repository,
+                  number: activeSurface.number,
+                }}
+                refreshToken={detailRefreshToken}
+                // There is no thread behind this panel, so handing an issue to an agent starts
+                // one rather than continuing whatever the reader last had open.
+                handoffTarget={{ kind: "new-thread" }}
+                // The change request that closes an issue is read beside it, as a peer tab in
+                // this page's own panel: leaving for the pull requests page would take the issue
+                // it answers off the screen.
+                onOpenLinkedPullRequest={(link) => {
+                  if (rightPanelRef === null) return;
+                  useRightPanelStore.getState().openPullRequest(rightPanelRef, {
+                    projectId: activeSurface.projectId,
+                    repository: link.repository,
+                    number: link.number,
+                  });
+                  selectSurfaceInUrl(null);
+                }}
+                // Closing or reopening changes the row this panel was opened from, so the list
+                // behind it is out of date the moment the host takes the action.
+                onActed={() => {
+                  refreshList();
+                  baselineQuery.refresh();
+                  authoredQuery.refresh();
+                  assignedQuery.refresh();
+                }}
+                onStateChange={handleIssueTabStatusChange}
+                chromeVariant="collapse"
+              />
+            )}
           </RightPanelTabs>
         ) : null}
       </div>
@@ -1207,7 +1383,7 @@ function CompactFilterMenu<Value extends string>({
 }: {
   label: string;
   value: Value;
-  options: ReadonlyArray<IssueFilterOption<Value>>;
+  options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0]!;
@@ -1341,7 +1517,7 @@ function IssuesColumn({
   involvement: IssueInvolvement;
   state: IssueListState;
   host: string | undefined;
-  hostMenuOptions: ReadonlyArray<IssueFilterOption<string>>;
+  hostMenuOptions: ReadonlyArray<ListFilterOption<string>>;
   onInvolvement: (involvement: IssueInvolvement) => void;
   onState: (state: IssueListState) => void;
   onHost: (host: string | undefined) => void;
@@ -1484,7 +1660,7 @@ function IssuesColumn({
 
       <div
         ref={scrollRef}
-        className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
+        className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto [--topbar-scroll-fade-height:1.5rem] sm:[--topbar-scroll-fade-height:1.5rem]"
       >
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only

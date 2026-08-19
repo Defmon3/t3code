@@ -4,7 +4,7 @@ import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contrac
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import {
   IssueProviderError,
-  type IssueProviderApi,
+  type IssueAdapter,
   type ProviderIssueActivity,
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
@@ -19,6 +19,8 @@ const CAPABILITIES: IssueCapabilities = {
   // its templates carry a body for the reader to write over and never a list of questions.
   issueTemplates: true,
   edit: true,
+  editComment: true,
+  reactions: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -69,7 +71,7 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
-  const provider: IssueProviderApi = {
+  const provider: IssueAdapter = {
     kind: "gitlab",
     capabilities: CAPABILITIES,
 
@@ -92,7 +94,7 @@ export const make = Effect.gen(function* () {
           Effect.mapError(fail("listIssues")),
           // GitLab is asked for its issues by update, newest first, whether or not it is being
           // carried on from — so every page it answers is one a cursor can continue.
-          Effect.map((batch) => ({ ...batch, continues: true })),
+          Effect.map(({ items, truncated }) => ({ items, truncated, continues: true })),
         ),
 
     getIssue: (input) =>
@@ -121,6 +123,7 @@ export const make = Effect.gen(function* () {
             commentCount: activity.comments.length,
             commentsTruncated: activity.truncated,
             events: activity.events,
+            reactions: activity.reactions,
           }),
         ),
       ),
@@ -142,6 +145,10 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     comment: (input) => cli.commentOnIssue(input).pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) => cli.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
+
+    setReaction: (input) => cli.setReaction(input).pipe(Effect.mapError(fail("setReaction"))),
 
     create: (input) =>
       cli

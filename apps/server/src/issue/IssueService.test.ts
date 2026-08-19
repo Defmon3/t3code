@@ -1,23 +1,23 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type {
-  IssueCapabilities,
-  IssueTemplateList,
-  IssueViewerPermissions,
-  OrchestrationProjectShell,
-  ProjectId,
-  SourceControlProviderKind,
+import {
+  issueSourceKey,
+  type IssueCapabilities,
+  type IssueTemplateList,
+  type IssueProviderKind,
+  type IssueViewerPermissions,
+  type OrchestrationProjectShell,
+  type ProjectId,
 } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
   IssueProviderError,
   type ProviderBatchedIssue,
   type ProviderIssue,
   type ProviderIssueDetail,
-  type IssueProviderApi,
+  type IssueAdapter,
 } from "./IssueProvider.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
@@ -52,6 +52,7 @@ function project(input: {
         }
       : {}),
     defaultModelSelection: null,
+    skillShortcuts: [],
     scripts: [],
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt: "2026-07-01T00:00:00Z",
@@ -89,7 +90,7 @@ function issueDetail(
   };
 }
 
-function unusable(provider: SourceControlProviderKind, reason: "missing-tool" | "unauthenticated") {
+function unusable(provider: IssueProviderKind, reason: "missing-tool" | "unauthenticated") {
   return new IssueProviderError({
     provider,
     operation: "getViewer",
@@ -113,6 +114,8 @@ const FULL_CAPABILITIES: IssueCapabilities = {
   create: true,
   issueTemplates: true,
   edit: true,
+  editComment: true,
+  reactions: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -134,9 +137,9 @@ const FULL_PERMISSIONS: IssueViewerPermissions = {
 
 /** A provider whose every call is supplied by the test; anything unset succeeds emptily. */
 function fakeProvider(
-  kind: SourceControlProviderKind,
-  overrides: Partial<IssueProviderApi> = {},
-): IssueProviderApi {
+  kind: IssueProviderKind,
+  overrides: Partial<IssueAdapter> = {},
+): IssueAdapter {
   return {
     kind,
     capabilities: FULL_CAPABILITIES,
@@ -159,17 +162,12 @@ function fakeProvider(
 
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
-  readonly providers: ReadonlyArray<IssueProviderApi>;
-  readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly providers: ReadonlyArray<IssueAdapter>;
 }) {
   return IssueService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(IssueProviderRegistry, fromProviders(input.providers)),
-        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
-          resolveHandle:
-            input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
-        }),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getShellSnapshot: () =>
             Effect.succeed({
@@ -182,6 +180,10 @@ function makeService(input: {
       ),
     ),
   );
+}
+
+function cursorKey(repository: string): string {
+  return `github.com ${repository}`;
 }
 
 /** The reference every write test aims at, so a test body only says what it is about. */
@@ -276,15 +278,17 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|7" },
+      cursors: { [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|1|7" },
     });
 
     assert.deepStrictEqual(
       result.entries.map((entry) => entry.number),
       [8, 9],
     );
+    // The cursor sent in still carries the row count no host pages by any more, and is taken as it
+    // stands; the one handed back writes that field out as zero.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-01T00:00:00Z|3|9",
+      [cursorKey("acme/web")]: "2026-07-01T00:00:00Z|0|9",
     });
   }),
 );
@@ -307,7 +311,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|6" },
+      cursors: { [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|1|6" },
     });
 
     // A triage afternoon puts a whole slice inside one second. The next read has to keep
@@ -317,7 +321,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
       [7, 8],
     );
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-02T00:00:00Z|3|6,7,8",
+      [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|0|6,7,8",
     });
   }),
 );
@@ -340,14 +344,14 @@ it.effect("carries on from a slice that was nothing but rows it had already sent
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|7" },
+      cursors: { [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|1|7" },
     });
 
     // Nothing survived de-duplication, and reading that as "nothing left" would strand every
     // older row for good.
     assert.deepStrictEqual(result.entries, []);
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-02T00:00:00Z|1|7",
+      [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|0|7",
     });
   }),
 );
@@ -360,7 +364,7 @@ it.effect("refuses a continuation it did not issue, before asking any host anyth
     });
 
     const error = yield* Effect.flip(
-      service.list({ state: "open", cursors: { "github.com acme/web": "yesterday" } }),
+      service.list({ state: "open", cursors: { [cursorKey("acme/web")]: "yesterday" } }),
     );
 
     assert.strictEqual(error._tag, "IssueOperationError");
@@ -601,7 +605,50 @@ it.effect("asks each host for the account signed in on that host, not on another
     assert.deepStrictEqual(result.viewers, {
       "github.com": "bilal",
       "github.acme.dev": "b.hassan",
+      [issueSourceKey("github", "github.com")]: "bilal",
+      [issueSourceKey("github", "github.acme.dev")]: "b.hassan",
     });
+  }),
+);
+
+it.effect("keeps adapters separate when they share a host and repository name", () =>
+  Effect.gen(function* () {
+    const asked: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "source",
+          workspaceRoot: "/source",
+          repository: "acme/web",
+          host: "tracker.example.test",
+        }),
+        project({ id: "p2", title: "planning", workspaceRoot: "/planning" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: () => Effect.succeed("octocat"),
+          listIssues: ({ viewer }) => {
+            asked.push(`github:${viewer}`);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+        }),
+        fakeProvider("jira", {
+          resolveSource: (candidate) =>
+            candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+          getViewer: () => Effect.succeed("jira-user"),
+          listIssues: ({ viewer }) => {
+            asked.push(`jira:${viewer}`);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(result.providers.map(({ kind }) => kind).toSorted(), ["github", "jira"]);
+    assert.deepStrictEqual(asked.toSorted(), ["github:octocat", "jira:jira-user"]);
   }),
 );
 
@@ -679,6 +726,24 @@ it.effect("carries the change requests a host links to an issue through to the d
       [[42, true]],
     );
     assert.strictEqual(result.workspaceRoot, "/a");
+  }),
+);
+
+it.effect("carries the signed-in account through to issue detail", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getViewer: () => Effect.succeed("bilal"),
+          getIssue: () => Effect.succeed(issueDetail(7)),
+        }),
+      ],
+    });
+
+    const result = yield* service.detail(REFERENCE);
+
+    assert.strictEqual(result.viewer, "bilal");
   }),
 );
 
@@ -808,6 +873,27 @@ it.effect("refuses a comment written out of spaces before it reaches the host", 
 
     assert.strictEqual(error._tag, "IssueOperationError");
     assert.include(error.message, "A comment cannot be empty.");
+  }),
+);
+
+it.effect("passes a rewritten issue comment through with its id and body", () =>
+  Effect.gen(function* () {
+    let received: { id: string; body: string } | null = null;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          updateComment: (input) => {
+            received = { id: input.commentId, body: input.body };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.updateComment({ ...REFERENCE, commentId: "IC_1", body: "Second thoughts" });
+
+    assert.deepStrictEqual(received, { id: "IC_1", body: "Second thoughts" });
   }),
 );
 
@@ -1123,33 +1209,42 @@ const TEMPLATES: IssueTemplateList = {
   blankIssuesEnabled: false,
 };
 
-it.effect("keeps the chooser from a host that has no templates to report", () =>
+/**
+ * The host that offers no starting point is the one the composer most needs an answer from: it is
+ * also the host that may take no labels, or no new issue at all. So an empty offer, with what the
+ * host can do on it, rather than a refusal the form can read nothing out of.
+ */
+it.effect("tells a host with no templates apart by what it says it can do", () =>
   Effect.gen(function* () {
+    const capabilities = { ...FULL_CAPABILITIES, issueTemplates: false, create: false };
     const hostCannot = yield* makeService({
       projects: ONE_PROJECT,
       providers: [
         fakeProvider("github", {
-          capabilities: { ...FULL_CAPABILITIES, issueTemplates: false },
+          capabilities,
           listIssueTemplates: () => Effect.die("must not be called"),
         }),
       ],
     });
-    const refusedHost = yield* Effect.flip(hostCannot.templates(REPOSITORY));
-    assert.include(
-      refusedHost.message,
-      "This host cannot say what a repository offers a new issue.",
-    );
+    assert.deepStrictEqual(yield* hostCannot.templates(REPOSITORY), {
+      capabilities,
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
 
-    // A host that claims the capability and implements nothing is the same refusal rather than a
-    // crash: the declaration is what the page believes, and it is the thing that was wrong.
+    // A host that claims the capability and implements nothing is the same empty offer rather than
+    // a crash: the declaration is what the page believes, and it is the thing that was wrong.
     const undeclared = yield* makeService({
       projects: ONE_PROJECT,
       providers: [fakeProvider("github")],
     });
-    assert.include(
-      (yield* Effect.flip(undeclared.templates(REPOSITORY))).message,
-      "This host cannot say what a repository offers a new issue.",
-    );
+    assert.deepStrictEqual(yield* undeclared.templates(REPOSITORY), {
+      capabilities: FULL_CAPABILITIES,
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
   }),
 );
 
@@ -1169,7 +1264,12 @@ it.effect("hands a repository's templates back without asking who is reading the
       ],
     });
 
-    assert.deepStrictEqual(yield* service.templates(REPOSITORY), TEMPLATES);
+    // The host's own answer, with what the host can do added to it: a provider reports the offer,
+    // the service is what knows the capabilities.
+    assert.deepStrictEqual(yield* service.templates(REPOSITORY), {
+      ...TEMPLATES,
+      capabilities: FULL_CAPABILITIES,
+    });
   }),
 );
 
@@ -1337,6 +1437,46 @@ const TWO_PROJECTS = [
   project({ id: "p2", title: "api", workspaceRoot: "/b", repository: "acme/api" }),
 ];
 
+it.effect("orders rows by the selected reaction kind across repositories", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: TWO_PROJECTS,
+      providers: [
+        fakeProvider("github", {
+          listIssuesAcross: () =>
+            Effect.succeed({
+              items: [
+                {
+                  ...batchedIssue(1, "acme/web", "2026-07-05T00:00:00Z"),
+                  reactions: [
+                    { content: "thumbs-up", count: 9, actors: [], viewerHasReacted: false },
+                    { content: "heart", count: 1, actors: [], viewerHasReacted: false },
+                  ],
+                },
+                {
+                  ...batchedIssue(2, "acme/api", "2026-07-02T00:00:00Z"),
+                  reactions: [{ content: "heart", count: 3, actors: [], viewerHasReacted: false }],
+                },
+              ],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({
+      state: "open",
+      sort: "reactions-heart",
+      order: "desc",
+    });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [2, 1],
+    );
+  }),
+);
+
 it.effect("reads a host's repositories in one search, and files the rows back under each", () =>
   Effect.gen(function* () {
     const asked: Array<ReadonlyArray<string>> = [];
@@ -1466,16 +1606,50 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
     const result = yield* service.list({
       state: "open",
       cursors: {
-        "github.com acme/web": "2026-07-06T00:00:00Z|1|1",
-        "github.com acme/api": "2026-07-06T00:00:00Z|1|5",
+        [cursorKey("acme/web")]: "2026-07-06T00:00:00Z|1|1",
+        [cursorKey("acme/api")]: "2026-07-06T00:00:00Z|1|5",
       },
     });
 
     // The repository that contributed nothing has been read to the same instant: its rows are
     // simply all older, and carrying it on from its own oldest row would say nothing about them.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-03T00:00:00Z|3|2",
-      "github.com acme/api": "2026-07-03T00:00:00Z|1|",
+      [cursorKey("acme/web")]: "2026-07-03T00:00:00Z|0|2",
+      [cursorKey("acme/api")]: "2026-07-03T00:00:00Z|0|",
+    });
+  }),
+);
+
+it.effect("passes a reaction through with its subject id", () =>
+  Effect.gen(function* () {
+    let received: Parameters<NonNullable<IssueAdapter["setReaction"]>>[0] | null = null;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          setReaction: (input) => {
+            received = input;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.setReaction({
+      ...REFERENCE,
+      subjectId: "IC_1",
+      content: "heart",
+      reacted: true,
+    });
+
+    assert.deepStrictEqual(received, {
+      cwd: "/a",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+      subjectId: "IC_1",
+      content: "heart",
+      reacted: true,
     });
   }),
 );

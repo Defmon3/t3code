@@ -193,7 +193,7 @@ layer("BitbucketIssueApi.layer", (it) => {
         repository: "acme/web",
         state: "open",
         limit: 50,
-        cursor: { updatedBefore: "2026-07-02T00:00:00.123456+00:00", delivered: 50 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00.123456+00:00" },
       });
 
       expect(filterOfCall(0)).toContain("updated_on <= 2026-07-02T00:00:00.123456+00:00");
@@ -285,6 +285,27 @@ layer("BitbucketIssueApi.layer", (it) => {
       expect(callAt(0)).toMatchObject({ method: "PUT", url: "/repositories/acme/web/issues/7" });
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ title: "New title" });
+    }),
+  );
+
+  it.effect("rewrites an issue comment by its id", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response("{}")));
+      const api = yield* BitbucketIssueApi.BitbucketIssueApi;
+
+      yield* api.updateComment({
+        repository: "acme/web",
+        number: 7,
+        commentId: "42",
+        body: "Second thoughts",
+      });
+
+      expect(callAt(0)).toMatchObject({
+        method: "PUT",
+        url: "/repositories/acme/web/issues/7/comments/42",
+      });
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).body ?? "")).toEqual({ content: { raw: "Second thoughts" } });
     }),
   );
 

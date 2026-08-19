@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contracts";
 
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
-import { IssueProviderError, type IssueProviderApi, type ProviderIssue } from "./IssueProvider.ts";
+import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./IssueProvider.ts";
 import type { BitbucketIssue } from "./bitbucketIssueJson.ts";
 
 const CAPABILITIES: IssueCapabilities = {
@@ -17,6 +17,7 @@ const CAPABILITIES: IssueCapabilities = {
   // offers nothing to start either from.
   issueTemplates: false,
   edit: true,
+  editComment: true,
   // Bitbucket has no labels on an issue — `kind` and `priority` are enumerations of their own,
   // not a label set, so nothing here is offered in their place.
   labels: false,
@@ -110,7 +111,7 @@ export const make = Effect.gen(function* () {
       new IssueProviderError({ provider: "bitbucket", operation, reason: "failed", detail }),
     );
 
-  const provider: IssueProviderApi = {
+  const provider: IssueAdapter = {
     kind: "bitbucket",
     capabilities: CAPABILITIES,
 
@@ -182,6 +183,8 @@ export const make = Effect.gen(function* () {
       api
         .comment({ repository: input.repository, number: input.number, body: input.body })
         .pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) => api.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
 
     create: (input) =>
       api

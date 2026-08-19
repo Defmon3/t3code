@@ -1,196 +1,38 @@
-import type { IssueDetailView, SourceControlActor } from "@t3tools/contracts";
-import { ChevronDownIcon, CircleDotIcon, ExternalLinkIcon, MessageSquareIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { EnvironmentId, IssueComment, IssueDetailView, IssueRef } from "@t3tools/contracts";
+import { CircleDotIcon, PencilIcon } from "lucide-react";
+import { useState } from "react";
 
-import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
+import { issueEnvironment } from "~/state/issues";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { SourceControlActorAvatar } from "../sourceControl/actorPresentation";
+import { ConversationGroup } from "../sourceControl/ConversationGroup";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
+import { ActorName, IconMarker } from "../sourceControl/TimelineRail";
+import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { toastManager } from "../ui/toast";
+import { IssueReactionBar } from "./IssueReactions";
 import {
   buildIssueTimeline,
+  canEditIssueComment,
+  issueCommentEditId,
+  type IssueCommentEditScope,
   groupIssueTimelineConversations,
   type IssueTimelineEntry,
 } from "./issueDetail.logic";
 
-function ActorName({ actor }: { actor: SourceControlActor | null }) {
-  return <span className="font-semibold text-foreground">{actor?.login ?? "ghost"}</span>;
-}
-
-function TimelineMarker({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string | undefined;
-}) {
-  return (
-    <span
-      className={cn(
-        "absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center bg-background",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-function ActorTimelineMarker({
-  actors,
-  className,
-  fallback,
-  muted = false,
-}: {
-  actors: ReadonlyArray<SourceControlActor>;
-  className?: string | undefined;
-  fallback: ReactNode;
-  muted?: boolean;
-}) {
-  const actor = actors[0];
-  return actor === undefined ? (
-    <TimelineMarker className={className}>
-      <span className="flex size-7 items-center justify-center bg-background text-muted-foreground">
-        {fallback}
-      </span>
-    </TimelineMarker>
-  ) : (
-    <TimelineMarker className={className}>
-      <SourceControlActorAvatar
-        actor={actor}
-        className={cn(
-          "size-7 bg-muted text-[9px] transition-opacity",
-          muted && "opacity-45 grayscale",
-        )}
-      />
-    </TimelineMarker>
-  );
-}
-
-function ConversationCard({
-  entry,
-  cwd,
-  onOpen,
-}: {
-  entry: IssueTimelineEntry;
-  cwd: string;
-  onOpen: (url: string) => void;
-}) {
-  const url = entry.url;
-  return (
-    <article className="py-2">
-      <div className="flex min-w-0 items-start gap-2 px-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-            <ActorName actor={entry.actor} />
-            <span className="text-muted-foreground">{entry.title}</span>
-          </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            {formatRelativeTimeLabel(entry.at)}
-          </p>
-        </div>
-        {url === null ? null : (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="-mr-1 -mt-1 shrink-0 text-muted-foreground"
-            aria-label="Open this comment on the host"
-            onClick={() => onOpen(url)}
-          >
-            <ExternalLinkIcon className="size-3" />
-          </Button>
-        )}
-      </div>
-      {entry.body === null ? null : (
-        <div className="px-2 pb-2">
-          <HostMarkdown className="mt-3" text={entry.body} cwd={cwd} />
-        </div>
-      )}
-    </article>
-  );
-}
-
-function uniqueConversationActors(entries: ReadonlyArray<IssueTimelineEntry>) {
-  const actors = new Map<string, SourceControlActor>();
-  for (const entry of entries) {
-    const actor = entry.actor;
-    if (actor !== null && !actors.has(actor.login)) actors.set(actor.login, actor);
-  }
-  return [...actors.values()];
-}
-
-function ConversationGroup({
-  entries,
-  cwd,
-  onOpen,
-}: {
-  entries: ReadonlyArray<IssueTimelineEntry>;
-  cwd: string;
-  onOpen: (url: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const actors = uniqueConversationActors(entries);
-  const first = entries[0];
-  if (first === undefined) return null;
-
-  return (
-    <div className="relative mb-5 pl-12 [contain-intrinsic-block-size:48px] [content-visibility:auto]">
-      <ActorTimelineMarker
-        actors={actors}
-        className="top-6"
-        fallback={<MessageSquareIcon className="size-3.5" />}
-        muted={!open}
-      />
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <div>
-          <CollapsibleTrigger
-            className={cn(
-              "flex w-full min-w-0 items-center gap-3 py-2 text-left transition-opacity hover:opacity-100",
-              open ? "text-foreground opacity-100" : "text-muted-foreground opacity-55",
-            )}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs font-semibold">
-                {entries.length.toLocaleString()} {entries.length === 1 ? "comment" : "comments"}
-              </span>
-              <span className="block truncate text-[10px] text-muted-foreground">
-                {actors.length.toLocaleString()} {actors.length === 1 ? "author" : "authors"} ·{" "}
-                {formatRelativeTimeLabel(first.at)}
-              </span>
-            </span>
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-180",
-              )}
-            />
-          </CollapsibleTrigger>
-          <CollapsiblePanel>
-            {open ? (
-              <div className="mt-1 space-y-1">
-                {entries.map((entry) => (
-                  <ConversationCard key={entry.id} entry={entry} cwd={cwd} onOpen={onOpen} />
-                ))}
-              </div>
-            ) : null}
-          </CollapsiblePanel>
-        </div>
-      </Collapsible>
-    </div>
-  );
-}
-
+/**
+ * An event wears the issue glyph rather than whoever caused it. A face here is a filled disc on
+ * every row of the rail, which reads as a column of blobs the line runs between; the glyph keeps
+ * the rail the continuous thing and leaves the avatars to say what they say on a pull request —
+ * that a run of comments has people in it.
+ */
 function TimelineEvent({ entry }: { entry: IssueTimelineEntry }) {
   return (
     <div className="relative mb-5 pl-12 [contain-intrinsic-block-size:48px] [content-visibility:auto]">
-      <ActorTimelineMarker
-        actors={entry.actor === null ? [] : [entry.actor]}
-        fallback={<CircleDotIcon className="size-3.5" />}
-      />
+      <IconMarker icon={<CircleDotIcon className="size-3.5" />} />
       <div className="py-1.5 text-xs">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <ActorName actor={entry.actor} />
@@ -205,31 +47,116 @@ function TimelineEvent({ entry }: { entry: IssueTimelineEntry }) {
 }
 
 export function IssueTimelineTab({
+  environmentId,
+  reference,
   detail,
   order,
+  onRefresh,
+  onLoadMoreComments,
+  loadingMoreComments,
 }: {
+  environmentId: EnvironmentId;
+  reference: IssueRef;
   detail: IssueDetailView;
   /** The rail is built oldest first, which is how an issue was written and how it reads. */
   order: "newest" | "oldest";
+  onRefresh: () => void;
+  onLoadMoreComments: () => void;
+  loadingMoreComments: boolean;
 }) {
   const entries = buildIssueTimeline(detail);
   const rows = groupIssueTimelineConversations(order === "oldest" ? entries : entries.toReversed());
   const openOnHost = (url: string) => {
     void readLocalApi()?.shell.openExternal(url);
   };
+  const comments = new Map(detail.comments.map((comment) => [comment.id, comment]));
+  const [editingScope, setEditingScope] = useState<IssueCommentEditScope | null>(null);
+  const editingId = issueCommentEditId(editingScope, detail.url);
+  const [saving, setSaving] = useState(false);
+  const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
+
+  const editableComment = (entry: IssueTimelineEntry): IssueComment | null => {
+    const comment = comments.get(entry.id);
+    return comment !== undefined && canEditIssueComment(detail, comment) ? comment : null;
+  };
+  const saveComment = async (comment: IssueComment, body: string) => {
+    if (saving) return;
+    setSaving(true);
+    const result = await updateComment({
+      environmentId,
+      input: { ...reference, commentId: comment.id, body },
+    });
+    setSaving(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not save the comment" });
+      return;
+    }
+    setEditingScope(null);
+    onRefresh();
+  };
 
   return (
     <div className="h-full overflow-y-auto px-4 py-5">
       <div className="mx-auto max-w-3xl">
+        {detail.nextCommentsCursor != null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mb-4 w-full"
+            disabled={loadingMoreComments}
+            onClick={onLoadMoreComments}
+          >
+            {loadingMoreComments ? "Loading..." : "Load older comments"}
+          </Button>
+        ) : null}
         <div className="relative">
           <span aria-hidden className="absolute bottom-5 left-[15px] top-1 w-px bg-border/45" />
           {rows.map((row) =>
             row.kind === "comments" ? (
               <ConversationGroup
-                key={`comments:${row.entries[0]?.id ?? "empty"}`}
+                key={`comments:${row.key}`}
                 entries={row.entries}
-                cwd={detail.workspaceRoot}
                 onOpen={openOnHost}
+                renderActions={(entry) => {
+                  const comment = editableComment(entry);
+                  return comment === null || editingId === entry.id ? null : (
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      className="-mt-1 shrink-0 text-muted-foreground"
+                      aria-label="Edit comment"
+                      onClick={() => setEditingScope({ issue: detail.url, id: entry.id })}
+                    >
+                      <PencilIcon className="size-3" />
+                    </Button>
+                  );
+                }}
+                renderBody={(entry) => {
+                  const comment = editableComment(entry);
+                  return editingId === entry.id && comment !== null ? (
+                    <SourceControlMarkdownEditor
+                      value={comment.body}
+                      cwd={detail.workspaceRoot}
+                      label="Edit comment"
+                      saving={saving}
+                      onSave={(body) => void saveComment(comment, body)}
+                      onCancel={() => setEditingScope(null)}
+                    />
+                  ) : entry.body === null ? null : (
+                    <div className="group">
+                      <HostMarkdown text={entry.body} cwd={detail.workspaceRoot} />
+                      <IssueReactionBar
+                        className="mt-2"
+                        reactions={comments.get(entry.id)?.reactions ?? []}
+                        canReact={detail.capabilities.reactions === true}
+                        subjectId={entry.id}
+                        environmentId={environmentId}
+                        reference={reference}
+                        onRefresh={onRefresh}
+                      />
+                    </div>
+                  );
+                }}
               />
             ) : (
               <TimelineEvent key={row.entry.id} entry={row.entry} />

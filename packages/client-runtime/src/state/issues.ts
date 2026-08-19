@@ -37,6 +37,12 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesActivity,
       staleTimeMs: 15_000,
     }),
+    commentsPage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:comments-page",
+      tag: WS_METHODS.issuesCommentsPage,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     /**
      * Its own query rather than part of the detail: the labels a repository has are only wanted
      * once somebody opens the label picker, so this atom is read then and not before. Kept fresh
@@ -74,6 +80,18 @@ export function createIssueEnvironmentAtoms<R, E>(
     comment: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:comment",
       tag: WS_METHODS.issuesComment,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    updateComment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:update-comment",
+      tag: WS_METHODS.issuesUpdateComment,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    setReaction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:set-reaction",
+      tag: WS_METHODS.issuesSetReaction,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),

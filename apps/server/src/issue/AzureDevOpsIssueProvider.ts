@@ -5,7 +5,7 @@ import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
 import type { AzureDevOpsWorkItem } from "./azureDevOpsIssueJson.ts";
 import {
   IssueProviderError,
-  type IssueProviderApi,
+  type IssueAdapter,
   type ProviderIssue,
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
@@ -31,6 +31,7 @@ const CAPABILITIES: IssueCapabilities = {
   // definition rather than in the repository, and `az boards` reads none of it.
   issueTemplates: false,
   edit: false,
+  editComment: false,
   // Azure has tags rather than labels, on a different field with different semantics.
   labels: false,
   // One assignee, written as an identity `az boards` resolves but never lists.
@@ -94,14 +95,16 @@ export const make = Effect.gen(function* () {
 
   const fail =
     (operation: string) =>
-    (error: AzureDevOpsIssueCli.AzureDevOpsIssueCliError): IssueProviderError =>
-      new IssueProviderError({
+    (error: AzureDevOpsIssueCli.AzureDevOpsIssueCliError): IssueProviderError => {
+      const { detail } = error;
+      return new IssueProviderError({
         provider: "azure-devops",
         operation,
         reason: reasonFor(error),
-        detail: error.message,
+        detail,
         cause: error,
       });
+    };
 
   /** Declared unavailable in `CAPABILITIES`, so the service refuses these before reaching here. */
   const unsupported = (operation: string) =>
@@ -120,25 +123,37 @@ export const make = Effect.gen(function* () {
 
     getViewer: (input) => cli.getViewer(input).pipe(Effect.mapError(fail("getViewer"))),
 
+    // Refused rather than answered with everything: Azure records no mention of a person on a
+    // work item, and nothing between here and the reader narrows a listing back down — so the
+    // page a mention filter would produce is every work item in the project.
     listIssues: (input) =>
-      cli
-        .listWorkItems({
-          cwd: input.cwd,
-          state: input.state,
-          involvement: input.involvement,
-          limit: input.limit,
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-        })
-        .pipe(
-          Effect.mapError(fail("listIssues")),
-          Effect.map((page) => ({
-            items: page.items.map(toIssue),
-            truncated: page.truncated,
-            // The query orders by the same date the cursor carries, so a further slice means
-            // exactly what it does on every other host here.
-            continues: true,
-          })),
-        ),
+      input.involvement === "mentioned"
+        ? Effect.fail(
+            new IssueProviderError({
+              provider: "azure-devops",
+              operation: "listIssues",
+              reason: "failed",
+              detail: "Azure DevOps records no mention of a person on a work item.",
+            }),
+          )
+        : cli
+            .listWorkItems({
+              cwd: input.cwd,
+              state: input.state,
+              involvement: input.involvement,
+              limit: input.limit,
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+            })
+            .pipe(
+              Effect.mapError(fail("listIssues")),
+              Effect.map((page) => ({
+                items: page.items.map(toIssue),
+                truncated: page.truncated,
+                // The query orders by the same date the cursor carries, so a further slice means
+                // exactly what it does on every other host here.
+                continues: true,
+              })),
+            ),
 
     getIssue: (input) =>
       cli.getWorkItem({ cwd: input.cwd, number: input.number }).pipe(
@@ -181,5 +196,5 @@ export const make = Effect.gen(function* () {
     listLabelCandidates: () => unsupported("listLabelCandidates"),
 
     listAssigneeCandidates: () => unsupported("listAssigneeCandidates"),
-  } satisfies IssueProviderApi;
+  } satisfies IssueAdapter;
 });

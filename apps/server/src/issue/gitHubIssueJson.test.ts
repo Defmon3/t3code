@@ -60,8 +60,19 @@ function searchItem(entry: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-function searchJson(nodes: ReadonlyArray<unknown>, hasNextPage = false): string {
-  return JSON.stringify({ data: { search: { pageInfo: { hasNextPage }, nodes } } });
+function searchJson(
+  nodes: ReadonlyArray<unknown>,
+  hasNextPage = false,
+  endCursor?: string,
+): string {
+  return JSON.stringify({
+    data: {
+      search: {
+        pageInfo: { hasNextPage, ...(endCursor === undefined ? {} : { endCursor }) },
+        nodes,
+      },
+    },
+  });
 }
 
 /** A change request as a reference to it names it, wherever GitHub found the reference. */
@@ -99,12 +110,16 @@ function activityJson(input: {
   readonly author?: Record<string, unknown> | null;
   readonly comments?: Record<string, unknown> | null;
   readonly timeline?: ReadonlyArray<unknown>;
+  readonly viewer?: string;
+  readonly reactions?: ReadonlyArray<unknown>;
 }): string {
   return JSON.stringify({
     data: {
+      viewer: input.viewer === undefined ? null : { login: input.viewer },
       repository: {
         issue: {
           author: input.author ?? null,
+          reactionGroups: input.reactions ?? [],
           comments: input.comments ?? { totalCount: 0, nodes: [] },
           timelineItems: { nodes: input.timeline ?? [] },
         },
@@ -197,6 +212,22 @@ describe("issue list decoding", () => {
       // The listing never asks for the conversation, so a row from it counts none.
       commentCount: 0,
     });
+  });
+
+  it("reads reaction totals without loading issue conversations", () => {
+    const batch = expectSuccess(
+      decodeIssueListJson(
+        listJson([
+          {
+            reactionGroups: [{ content: "THUMBS_UP", reactors: { totalCount: 5, nodes: [] } }],
+          },
+        ]),
+      ),
+    );
+
+    expect(batch.items[0]?.reactions).toEqual([
+      { content: "thumbs-up", count: 5, actors: [], viewerHasReacted: false },
+    ]);
   });
 
   it("reads why a closed issue was closed, and nothing for one still open", () => {
@@ -300,6 +331,20 @@ describe("issue search decoding", () => {
     expect(batch.hasNextPage).toBe(false);
   });
 
+  it("reads reaction totals from cross-repository search rows", () => {
+    const batch = expectSuccess(
+      decodeIssueSearchJson(
+        searchJson([
+          searchItem({
+            reactionGroups: [{ content: "ROCKET", reactors: { totalCount: 3, nodes: [] } }],
+          }),
+        ]),
+      ),
+    );
+
+    expect(batch.items[0]?.reactions?.[0]).toMatchObject({ content: "rocket", count: 3 });
+  });
+
   it("skips a node that is not an issue but still counts it", () => {
     const batch = expectSuccess(
       // A node GitHub answered for something other than an issue decodes as empty, and a row
@@ -315,6 +360,19 @@ describe("issue search decoding", () => {
     const batch = expectSuccess(decodeIssueSearchJson(searchJson([searchItem({})], true)));
 
     expect(batch.hasNextPage).toBe(true);
+  });
+
+  // Where a search reads on to finish an instant, this is what it reads on from. GitHub sends an
+  // `endCursor` on the last page too, so the flag is what decides, not the cursor.
+  it("carries the cursor a search page ends on, and none once there is nothing after it", () => {
+    expect(
+      expectSuccess(decodeIssueSearchJson(searchJson([searchItem({})], true, "Y3Vyc29y")))
+        .nextCursor,
+    ).toBe("Y3Vyc29y");
+    expect(
+      expectSuccess(decodeIssueSearchJson(searchJson([searchItem({})], false, "Y3Vyc29y")))
+        .nextCursor,
+    ).toBeNull();
   });
 
   it("fails when GitHub answered something other than a search", () => {
@@ -495,12 +553,27 @@ describe("issue activity decoding", () => {
       decodeIssueActivityJson(
         activityJson({
           author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
+          viewer: "bilal",
+          reactions: [
+            {
+              content: "ROCKET",
+              viewerHasReacted: false,
+              reactors: { totalCount: 1, nodes: [{ login: "julius" }] },
+            },
+          ],
           comments: {
             totalCount: 250,
-            pageInfo: { hasNextPage: true, endCursor: "Y3Vyc29y" },
+            pageInfo: { hasPreviousPage: true, startCursor: "Y3Vyc29y" },
             nodes: [
               {
                 id: "IC_1",
+                reactionGroups: [
+                  {
+                    content: "HEART",
+                    viewerHasReacted: true,
+                    reactors: { totalCount: 2, nodes: [{ login: "bilal" }, { login: "julius" }] },
+                  },
+                ],
                 author: { login: "julius", avatarUrl: "https://avatars/julius" },
                 body: "Reproduced.",
                 createdAt: "2026-07-02T00:00:00Z",
@@ -526,16 +599,22 @@ describe("issue activity decoding", () => {
     // GitHub's own count, which this bounded read fell well short of.
     expect(activity.commentCount).toBe(250);
     expect(activity.nextCursor).toBe("Y3Vyc29y");
+    expect(activity.reactions).toEqual([
+      { content: "rocket", count: 1, actors: ["julius"], viewerHasReacted: false },
+    ]);
+    expect(activity.comments[0]?.reactions).toEqual([
+      { content: "heart", count: 2, actors: ["julius"], viewerHasReacted: true },
+    ]);
   });
 
   it("carries on from nowhere once GitHub says the conversation is whole", () => {
     const activity = expectSuccess(
       decodeIssueActivityJson(
-        // GitHub sends an `endCursor` on the last page too, so the flag is what decides.
+        // GitHub sends a `startCursor` on the first page too, so the flag is what decides.
         activityJson({
           comments: {
             totalCount: 1,
-            pageInfo: { hasNextPage: false, endCursor: "Y3Vyc29y" },
+            pageInfo: { hasPreviousPage: false, startCursor: "Y3Vyc29y" },
             nodes: [],
           },
         }),
@@ -635,7 +714,7 @@ describe("issue comment page decoding", () => {
               issue: {
                 comments: {
                   totalCount: 250,
-                  pageInfo: { hasNextPage: true, endCursor: "bmV4dA==" },
+                  pageInfo: { hasPreviousPage: true, startCursor: "bmV4dA==" },
                   nodes: [{ id: "IC_2", body: "Still broken.", createdAt: "2026-07-04T00:00:00Z" }],
                 },
               },
@@ -1000,6 +1079,53 @@ body:
     expect(input?.kind === "input" ? input.id : null).toBe("field-1");
   });
 
+  // The stand-in is built from a place in the body, which is a name a form is free to have given
+  // another question. Sharing it would mean sharing an answer: one control writes over the other,
+  // and the issue is filed with one answer twice and the other not at all.
+  it("keeps an unnamed question off an id the form gives another one", () => {
+    const form = decodeIssueFormYaml(
+      "clash.yml",
+      `name: Clash
+body:
+  - type: markdown
+    attributes:
+      value: intro
+  - type: input
+    attributes:
+      label: Unnamed
+  - type: input
+    id: field-1
+    attributes:
+      label: Named
+`,
+    );
+
+    expect(
+      form?.fields?.map((field) => (field.kind === "markdown" ? field.kind : field.id)),
+    ).toEqual(["markdown", "field-1-2", "field-1"]);
+  });
+
+  it("gives the second of two questions the form named the same thing an answer of its own", () => {
+    const form = decodeIssueFormYaml(
+      "twice.yml",
+      `name: Twice
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+  - type: textarea
+    id: version
+    attributes:
+      label: Version details
+`,
+    );
+
+    expect(
+      form?.fields?.map((field) => (field.kind === "markdown" ? field.kind : field.id)),
+    ).toEqual(["version", "version-2"]);
+  });
+
   it("answers null for a file that will not parse as YAML at all", () => {
     expect(decodeIssueFormYaml("broken.yml", 'name: "Bug report')).toBeNull();
   });
@@ -1135,6 +1261,8 @@ describe("issue search document", () => {
     expect(query).toContain("type: ISSUE");
     expect(query).toContain("... on Issue");
     expect(query).toContain("first: 10");
+    // The cursor is how one instant holding more rows than a page is read whole.
+    expect(query).toContain("after: $cursor");
   });
 
   it("clamps the page to what GitHub's search will serve", () => {

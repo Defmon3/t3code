@@ -29,6 +29,25 @@ function output(stdout: string) {
   };
 }
 
+function awardPage(): string {
+  return JSON.stringify({
+    data: {
+      currentUser: { username: "bilal" },
+      project: { issue: { awardEmoji: { nodes: [] }, notes: { pageInfo: {}, nodes: [] } } },
+    },
+  });
+}
+
+function awards(count: number, firstId: number, viewer: string): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      id: firstId + index,
+      name: "heart",
+      user: { username: viewer },
+    })),
+  );
+}
+
 function issues(count: number, firstNumber: number): string {
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
@@ -66,6 +85,36 @@ function notes(count: number, firstId: number): string {
       created_at: "2026-07-01T00:00:00Z",
     })),
   );
+}
+
+/** A page of `resource_label_events`, which is where the labellings are read from. */
+function labelEvents(count: number, firstId: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      id: firstId + index,
+      action: "add",
+      created_at: "2026-07-01T00:00:00Z",
+      label: { name: "backend" },
+    })),
+  );
+}
+
+/** A page of either merge request link endpoint, which answer the same shape. */
+function mergeRequests(count: number, firstIid: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      iid: firstIid + index,
+      title: `Merge request ${firstIid + index}`,
+      web_url: `https://gitlab.com/acme/web/-/merge_requests/${firstIid + index}`,
+      state: "opened",
+      references: { full: `acme/web!${firstIid + index}` },
+    })),
+  );
+}
+
+/** Which page a paged read asked for, which `per_page` must not be mistaken for. */
+function pageOf(path: string): number {
+  return Number(/[?&]page=(\d+)/.exec(path)?.[1] ?? "1");
 }
 
 /** A row of `templates/issues`, which names a template but carries none of it. */
@@ -253,11 +302,9 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
-  it.effect("carries on from the number of rows already delivered", () =>
+  it.effect("carries on from the instant the last slice ended on", () =>
     Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(output(issues(11, 144))))
-        .mockReturnValueOnce(Effect.succeed(output(issues(11, 155))));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(11, 151))));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const batch = yield* cli.listIssues({
@@ -267,18 +314,37 @@ layer("GitLabIssueCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 150 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
       });
 
-      // GitLab's timestamp filter has no tie-breaker, so an offset is what advances through a
-      // boundary shared by more rows than one page can hold.
-      expect(pathOfCall(0)).not.toContain("updated_before=");
-      expect(pathOfCall(0)).toContain("page=14");
-      expect(pathOfCall(1)).toContain("page=15");
+      // The boundary bounds the row set, so an issue touched between the two reads cannot shift
+      // rows past the page. Inclusive, and the service drops what it has already sent at it.
+      expect(pathOfCall(0)).toContain("updated_before=2026-07-02T00%3A00%3A00Z");
+      // An offset into a list that moves under it would be the thing this replaces.
+      expect(pathOfCall(0)).toContain("page=1");
       expect(batch.items.map((item) => item.number)).toEqual([
         151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
       ]);
       assert.isTrue(batch.truncated);
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("asks for no boundary at all on a first page", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      yield* cli.listIssues({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      expect(pathOfCall(0)).not.toContain("updated_before=");
     }),
   );
 
@@ -423,6 +489,54 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("reads the merge request links past the first hundred", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        if (!path.includes("closed_by")) return Effect.succeed(output("[]"));
+        // A full page says nothing about being the last, so the short one after it ends the walk.
+        return Effect.succeed(
+          pageOf(path) === 1 ? output(mergeRequests(100, 1)) : output(mergeRequests(3, 101)),
+        );
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const links = yield* cli.listLinkedMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(links.length, 103);
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+    }),
+  );
+
+  it.effect("stops the link walk at its bound, keeping one of a link answered twice", () =>
+    Effect.gen(function* () {
+      // A host that answers the same full page whatever page is asked for: the walk has to end
+      // itself, and the repeats must not reach the panel as separate links.
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(
+          (input.args[1] ?? "").includes("closed_by")
+            ? output(mergeRequests(100, 1))
+            : output("[]"),
+        ),
+      );
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const links = yield* cli.listLinkedMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      // Five pages of links and the one empty read beside them.
+      assert.strictEqual(mockedExecute.mock.calls.length, 6);
+      assert.strictEqual(links.length, 100);
+    }),
+  );
+
   it.effect("splits the conversation into remarks and a history, in order", () =>
     Effect.gen(function* () {
       mockedExecute
@@ -457,6 +571,7 @@ layer("GitLabIssueCli.layer", (it) => {
             ),
           ),
         );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(awardPage())));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const activity = yield* cli.listActivity({
@@ -477,7 +592,9 @@ layer("GitLabIssueCli.layer", (it) => {
   it.effect("stops the conversation walk at its bound and says it was cut short", () =>
     Effect.gen(function* () {
       // GitLab that never answers short: the walk has to end itself.
-      mockedExecute.mockReturnValue(Effect.succeed(output(notes(100, 1))));
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(output(input.args[1] === "graphql" ? awardPage() : notes(100, 1))),
+      );
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const activity = yield* cli.listActivity({
@@ -487,8 +604,38 @@ layer("GitLabIssueCli.layer", (it) => {
       });
 
       // Ten pages of notes and ten of labellings, both bounded by the same limit.
-      assert.strictEqual(mockedExecute.mock.calls.length, 20);
+      assert.strictEqual(mockedExecute.mock.calls.length, 21);
       assert.strictEqual(activity.comments.length, 1000);
+      assert.isTrue(activity.truncated);
+    }),
+  );
+
+  it.effect("says the history was cut short when only the labellings ran past the bound", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        // A quiet issue that has been relabelled all day: the conversation ends on its first page.
+        return Effect.succeed(
+          output(
+            path === "graphql"
+              ? awardPage()
+              : path.includes("/notes?")
+                ? notes(1, 1)
+                : labelEvents(100, 1),
+          ),
+        );
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const activity = yield* cli.listActivity({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(activity.comments.length, 1);
+      assert.strictEqual(activity.events.length, 1000);
+      // The labelling walk stopped at its bound, so the timeline is short whatever the notes did.
       assert.isTrue(activity.truncated);
     }),
   );
@@ -598,6 +745,58 @@ layer("GitLabIssueCli.layer", (it) => {
       ]);
       // A JSON body, so a comment reading as a literal `true` stays text.
       expect(callAt(0).stdin).toBe('{"body":"true"}');
+    }),
+  );
+
+  it.effect("rewrites an issue comment by its note id", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      yield* cli.updateComment({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        commentId: "42",
+        body: "Second thoughts",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "projects/acme%2Fweb/issues/7/notes/42",
+        "--method",
+        "PUT",
+        "--input",
+        "-",
+        "--header",
+        "Content-Type: application/json",
+      ]);
+      expect(callAt(0).stdin).toBe('{"body":"Second thoughts"}');
+    }),
+  );
+
+  it.effect("adds and removes an issue reaction after paging its awards", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output("{}")))
+        .mockReturnValueOnce(Effect.succeed(output('{"username":"bilal"}')))
+        .mockReturnValueOnce(Effect.succeed(output(awards(100, 1, "theo"))))
+        .mockReturnValueOnce(Effect.succeed(output(awards(1, 101, "bilal"))))
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const target = { cwd: "/w", repository: "acme/web", number: 7 };
+
+      yield* cli.setReaction({ ...target, content: "heart", reacted: true });
+      yield* cli.setReaction({ ...target, subjectId: "42", content: "heart", reacted: false });
+
+      expect(pathOfCall(0)).toBe("projects/acme%2Fweb/issues/7/award_emoji?name=heart");
+      expect(pathOfCall(2)).toBe(
+        "projects/acme%2Fweb/issues/7/notes/42/award_emoji?per_page=100&page=1",
+      );
+      expect(pathOfCall(3)).toBe(
+        "projects/acme%2Fweb/issues/7/notes/42/award_emoji?per_page=100&page=2",
+      );
+      expect(pathOfCall(4)).toBe("projects/acme%2Fweb/issues/7/notes/42/award_emoji/101");
     }),
   );
 
@@ -723,6 +922,47 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("offers an assignee the member page never reached, by an id GitLab takes", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(output(issueJson({ assignees: [{ id: 42, username: "faraway" }] }))),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // A full page of somebody else: GitLab caps it at a hundred, and this project has
+              // more members than that, so the assignee is nowhere in what came back.
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify(
+                Array.from({ length: 100 }, (_, index) => ({
+                  id: index + 1,
+                  username: `member${index}`,
+                })),
+              ),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const target = { cwd: "/w", repository: "acme/web", number: 7 };
+
+      const list = yield* cli.listAssigneeCandidates(target);
+
+      const assignee = list.candidates.find((candidate) => candidate.login === "faraway");
+      assert.isDefined(assignee);
+      assert.isTrue(assignee.isAssigned);
+      assert.isTrue(list.truncated);
+
+      // The whole point of carrying them: the set is written from this list, so the id has to be
+      // one the write keeps rather than one it drops on the floor.
+      yield* cli.setAssignees({ ...target, assignees: [assignee.id] });
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(2).stdin ?? "")).toEqual({ assignee_ids: [42] });
+    }),
+  );
+
   it.effect("reads a project's templates in two steps, names then bodies", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation((input) => {
@@ -827,10 +1067,7 @@ layer("GitLabIssueCli.layer", (it) => {
         const path = input.args[1];
         if (path === "projects/acme%2Fweb/templates/issues") {
           return Effect.succeed(
-            output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify([{ name: "No key" }, { key: "bug.md", name: "Bug" }]),
-            ),
+            output(JSON.stringify([{ name: "No key" }, { key: "bug.md", name: "Bug" }])),
           );
         }
         if (path === "projects/acme%2Fweb/templates/issues/bug.md") {

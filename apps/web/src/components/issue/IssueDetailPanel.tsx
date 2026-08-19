@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   IssueAction,
   IssueCloseReason,
+  IssueComment,
   IssueLinkedPullRequest,
   IssueRef,
   IssueState,
@@ -40,7 +41,9 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
+import { CondensedDetailTabStrip, DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
+import { useMountedTabs } from "../sourceControl/useMountedTabs";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -54,7 +57,8 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
-import { IssueActivityUnavailableState } from "./IssueActivityUnavailableState";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import {
   buildAskAboutIssueHandoff,
   buildAttachIssueContext,
@@ -63,10 +67,12 @@ import {
   buildSolveIssueHandoff,
   issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
+  mergeEarlierIssueComments,
+  shouldRefreshIssueActivity,
   type IssueHandoff,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
-import { IssueDetailGhost, IssueTimelineGhost } from "./IssueGhosts";
+import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { IssueSummaryTab } from "./IssueSummaryTab";
 import { IssuesUnavailableState } from "./IssuesUnavailableState";
 import { IssueTimelineTab } from "./IssueTimelineTab";
@@ -113,6 +119,9 @@ const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
   "azure-devops": "Open on Azure DevOps",
 };
 
+/** Names no hand-off, which is the point: it holds the controls shut without claiming one is running. */
+const HANDOFF_WAITING_KIND = "waiting-for-activity";
+
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
@@ -152,7 +161,6 @@ export function IssueDetailPanel({
   onActed,
   onStateChange,
   onOpenLinkedPullRequest,
-  context = "page",
   chromeVariant = "full",
 }: {
   environmentId: EnvironmentId;
@@ -185,18 +193,13 @@ export function IssueDetailPanel({
    */
   onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
   /**
-   * Beside a thread the header is narrow and the reader is already in the conversation a hand-off
-   * would land in, so "Solve" stays in the menu with the other three; on a page it is the reason
-   * to have opened the issue at all, and rides the button row.
-   */
-  context?: "page" | "thread";
-  /**
    * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
    * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
    * top — the chrome spends its height on what is being read.
    */
   chromeVariant?: "full" | "collapse";
 }) {
+  const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
   // Oldest first, unlike a change request: an issue is an argument written from its opening
   // towards whatever was settled, and reading it backwards is reading the conclusion first.
@@ -205,18 +208,7 @@ export function IssueDetailPanel({
   // in this header and the summary is a tab away when it is pressed.
   const [editing, setEditing] = useState(false);
   const [openPicker, setOpenPicker] = useState<"labels" | "assignees" | null>(null);
-  // Every tab the reader has opened stays mounted behind the active one: a long description and a
-  // long conversation both re-parse their whole markdown on every return to the tab.
-  // `visibility` keeps boxes, sizes and scroll offsets, and takes hidden content out of the tab
-  // order and the accessibility tree.
-  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
-    () => new Set<DetailTab>(["summary"]),
-  );
-  useEffect(() => {
-    setMountedTabs((previous) =>
-      previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
-    );
-  }, [tab]);
+  const mountedTabs = useMountedTabs(tab);
   const [chromeCondensed, setChromeCondensed] = useState(false);
   // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
   // events, so the capture handler always writes the active tab's entry — and a tab switch
@@ -247,12 +239,23 @@ export function IssueDetailPanel({
     compensationRef.current = null;
     if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
   }, [condensed]);
-  const [confirmClose, setConfirmClose] = useState<{ reason: IssueCloseReason | null } | null>(
-    null,
-  );
+  // The issue the dialog was opened over travels with the question, because the panel shows a
+  // different issue every time it is opened and the dialog outlives that swap: without it, a
+  // confirmation asked about one issue closes whichever one the panel has moved on to.
+  const [confirmClose, setConfirmClose] = useState<{
+    reference: IssueRef;
+    reason: IssueCloseReason | null;
+  } | null>(null);
   const [actionPending, setActionPending] = useState(false);
   /** Which hand-off is under way, so only the item that was pressed says it is working. */
   const [handoff, setHandoff] = useState<string | null>(null);
+  const [loadedComments, setLoadedComments] = useState<{
+    readonly key: string;
+    readonly comments: ReadonlyArray<IssueComment>;
+    readonly nextCursor: string | null;
+  } | null>(null);
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
+  const readCommentsPage = useAtomCommand(issueEnvironment.commentsPage, { reportFailure: false });
 
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
@@ -264,6 +267,7 @@ export function IssueDetailPanel({
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
+  const loadedPage = loadedComments?.key === issueKey ? loadedComments : null;
   const detail = useMemo(
     () =>
       coreDetail === null
@@ -271,14 +275,23 @@ export function IssueDetailPanel({
         : {
             ...coreDetail,
             author: activity?.author ?? coreDetail.author,
-            comments: activity?.comments ?? [],
+            comments: mergeEarlierIssueComments(
+              activity?.comments ?? [],
+              loadedPage?.comments ?? [],
+            ),
             // The host's own count, which the core read already carries: the conversation being
             // unread is not the same as there being nothing in it.
             commentCount: activity?.commentCount ?? coreDetail.commentCount,
-            commentsTruncated: activity?.commentsTruncated ?? false,
+            commentsTruncated:
+              loadedPage === null
+                ? (activity?.commentsTruncated ?? false)
+                : loadedPage.nextCursor !== null,
+            nextCommentsCursor:
+              loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
             events: activity?.events ?? [],
+            ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
           },
-    [activity, coreDetail],
+    [activity, coreDetail, loadedPage],
   );
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
@@ -286,6 +299,47 @@ export function IssueDetailPanel({
     detailQuery.refresh();
     activityQuery.refresh();
   }, [activityQuery.refresh, detailQuery.refresh]);
+  const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
+    null,
+  );
+  const loadMoreComments = useCallback(async () => {
+    const cursor = detail?.nextCommentsCursor;
+    if (cursor == null || loadingMoreComments) return;
+    setLoadingMoreComments(true);
+    const result = await readCommentsPage({
+      environmentId,
+      input: { ...reference, cursor },
+    });
+    setLoadingMoreComments(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not load more comments" });
+      return;
+    }
+    setLoadedComments((previous) => {
+      const comments = previous?.key === issueKey ? previous.comments : [];
+      return {
+        key: issueKey,
+        comments: mergeEarlierIssueComments(comments, result.value.comments),
+        nextCursor: result.value.nextCursor,
+      };
+    });
+  }, [
+    detail?.nextCommentsCursor,
+    environmentId,
+    issueKey,
+    loadingMoreComments,
+    readCommentsPage,
+    reference,
+  ]);
+
+  useEffect(() => {
+    if (!coreDetail) return;
+    const next = { key: issueKey, updatedAt: coreDetail.updatedAt };
+    if (shouldRefreshIssueActivity(activityRevision.current, next)) {
+      activityQuery.refresh();
+    }
+    activityRevision.current = next;
+  }, [activityQuery.refresh, coreDetail, issueKey]);
   useEffect(() => {
     if (!detail) return;
     onStateChange?.({
@@ -296,12 +350,10 @@ export function IssueDetailPanel({
       stateReason: detail.stateReason,
     });
   }, [detail, onStateChange]);
-  // An issue changes while it is open in front of somebody — a comment lands, someone closes it —
-  // so the panel reads it again on the way back to the window and while a reader sits on it.
-  // Keyed by the issue rather than by the panel, because this one panel shows a different issue
-  // every time it is opened.
-  useLiveRefresh(refreshDetail, {
-    key: `issue:${reference.projectId}:${reference.repository}#${reference.number}`,
+  // Core detail is cheap enough to re-read while this stays open. Activity is heavier, so the
+  // revision effect above reads it only after this same issue reports a change.
+  useLiveRefresh(detailQuery.refresh, {
+    key: `issue:${issueKey}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
   // the answer for a reader who can see that what they are looking at is behind. The
@@ -322,12 +374,12 @@ export function IssueDetailPanel({
   const runAction = useAtomCommand(issueEnvironment.runAction, { reportFailure: false });
   const newThread = useNewThreadHandler();
 
-  const perform = async (action: IssueAction, reason?: IssueCloseReason) => {
+  const perform = async (action: IssueAction, target: IssueRef, reason?: IssueCloseReason) => {
     if (actionPending) return;
     setActionPending(true);
     const result = await runAction({
       environmentId,
-      input: { ...reference, action, ...(reason ? { reason } : {}) },
+      input: { ...target, action, ...(reason ? { reason } : {}) },
     });
     setActionPending(false);
     if (result._tag === "Failure") {
@@ -395,7 +447,7 @@ export function IssueDetailPanel({
     kind: string,
     build: (source: IssueHandoffSource) => IssueHandoff,
   ) => {
-    if (!detail || handoff !== null) return;
+    if (!detail || handoff !== null || activityPending) return;
     const task = build({
       number: detail.number,
       repository: detail.repository,
@@ -465,7 +517,14 @@ export function IssueDetailPanel({
     setTab("summary");
     setOpenPicker(picker);
   };
-  const handoffLabel = (kind: string, label: string) => (handoff === kind ? "Opening..." : label);
+  // Every hand-off quotes the conversation, and until the activity read lands there is none to
+  // quote — an agent handed the issue mid-read gets the argument with the argument missing, and
+  // the read that lands afterwards cannot amend a composer already written. So the controls wait
+  // and say what they are waiting for, rather than sending half an issue. A failed read is not
+  // waiting: nothing further is coming, and the issue itself is still worth handing over.
+  const handoffDisabled = handoff !== null || activityPending;
+  const handoffLabel = (kind: string, label: string) =>
+    handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -490,21 +549,32 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <>
-                <span className="min-w-0 truncate" title={detail.repository}>
-                  {detail.repository}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => openOnHost(detail.url)}
-                  className={cn(
-                    "shrink-0 font-medium underline-offset-2 hover:underline",
-                    statePresentation.toneClassName,
-                  )}
-                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  aria-label={`Open issue #${detail.number} on host`}
-                >
-                  #{detail.number}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="min-w-0 truncate" />}>
+                    {detail.repository}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{detail.repository}</TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => openOnHost(detail.url)}
+                        className={cn(
+                          "shrink-0 font-medium underline-offset-2 hover:underline",
+                          statePresentation.toneClassName,
+                        )}
+                        aria-label={`Open issue #${detail.number} on host`}
+                      />
+                    }
+                  >
+                    #{detail.number}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">
+                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  </TooltipPopup>
+                </Tooltip>
               </>
             ) : null}
           </div>
@@ -520,22 +590,35 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <>
-                <button
-                  type="button"
-                  tabIndex={condensed ? 0 : -1}
-                  onClick={() => openOnHost(detail.url)}
-                  className={cn(
-                    "shrink-0 font-medium underline-offset-2 hover:underline",
-                    statePresentation.toneClassName,
-                  )}
-                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  aria-label={`Open issue #${detail.number} on host`}
-                >
-                  #{detail.number}
-                </button>
-                <span className="min-w-0 truncate font-medium text-foreground" title={detail.title}>
-                  {detail.title}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        tabIndex={condensed ? 0 : -1}
+                        onClick={() => openOnHost(detail.url)}
+                        className={cn(
+                          "shrink-0 font-medium underline-offset-2 hover:underline",
+                          statePresentation.toneClassName,
+                        )}
+                        aria-label={`Open issue #${detail.number} on host`}
+                      />
+                    }
+                  >
+                    #{detail.number}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">
+                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  </TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="min-w-0 truncate font-medium text-foreground" />}
+                  >
+                    {detail.title}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{detail.title}</TooltipPopup>
+                </Tooltip>
                 <statePresentation.Icon
                   role="img"
                   aria-label={statePresentation.label}
@@ -550,8 +633,14 @@ export function IssueDetailPanel({
             <>
               <Menu>
                 <MenuTrigger
-                  className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label="More issue actions"
+                  render={
+                    <Button
+                      aria-label="More issue actions"
+                      className="size-6"
+                      size="icon-xs"
+                      variant="ghost-muted"
+                    />
+                  }
                 >
                   <MoreHorizontalIcon className="size-4" />
                 </MenuTrigger>
@@ -560,26 +649,8 @@ export function IssueDetailPanel({
                     <RefreshCwIcon className="size-3.5" />
                     Refresh
                   </MenuItem>
-                  {/* Only where the button row could not take it: on a page "Solve" is the header
-                      button, so offering it here as well would show the same action twice. */}
-                  {context === "thread" ? (
-                    <MenuItem
-                      disabled={handoff !== null}
-                      onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-                    >
-                      <HammerIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                      <span className="flex min-w-0 flex-col">
-                        <span>{handoffLabel("solve", "Solve this issue")}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {inPlaceDraft === null
-                            ? "Opens a thread on this project holding the task."
-                            : "Puts the task in this thread's composer."}
-                        </span>
-                      </span>
-                    </MenuItem>
-                  ) : null}
                   <MenuItem
-                    disabled={handoff !== null}
+                    disabled={handoffDisabled}
                     onClick={() => void startHandoff("ask", buildAskAboutIssueHandoff)}
                   >
                     <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
@@ -591,7 +662,7 @@ export function IssueDetailPanel({
                     </span>
                   </MenuItem>
                   <MenuItem
-                    disabled={handoff !== null}
+                    disabled={handoffDisabled}
                     onClick={() => void startHandoff("explain", buildExplainIssueHandoff)}
                   >
                     <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
@@ -606,11 +677,11 @@ export function IssueDetailPanel({
                       one, and "add to the thread you are in" would be that same thread. */}
                   {inPlaceDraft === null ? null : (
                     <MenuItem
-                      disabled={handoff !== null}
+                      disabled={handoffDisabled}
                       onClick={() => void startHandoff("attach", buildAttachIssueContext)}
                     >
                       <PaperclipIcon className="size-3.5" />
-                      Add to composer
+                      {handoffLabel("attach", "Add to composer")}
                     </MenuItem>
                   )}
                   {canEdit || canLabel || canAssign ? (
@@ -646,31 +717,58 @@ export function IssueDetailPanel({
                     <ArrowUpRightIcon className="size-3.5" />
                     {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
                   </MenuItem>
-                  <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
+                  {/* A clipboard that is switched off or refuses says nothing on its own, and a
+                      reader who has been handed nothing goes and pastes whatever was there
+                      before. The refusal is the host's own sentence, because it is the only
+                      thing that says which of the two happened. */}
+                  <MenuItem
+                    onClick={() =>
+                      void writeTextToClipboard(detail.url, "issue link").catch(
+                        (error: unknown) => {
+                          toastManager.add({
+                            type: "error",
+                            title: "Could not copy the link",
+                            description:
+                              error instanceof Error
+                                ? error.message
+                                : "The clipboard refused it. Open the issue on the host instead.",
+                          });
+                        },
+                      )
+                    }
+                  >
                     <LinkIcon className="size-3.5" />
                     Copy link
                   </MenuItem>
                 </MenuPopup>
               </Menu>
-              {/* Handing the issue to an agent is the reason to open one here at all, so on a page
-                  it is a button of its own rather than a line in a menu. */}
-              {context === "page" ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={handoff !== null}
-                  onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-                >
-                  {handoff === "solve" ? (
-                    "Opening..."
-                  ) : (
-                    <>
-                      <HammerIcon className="size-3" />
-                      Solve
-                    </>
-                  )}
-                </Button>
-              ) : null}
+              {/* Handing the issue to an agent is the reason to open one at all, so it is a
+                  button of its own wherever the panel is — beside a thread as much as on the
+                  page. The label goes once the chrome condenses; the button itself does not. */}
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={handoffDisabled}
+                title={
+                  activityPending
+                    ? "Waiting for the issue's comments, which go with the task"
+                    : inPlaceDraft === null
+                      ? "Opens a thread on this project holding the task"
+                      : "Puts the task in this thread's composer"
+                }
+                onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
+              >
+                {handoff === "solve" ? (
+                  "Opening..."
+                ) : activityPending ? (
+                  "Loading..."
+                ) : (
+                  <>
+                    <HammerIcon className="size-3" />
+                    <span className={cn(condensed && "sr-only")}>Solve</span>
+                  </>
+                )}
+              </Button>
               {detail.state === "open" && can("close") ? (
                 closeReasons.length > 0 ? (
                   // A reason is not a second action but a part of this one, so it is chosen on the
@@ -696,7 +794,7 @@ export function IssueDetailPanel({
                         <MenuItem
                           key={reason}
                           disabled={actionPending}
-                          onClick={() => setConfirmClose({ reason })}
+                          onClick={() => setConfirmClose({ reference, reason })}
                         >
                           {CLOSE_REASON_LABELS[reason]}
                         </MenuItem>
@@ -707,13 +805,17 @@ export function IssueDetailPanel({
                   <Button
                     size="xs"
                     disabled={actionPending}
-                    onClick={() => setConfirmClose({ reason: null })}
+                    onClick={() => setConfirmClose({ reference, reason: null })}
                   >
                     {actionPending ? "Closing..." : "Close"}
                   </Button>
                 )
               ) : detail.state === "closed" && can("reopen") ? (
-                <Button size="xs" disabled={actionPending} onClick={() => void perform("reopen")}>
+                <Button
+                  size="xs"
+                  disabled={actionPending}
+                  onClick={() => void perform("reopen", reference)}
+                >
                   {actionPending ? "Reopening..." : "Reopen"}
                 </Button>
               ) : null}
@@ -737,25 +839,13 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <div className="flex min-w-0 items-center gap-1 px-4 pb-2">
-                <nav aria-label="Issue tabs" className="flex shrink-0 items-center gap-0.5">
-                  {TABS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      tabIndex={condensed ? 0 : -1}
-                      aria-pressed={tab === item.value}
-                      onClick={() => setTab(item.value)}
-                      className={cn(
-                        "rounded-md px-2 py-1 text-[11px] transition-colors",
-                        tab === item.value
-                          ? "bg-accent text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </nav>
+                <CondensedDetailTabStrip
+                  label="Issue tabs"
+                  tabs={TABS}
+                  active={tab}
+                  onSelect={setTab}
+                  focusable={condensed}
+                />
                 <span className="ml-auto shrink-0 truncate text-[11px] text-muted-foreground">
                   {statePresentation.label} · updated {formatRelativeTimeLabel(detail.updatedAt)}
                 </span>
@@ -807,26 +897,7 @@ export function IssueDetailPanel({
             ) : null}
 
             {detail ? (
-              <nav
-                className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2"
-                aria-label="Issue tabs"
-              >
-                {TABS.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    aria-pressed={tab === item.value}
-                    onClick={() => setTab(item.value)}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
-                      tab === item.value
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={setTab}>
                 {tab === "timeline" ? (
                   <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                     <span
@@ -867,7 +938,7 @@ export function IssueDetailPanel({
                     </Button>
                   </div>
                 ) : null}
-              </nav>
+              </DetailTabStrip>
             ) : null}
           </div>
         </div>
@@ -881,6 +952,12 @@ export function IssueDetailPanel({
         onScrollCapture={(event) => {
           if (chromeVariant !== "collapse") return;
           const scroller = event.target as HTMLElement;
+          // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code block
+          // running wide, the description open in an editor — is the reader moving something on
+          // the page rather than the page, and its `scrollTop` is not the one the compensation
+          // belongs to. The tab renders its scroller as the marked wrapper's only child, so that
+          // is what the mark asks about.
+          if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
           scrollerRef.current = scroller;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
@@ -911,27 +988,34 @@ export function IssueDetailPanel({
           // The ghost wears the shape of the tab being waited on, so switching tabs mid-load
           // does not flash a summary outline under a timeline heading.
           tab === "timeline" ? (
-            <IssueTimelineGhost />
+            <TimelineGhost />
           ) : (
-            <IssueDetailGhost />
+            <DetailGhost label="Loading issue" />
           )
         ) : detailQuery.error && !detail ? (
           <IssuesUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
         ) : detail ? (
           <>
             {mountedTabs.has("summary") ? (
-              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
+              <div
+                data-tab-scroller
+                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
+              >
                 <IssueSummaryTab
                   environmentId={environmentId}
                   reference={reference}
                   detail={detail}
+                  onLoadMoreComments={() => void loadMoreComments()}
+                  loadingMoreComments={loadingMoreComments}
                   activityPending={activityPending}
                   activityError={activityError}
                   editing={editing}
                   onEditingChange={setEditing}
                   openPicker={openPicker}
                   onOpenPickerChange={setOpenPicker}
-                  pendingHandoff={handoff}
+                  // The section's own button knows only about a hand-off already under way, so
+                  // "cannot go yet" is said to it in the one word it understands.
+                  pendingHandoff={handoff ?? (activityPending ? HANDOFF_WAITING_KIND : null)}
                   onLinkPullRequests={() =>
                     void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, buildLinkPullRequestsHandoff)
                   }
@@ -945,16 +1029,28 @@ export function IssueDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
-              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
+              <div
+                data-tab-scroller
+                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
+              >
                 {activityPending ? (
-                  <IssueTimelineGhost />
+                  <TimelineGhost />
                 ) : activityError ? (
-                  <IssueActivityUnavailableState
+                  <ActivityUnavailableState
+                    title="Could not load issue activity"
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />
                 ) : (
-                  <IssueTimelineTab detail={detail} order={timelineOrder} />
+                  <IssueTimelineTab
+                    environmentId={environmentId}
+                    reference={reference}
+                    detail={detail}
+                    onLoadMoreComments={() => void loadMoreComments()}
+                    loadingMoreComments={loadingMoreComments}
+                    order={timelineOrder}
+                    onRefresh={refreshDetail}
+                  />
                 )}
               </div>
             ) : null}
@@ -970,7 +1066,7 @@ export function IssueDetailPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Close issue?</AlertDialogTitle>
             <AlertDialogDescription>
-              {`This closes #${reference.number}${
+              {`This closes #${confirmClose?.reference.number ?? reference.number}${
                 confirmClose?.reason ? CLOSE_REASON_PHRASES[confirmClose.reason] : ""
               } on the host. You can reopen it afterwards.`}
             </AlertDialogDescription>
@@ -984,9 +1080,10 @@ export function IssueDetailPanel({
               variant="destructive"
               disabled={actionPending}
               onClick={() => {
-                const reason = confirmClose?.reason ?? undefined;
+                const pending = confirmClose;
+                if (!pending) return;
                 setConfirmClose(null);
-                void perform("close", reason);
+                void perform("close", pending.reference, pending.reason ?? undefined);
               }}
             >
               Close issue

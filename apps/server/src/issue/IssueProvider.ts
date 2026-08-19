@@ -8,17 +8,22 @@ import type {
   IssueComment,
   IssueEvent,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
+  IssueReaction,
+  IssueReactionContent,
   IssueListState,
   IssueState,
   IssueTemplateList,
   IssueViewerPermissions,
-  SourceControlActor,
-  SourceControlLabel,
-  SourceControlProviderKind,
+  IssueActor,
+  IssueLabel,
+  IssueProviderKind,
+  OrchestrationProjectShell,
 } from "@t3tools/contracts";
-import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t3tools/contracts";
+import { IssueProviderKind as IssueProviderKindSchema } from "@t3tools/contracts";
 
 /**
  * The one failure shape every provider reports, so the service can decide what a failure means
@@ -31,7 +36,7 @@ import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t
 export class IssueProviderError extends Schema.TaggedErrorClass<IssueProviderError>()(
   "IssueProviderError",
   {
-    provider: SourceControlProviderKindSchema,
+    provider: IssueProviderKindSchema,
     operation: Schema.String,
     reason: Schema.Literals(["missing-tool", "unauthenticated", "tracker-disabled", "failed"]),
     detail: Schema.String,
@@ -48,27 +53,23 @@ export interface ProviderIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   readonly stateReason: IssueCloseReason | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
-  readonly labels: ReadonlyArray<SourceControlLabel>;
+  readonly assignees: ReadonlyArray<IssueActor>;
+  readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
+  readonly reactions?: ReadonlyArray<IssueReaction>;
 }
 
 export interface ProviderIssuePage {
   readonly items: ReadonlyArray<ProviderIssue>;
   /** True when the host has more rows than the page size asked for. */
   readonly truncated: boolean;
-  /**
-   * Optional count-based cursor advance. Most hosts advance by the rows delivered after local
-   * de-duplication; an offset-paged host may need to count malformed raw rows it consumed too.
-   */
-  readonly cursorAdvance?: number;
   /**
    * This page can be carried on from, so the service may hand the caller a cursor for it. False
    * where the host answered in an order a cursor means nothing in, which leaves a larger `limit`
@@ -89,8 +90,6 @@ export interface ProviderListCursor {
    * slice ended before. The service drops the ones it has already sent.
    */
   readonly updatedBefore: string;
-  /** How many provider rows this repository has consumed, for a host that pages by counting. */
-  readonly delivered: number;
 }
 
 /** One repository's row inside an answer that spans several of them. */
@@ -118,7 +117,7 @@ export interface ProviderIssueDetail extends ProviderIssue {
 /** The conversation-shaped half of a detail, loaded after the core can already render. */
 export interface ProviderIssueActivity {
   /** An optional richer actor, e.g. after a GraphQL read supplies an avatar the listing lacks. */
-  readonly author?: SourceControlActor | null;
+  readonly author?: IssueActor | null;
   readonly comments: ReadonlyArray<IssueComment>;
   /**
    * The host's own count of the conversation, which a bounded read can fall short of. A host that
@@ -126,7 +125,14 @@ export interface ProviderIssueActivity {
    */
   readonly commentCount: number;
   readonly commentsTruncated: boolean;
+  readonly nextCommentsCursor?: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
+  readonly reactions?: ReadonlyArray<IssueReaction>;
+}
+
+export interface ProviderIssueCommentsPage {
+  readonly comments: ReadonlyArray<IssueComment>;
+  readonly nextCursor: string | null;
 }
 
 export interface ProviderCreatedIssue {
@@ -146,18 +152,30 @@ export interface ProviderRepositoryRef {
   readonly host: string;
 }
 
+export interface IssueAdapterSource {
+  readonly host: string;
+  readonly repository: string;
+}
+
 /**
  * One host's issues. Implementations own their own tool and JSON shapes and hand back the neutral
  * types above; anything a host cannot do is declared in `capabilities` rather than failing at call
  * time.
  */
-export interface IssueProviderApi {
-  readonly kind: SourceControlProviderKind;
+export interface IssueAdapter {
+  readonly kind: IssueProviderKind;
   readonly capabilities: IssueCapabilities;
+
+  /**
+   * Optional local project binding for adapters selected outside source control, such as a future
+   * project-level Jira setting. Synchronous by design: discovering sources must spend no API calls.
+   */
+  readonly resolveSource?: (project: OrchestrationProjectShell) => IssueAdapterSource | null;
 
   /** The signed-in account, which is what involvement filtering compares against. */
   readonly getViewer: (input: {
     readonly cwd: string;
+    readonly host: string;
   }) => Effect.Effect<string, IssueProviderError>;
 
   readonly listIssues: (
@@ -166,6 +184,8 @@ export interface IssueProviderApi {
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
+      readonly order?: IssueListOrder | undefined;
       /**
        * Free text to narrow the listing by, as the host understands it. A host with no text
        * filter of its own ignores it and answers with the page it would have answered anyway.
@@ -189,6 +209,8 @@ export interface IssueProviderApi {
     readonly involvement: IssueInvolvement;
     readonly viewer: string;
     readonly limit: number;
+    readonly sort?: IssueListSort | undefined;
+    readonly order?: IssueListOrder | undefined;
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
   }) => Effect.Effect<ProviderBatchedIssuePage, IssueProviderError>;
@@ -201,6 +223,10 @@ export interface IssueProviderApi {
   readonly getIssueActivity: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderIssueActivity, IssueProviderError>;
+
+  readonly getIssueComments?: (
+    input: ProviderRepositoryRef & { readonly number: number; readonly cursor: string },
+  ) => Effect.Effect<ProviderIssueCommentsPage, IssueProviderError>;
 
   /**
    * The same answer `getIssue` carries, on its own. Asked freshly before anything is written, so
@@ -223,6 +249,23 @@ export interface IssueProviderApi {
 
   readonly comment: (
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
+  ) => Effect.Effect<void, IssueProviderError>;
+
+  readonly updateComment?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    },
+  ) => Effect.Effect<void, IssueProviderError>;
+
+  readonly setReaction?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: IssueReactionContent;
+      readonly reacted: boolean;
+    },
   ) => Effect.Effect<void, IssueProviderError>;
 
   /** Only called when `capabilities.create` is true. */

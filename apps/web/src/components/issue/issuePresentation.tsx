@@ -1,7 +1,13 @@
-import type { IssueCloseReason, IssueState, SourceControlLabel } from "@t3tools/contracts";
-import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon } from "lucide-react";
+import type {
+  IssueCloseReason,
+  IssueLabel,
+  IssueProviderKind,
+  IssueState,
+} from "@t3tools/contracts";
+import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { cn } from "~/lib/utils";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -10,6 +16,19 @@ interface StatePresentation {
   readonly label: string;
   readonly toneClassName: string;
   readonly Icon: typeof CircleDotIcon;
+}
+
+export function getIssueProviderPresentation(kind: IssueProviderKind) {
+  switch (kind) {
+    case "github":
+    case "gitlab":
+    case "azure-devops":
+    case "bitbucket":
+    case "unknown":
+      return getSourceControlPresentationForKind(kind);
+    default:
+      return { providerName: kind, Icon: TicketIcon };
+  }
 }
 
 /**
@@ -72,47 +91,29 @@ export function IssueStateGlyph({
   );
 }
 
-/** Hosts write a label colour every one of these ways, and none of them with an alpha channel. */
-const HEX_COLOR_PATTERN = /^#?(?:([\da-f]{3})|([\da-f]{6}))$/iu;
-
-function channels(color: string): { r: number; g: number; b: number } | null {
-  const match = HEX_COLOR_PATTERN.exec(color.trim());
-  if (match === null) return null;
-  const hex =
-    match[1] === undefined ? match[2]! : [...match[1]].map((digit) => `${digit}${digit}`).join("");
-  return {
-    r: Number.parseInt(hex.slice(0, 2), 16) / 255,
-    g: Number.parseInt(hex.slice(2, 4), 16) / 255,
-    b: Number.parseInt(hex.slice(4, 6), 16) / 255,
-  };
-}
-
-const toLinear = (channel: number) =>
-  channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-
 /**
- * Where black and white draw level against a background, by the WCAG contrast ratios — above it
- * black reads further, below it white does.
+ * Hosts write a label colour every one of these ways, and none of them with an alpha channel.
+ * Checked rather than trusted: the value reaches a style attribute, and anything that is not a
+ * colour would be one the browser silently keeps from whatever was set before.
  */
-const INK_CROSSOVER_LUMINANCE = 0.179;
+const HEX_COLOR_PATTERN = /^#?(?:[\da-f]{3}|[\da-f]{6})$/iu;
 
 /**
- * A label's own colours. The host picks the background and says nothing about the ink, and half
- * the palettes it offers are pale — GitHub ships `good first issue` as `#7057ff` beside a
- * `#d4c5f9` that white all but disappears on. So the ink is whichever of black and white the
- * background contrasts further with, rather than a fixed one.
+ * A label's own colour, worn the way the hosts wear it: a wash of the colour rather than the
+ * colour itself, an edge a shade stronger, and the name in the colour pulled far enough towards
+ * the page's own ink to stay legible — half the palettes on offer are pale enough that the raw
+ * colour disappears against a light page and glares against a dark one.
  *
+ * Mixed in CSS rather than computed here, so one set of numbers reads correctly in both themes.
  * Nothing at all where the host gave no usable colour, which leaves the neutral chip standing.
  */
 function labelStyle(color: string | null): CSSProperties | undefined {
-  if (color === null) return undefined;
-  const rgb = channels(color);
-  if (rgb === null) return undefined;
-  const luminance = 0.2126 * toLinear(rgb.r) + 0.7152 * toLinear(rgb.g) + 0.0722 * toLinear(rgb.b);
+  if (color === null || !HEX_COLOR_PATTERN.test(color.trim())) return undefined;
+  const hex = `#${color.trim().replace(/^#/u, "")}`;
   return {
-    backgroundColor: `#${color.trim().replace(/^#/u, "")}`,
-    color: luminance > INK_CROSSOVER_LUMINANCE ? "#101014" : "#ffffff",
-    borderColor: "transparent",
+    backgroundColor: `color-mix(in oklab, ${hex} 18%, transparent)`,
+    borderColor: `color-mix(in oklab, ${hex} 35%, transparent)`,
+    color: `color-mix(in oklab, ${hex} 70%, var(--foreground))`,
   };
 }
 
@@ -126,7 +127,7 @@ export function IssueLabelChips({
   max = 3,
   className,
 }: {
-  labels: ReadonlyArray<SourceControlLabel>;
+  labels: ReadonlyArray<IssueLabel>;
   max?: number;
   className?: string;
 }) {
@@ -136,22 +137,29 @@ export function IssueLabelChips({
   return (
     <span className={cn("flex min-w-0 items-center gap-1", className)}>
       {shown.map((label) => (
-        <span
-          key={label.name}
-          title={label.name}
-          style={labelStyle(label.color)}
-          className="max-w-28 shrink-0 truncate rounded-full border border-border/60 px-1.5 text-[10px] leading-4 font-medium"
-        >
-          {label.name}
-        </span>
+        <Tooltip key={label.name}>
+          <TooltipTrigger
+            render={
+              <span
+                style={labelStyle(label.color)}
+                className="max-w-28 shrink-0 truncate rounded-full border border-border/60 px-1.5 text-[10px] leading-4 font-medium"
+              />
+            }
+          >
+            {label.name}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{label.name}</TooltipPopup>
+        </Tooltip>
       ))}
       {hidden.length > 0 ? (
-        <span
-          className="shrink-0 text-[10px] text-muted-foreground/70"
-          title={hidden.map((label) => label.name).join(", ")}
-        >
-          +{hidden.length}
-        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={<span className="shrink-0 text-[10px] text-muted-foreground/70" />}
+          >
+            +{hidden.length}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{hidden.map((label) => label.name).join(", ")}</TooltipPopup>
+        </Tooltip>
       ) : null}
     </span>
   );

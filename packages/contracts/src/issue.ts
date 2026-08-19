@@ -9,14 +9,38 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import {
-  ChangeRequestState,
-  SourceControlActor,
-  SourceControlLabel,
-  SourceControlListCursors,
-  SourceControlListProjectError,
-  SourceControlProviderKind,
-} from "./sourceControl.ts";
+import { ChangeRequestState } from "./sourceControl.ts";
+
+/** Stable adapter id carried through the neutral T3 issue format. */
+export const IssueProviderKind = TrimmedNonEmptyString;
+export type IssueProviderKind = typeof IssueProviderKind.Type;
+
+/** Stable identity for one adapter account on one host. */
+export function issueSourceKey(provider: IssueProviderKind, host: string): string {
+  return JSON.stringify([provider, host.toLowerCase()]);
+}
+
+/** Stable identity for one repository inside an adapter account. */
+export function issueRepositoryKey(
+  provider: IssueProviderKind,
+  host: string,
+  repository: string,
+): string {
+  return JSON.stringify([provider, host.toLowerCase(), repository.toLowerCase()]);
+}
+
+export const IssueActor = Schema.Struct({
+  login: TrimmedNonEmptyString,
+  name: Schema.NullOr(Schema.String),
+  avatarUrl: Schema.NullOr(Schema.String),
+});
+export type IssueActor = typeof IssueActor.Type;
+
+export const IssueLabel = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  color: Schema.NullOr(Schema.String),
+});
+export type IssueLabel = typeof IssueLabel.Type;
 
 export const IssueInvolvement = Schema.Literals(["all", "assigned", "authored", "mentioned"]);
 export type IssueInvolvement = typeof IssueInvolvement.Type;
@@ -28,6 +52,26 @@ export type IssueState = typeof IssueState.Type;
 export const IssueListState = Schema.Literals(["all", "open", "closed"]);
 export type IssueListState = typeof IssueListState.Type;
 
+export const IssueListSort = Schema.Literals([
+  "best-match",
+  "created",
+  "updated",
+  "comments",
+  "reactions",
+  "reactions-thumbs-up",
+  "reactions-thumbs-down",
+  "reactions-rocket",
+  "reactions-hooray",
+  "reactions-eyes",
+  "reactions-heart",
+  "reactions-laugh",
+  "reactions-confused",
+]);
+export type IssueListSort = typeof IssueListSort.Type;
+
+export const IssueListOrder = Schema.Literals(["asc", "desc"]);
+export type IssueListOrder = typeof IssueListOrder.Type;
+
 /**
  * Why an issue was closed, which is the difference between work that got done and work that was
  * dropped. Only GitHub records it; elsewhere a closed issue simply has no reason to report.
@@ -38,12 +82,33 @@ export type IssueCloseReason = typeof IssueCloseReason.Type;
 export const IssueAction = Schema.Literals(["close", "reopen"]);
 export type IssueAction = typeof IssueAction.Type;
 
+export const IssueReactionContent = Schema.Literals([
+  "thumbs-up",
+  "thumbs-down",
+  "laugh",
+  "hooray",
+  "confused",
+  "heart",
+  "rocket",
+  "eyes",
+]);
+export type IssueReactionContent = typeof IssueReactionContent.Type;
+
+export const IssueReaction = Schema.Struct({
+  content: IssueReactionContent,
+  count: PositiveInt,
+  actors: Schema.Array(TrimmedNonEmptyString),
+  viewerHasReacted: Schema.Boolean,
+});
+export type IssueReaction = typeof IssueReaction.Type;
+
 export const IssueComment = Schema.Struct({
   id: TrimmedNonEmptyString,
-  author: Schema.NullOr(SourceControlActor),
+  author: Schema.NullOr(IssueActor),
   body: Schema.String,
   createdAt: IsoDateTime,
   url: Schema.NullOr(Schema.String),
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
 export type IssueComment = typeof IssueComment.Type;
 
@@ -70,7 +135,7 @@ export type IssueEventKind = typeof IssueEventKind.Type;
 export const IssueEvent = Schema.Struct({
   id: TrimmedNonEmptyString,
   kind: IssueEventKind,
-  actor: Schema.NullOr(SourceControlActor),
+  actor: Schema.NullOr(IssueActor),
   createdAt: IsoDateTime,
   /** What the event was about, where it has a subject: a label name, an assignee, a title. */
   detail: Schema.NullOr(TrimmedNonEmptyString),
@@ -129,6 +194,10 @@ export const IssueCapabilities = Schema.Struct({
   issueTemplates: Schema.Boolean,
   /** The title and body of an existing issue can be rewritten. */
   edit: Schema.Boolean,
+  /** A posted comment can be rewritten by its author. */
+  editComment: Schema.optional(Schema.Boolean),
+  /** Reactions can be read, added, and removed on the issue and its comments. */
+  reactions: Schema.optional(Schema.Boolean),
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
   /** The labels a repository has can be listed, so a picker offers them instead of taking text. */
@@ -161,7 +230,7 @@ export const IssueViewerPermissions = Schema.Struct({
 export type IssueViewerPermissions = typeof IssueViewerPermissions.Type;
 
 export const IssueListEntry = Schema.Struct({
-  provider: SourceControlProviderKind,
+  provider: IssueProviderKind,
   /**
    * The host below which `repository` is addressed, so the same provider kind can serve more than
    * one account — github.com and a GitHub Enterprise install are different identities.
@@ -173,20 +242,25 @@ export const IssueListEntry = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
-  author: Schema.NullOr(SourceControlActor),
+  author: Schema.NullOr(IssueActor),
   state: IssueState,
   stateReason: Schema.NullOr(IssueCloseReason),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   closedAt: Schema.NullOr(IsoDateTime),
-  assignees: Schema.Array(SourceControlActor),
-  labels: Schema.Array(SourceControlLabel),
+  assignees: Schema.Array(IssueActor),
+  labels: Schema.Array(IssueLabel),
   milestone: Schema.NullOr(TrimmedNonEmptyString),
+  /** Present when the host can return reaction totals with the listing. */
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
   commentCount: NonNegativeInt,
 });
 export type IssueListEntry = typeof IssueListEntry.Type;
 
-export const IssueListCursors = SourceControlListCursors;
+export const IssueListCursors = Schema.Record(
+  TrimmedNonEmptyString,
+  TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+);
 export type IssueListCursors = typeof IssueListCursors.Type;
 
 export const IssueListInput = Schema.Struct({
@@ -213,16 +287,18 @@ export const IssueListInput = Schema.Struct({
    * answers unnarrowed rather than pretending.
    */
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  sort: Schema.optional(IssueListSort),
+  order: Schema.optional(IssueListOrder),
 });
 export type IssueListInput = typeof IssueListInput.Type;
 
 /**
- * A host the workspace has projects on, and whether its issues can be read right now. One per
- * host rather than per provider kind, because signing in is a question about the host.
+ * One adapter account the workspace has projects on, and whether its issues can be read right
+ * now. Two adapters can use the same host without sharing credentials.
  */
 export const IssueProviderSummary = Schema.Struct({
   host: TrimmedNonEmptyString,
-  kind: SourceControlProviderKind,
+  kind: IssueProviderKind,
   /** False where a search has to be applied to the rows after they arrive. */
   searchesOnHost: Schema.Boolean,
   projectCount: PositiveInt,
@@ -232,11 +308,15 @@ export const IssueProviderSummary = Schema.Struct({
 });
 export type IssueProviderSummary = typeof IssueProviderSummary.Type;
 
-export const IssueListProjectError = SourceControlListProjectError;
+export const IssueListProjectError = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+});
 export type IssueListProjectError = typeof IssueListProjectError.Type;
 
 export const IssueListResult = Schema.Struct({
-  /** The signed-in account per host, which is what involvement filtering compares. */
+  /** The signed-in account per adapter and host, keyed with `issueSourceKey`. */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   providers: Schema.Array(IssueProviderSummary),
   /** By update, newest first, across every repository this answer covers. */
@@ -267,7 +347,7 @@ export const IssueInvalidateInput = Schema.Struct({
 export type IssueInvalidateInput = typeof IssueInvalidateInput.Type;
 
 export const IssueDetail = Schema.Struct({
-  provider: SourceControlProviderKind,
+  provider: IssueProviderKind,
   capabilities: IssueCapabilities,
   /** What this viewer may do, which `capabilities` says nothing about. Both narrow the page. */
   viewerPermissions: IssueViewerPermissions,
@@ -279,15 +359,22 @@ export const IssueDetail = Schema.Struct({
   title: TrimmedNonEmptyString,
   body: Schema.String,
   url: TrimmedNonEmptyString,
-  author: Schema.NullOr(SourceControlActor),
+  author: Schema.NullOr(IssueActor),
   state: IssueState,
   stateReason: Schema.NullOr(IssueCloseReason),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   closedAt: Schema.NullOr(IsoDateTime),
-  assignees: Schema.Array(SourceControlActor),
-  labels: Schema.Array(SourceControlLabel),
+  assignees: Schema.Array(IssueActor),
+  labels: Schema.Array(IssueLabel),
   milestone: Schema.NullOr(TrimmedNonEmptyString),
+  /** Present when the host can return reaction totals with the listing. */
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
+  /**
+   * Signed-in host account. A comment edit is shown only when this matches its author. Absent
+   * when the host cannot identify the viewer, which offers nothing rather than everything.
+   */
+  viewer: Schema.optional(TrimmedNonEmptyString),
   commentCount: NonNegativeInt,
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
 });
@@ -299,7 +386,7 @@ export type IssueDetail = typeof IssueDetail.Type;
  * a host's conversation query may carry an avatar its basic read does not.
  */
 export const IssueActivity = Schema.Struct({
-  author: Schema.optional(Schema.NullOr(SourceControlActor)),
+  author: Schema.optional(Schema.NullOr(IssueActor)),
   comments: Schema.Array(IssueComment),
   /**
    * How many remarks the host itself counts, which is the number a surface showing a count has to
@@ -308,16 +395,31 @@ export const IssueActivity = Schema.Struct({
   commentCount: NonNegativeInt,
   /** The read stopped at a bound of its own before the host ran out. */
   commentsTruncated: Schema.Boolean,
+  nextCommentsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   events: Schema.Array(IssueEvent),
+  /** Reactions on the issue description itself. */
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
 export type IssueActivity = typeof IssueActivity.Type;
+
+export const IssueCommentsPageInput = Schema.Struct({
+  ...IssueRef.fields,
+  cursor: TrimmedNonEmptyString,
+});
+export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
+
+export const IssueCommentsPageResult = Schema.Struct({
+  comments: Schema.Array(IssueComment),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type IssueCommentsPageResult = typeof IssueCommentsPageResult.Type;
 
 /** The complete detail shape after the independently loaded activity has been applied. */
 export const IssueDetailView = Schema.Struct({
   ...IssueDetail.fields,
   ...IssueActivity.fields,
   // A composed view always has the core identity field, even where the activity did not enrich it.
-  author: Schema.NullOr(SourceControlActor),
+  author: Schema.NullOr(IssueActor),
 });
 export type IssueDetailView = typeof IssueDetailView.Type;
 
@@ -339,6 +441,22 @@ export const IssueCommentInput = Schema.Struct({
   body: CommentBody,
 });
 export type IssueCommentInput = typeof IssueCommentInput.Type;
+
+export const IssueCommentUpdateInput = Schema.Struct({
+  ...IssueRef.fields,
+  commentId: TrimmedNonEmptyString,
+  body: CommentBody,
+});
+export type IssueCommentUpdateInput = typeof IssueCommentUpdateInput.Type;
+
+export const IssueReactionInput = Schema.Struct({
+  ...IssueRef.fields,
+  /** Absent reacts to the issue body; present names a comment. */
+  subjectId: Schema.optional(TrimmedNonEmptyString),
+  content: IssueReactionContent,
+  reacted: Schema.Boolean,
+});
+export type IssueReactionInput = typeof IssueReactionInput.Type;
 
 const IssueTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
 
@@ -503,8 +621,13 @@ function answerBlock(field: IssueTemplateQuestion, answer: IssueTemplateFieldAns
       return text.length === 0 ? NO_RESPONSE : text;
     }
     case "textarea": {
-      const text = issueTemplateAnswerText(answer).trim();
-      if (text.length === 0) return NO_RESPONSE;
+      const written = issueTemplateAnswerText(answer);
+      if (written.trim().length === 0) return NO_RESPONSE;
+      // Only the whitespace at the end of the answer goes, because the blocks are joined with a
+      // blank line and a fence closes on a line of its own: whatever follows the last word would
+      // file as an empty line nobody wrote. Everything before the first word is the answer — four
+      // spaces are a code block, and dropping them files prose where the reader wrote code.
+      const text = written.trimEnd();
       return field.render === null ? text : `\`\`\`${field.render}\n${text}\n\`\`\``;
     }
     case "dropdown": {
@@ -577,6 +700,16 @@ export const IssueContactLink = Schema.Struct({
 export type IssueContactLink = typeof IssueContactLink.Type;
 
 export const IssueTemplateList = Schema.Struct({
+  /**
+   * What the host can do with issues at all, which a composer has no other way to learn: every
+   * other answer carrying `IssueCapabilities` is about an issue that already exists, and the one
+   * question asked before filing is this one. A host that takes no new issue, or no labels on one,
+   * has to be known before the form is drawn rather than after the host refuses it.
+   *
+   * Optional because it arrives on the wire: a client talking to a server from before this was
+   * carried reads nothing here rather than failing to decode the offer at all.
+   */
+  capabilities: Schema.optional(IssueCapabilities),
   templates: Schema.Array(IssueTemplate),
   contactLinks: Schema.Array(IssueContactLink),
   /**
@@ -616,7 +749,7 @@ export const IssueAssigneesInput = Schema.Struct({
 export type IssueAssigneesInput = typeof IssueAssigneesInput.Type;
 
 export const IssueAssigneeCandidate = Schema.Struct({
-  ...SourceControlActor.fields,
+  ...IssueActor.fields,
   /** How the host addresses this person when an assignment is written, which is not always the
    * handle it shows: GitHub takes a login, GitLab a numeric user id. Opaque to the page. */
   id: TrimmedNonEmptyString,
@@ -633,7 +766,7 @@ export const IssueAssigneeCandidateList = Schema.Struct({
 export type IssueAssigneeCandidateList = typeof IssueAssigneeCandidateList.Type;
 
 export const IssueLabelCandidate = Schema.Struct({
-  ...SourceControlLabel.fields,
+  ...IssueLabel.fields,
   description: Schema.NullOr(Schema.String),
   isApplied: Schema.Boolean,
 });
@@ -659,7 +792,7 @@ export type IssueUnavailableReason = typeof IssueUnavailableReason.Type;
  * are whole sentences instead of a tool name to interpolate.
  */
 const PROVIDER_REQUIREMENT: Partial<
-  Record<SourceControlProviderKind, { readonly missing: string; readonly unauthenticated: string }>
+  Record<IssueProviderKind, { readonly missing: string; readonly unauthenticated: string }>
 > = {
   github: {
     missing:
@@ -689,7 +822,7 @@ const PROVIDER_REQUIREMENT: Partial<
  * reported as unusable. Null when the reason is not about setting a host up.
  */
 export function issueProviderRequirement(
-  provider: SourceControlProviderKind,
+  provider: IssueProviderKind,
   reason: IssueUnavailableReason,
 ): string | null {
   const requirement = PROVIDER_REQUIREMENT[provider];
@@ -714,7 +847,7 @@ export class IssueUnavailableError extends Schema.TaggedErrorClass<IssueUnavaila
   "IssueUnavailableError",
   {
     reason: IssueUnavailableReason,
-    provider: Schema.optional(SourceControlProviderKind),
+    provider: Schema.optional(IssueProviderKind),
     cause: Schema.optional(Schema.Defect()),
   },
   { httpApiStatus: 503 },

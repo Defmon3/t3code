@@ -1,15 +1,11 @@
 import * as Effect from "effect/Effect";
-import type {
-  IssueCapabilities,
-  IssueViewerPermissions,
-  SourceControlActor,
-} from "@t3tools/contracts";
+import type { IssueCapabilities, IssueViewerPermissions, IssueActor } from "@t3tools/contracts";
 
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import type { GitHubIssueViewerAccess } from "./gitHubIssueJson.ts";
 import {
   IssueProviderError,
-  type IssueProviderApi,
+  type IssueAdapter,
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
 
@@ -20,6 +16,8 @@ const CAPABILITIES: IssueCapabilities = {
   create: true,
   issueTemplates: true,
   edit: true,
+  editComment: true,
+  reactions: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -71,9 +69,9 @@ function reasonFor(error: GitHubIssueCli.GitHubIssueCliError): IssueProviderErro
  * about keeps its initials rather than a guessed picture.
  */
 function withAvatar(
-  actor: SourceControlActor | null,
+  actor: IssueActor | null,
   avatarsByLogin: ReadonlyMap<string, string>,
-): SourceControlActor | null {
+): IssueActor | null {
   if (actor === null || actor.avatarUrl !== null) return actor;
   const avatarUrl = avatarsByLogin.get(actor.login);
   return avatarUrl === undefined ? actor : { ...actor, avatarUrl };
@@ -91,12 +89,11 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
-  const provider: IssueProviderApi = {
+  const provider: IssueAdapter = {
     kind: "github",
     capabilities: CAPABILITIES,
 
-    getViewer: (input) =>
-      cli.getViewerLogin({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
+    getViewer: (input) => cli.getViewerLogin(input).pipe(Effect.mapError(fail("getViewer"))),
 
     listIssues: (input) =>
       cli
@@ -108,6 +105,8 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          sort: input.sort,
+          order: input.order,
           query: input.query,
           cursor: input.cursor,
         })
@@ -125,6 +124,8 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          sort: input.sort,
+          order: input.order,
           query: input.query,
           cursor: input.cursor,
         })
@@ -152,6 +153,9 @@ export const make = Effect.gen(function* () {
     getIssueActivity: (input) =>
       cli.getIssueActivity(input).pipe(Effect.mapError(fail("getIssueActivity"))),
 
+    getIssueComments: (input) =>
+      cli.getIssueComments(input).pipe(Effect.mapError(fail("getIssueComments"))),
+
     getViewerPermissions: (input) =>
       cli
         .getViewerAccess(input)
@@ -173,6 +177,10 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     comment: (input) => cli.commentOnIssue(input).pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) => cli.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
+
+    setReaction: (input) => cli.setReaction(input).pipe(Effect.mapError(fail("setReaction"))),
 
     create: (input) => cli.createIssue(input).pipe(Effect.mapError(fail("create"))),
 

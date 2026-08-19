@@ -6,99 +6,43 @@ import type {
   IssueRef,
 } from "@t3tools/contracts";
 import {
-  ChevronRightIcon,
   LinkIcon,
   MessageSquareIcon,
   MilestoneIcon,
-  SendIcon,
+  PencilIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { issueEnvironment } from "~/state/issues";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
+import { CommentComposer } from "../sourceControl/CommentComposer";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
+import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import { readableFailure } from "../sourceControl/handoff";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
-import { IssueActivityUnavailableState } from "./IssueActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
-import { LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
-import { IssueConversationGhost } from "./IssueGhosts";
+import {
+  canEditIssueComment,
+  issueCommentEditId,
+  type IssueCommentEditScope,
+  LINK_PULL_REQUESTS_HANDOFF_KIND,
+} from "./issueDetail.logic";
+import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
-
-function MetaRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 py-1.5 text-xs">
-      <span className="flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-foreground">{children}</span>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  count,
-  defaultOpen = true,
-  actions,
-  children,
-}: {
-  title: string;
-  count?: number;
-  defaultOpen?: boolean;
-  /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
-      a button cannot hold a button — and only while open, since they act on what is shown. */
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex w-full items-center border-t border-border/60 pr-4">
-        {/* Title first, chevron riding to its right, count last: the row reads as a heading
-            with an affordance rather than a tree node. */}
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
-          <span>{title}</span>
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "size-3.5 text-muted-foreground transition-transform",
-              open && "rotate-90",
-            )}
-          />
-          {count === undefined ? null : (
-            <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-          )}
-        </CollapsibleTrigger>
-        {open ? actions : null}
-      </div>
-      <CollapsiblePanel>
-        <div className="px-4 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
+import { IssueReactionBar } from "./IssueReactions";
 
 /**
  * Rewriting the issue where it is read, rather than in a dialog over the top of it: what the
@@ -192,68 +136,6 @@ function IssueEditor({
   );
 }
 
-function CommentComposer({
-  environmentId,
-  detail,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  detail: IssueDetailView;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const postComment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
-
-  const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
-    const result = await postComment({
-      environmentId,
-      input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
-        body: trimmed,
-      },
-    });
-    setPosting(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this issue"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || posting}
-          onClick={() => void submit()}
-        >
-          <SendIcon className="size-3.5" />
-          {posting ? "Posting..." : "Comment"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /**
  * What a first render of the conversation carries. An issue with two hundred comments is two
  * hundred markdown documents, and the ones worth arriving for are the recent ones.
@@ -273,6 +155,8 @@ export function IssueSummaryTab({
   pendingHandoff,
   onLinkPullRequests,
   onOpenLinkedPullRequest,
+  onLoadMoreComments,
+  loadingMoreComments,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -299,6 +183,8 @@ export function IssueSummaryTab({
   onLinkPullRequests?: () => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
   onRefresh: () => void;
+  onLoadMoreComments: () => void;
+  loadingMoreComments: boolean;
 }) {
   // Keyed by the issue, so opening another one starts at the end of its conversation rather than
   // wherever the last one had been read back to.
@@ -307,12 +193,32 @@ export function IssueSummaryTab({
   // An issue reads in the order it was written, so the window reaches backwards from the end.
   const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
   const hiddenCommentCount = detail.comments.length - recentComments.length;
+  const [commentScope, setCommentScope] = useState<IssueCommentEditScope | null>(null);
+  const [commentSaving, setCommentSaving] = useState(false);
+  const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
+  const editingCommentId = issueCommentEditId(commentScope, detail.url);
+
+  const saveComment = async (commentId: string, body: string) => {
+    if (commentSaving) return;
+    setCommentSaving(true);
+    const result = await updateComment({
+      environmentId,
+      input: { ...reference, commentId, body },
+    });
+    setCommentSaving(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not save the comment" });
+      return;
+    }
+    setCommentScope(null);
+    onRefresh();
+  };
 
   return (
     <div className="h-full overflow-y-auto">
       <section className="px-4 py-3">
         <div>
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Assignees">
+          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Assignees">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {detail.assignees.length === 0 ? (
                 <span className="text-muted-foreground">Nobody</span>
@@ -335,8 +241,8 @@ export function IssueSummaryTab({
                 />
               ) : null}
             </span>
-          </MetaRow>
-          <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+          </SummaryMetaRow>
+          <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {detail.labels.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -355,11 +261,11 @@ export function IssueSummaryTab({
                 />
               ) : null}
             </span>
-          </MetaRow>
-          <MetaRow icon={<MilestoneIcon className="size-3.5" />} label="Milestone">
+          </SummaryMetaRow>
+          <SummaryMetaRow icon={<MilestoneIcon className="size-3.5" />} label="Milestone">
             {detail.milestone ?? <span className="text-muted-foreground">None</span>}
-          </MetaRow>
-          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          </SummaryMetaRow>
+          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -367,30 +273,41 @@ export function IssueSummaryTab({
                 : detail.commentCount === 1
                   ? "1 comment"
                   : `${detail.commentCount} comments`}
-          </MetaRow>
+          </SummaryMetaRow>
         </div>
       </section>
 
-      <Section title="Description">
-        {editing ? (
-          <IssueEditor
+      <SummarySection title="Description">
+        <div className="group">
+          {editing ? (
+            <IssueEditor
+              key={detail.url}
+              environmentId={environmentId}
+              detail={detail}
+              onDone={() => onEditingChange(false)}
+              onSaved={onRefresh}
+            />
+          ) : (
+            <HostMarkdown
+              text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+              cwd={detail.workspaceRoot}
+            />
+          )}
+          <IssueReactionBar
+            className="mt-2"
+            reactions={detail.reactions ?? []}
+            canReact={detail.capabilities.reactions === true}
             environmentId={environmentId}
-            detail={detail}
-            onDone={() => onEditingChange(false)}
-            onSaved={onRefresh}
+            reference={reference}
+            onRefresh={onRefresh}
           />
-        ) : (
-          <HostMarkdown
-            text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-            cwd={detail.workspaceRoot}
-          />
-        )}
-      </Section>
+        </div>
+      </SummarySection>
 
       {/* Only where the host reports links at all: an empty section under a host that never
           answers this question says the issue has no work on it, which it cannot know. */}
       {detail.capabilities.linkedPullRequests ? (
-        <Section
+        <SummarySection
           title="Related pull requests"
           count={detail.linkedPullRequests.length}
           // Offered whether or not anything is listed: an issue one change already mentions can
@@ -449,29 +366,45 @@ export function IssueSummaryTab({
               })}
             </div>
           )}
-        </Section>
+        </SummarySection>
       ) : null}
 
-      <Section
+      <SummarySection
         title="Comments"
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
       >
         {activityPending ? (
-          <IssueConversationGhost />
+          <ConversationGhost label="Loading issue conversation" />
         ) : activityError ? (
-          <IssueActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
+          <ActivityUnavailableState
+            compact
+            title="Could not load issue activity"
+            error={activityError}
+            onRetry={onRefresh}
+          />
         ) : (
           <>
-            {detail.commentsTruncated ? (
+            {detail.commentsTruncated && detail.nextCommentsCursor == null ? (
               <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-                This conversation is longer than this page reads in one go. The most recent{" "}
-                {detail.comments.length} are here; open it on the host to read the rest.
+                Only {detail.comments.length} comments are available here. Open the issue on the
+                host to read the rest.
               </p>
             ) : null}
             {detail.comments.length === 0 ? (
               <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : (
               <div className="space-y-3">
+                {detail.nextCommentsCursor != null ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    disabled={loadingMoreComments}
+                    onClick={onLoadMoreComments}
+                  >
+                    {loadingMoreComments ? "Loading..." : "Load older comments"}
+                  </Button>
+                ) : null}
                 {hiddenCommentCount > 0 ? (
                   // Hundreds of comments are hundreds of markdown renders, and the ones worth
                   // opening an issue for are the recent ones. The rest are one press away and
@@ -494,7 +427,7 @@ export function IssueSummaryTab({
                     // Offscreen comments skip style, layout and paint. Bot comments carry pages
                     // of highlighted code, and the conversation is below the description either
                     // way.
-                    className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                    className="group rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                   >
                     <SourceControlMetaLine className="min-w-0 text-xs text-muted-foreground">
                       <SourceControlActorLabel
@@ -503,7 +436,45 @@ export function IssueSummaryTab({
                       />
                       <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                     </SourceControlMetaLine>
-                    <HostMarkdown className="mt-2" text={comment.body} cwd={detail.workspaceRoot} />
+                    {editingCommentId === comment.id ? (
+                      <SourceControlMarkdownEditor
+                        className="mt-2"
+                        value={comment.body}
+                        cwd={detail.workspaceRoot}
+                        label="Edit comment"
+                        saving={commentSaving}
+                        onSave={(body) => void saveComment(comment.id, body)}
+                        onCancel={() => setCommentScope(null)}
+                      />
+                    ) : (
+                      <div className="mt-2 flex items-start gap-1">
+                        <HostMarkdown
+                          className="min-w-0 flex-1"
+                          text={comment.body}
+                          cwd={detail.workspaceRoot}
+                        />
+                        {canEditIssueComment(detail, comment) ? (
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                            aria-label="Edit comment"
+                            onClick={() => setCommentScope({ issue: detail.url, id: comment.id })}
+                          >
+                            <PencilIcon className="size-3" />
+                          </Button>
+                        ) : null}
+                      </div>
+                    )}
+                    <IssueReactionBar
+                      className="mt-2"
+                      reactions={comment.reactions ?? []}
+                      canReact={detail.capabilities.reactions === true}
+                      subjectId={comment.id}
+                      environmentId={environmentId}
+                      reference={reference}
+                      onRefresh={onRefresh}
+                    />
                   </article>
                 ))}
               </div>
@@ -516,10 +487,12 @@ export function IssueSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            label="Comment on this issue"
+            command={issueEnvironment.comment}
             onCommented={onRefresh}
           />
         ) : null}
-      </Section>
+      </SummarySection>
     </div>
   );
 }
