@@ -256,6 +256,7 @@ export function useOpenIssueLink(threadRef?: ScopedThreadRef) {
 
       if (issuesSupported && resolvedThreadRef && parsed !== null && project !== undefined) {
         useRightPanelStore.getState().openIssue(resolvedThreadRef, {
+          environmentId: resolvedThreadRef.environmentId,
           projectId: project.id,
           // The identity's own spelling, not the one read out of the URL: the panel asks the
           // provider for this repository, while matching a link only ever compares lower case.

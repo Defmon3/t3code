@@ -689,6 +689,25 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe(issueSurfaceId(first));
   });
 
+  it("keeps one issue read from two servers as two tabs", () => {
+    const local = {
+      environmentId: "local",
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    };
+    const remote = { ...local, environmentId: "remote" };
+
+    useRightPanelStore.getState().openIssue(refA, local);
+    useRightPanelStore.getState().openIssue(refA, remote);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      issueSurfaceId(local),
+      issueSurfaceId(remote),
+    ]);
+  });
+
   it("keeps the issue browser one tab while the issue it shows changes", () => {
     const target = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
     useRightPanelStore.getState().openIssues(refA);

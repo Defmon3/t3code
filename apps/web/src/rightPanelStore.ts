@@ -86,6 +86,8 @@ export type RightPanelSurface =
        */
       id: `issue:${string}`;
       kind: "issue";
+      /** The server that owns the issue when it came from a multi-server list. */
+      environmentId?: string;
       projectId: string;
       repository: string;
       number: number;
@@ -140,7 +142,7 @@ interface RightPanelStoreState {
   ) => void;
   openIssue: (
     ref: ScopedThreadRef,
-    target: { projectId: string; repository: string; number: number },
+    target: { environmentId?: string; projectId: string; repository: string; number: number },
   ) => void;
   openIssues: (ref: ScopedThreadRef) => void;
   /** Opens the shared repository pane at the requested view. */
@@ -289,14 +291,18 @@ export function updatePullRequestTabStatus<Status extends { state: unknown; isDr
 export type IssueSurface = Extract<RightPanelSurface, { kind: "issue" }>;
 
 export function issueSurfaceId(target: {
+  environmentId?: string;
   projectId: string;
   repository: string;
   number: number;
 }): IssueSurface["id"] {
-  return `issue:${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  const scope =
+    target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
+  return `issue:${scope}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
 }
 
 export function issueSurface(target: {
+  environmentId?: string;
   projectId: string;
   repository: string;
   number: number;
@@ -304,6 +310,7 @@ export function issueSurface(target: {
   return {
     id: issueSurfaceId(target),
     kind: "issue",
+    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
     projectId: target.projectId,
     repository: target.repository,
     number: target.number,
@@ -427,7 +434,13 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       ) {
                         return [];
                       }
-                      return [issueSurface(surface)];
+                      const { environmentId, ...rest } = surface;
+                      return [
+                        issueSurface({
+                          ...rest,
+                          ...(typeof environmentId === "string" ? { environmentId } : {}),
+                        }),
+                      ];
                     }
                     if (surface.kind === "issues") {
                       return [

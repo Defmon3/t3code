@@ -1649,14 +1649,19 @@ function ChatViewContent(props: ChatViewProps) {
     [activePullRequestSurfaceId],
   );
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
-    const id = issueSurfaceId(status);
-    setIssueTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
+  const activeIssueSurfaceId =
+    activeRightPanelSurface?.kind === "issue" ? activeRightPanelSurface.id : undefined;
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      const id = activeIssueSurfaceId ?? issueSurfaceId(status);
+      setIssueTabStatuses((current) =>
+        current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
+          ? current
+          : { ...current, [id]: status },
+      );
+    },
+    [activeIssueSurfaceId],
+  );
   const activeFileSurface =
     activeRightPanelSurface?.kind === "file" ? activeRightPanelSurface : null;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
@@ -3417,6 +3422,7 @@ function ChatViewContent(props: ChatViewProps) {
     (link: { repository: string; number: number }) => {
       if (!supportsIssues || !activeThreadRef || !activeProject) return;
       useRightPanelStore.getState().openIssue(activeThreadRef, {
+        environmentId: activeThreadRef.environmentId,
         projectId: activeProject.id,
         repository: link.repository,
         number: link.number,

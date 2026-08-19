@@ -257,14 +257,17 @@ function IssuesRouteView() {
       : null;
   const activeIssueSurface = activeSurface?.kind === "issue" ? activeSurface : null;
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
-    const id = issueSurfaceId(status);
-    setIssueTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      const id = activeIssueSurface?.id ?? issueSurfaceId(status);
+      setIssueTabStatuses((current) =>
+        current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
+          ? current
+          : { ...current, [id]: status },
+      );
+    },
+    [activeIssueSurface?.id],
+  );
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -877,9 +880,14 @@ function IssuesRouteView() {
   const linkedSelection = useMemo(
     () =>
       search.repository && search.number && selectedProjectId
-        ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
+        ? {
+            ...(issueEnvironmentId === null ? {} : { environmentId: issueEnvironmentId }),
+            repository: search.repository,
+            number: search.number,
+            projectId: selectedProjectId,
+          }
         : null,
-    [search.number, search.repository, selectedProjectId],
+    [issueEnvironmentId, search.number, search.repository, selectedProjectId],
   );
   useEffect(() => {
     if (!issuesSupported || rightPanelRef === null || linkedSelection === null) return;
@@ -958,14 +966,17 @@ function IssuesRouteView() {
   const selectEntry = useCallback(
     (entry: IssueListEntry) => {
       if (rightPanelRef === null) return;
-      useRightPanelStore.getState().openIssue(rightPanelRef, entry);
+      useRightPanelStore.getState().openIssue(rightPanelRef, {
+        ...entry,
+        ...(issueEnvironmentId === null ? {} : { environmentId: issueEnvironmentId }),
+      });
       updateSearch({
         repository: entry.repository,
         number: entry.number,
         selectedProjectId: entry.projectId,
       });
     },
-    [rightPanelRef, updateSearch],
+    [issueEnvironmentId, rightPanelRef, updateSearch],
   );
 
   const [creating, setCreating] = useState(false);
@@ -1288,6 +1299,7 @@ function IssuesRouteView() {
                 onOpenLinkedIssue={(link) => {
                   if (rightPanelRef === null) return;
                   const target = {
+                    environmentId: issueEnvironmentId,
                     projectId: activeSurface.projectId,
                     repository: link.repository,
                     number: link.number,
@@ -1353,7 +1365,10 @@ function IssuesRouteView() {
           // from is a row out of date until the hosts are asked again.
           onCreated={(created) => {
             if (rightPanelRef !== null) {
-              useRightPanelStore.getState().openIssue(rightPanelRef, created);
+              useRightPanelStore.getState().openIssue(rightPanelRef, {
+                ...created,
+                environmentId: issueEnvironmentId,
+              });
             }
             updateSearch({
               repository: created.repository,
