@@ -12,11 +12,10 @@ export interface HostedBrowserWebviewWrapperStyle {
   readonly height: number;
   readonly zIndex: number;
   readonly pointerEvents: "auto" | "none";
+  readonly opacity?: number;
   readonly borderRadius?: number;
   readonly visibility?: "visible";
 }
-
-export const HIDDEN_BROWSER_WEBVIEW_OFFSET = -100_000;
 
 export function resolveHostedBrowserWebviewWrapperStyle(input: {
   readonly active: boolean;
@@ -38,15 +37,15 @@ export function resolveHostedBrowserWebviewWrapperStyle(input: {
   }
 
   return {
-    left: HIDDEN_BROWSER_WEBVIEW_OFFSET,
-    top: HIDDEN_BROWSER_WEBVIEW_OFFSET,
+    left: 0,
+    top: 0,
     width: hiddenSize.width,
     height: hiddenSize.height,
-    zIndex: -1,
+    zIndex: 0,
     pointerEvents: "none",
-    // Keep the guest CSS-visible even while physically offscreen. Electron
-    // webviews can keep metadata/status alive under `visibility:hidden` while
-    // CDP Runtime/Input commands stall, which breaks offscreen automation.
+    // why: an off-viewport guest can have its compositor surface culled even
+    // with background throttling disabled, stalling CDP and capture requests.
     visibility: "visible",
+    opacity: 0,
   };
 }
