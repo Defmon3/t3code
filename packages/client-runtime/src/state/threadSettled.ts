@@ -1,7 +1,36 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import type { OrchestrationThreadShell, VcsStatusResult } from "@t3tools/contracts";
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
+
+export type ThreadPr = VcsStatusResult["pr"];
+
+export function resolveThreadPr(input: {
+  readonly threadBranch: string | null;
+  readonly threadCreatedAt: string | null;
+  readonly gitStatus: Pick<VcsStatusResult, "refName" | "pr"> | null;
+}): ThreadPr | null {
+  const { threadBranch, threadCreatedAt, gitStatus } = input;
+  if (gitStatus === null || threadBranch === null || gitStatus.refName !== threadBranch) {
+    return null;
+  }
+  const pr = gitStatus.pr;
+  const completedAtValue = pr?.completedAt;
+  if (
+    pr === null ||
+    pr.state === "open" ||
+    threadCreatedAt === null ||
+    completedAtValue === null ||
+    completedAtValue === undefined
+  ) {
+    return pr;
+  }
+  const createdAt = Date.parse(threadCreatedAt);
+  const completedAt = Date.parse(completedAtValue);
+  return Number.isNaN(createdAt) || Number.isNaN(completedAt) || completedAt >= createdAt
+    ? pr
+    : null;
+}
 
 /**
  * The slice of a change request the settle rules need. `updatedAt` is the
