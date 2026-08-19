@@ -67,10 +67,15 @@ import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationHost,
   PreviewAutomationHostFocus,
+  PreviewAutomationObservationRead,
+  PreviewAutomationObservationStatus,
+  PreviewAutomationObservationStopResult,
+  PreviewAutomationObserveStopInput,
   PreviewAutomationPressInput,
   PreviewAutomationResponse,
   PreviewAutomationScrollInput,
   PreviewAutomationSnapshot,
+  PreviewAutomationSnapshotInput,
   PreviewAutomationStatus,
   PreviewAutomationStreamEvent,
   PreviewAutomationTypeInput,
@@ -1032,6 +1037,16 @@ export const DesktopPreviewAutomationClickInputSchema = Schema.Struct({
   input: PreviewAutomationClickInput,
 });
 
+export const DesktopPreviewAutomationSnapshotInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  input: PreviewAutomationSnapshotInput,
+});
+
+export const DesktopPreviewAutomationObserveStopInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  input: PreviewAutomationObserveStopInput,
+});
+
 export const DesktopPreviewAutomationTypeInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationTypeInput,
@@ -1212,7 +1227,16 @@ export interface DesktopPreviewBridge {
   };
   automation: {
     status: (tabId: string) => Promise<PreviewAutomationStatus>;
-    snapshot: (tabId: string) => Promise<PreviewAutomationSnapshot>;
+    snapshot: (
+      tabId: string,
+      input: PreviewAutomationSnapshotInput,
+    ) => Promise<PreviewAutomationSnapshot>;
+    observeStart: (tabId: string) => Promise<PreviewAutomationObservationStatus>;
+    observeRead: (tabId: string) => Promise<PreviewAutomationObservationRead>;
+    observeStop: (
+      tabId: string,
+      input: PreviewAutomationObserveStopInput,
+    ) => Promise<PreviewAutomationObservationStopResult>;
     click: (tabId: string, input: PreviewAutomationClickInput) => Promise<void>;
     type: (tabId: string, input: PreviewAutomationTypeInput) => Promise<void>;
     press: (tabId: string, input: PreviewAutomationPressInput) => Promise<void>;

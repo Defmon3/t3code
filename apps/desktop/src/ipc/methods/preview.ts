@@ -3,8 +3,10 @@ import {
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewAutomationClickInputSchema,
   DesktopPreviewAutomationEvaluateInputSchema,
+  DesktopPreviewAutomationObserveStopInputSchema,
   DesktopPreviewAutomationPressInputSchema,
   DesktopPreviewAutomationScrollInputSchema,
+  DesktopPreviewAutomationSnapshotInputSchema,
   DesktopPreviewAutomationTypeInputSchema,
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
@@ -20,6 +22,9 @@ import {
   DesktopPreviewWebviewConfigSchema,
   PreviewAnnotationSubmissionResultSchema,
   PreviewAutomationSnapshot,
+  PreviewAutomationObservationRead,
+  PreviewAutomationObservationStatus,
+  PreviewAutomationObservationStopResult,
   PreviewAutomationStatus,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -291,11 +296,41 @@ export const automationStatus = DesktopIpc.makeIpcMethod({
 
 export const automationSnapshot = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_AUTOMATION_SNAPSHOT_CHANNEL,
-  payload: DesktopPreviewTabInputSchema,
+  payload: DesktopPreviewAutomationSnapshotInputSchema,
   result: PreviewAutomationSnapshot,
-  handler: Effect.fn("desktop.ipc.preview.automationSnapshot")(function* ({ tabId }) {
+  handler: Effect.fn("desktop.ipc.preview.automationSnapshot")(function* ({ tabId, input }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.automationSnapshot(tabId);
+    return yield* manager.automationSnapshot(tabId, input);
+  }),
+});
+
+export const automationObserveStart = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_OBSERVE_START_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: PreviewAutomationObservationStatus,
+  handler: Effect.fn("desktop.ipc.preview.automationObserveStart")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.automationObserveStart(tabId);
+  }),
+});
+
+export const automationObserveRead = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_OBSERVE_READ_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: PreviewAutomationObservationRead,
+  handler: Effect.fn("desktop.ipc.preview.automationObserveRead")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.automationObserveRead(tabId);
+  }),
+});
+
+export const automationObserveStop = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_OBSERVE_STOP_CHANNEL,
+  payload: DesktopPreviewAutomationObserveStopInputSchema,
+  result: PreviewAutomationObservationStopResult,
+  handler: Effect.fn("desktop.ipc.preview.automationObserveStop")(function* ({ tabId, input }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.automationObserveStop(tabId, input);
   }),
 });
 
@@ -397,6 +432,9 @@ export const methods = [
   closePictureInPicture,
   automationStatus,
   automationSnapshot,
+  automationObserveStart,
+  automationObserveRead,
+  automationObserveStop,
   automationClick,
   automationType,
   automationPress,
