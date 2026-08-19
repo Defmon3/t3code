@@ -60,6 +60,7 @@ import {
   previewAutomationOpenNeedsOverlay,
   shouldOpenPreviewMiniPlayer,
 } from "./previewAutomationOpenReadiness";
+import { projectPreviewObservationTabId } from "./previewAutomationObservation";
 import {
   assertPreviewRuntimeCurrent,
   waitForNavigationReadiness,
@@ -591,17 +592,26 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           }
           case "observeStart": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.observeStart(ready.runtimeTabId);
+            return projectPreviewObservationTabId(
+              await ready.bridge.automation.observeStart(ready.runtimeTabId),
+              ready.tabId,
+            );
           }
           case "observeRead": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.observeRead(ready.runtimeTabId);
+            return projectPreviewObservationTabId(
+              await ready.bridge.automation.observeRead(ready.runtimeTabId),
+              ready.tabId,
+            );
           }
           case "observeStop": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.observeStop(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.observeStop>[1],
+            return projectPreviewObservationTabId(
+              await ready.bridge.automation.observeStop(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.observeStop>[1],
+              ),
+              ready.tabId,
             );
           }
           case "click": {
