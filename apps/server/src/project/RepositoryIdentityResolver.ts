@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import {
   detectSourceControlProviderFromGitRemoteUrl,
@@ -9,15 +13,20 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ProcessRunner from "../processRunner.ts";
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
+const DEFAULT_REPOSITORY_IDENTITY_CONCURRENCY = 8;
+const DEFAULT_REPOSITORY_IDENTITY_DISCOVERY_TIMEOUT = "3 seconds";
+const DEFAULT_REPOSITORY_IDENTITY_PROCESS_TIMEOUT = "2 seconds";
 const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(1);
 const DEFAULT_NEGATIVE_CACHE_TTL = Duration.minutes(1);
 
 export interface RepositoryIdentityResolverOptions {
   readonly cacheCapacity?: number;
+  readonly discoveryTimeout?: Duration.Input;
   readonly positiveCacheTtl?: Duration.Input;
   readonly negativeCacheTtl?: Duration.Input;
 }
@@ -87,32 +96,72 @@ function buildRepositoryIdentity(input: {
   };
 }
 
-const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.resolveCacheKey")(
-  function* (cwd: string) {
-    const processRunner = yield* ProcessRunner.ProcessRunner;
-    let cacheKey = cwd;
+const readOptionalTextFile = (path: string): Promise<string | null> =>
+  NodeFSP.readFile(path, "utf8").catch(() => null);
 
-    // git is a real executable on every platform — no cmd.exe shell mode, which
-    // would split paths containing spaces during cmd's re-tokenization.
-    const topLevelResult = yield* processRunner
-      .run({
-        command: "git",
-        args: ["-C", cwd, "rev-parse", "--show-toplevel"],
-        timeoutBehavior: "timedOutResult",
-      })
-      .pipe(Effect.option);
-    if (topLevelResult._tag === "None" || topLevelResult.value.code !== 0) {
-      return cacheKey;
+const isDirectory = (path: string): Promise<boolean> =>
+  NodeFSP.stat(path).then(
+    (entry) => entry.isDirectory(),
+    () => false,
+  );
+
+const isFile = (path: string): Promise<boolean> =>
+  NodeFSP.stat(path).then(
+    (entry) => entry.isFile(),
+    () => false,
+  );
+
+const canonicalDirectoryPath = (path: string): Promise<string> =>
+  NodeFSP.realpath(path).catch(() => path);
+
+async function repositoryRootFromGitDir(
+  rootPath: string,
+  gitDirPath: string,
+): Promise<string | null> {
+  if (!(await isFile(NodePath.join(gitDirPath, "HEAD")))) {
+    return null;
+  }
+  return canonicalDirectoryPath(rootPath);
+}
+
+async function findRepositoryRoot(cwd: string): Promise<string | null> {
+  let currentPath = NodePath.resolve(cwd);
+  if (!(await isDirectory(currentPath))) {
+    return null;
+  }
+  currentPath = await canonicalDirectoryPath(currentPath);
+
+  if (
+    (await isFile(NodePath.join(currentPath, "HEAD"))) &&
+    (await isFile(NodePath.join(currentPath, "config"))) &&
+    (await isDirectory(NodePath.join(currentPath, "objects"))) &&
+    (await isDirectory(NodePath.join(currentPath, "refs")))
+  ) {
+    return canonicalDirectoryPath(currentPath);
+  }
+
+  for (;;) {
+    const dotGitPath = NodePath.join(currentPath, ".git");
+    if (await isDirectory(dotGitPath)) {
+      return repositoryRootFromGitDir(currentPath, dotGitPath);
     }
 
-    const candidate = topLevelResult.value.stdout.trim();
-    if (candidate.length > 0) {
-      cacheKey = candidate;
+    if (await isFile(dotGitPath)) {
+      const gitFile = await readOptionalTextFile(dotGitPath);
+      const gitDir = /^gitdir:\s*(.+)$/im.exec(gitFile ?? "")?.[1]?.trim();
+      if (!gitDir) {
+        return null;
+      }
+      return repositoryRootFromGitDir(currentPath, NodePath.resolve(currentPath, gitDir));
     }
 
-    return cacheKey;
-  },
-);
+    const parentPath = NodePath.dirname(currentPath);
+    if (parentPath === currentPath) {
+      return null;
+    }
+    currentPath = parentPath;
+  }
+}
 
 const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   "RepositoryIdentityResolver.resolveFromCacheKey",
@@ -124,6 +173,7 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
     .run({
       command: "git",
       args: ["-C", cacheKey, "remote", "-v"],
+      timeout: DEFAULT_REPOSITORY_IDENTITY_PROCESS_TIMEOUT,
       timeoutBehavior: "timedOutResult",
     })
     .pipe(Effect.option);
@@ -139,6 +189,7 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
   options: RepositoryIdentityResolverOptions = {},
 ) {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const resolutionSemaphore = yield* Semaphore.make(DEFAULT_REPOSITORY_IDENTITY_CONCURRENCY);
 
   const repositoryIdentityCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
     (cacheKey) =>
@@ -157,13 +208,40 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
     },
   );
 
+  const repositoryIdentityByCwdCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
+    (cwd) =>
+      resolutionSemaphore
+        .withPermits(1)(
+          Effect.promise(() => findRepositoryRoot(cwd)).pipe(
+            Effect.flatMap((rootPath) =>
+              rootPath === null
+                ? Effect.succeed(null)
+                : Cache.get(repositoryIdentityCache, rootPath),
+            ),
+          ),
+        )
+        .pipe(
+          Effect.timeoutOrElse({
+            duration: options.discoveryTimeout ?? DEFAULT_REPOSITORY_IDENTITY_DISCOVERY_TIMEOUT,
+            orElse: () => Effect.succeed(null),
+          }),
+        ),
+    {
+      capacity: options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY,
+      timeToLive: Exit.match({
+        onSuccess: (value) =>
+          value === null
+            ? (options.negativeCacheTtl ?? DEFAULT_NEGATIVE_CACHE_TTL)
+            : (options.positiveCacheTtl ?? DEFAULT_POSITIVE_CACHE_TTL),
+        onFailure: () => Duration.zero,
+      }),
+    },
+  );
+
   const resolve: RepositoryIdentityResolver["Service"]["resolve"] = Effect.fn(
     "RepositoryIdentityResolver.resolve",
   )(function* (cwd) {
-    const cacheKey = yield* resolveRepositoryIdentityCacheKey(cwd).pipe(
-      Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
-    );
-    return yield* Cache.get(repositoryIdentityCache, cacheKey);
+    return yield* Cache.get(repositoryIdentityByCwdCache, cwd);
   });
 
   return RepositoryIdentityResolver.of({ resolve });
