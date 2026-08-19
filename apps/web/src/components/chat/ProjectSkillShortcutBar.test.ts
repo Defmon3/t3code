@@ -10,13 +10,12 @@ import {
 } from "./ProjectSkillShortcutBar";
 
 describe("project skill shortcuts", () => {
-  it("defines the shortcut bar's horizontal-only, scrollbar-hidden layout contract", () => {
-    expect(projectSkillShortcutBarClassName).toContain("overflow-x-auto");
-    expect(projectSkillShortcutBarClassName).toContain("overflow-y-hidden");
-    expect(projectSkillShortcutBarClassName).toContain("py-0.5");
-    expect(projectSkillShortcutBarClassName).toContain("[-ms-overflow-style:none]");
-    expect(projectSkillShortcutBarClassName).toContain("[scrollbar-width:none]");
-    expect(projectSkillShortcutBarClassName).toContain("[&::-webkit-scrollbar]:hidden");
+  it("defines a wrapping shortcut layout without scrollbars", () => {
+    expect(projectSkillShortcutBarClassName).toContain("flex-wrap");
+    expect(projectSkillShortcutBarClassName).toContain("min-h-9");
+    expect(projectSkillShortcutBarClassName).toContain("overflow-hidden");
+    expect(projectSkillShortcutBarClassName).not.toContain("overflow-x-auto");
+    expect(projectSkillShortcutBarClassName).not.toContain("scrollbar");
   });
 
   it("preserves quick-slot text and rejects empty or duplicate additions", () => {
