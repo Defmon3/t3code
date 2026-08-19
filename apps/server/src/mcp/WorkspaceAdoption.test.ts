@@ -38,6 +38,7 @@ const makeProject = (workspaceRoot: string): OrchestrationProjectShell => ({
   repositoryIdentity: null,
   defaultModelSelection: null,
   scripts: [],
+  skillShortcuts: [],
   createdAt: now,
   updatedAt: now,
 });
