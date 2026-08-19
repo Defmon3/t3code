@@ -17,6 +17,7 @@ import {
   LoaderIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+
 import { cn } from "~/lib/utils";
 
 import {
@@ -27,6 +28,10 @@ import {
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { PullRequestReviewOutcome } from "./pullRequestDetail.logic";
+
+export const PullRequestActorAvatar = SourceControlActorAvatar;
+export const PullRequestActorLabel = SourceControlActorLabel;
+export const PullRequestMetaLine = SourceControlMetaLine;
 
 interface StatePresentation {
   readonly label: string;
@@ -305,10 +310,6 @@ export function PullRequestReviewOutcomeBadge({
     </Badge>
   );
 }
-
-export const PullRequestActorAvatar = SourceControlActorAvatar;
-export const PullRequestActorLabel = SourceControlActorLabel;
-
 /** Added and removed lines, coloured the way every host colours them. */
 export function PullRequestDiffStat({
   additions,
@@ -333,8 +334,6 @@ export function PullRequestDiffStat({
     </span>
   );
 }
-
-export const PullRequestMetaLine = SourceControlMetaLine;
 
 export function summarizePullRequestChecks(checks: ReadonlyArray<PullRequestCheck>): string {
   if (checks.length === 0) return "No checks reported";

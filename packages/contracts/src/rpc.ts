@@ -83,6 +83,9 @@ import {
   IssueAssigneeCandidateList,
   IssueAssigneesInput,
   IssueCommentInput,
+  IssueCommentsPageInput,
+  IssueCommentsPageResult,
+  IssueCommentUpdateInput,
   IssueCreateInput,
   IssueCreateResult,
   IssueDetail,
@@ -92,6 +95,7 @@ import {
   IssueListInput,
   IssueListResult,
   IssueOperationError,
+  IssueReactionInput,
   IssueRef,
   IssueRepositoryRef,
   IssueTemplateList,
@@ -338,8 +342,11 @@ export const WS_METHODS = {
   issuesList: "issues.list",
   issuesDetail: "issues.detail",
   issuesActivity: "issues.activity",
+  issuesCommentsPage: "issues.commentsPage",
   issuesRunAction: "issues.runAction",
   issuesComment: "issues.comment",
+  issuesUpdateComment: "issues.updateComment",
+  issuesSetReaction: "issues.setReaction",
   issuesCreate: "issues.create",
   issuesUpdate: "issues.update",
   issuesSetLabels: "issues.setLabels",
@@ -670,6 +677,12 @@ export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
   error: IssueRpcError,
 });
 
+export const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+  payload: IssueCommentsPageInput,
+  success: IssueCommentsPageResult,
+  error: IssueRpcError,
+});
+
 export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
   payload: IssueActionInput,
   success: Schema.Void,
@@ -678,6 +691,18 @@ export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
 
 export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
   payload: IssueCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
+  payload: IssueCommentUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
+  payload: IssueReactionInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -852,7 +877,7 @@ export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePu
 export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
 });
 
 export const WsVcsListHistoryRefsRpc = Rpc.make(WS_METHODS.vcsListHistoryRefs, {
@@ -1203,7 +1228,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesDetailRpc,
   WsIssuesActivityRpc,
   WsIssuesRunActionRpc,
+  WsIssuesCommentsPageRpc,
   WsIssuesCommentRpc,
+  WsIssuesUpdateCommentRpc,
+  WsIssuesSetReactionRpc,
   WsIssuesCreateRpc,
   WsIssuesUpdateRpc,
   WsIssuesSetLabelsRpc,

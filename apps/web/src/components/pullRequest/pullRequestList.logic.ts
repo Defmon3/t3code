@@ -590,13 +590,6 @@ const decodeSnapshot = Schema.decodeUnknownOption(
   }),
 );
 
-/**
- * The last list answered for this environment, brought back across a reload. The registry the
- * queries live in is recreated with the renderer, so without this a revisit cold-starts into
- * skeletons even though almost every row is unchanged; hydrated, the stale rows render at once
- * and the live read reconciles them in place by key. Errors are not carried — a failure is
- * never cached, and yesterday's is not this morning's.
- */
 export function readPullRequestListSnapshot(
   storage: SnapshotStorage | undefined,
   environmentSetKey: string,

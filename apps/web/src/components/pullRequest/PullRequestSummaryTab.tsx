@@ -14,21 +14,19 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PencilIcon,
-  SendIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
-import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -43,7 +41,9 @@ import {
 } from "./pullRequestPresentation";
 import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { CommentComposer } from "../sourceControl/CommentComposer";
+import { SummaryMetaRow } from "../sourceControl/SummaryMetaRow";
 import {
   LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
@@ -58,9 +58,9 @@ import {
   canEditPullRequestComment,
 } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
-import { PullRequestConversationGhost } from "./PullRequestGhosts";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
 /** One reviewer, however a host happens to have cased their login this time. */
@@ -214,26 +214,6 @@ function CollapsedComment({
   );
 }
 
-function MetaRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 py-1.5 text-xs">
-      <span className="flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-foreground">{children}</span>
-    </div>
-  );
-}
-
 function Section({
   title,
   count,
@@ -304,68 +284,6 @@ function Section({
         <div className="px-4 pb-4">{children}</div>
       </CollapsiblePanel>
     </Collapsible>
-  );
-}
-
-function CommentComposer({
-  environmentId,
-  detail,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  detail: PullRequestDetailView;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
-
-  const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
-    const result = await postComment({
-      environmentId,
-      input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
-        body: trimmed,
-      },
-    });
-    setPosting(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this pull request"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || posting}
-          onClick={() => void submit()}
-        >
-          <SendIcon className="size-3.5" />
-          {posting ? "Posting..." : "Comment"}
-        </Button>
-      </div>
-    </div>
   );
 }
 
@@ -535,7 +453,7 @@ export function PullRequestSummaryTab({
     <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
       <section className="px-4 py-3">
         <div>
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {reviewerEntries.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -624,9 +542,9 @@ export function PullRequestSummaryTab({
                 />
               ) : null}
             </span>
-          </MetaRow>
+          </SummaryMetaRow>
           {detail.labels.length > 0 ? (
-            <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+            <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.map((label) => {
                   const dot = labelDotColor(label.color);
@@ -645,9 +563,9 @@ export function PullRequestSummaryTab({
                   );
                 })}
               </span>
-            </MetaRow>
+            </SummaryMetaRow>
           ) : null}
-          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -655,7 +573,7 @@ export function PullRequestSummaryTab({
                 : detail.commentCount === 1
                   ? "1 comment"
                   : `${detail.commentCount} comments`}
-          </MetaRow>
+          </SummaryMetaRow>
         </div>
       </section>
 
@@ -756,6 +674,11 @@ export function PullRequestSummaryTab({
                   </span>
                 </button>
               ))}
+              {detail.linkedIssuesTruncated === true ? (
+                <p className="px-2 pt-1 text-xs text-muted-foreground">
+                  More linked issues exist on the host.
+                </p>
+              ) : null}
             </div>
           )}
         </Section>
@@ -837,9 +760,14 @@ export function PullRequestSummaryTab({
         }
       >
         {activityPending ? (
-          <PullRequestConversationGhost />
+          <ConversationGhost label="Loading pull request conversation" />
         ) : activityError ? (
-          <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
+          <ActivityUnavailableState
+            compact
+            title="Could not load pull request activity"
+            error={activityError}
+            onRetry={onRefresh}
+          />
         ) : (
           <>
             {detail.commentsTruncated ? (
@@ -989,6 +917,8 @@ export function PullRequestSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            label="Comment on this pull request"
+            command={pullRequestEnvironment.comment}
             onCommented={onRefresh}
           />
         ) : null}

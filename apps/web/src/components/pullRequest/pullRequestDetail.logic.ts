@@ -484,7 +484,65 @@ export interface FixFindingsHandoff {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
 }
 
-export { handoffPrompt, handoffReviewComments, readableFailure } from "../sourceControl/handoff";
+/**
+ * Every chip a hand-off leaves in the composer is named after the pull request it came from —
+ * `pull-request-context:`, `pull-request-finding:`, `pull-request-selection:` — which is what
+ * tells them apart from the ones a reader marked up in the thread's own diff.
+ */
+const HANDOFF_COMMENT_ID_PREFIX = "pull-request-";
+
+/**
+ * The prompt the composer should hold once a hand-off lands there.
+ *
+ * A hand-off owns what an earlier hand-off wrote and nothing else: pressing Ask and then Explain
+ * used to stack both in the composer, and the reader sent a question nobody wrote. What says an
+ * earlier one wrote it is the text itself — the caller remembers what it last put in this draft,
+ * and only that exact sentence is replaced. A reader who typed their own question, or edited the
+ * one they were given, has written something no hand-off may take away: an empty ask leaves it
+ * alone, and one carrying a prompt goes underneath it.
+ */
+export function handoffPrompt(
+  existing: {
+    readonly prompt: string;
+    /**
+     * What the last hand-off into this draft wrote — its own contribution alone, never the
+     * merged prompt it landed in, or a draft that held the reader's text before the first
+     * hand-off would read as all hand-off and be replaced wholesale by the second.
+     */
+    readonly lastHandoffPrompt: string | undefined;
+  },
+  incoming: string,
+): string {
+  if (existing.prompt.trim().length === 0) return incoming;
+  const last = existing.lastHandoffPrompt ?? "";
+  // Only the sentence the last hand-off wrote is taken back: alone, or off the end of the
+  // reader's own text it was appended under.
+  const kept =
+    last.length === 0
+      ? existing.prompt
+      : existing.prompt === last
+        ? ""
+        : existing.prompt.endsWith(`\n\n${last}`)
+          ? existing.prompt.slice(0, -(last.length + 2))
+          : existing.prompt;
+  if (kept.trim().length === 0) return incoming;
+  return incoming.length === 0 ? kept : `${kept}\n\n${incoming}`;
+}
+
+/**
+ * The chips the composer should hold once a hand-off lands there: this one's, plus whatever the
+ * reader attached themselves. What an earlier hand-off left goes, because a question about one
+ * pull request carrying another one's context is not a question anybody meant to ask.
+ */
+export function handoffReviewComments(
+  existing: ReadonlyArray<ReviewCommentContext>,
+  incoming: ReadonlyArray<ReviewCommentContext>,
+): ReviewCommentContext[] {
+  return [
+    ...existing.filter((comment) => !comment.id.startsWith(HANDOFF_COMMENT_ID_PREFIX)),
+    ...incoming,
+  ];
+}
 
 /**
  * The task for handing a pull request's review findings to a fresh thread. Everything derived
@@ -757,7 +815,6 @@ export function buildExplainPullRequestHandoff(input: {
   };
 }
 
-/** Names the hand-off, so the section's own button and the panel running it agree on which. */
 export const LINK_ISSUES_HANDOFF_KIND = "link-issues";
 
 /**

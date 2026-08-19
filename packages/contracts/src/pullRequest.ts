@@ -104,6 +104,7 @@ export const PullRequestAction = Schema.Literals([
 ]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
+export const PullRequestActor = SourceControlActor;
 /**
  * How a stale branch catches up with its base: a merge commit, or a rebase onto it. The two are
  * the host's own choices, not this page's — GitHub offers both and refuses a rebase it cannot
@@ -123,7 +124,6 @@ export type PullRequestUpdateMethod = typeof PullRequestUpdateMethod.Type;
 export const PullRequestBaseComparison = Schema.Literals(["up-to-date", "behind", "unknown"]);
 export type PullRequestBaseComparison = typeof PullRequestBaseComparison.Type;
 
-export const PullRequestActor = SourceControlActor;
 export type PullRequestActor = typeof PullRequestActor.Type;
 
 export const PullRequestLabel = SourceControlLabel;
@@ -653,6 +653,14 @@ export const PullRequestDetail = Schema.Struct({
   checks: Schema.Array(PullRequestCheck),
   mergeCapabilities: PullRequestMergeCapabilities,
   /**
+   * The issues this change request cites, with the ones it closes marked as such. Optional
+   * because a server from before issues could be browsed does not report them, and because a
+   * host with no notion of the link answers with nothing rather than with an empty promise.
+   */
+  linkedIssues: Schema.optional(Schema.Array(IssueLink)),
+  /** True when the host has more linked issues than this bounded read returned. */
+  linkedIssuesTruncated: Schema.optional(Schema.Boolean),
+  /**
    * Who the host says the reader is, which is the one thing a conversation cannot be read without
    * to tell the reader's own remarks from everybody else's — and rewriting a remark is offered
    * only where the two names agree. Absent where the host could not say, which offers nothing
@@ -673,12 +681,6 @@ export const PullRequestDetail = Schema.Struct({
    * arm something that is already armed, and a second arming is a write nobody asked for.
    */
   autoMergeEnabled: Schema.optional(Schema.Boolean),
-  /**
-   * The issues this change request cites, with the ones it closes marked as such. Optional
-   * because a server from before issues could be browsed does not report them, and because a
-   * host with no notion of the link answers with nothing rather than with an empty promise.
-   */
-  linkedIssues: Schema.optional(Schema.Array(IssueLink)),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
