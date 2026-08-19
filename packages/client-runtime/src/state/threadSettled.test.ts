@@ -24,7 +24,7 @@ const STALE = "2026-04-06T23:59:59.999Z";
 
 function pullRequest(input: {
   readonly state: "open" | "closed" | "merged";
-  readonly completedAt?: string | null;
+  readonly updatedAt?: string | null;
 }): NonNullable<VcsStatusResult["pr"]> {
   return {
     number: 4970,
@@ -33,7 +33,7 @@ function pullRequest(input: {
     baseRef: "main",
     headRef: "feature/historical-pr",
     state: input.state,
-    ...(input.completedAt !== undefined ? { completedAt: input.completedAt } : {}),
+    ...(input.updatedAt !== undefined ? { updatedAt: input.updatedAt } : {}),
   };
 }
 
@@ -48,15 +48,15 @@ function resolve(pr: NonNullable<VcsStatusResult["pr"]>) {
 describe("resolveThreadPr", () => {
   it("hides only terminal pull requests completed before the thread", () => {
     expect(
-      resolve(pullRequest({ state: "merged", completedAt: "2026-08-01T11:59:59.999Z" })),
+      resolve(pullRequest({ state: "merged", updatedAt: "2026-08-01T11:59:59.999Z" })),
     ).toBeNull();
     const atCreation = pullRequest({
       state: "closed",
-      completedAt: "2026-08-01T12:00:00.000Z",
+      updatedAt: "2026-08-01T12:00:00.000Z",
     });
     const afterCreation = pullRequest({
       state: "merged",
-      completedAt: "2026-08-01T12:00:00.001Z",
+      updatedAt: "2026-08-01T12:00:00.001Z",
     });
     expect(resolve(atCreation)).toBe(atCreation);
     expect(resolve(afterCreation)).toBe(afterCreation);
@@ -64,8 +64,8 @@ describe("resolveThreadPr", () => {
 
   it("keeps open and terminal pull requests without a usable completion time", () => {
     const open = pullRequest({ state: "open" });
-    const missing = pullRequest({ state: "closed", completedAt: null });
-    const invalid = pullRequest({ state: "merged", completedAt: "not-a-date" });
+    const missing = pullRequest({ state: "closed", updatedAt: null });
+    const invalid = pullRequest({ state: "merged", updatedAt: "not-a-date" });
     expect(resolve(open)).toBe(open);
     expect(resolve(missing)).toBe(missing);
     expect(resolve(invalid)).toBe(invalid);
