@@ -948,6 +948,9 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
+      {row.kind === "turn-ended-without-response" ? (
+        <TurnEndedWithoutResponseTimelineRow row={row} />
+      ) : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1302,6 +1305,25 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
           <span className="min-w-0 truncate text-muted-foreground/55">· {workingStepLabel}</span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function TurnEndedWithoutResponseTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "turn-ended-without-response" }>;
+}) {
+  const label =
+    row.state === "error"
+      ? "Agent failed before sending a final response"
+      : row.state === "interrupted"
+        ? "Agent was stopped before sending a final response"
+        : "Agent stopped without sending a final response";
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-amber-500/25 bg-amber-500/5 px-2.5 py-2 text-amber-700 text-xs dark:text-amber-300/90">
+      <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden />
+      <span>{label}</span>
     </div>
   );
 }
