@@ -11,6 +11,7 @@ import {
   ModelSelection,
   ProjectId,
   ProjectScript,
+  ProjectSkillShortcutColors,
   ProjectSkillShortcuts,
   ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -29,6 +30,7 @@ export const ProjectionProject = Schema.Struct({
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   skillShortcuts: ProjectSkillShortcuts,
+  skillShortcutColors: ProjectSkillShortcutColors,
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

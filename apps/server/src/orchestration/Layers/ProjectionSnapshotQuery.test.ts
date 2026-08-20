@@ -277,6 +277,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           faviconPath: null,
           skillShortcuts: [],
+          skillShortcutColors: {},
           scripts: [
             {
               id: "script-1",
@@ -398,6 +399,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           faviconPath: null,
           skillShortcuts: [],
+          skillShortcutColors: {},
           scripts: [
             {
               id: "script-1",

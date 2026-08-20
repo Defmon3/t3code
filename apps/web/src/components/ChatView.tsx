@@ -5,6 +5,7 @@ import {
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
+  type ProjectSkillShortcutColors,
   type ProjectScript,
   type ProjectId,
   type ProviderApprovalDecision,
@@ -3157,11 +3158,11 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, updateProject, upsertKeybinding],
   );
   const persistProjectSkillShortcuts = useCallback(
-    async (skillShortcuts: string[]) => {
+    async (skillShortcuts: string[], skillShortcutColors: ProjectSkillShortcutColors) => {
       if (!activeProject) return;
       const result = await updateProject({
         environmentId,
-        input: { projectId: activeProject.id, skillShortcuts },
+        input: { projectId: activeProject.id, skillShortcuts, skillShortcutColors },
       });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -6529,8 +6530,12 @@ function ChatViewContent(props: ChatViewProps) {
                               activeProject ? (
                                 <ProjectSkillShortcutBar
                                   shortcuts={activeProject.skillShortcuts}
-                                  onChange={(skillShortcuts) =>
-                                    void persistProjectSkillShortcuts(skillShortcuts)
+                                  colors={activeProject.skillShortcutColors ?? {}}
+                                  onChange={(skillShortcuts, skillShortcutColors) =>
+                                    void persistProjectSkillShortcuts(
+                                      skillShortcuts,
+                                      skillShortcutColors,
+                                    )
                                   }
                                   onInvoke={(shortcut) =>
                                     void onSend(undefined, undefined, {
