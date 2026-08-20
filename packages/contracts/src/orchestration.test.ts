@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  PROJECT_SKILL_SHORTCUT_COLORS,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -177,6 +178,7 @@ it.effect("decodes historical project.created payloads with a default provider",
     });
     assert.strictEqual(parsed.defaultModelSelection?.instanceId, "codex");
     assert.deepStrictEqual(parsed.skillShortcuts, []);
+    assert.strictEqual(parsed.skillShortcutColors, undefined);
   }),
 );
 
@@ -199,6 +201,7 @@ it.effect("decodes historical project snapshots with empty skill shortcuts", () 
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.deepStrictEqual(parsed.projects[0]?.skillShortcuts, []);
+    assert.strictEqual(parsed.projects[0]?.skillShortcutColors, undefined);
   }),
 );
 
@@ -217,6 +220,31 @@ it.effect("rejects duplicate project skill shortcuts", () =>
   }),
 );
 
+it.effect("decodes preset project skill shortcut colors and rejects unknown colors", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-skill-shortcut-colors",
+      projectId: "project-1",
+      skillShortcutColors: { review: "violet", deploy: "green" },
+    });
+    assert.deepStrictEqual(
+      parsed.type === "project.meta.update" ? parsed.skillShortcutColors : undefined,
+      { review: "violet", deploy: "green" },
+    );
+
+    const result = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "project.meta.update",
+        commandId: "cmd-invalid-project-skill-shortcut-color",
+        projectId: "project-1",
+        skillShortcutColors: { review: "chartreuse" },
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
 it.effect("decodes project.meta-updated payloads with explicit default provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProjectMetaUpdatedPayload({
@@ -230,6 +258,10 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
     assert.strictEqual(parsed.defaultModelSelection?.instanceId, "claudeAgent");
   }),
 );
+
+it("defines ten project skill shortcut colors", () => {
+  assert.strictEqual(PROJECT_SKILL_SHORTCUT_COLORS.length, 10);
+});
 
 it.effect("rejects command fields that become empty after trim", () =>
   Effect.gen(function* () {

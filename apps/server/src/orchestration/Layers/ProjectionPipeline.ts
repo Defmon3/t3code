@@ -649,6 +649,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             defaultThreadEnvMode: null,
             faviconPath: event.payload.faviconPath ?? null,
             skillShortcuts: event.payload.skillShortcuts,
+            skillShortcutColors: event.payload.skillShortcutColors ?? {},
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -680,6 +681,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.skillShortcuts !== undefined
               ? { skillShortcuts: event.payload.skillShortcuts }
+              : {}),
+            ...(event.payload.skillShortcutColors !== undefined
+              ? { skillShortcutColors: event.payload.skillShortcutColors }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,

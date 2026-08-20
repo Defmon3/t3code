@@ -40,6 +40,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       expect(event.type).toBe("project.created");
       expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
       expect((event.payload as { skillShortcuts: unknown[] }).skillShortcuts).toEqual([]);
+      expect((event.payload as { skillShortcutColors: object }).skillShortcutColors).toEqual({});
     }),
   );
 
@@ -96,7 +97,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
     }),
   );
 
-  it.effect("propagates ordered skill shortcuts in project.meta.update payload", () =>
+  it.effect("propagates ordered skill shortcuts and colors in project.meta.update payload", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
       const readModel = yield* projectEvent(createEmptyReadModel(now), {
@@ -128,6 +129,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           commandId: CommandId.make("cmd-project-update-shortcuts"),
           projectId: asProjectId("project-shortcuts"),
           skillShortcuts: ["review", "deploy"],
+          skillShortcutColors: { review: "violet", deploy: "green" },
         },
         readModel,
       });
@@ -138,6 +140,9 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         "review",
         "deploy",
       ]);
+      expect(
+        (event.payload as { skillShortcutColors?: Record<string, string> }).skillShortcutColors,
+      ).toEqual({ review: "violet", deploy: "green" });
     }),
   );
 

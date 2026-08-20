@@ -2835,6 +2835,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           },
           faviconPath: "brand/icon.svg",
           skillShortcuts: ["review", "deploy"],
+          skillShortcutColors: { review: "violet", deploy: "green" },
         });
 
         yield* engine.dispatch({
@@ -2850,13 +2851,15 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           readonly defaultModelSelection: string;
           readonly faviconPath: string | null;
           readonly skillShortcuts: string;
+          readonly skillShortcutColors: string;
         }>`
         SELECT
           title,
           scripts_json AS "scriptsJson",
           default_model_selection_json AS "defaultModelSelection",
           favicon_path AS "faviconPath",
-          skill_shortcuts_json AS "skillShortcuts"
+          skill_shortcuts_json AS "skillShortcuts",
+          skill_shortcut_colors_json AS "skillShortcutColors"
         FROM projection_projects
         WHERE project_id = 'project-scripts'
       `;
@@ -2868,6 +2871,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
             defaultModelSelection: '{"instanceId":"codex","model":"gpt-5"}',
             faviconPath: "brand/icon.svg",
             skillShortcuts: '["review","deploy"]',
+            skillShortcutColors: '{"review":"violet","deploy":"green"}',
           },
         ]);
       }),
