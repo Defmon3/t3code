@@ -83,7 +83,6 @@ const SEARCH_DEBOUNCE_MS = 250;
  * What `IssueListInput` accepts as a query. Past it the read is refused outright, so a pasted wall
  * of text searches its opening rather than coming back as an error about its length.
  */
-const MAX_QUERY_LENGTH = 200;
 const PAGE_SIZE = 30;
 /** The listing's own ceiling. Past it the search is the way to find something, not more rows. */
 const MAX_LIMIT = 500;
@@ -215,7 +214,7 @@ function IssueBrowserList({
   refreshPending: boolean;
   onRefreshConsumed: () => void;
 }) {
-  const typed = query.trim().slice(0, MAX_QUERY_LENGTH);
+  const typed = query.trim();
   // Searching asks the host, which takes a round trip, so the text is held for a moment before it
   // is sent — the same bargain the issues page makes.
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
@@ -469,6 +468,7 @@ function IssueBrowserList({
       }),
     [onSelect, projectId],
   );
+  const retainedDataError = listQuery.error !== null && listQuery.data !== null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -555,6 +555,14 @@ function IssueBrowserList({
               ) : null}
             </>
           )}
+          {retainedDataError ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+              <span>The latest request failed. Showing the last issues loaded.</span>
+              <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
         </div>
       </ScrollArea>
     </div>
