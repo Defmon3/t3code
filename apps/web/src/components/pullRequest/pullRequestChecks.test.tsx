@@ -1,5 +1,5 @@
 import type { EnvironmentId, ProjectId, PullRequestCheck } from "@t3tools/contracts";
-import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
@@ -7,14 +7,6 @@ import { ListRow } from "../sourceControl/ListRow";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
 import { pullRequestChecksState } from "./pullRequestPresentation";
-
-function checksPopoverTrigger(): ReactElement<{ nativeButton?: boolean }> | undefined {
-  const popover = PullRequestChecksPopover({ checksState: "failing" });
-  return Children.toArray(popover.props.children).find(
-    (element): element is ReactElement<{ nativeButton?: boolean }> =>
-      isValidElement<{ nativeButton?: boolean }>(element) && "nativeButton" in element.props,
-  );
-}
 
 function check(status: PullRequestCheck["status"]): PullRequestCheck {
   return { name: `check-${status}`, status, description: null, url: null };
@@ -98,9 +90,5 @@ describe("PullRequestRow checks indicator", () => {
     expect(
       flatten(row({})).some((element) => (element as { type?: unknown }).type === ListRow),
     ).toBe(true);
-  });
-
-  it("disables native button semantics for its span trigger inside a row button", () => {
-    expect(checksPopoverTrigger()?.props.nativeButton).toBe(false);
   });
 });

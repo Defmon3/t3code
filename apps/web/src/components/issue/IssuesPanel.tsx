@@ -34,7 +34,6 @@ import {
   filterIssueQueryResults,
   filterIssuesByInvolvement,
   issueEntryKey,
-  matchesIssueQuery,
   rankIssueMatches,
   type IssueViewers,
 } from "./issueList.logic";
@@ -125,7 +124,6 @@ function ProjectIssues({
   // the search that found it — the list is unmounted while the issue is open.
   const [query, setQuery] = useState("");
   const [page, setPage] = useState<PanelPage>({ key: "", size: PAGE_SIZE, cursors: null });
-  const [refreshPending, setRefreshPending] = useState(false);
   const [filters, setFilters] = useState<{
     readonly state: IssueListState;
     readonly involvement: IssueInvolvement;
@@ -161,7 +159,6 @@ function ProjectIssues({
               number: selected.number,
             }}
             handoffTarget={handoffTarget}
-            onActed={() => setRefreshPending(true)}
             onStateChange={onStateChange}
             {...(onOpenLinkedPullRequest ? { onOpenLinkedPullRequest } : {})}
             // The panel is the narrowest place this reads, so the metadata folds into the top row
@@ -183,8 +180,6 @@ function ProjectIssues({
       onPage={setPage}
       filters={filters}
       onFilters={setFilters}
-      refreshPending={refreshPending}
-      onRefreshConsumed={() => setRefreshPending(false)}
     />
   );
 }
@@ -199,8 +194,6 @@ function IssueBrowserList({
   onPage,
   filters,
   onFilters,
-  refreshPending,
-  onRefreshConsumed,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
@@ -211,10 +204,8 @@ function IssueBrowserList({
   onPage: (page: PanelPage) => void;
   filters: PanelFilters;
   onFilters: (filters: PanelFilters) => void;
-  refreshPending: boolean;
-  onRefreshConsumed: () => void;
 }) {
-  const typed = query.trim();
+  const typed = query.trim().slice(0, MAX_QUERY_LENGTH);
   // Searching asks the host, which takes a round trip, so the text is held for a moment before it
   // is sent — the same bargain the issues page makes.
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
@@ -248,20 +239,6 @@ function IssueBrowserList({
     }),
   );
   const answered = listQuery.data;
-  const baselineQuery = useEnvironmentQuery(
-    issueEnvironment.list({
-      environmentId,
-      input: {
-        state: filters.state,
-        involvement: filters.involvement,
-        projectId,
-        limit: PAGE_SIZE,
-        sort: filters.sort,
-        order: filters.order,
-      },
-    }),
-  );
-  const baseline = baselineQuery.data;
   const githubSortingAvailable =
     answered?.providers.some((provider) => provider.kind === "github") ?? false;
   const searchingHosts = useMemo(
@@ -323,23 +300,9 @@ function IssueBrowserList({
   const entries = useMemo(() => {
     const shown = ordered?.key === filterKey ? ordered : null;
     const held = shown?.entries ?? answered?.entries ?? [];
-    const searchingHosts = new Set(
-      (baseline?.providers ?? answered?.providers ?? [])
-        .filter((provider) => provider.searchesOnHost)
-        .map((provider) => provider.host),
-    );
-    const queried =
-      typed.length === 0
-        ? held
-        : [
-            ...held.filter((entry) => searchingHosts.has(entry.host)),
-            ...(baseline?.entries ?? held).filter(
-              (entry) => !searchingHosts.has(entry.host) && matchesIssueQuery(entry, typed),
-            ),
-          ];
     const byInvolvement = filterIssuesByInvolvement(
-      queried,
-      shown?.viewers ?? answered?.viewers ?? baseline?.viewers ?? {},
+      held,
+      shown?.viewers ?? answered?.viewers ?? {},
       filters.involvement,
     );
     const queried = filterIssueQueryResults(
@@ -377,30 +340,6 @@ function IssueBrowserList({
         : { key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_LIMIT), cursors: null },
     );
   };
-
-  const refreshList = useCallback(() => {
-    if (sentCursors === null) {
-      listQuery.refresh();
-      return;
-    }
-    const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
-    onPage({
-      key: filterKey,
-      size: Math.min(Math.max(pageSize, Math.ceil(loadedCount / PAGE_SIZE) * PAGE_SIZE), MAX_LIMIT),
-      cursors: null,
-    });
-  }, [filterKey, listQuery.refresh, onPage, ordered, pageSize, sentCursors]);
-  const consumedRefresh = useRef(false);
-  useEffect(() => {
-    if (!refreshPending) {
-      consumedRefresh.current = false;
-      return;
-    }
-    if (consumedRefresh.current) return;
-    consumedRefresh.current = true;
-    refreshList();
-    onRefreshConsumed();
-  }, [onRefreshConsumed, refreshList, refreshPending]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -468,7 +407,6 @@ function IssueBrowserList({
       }),
     [onSelect, projectId],
   );
-  const retainedDataError = listQuery.error !== null && listQuery.data !== null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -555,14 +493,6 @@ function IssueBrowserList({
               ) : null}
             </>
           )}
-          {retainedDataError ? (
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-              <span>The latest request failed. Showing the last issues loaded.</span>
-              <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
-                Retry
-              </Button>
-            </div>
-          ) : null}
         </div>
       </ScrollArea>
     </div>
