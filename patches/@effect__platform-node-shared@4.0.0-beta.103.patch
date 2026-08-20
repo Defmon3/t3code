@@ -1,0 +1,34 @@
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index 29b02311c2101b01e5ad991f2e9375e699f2340c..8c3c4ff07acdcd9c604efbd6fb638fded68106d6 100644
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -274,9 +274,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   };
+   const killProcessGroupOnExit = (childProcess, signal) => {
+     if (globalThis.process.platform === "win32") {
+-      NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {
+-        // ignore errors during best-effort cleanup
+-      });
++      try {
++        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {});
++      } catch {}
+       return;
+     }
+     try {
+diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
+index bf6f007c4a29597fad5eb1367dd145fde2688851..780152175f8a930c8247c201bc9bcdb6aa4b8210 100644
+--- a/src/NodeChildProcessSpawner.ts
++++ b/src/NodeChildProcessSpawner.ts
+@@ -376,9 +376,9 @@ const make = Effect.gen(function*() {
+     signal: NodeJS.Signals
+   ): void => {
+     if (globalThis.process.platform === "win32") {
+-      NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {
+-        // ignore errors during best-effort cleanup
+-      })
++      try {
++        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, () => {})
++      } catch {}
+       return
+     }
+     try {
