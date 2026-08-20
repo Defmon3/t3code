@@ -1,22 +1,25 @@
 import { memo } from "react";
 import { type PendingApproval } from "../../session-logic";
+import { cn } from "~/lib/utils";
 
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
   pendingCount: number;
+  className?: string;
 }
 
 export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
+  className,
 }: ComposerPendingApprovalPanelProps) {
-  const approvalSummary =
+  const fallbackLabel =
     approval.requestKind === "command"
-      ? "Command approval requested"
+      ? "Command approval"
       : approval.requestKind === "file-read"
-        ? "File-read approval requested"
-        : "File-change approval requested";
-  const detailLabel =
+        ? "File read approval"
+        : "File change approval";
+  const detailAriaLabel =
     approval.requestKind === "command"
       ? "Command"
       : approval.requestKind === "file-read"
@@ -24,52 +27,62 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         : "File change";
   const isHookApproval = approval.source === "hook";
 
-  return (
-    <div className="min-w-0 px-4 py-3.5 sm:px-5 sm:py-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="uppercase text-sm tracking-[0.2em]">PENDING APPROVAL</span>
-        <span className="text-sm font-medium">
-          {isHookApproval ? (approval.title ?? "Hook approval requested") : approvalSummary}
-        </span>
-        {isHookApproval ? (
-          <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-warning text-xs">
+  if (isHookApproval) {
+    const title = approval.title ?? "Hook approval requested";
+    return (
+      <div aria-label={title} className={cn("min-w-0 flex-1 space-y-2", className)} role="group">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="font-medium text-xs text-foreground">{title}</span>
+          <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-warning text-[10px]">
             Project hook
           </span>
-        ) : null}
-        {pendingCount > 1 ? (
-          <span className="text-xs text-muted-foreground">1/{pendingCount}</span>
-        ) : null}
-      </div>
-      {isHookApproval && approval.reason ? (
-        <div className="mt-3">
-          <p className="text-xs font-medium text-muted-foreground">Reason</p>
+          {pendingCount > 1 ? (
+            <span className="text-[10px] text-muted-foreground tabular-nums">1/{pendingCount}</span>
+          ) : null}
+        </div>
+        {approval.reason ? (
           <p
-            className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed"
+            className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/85"
             data-approval-reason="complete"
           >
             {approval.reason}
           </p>
-        </div>
-      ) : null}
-      {isHookApproval && approval.description && approval.description !== approval.reason ? (
-        <div className="mt-3">
-          <p className="text-xs font-medium text-muted-foreground">Details</p>
-          <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-muted-foreground">
+        ) : null}
+        {approval.description && approval.description !== approval.reason ? (
+          <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
             {approval.description}
           </p>
-        </div>
-      ) : null}
-      {approval.detail ? (
-        <div className="mt-3 min-w-0 max-w-full rounded-lg border border-border/65 bg-background/70 p-3">
-          <p className="text-xs font-medium text-muted-foreground">{detailLabel}</p>
-          <pre
-            aria-label={detailLabel}
-            className="mt-2 min-w-0 max-w-full max-h-40 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-xs leading-relaxed text-foreground"
-            data-approval-detail="complete"
-          >
-            {approval.detail}
-          </pre>
-        </div>
+        ) : null}
+        <code
+          aria-label={detailAriaLabel}
+          className="block max-h-20 min-w-0 overflow-auto whitespace-pre font-mono text-[11px] text-foreground/85 [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5"
+          data-approval-detail="complete"
+          tabIndex={0}
+        >
+          {approval.detail || fallbackLabel}
+        </code>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      aria-label={fallbackLabel}
+      className={cn("flex min-w-0 flex-1 items-center gap-2", className)}
+      role="group"
+    >
+      <code
+        aria-label={detailAriaLabel}
+        className="block max-h-20 min-w-0 flex-1 overflow-auto whitespace-pre font-mono text-[11px] text-foreground/85 [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5"
+        data-approval-detail="complete"
+        tabIndex={0}
+      >
+        {approval.detail || fallbackLabel}
+      </code>
+      {pendingCount > 1 ? (
+        <span className="shrink-0 text-[10px] font-medium text-muted-foreground tabular-nums">
+          1/{pendingCount}
+        </span>
       ) : null}
     </div>
   );

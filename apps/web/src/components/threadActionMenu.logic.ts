@@ -18,6 +18,7 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "copy"
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
@@ -73,14 +74,14 @@ export function buildThreadActionMenuItems(
     ...(state.supports.settlement
       ? [
           state.isSettled
-            ? { id: "unsettle" as const, label: "Un-settle thread", icon: "undo" }
+            ? { id: "unsettle" as const, label: "Un-settle thread", icon: "circle-check" }
             : { id: "settle" as const, label: "Settle thread", icon: "circle-check" },
         ]
       : []),
     ...(state.supports.snooze
       ? [
           state.isSnoozed
-            ? { id: "unsnooze" as const, label: "Wake thread", icon: "alarm-clock" }
+            ? { id: "unsnooze" as const, label: "Wake thread", icon: "clock" }
             : {
                 id: "snooze" as const,
                 label: "Snooze",
@@ -93,29 +94,48 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    { id: "rename", label: "Rename thread", icon: "pencil" },
+    { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [
           {
             id: "regenerate-title" as const,
             label: state.isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
-            icon: "sparkles",
+            icon: "refresh-cw",
             disabled: state.isRegeneratingTitle,
           },
         ]
       : []),
-    { id: "mark-unread", label: "Mark unread", icon: "mail" },
-    { id: "copy-path", label: "Copy path", icon: "copy" },
-    ...(state.branch
-      ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "git-branch" }]
-      : []),
-    { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
+    { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+    {
+      id: "copy",
+      label: "Copy",
+      icon: "copy",
+      separatorBefore: true,
+      children: [
+        { id: "copy-path", label: "Path", icon: "folder" },
+        ...(state.branch
+          ? [{ id: "copy-branch" as const, label: "Branch", icon: "git-branch" }]
+          : []),
+        { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
+      ],
+    },
     // Archive removes the thread from the sidebar while keeping its
     // conversation under Settings > Archived threads — distinct from Settle
     // (stays visible in the Settled shelf) and Delete (clears history for
     // good), so it sits beside Delete without borrowing its destructive
     // styling.
-    { id: "archive", label: "Archive thread", disabled: state.isRunning },
-    { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+    {
+      id: "archive",
+      label: "Archive thread",
+      icon: "archive",
+      disabled: state.isRunning,
+      separatorBefore: true,
+    },
+    {
+      id: "delete",
+      label: "Delete",
+      destructive: true,
+      icon: "trash",
+    },
   ];
 }
