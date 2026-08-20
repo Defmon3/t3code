@@ -427,8 +427,9 @@ export async function settlePromise<A>(
 export function environmentRpcKey<Input>(target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }): string {
-  return JSON.stringify([target.environmentId, target.input]);
+  return JSON.stringify([target.environmentId, target.input, target.cacheKey]);
 }
 
 function parseEnvironmentRpcKey<Input>(key: string): {
@@ -485,6 +486,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
 ): (target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
   const connectionAtom = Atom.family((environmentId: EnvironmentIdType) =>
     runtime.atom(
