@@ -32,6 +32,7 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveDraftHeroState,
+  resolveGitHubIssueUrlPrefix,
   scheduleEnvironmentReconnectWarning,
   startNewThreadForProject,
   shouldDockDraftHeroForSubmission,
@@ -198,6 +199,38 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     expect(shouldReleaseTimelineAnchorForToolActivity({ ...input, runningTurnId: null })).toBe(
       false,
     );
+  });
+});
+
+describe("resolveGitHubIssueUrlPrefix", () => {
+  it("uses the repository remote host for public and self-hosted GitHub issue citations", () => {
+    expect(
+      resolveGitHubIssueUrlPrefix({
+        canonicalKey: "github.com/t3tools/t3code",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@github.com:t3tools/t3code.git",
+        },
+        provider: "github",
+        owner: "t3tools",
+        name: "t3code",
+      }),
+    ).toBe("https://github.com/t3tools/t3code/issues/");
+
+    expect(
+      resolveGitHubIssueUrlPrefix({
+        canonicalKey: "git.acme.test/platform/console",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://git.acme.test:8443/platform/console.git",
+        },
+        provider: "github",
+        owner: "platform",
+        name: "console",
+      }),
+    ).toBe("https://git.acme.test:8443/platform/console/issues/");
   });
 });
 

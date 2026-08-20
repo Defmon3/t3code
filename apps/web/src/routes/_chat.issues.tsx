@@ -1441,6 +1441,7 @@ function IssuesRouteView() {
             onAddBrowser={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
+            onAddRepository={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
@@ -1448,6 +1449,7 @@ function IssuesRouteView() {
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
+            repositoryAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}

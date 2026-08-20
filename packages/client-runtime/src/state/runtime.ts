@@ -53,6 +53,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  readonly revalidateOnReconnect?: (input: Input) => boolean;
 }
 
 interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
@@ -510,6 +511,29 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         A,
         E | ConnectionAttemptError | EnvironmentNotRegisteredError | EnvironmentRpcUnavailableError
       >((get) => {
+        if (!(options.revalidateOnReconnect?.(target.input) ?? true)) {
+          return runInEnvironment(
+            target.environmentId,
+            EnvironmentSupervisor.pipe(
+              Effect.flatMap((supervisor) =>
+                Stream.concat(
+                  Stream.fromEffect(SubscriptionRef.get(supervisor.state)),
+                  SubscriptionRef.changes(supervisor.state),
+                ).pipe(
+                  Stream.filter((state) => state.phase === "connected"),
+                  Stream.take(1),
+                  Stream.runHead,
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () => Effect.never,
+                      onSome: () => options.execute(target.input),
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
         const connection = Option.getOrNull(
           AsyncResult.value(get(connectionAtom(target.environmentId))),
         );
@@ -621,6 +645,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    readonly revalidateOnReconnect?: (input: EnvironmentRpcInput<TTag>) => boolean;
   },
 ) {
   return createEnvironmentQueryAtomFamily(runtime, {
@@ -630,6 +655,9 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
+    ...(options.revalidateOnReconnect === undefined
+      ? {}
+      : { revalidateOnReconnect: options.revalidateOnReconnect }),
     execute: (input: EnvironmentRpcInput<TTag>) => request(options.tag, input),
   });
 }
