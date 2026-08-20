@@ -235,6 +235,25 @@ export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 export const ProjectSkillShortcut = TrimmedNonEmptyString.check(Schema.isMaxLength(255));
 export type ProjectSkillShortcut = typeof ProjectSkillShortcut.Type;
 export const ProjectSkillShortcuts = Schema.Array(ProjectSkillShortcut).check(Schema.isUnique());
+export const PROJECT_SKILL_SHORTCUT_COLORS = [
+  "red",
+  "orange",
+  "amber",
+  "lime",
+  "green",
+  "cyan",
+  "blue",
+  "violet",
+  "pink",
+  "rose",
+] as const;
+export const ProjectSkillShortcutColor = Schema.Literals(PROJECT_SKILL_SHORTCUT_COLORS);
+export type ProjectSkillShortcutColor = typeof ProjectSkillShortcutColor.Type;
+export const ProjectSkillShortcutColors = Schema.Record(
+  ProjectSkillShortcut,
+  ProjectSkillShortcutColor,
+);
+export type ProjectSkillShortcutColors = typeof ProjectSkillShortcutColors.Type;
 
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
@@ -248,6 +267,7 @@ export const OrchestrationProject = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   skillShortcuts: ProjectSkillShortcuts.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -446,6 +466,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   skillShortcuts: ProjectSkillShortcuts.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -662,6 +683,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -1109,6 +1131,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   skillShortcuts: ProjectSkillShortcuts.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1123,6 +1146,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });

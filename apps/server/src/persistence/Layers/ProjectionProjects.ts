@@ -5,7 +5,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
-import { ModelSelection, ProjectScript, ProjectSkillShortcuts } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  ProjectScript,
+  ProjectSkillShortcutColors,
+  ProjectSkillShortcuts,
+} from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionProjectInput,
@@ -19,6 +24,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     skillShortcuts: Schema.fromJsonString(ProjectSkillShortcuts),
+    skillShortcutColors: Schema.fromJsonString(ProjectSkillShortcutColors),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -39,6 +45,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode,
           favicon_path,
           skill_shortcuts_json,
+          skill_shortcut_colors_json,
           scripts_json,
           created_at,
           updated_at,
@@ -52,6 +59,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.defaultThreadEnvMode},
           ${row.faviconPath ?? null},
           ${JSON.stringify(row.skillShortcuts)},
+          ${JSON.stringify(row.skillShortcutColors)},
           ${JSON.stringify(row.scripts)},
           ${row.createdAt},
           ${row.updatedAt},
@@ -65,6 +73,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode = excluded.default_thread_env_mode,
           favicon_path = excluded.favicon_path,
           skill_shortcuts_json = excluded.skill_shortcuts_json,
+          skill_shortcut_colors_json = excluded.skill_shortcut_colors_json,
           scripts_json = excluded.scripts_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
@@ -85,6 +94,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
           skill_shortcuts_json AS "skillShortcuts",
+          skill_shortcut_colors_json AS "skillShortcutColors",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -107,6 +117,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
           skill_shortcuts_json AS "skillShortcuts",
+          skill_shortcut_colors_json AS "skillShortcutColors",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",

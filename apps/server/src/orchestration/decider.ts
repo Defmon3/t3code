@@ -252,6 +252,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           defaultModelSelection: command.defaultModelSelection ?? null,
           faviconPath: null,
           skillShortcuts: [],
+          skillShortcutColors: {},
           scripts: [],
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -295,6 +296,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.faviconPath !== undefined ? { faviconPath: command.faviconPath } : {}),
           ...(command.skillShortcuts !== undefined
             ? { skillShortcuts: command.skillShortcuts }
+            : {}),
+          ...(command.skillShortcutColors !== undefined
+            ? { skillShortcutColors: command.skillShortcutColors }
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           updatedAt: occurredAt,

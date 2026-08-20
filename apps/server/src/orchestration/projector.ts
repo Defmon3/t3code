@@ -217,6 +217,7 @@ export function projectEvent(
             defaultThreadEnvMode: null,
             faviconPath: payload.faviconPath ?? null,
             skillShortcuts: payload.skillShortcuts,
+            skillShortcutColors: payload.skillShortcutColors ?? {},
             scripts: payload.scripts,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -257,6 +258,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.skillShortcuts !== undefined
                     ? { skillShortcuts: payload.skillShortcuts }
+                    : {}),
+                  ...(payload.skillShortcutColors !== undefined
+                    ? { skillShortcutColors: payload.skillShortcutColors }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,

@@ -8,6 +8,7 @@ import {
   reorderProjectSkillShortcuts,
   resolveProjectSkillShortcutActivation,
   resolveProjectSkillShortcutText,
+  setProjectSkillShortcutColor,
 } from "./ProjectSkillShortcutBar";
 
 describe("project skill shortcuts", () => {
@@ -44,6 +45,12 @@ describe("project skill shortcuts", () => {
   it("inserts Alt-clicked shortcuts and sends ordinary clicks", () => {
     expect(resolveProjectSkillShortcutActivation(true)).toBe("insert");
     expect(resolveProjectSkillShortcutActivation(false)).toBe("send");
+  });
+
+  it("sets and clears preset colors without changing other buttons", () => {
+    const colored = setProjectSkillShortcutColor({ review: "violet" }, "deploy", "green");
+    expect(colored).toEqual({ review: "violet", deploy: "green" });
+    expect(setProjectSkillShortcutColor(colored, "review", null)).toEqual({ deploy: "green" });
   });
 
   it("removes and reorders shortcuts as full ordered replacements", () => {
