@@ -2991,6 +2991,12 @@ describe("PreviewManager", () => {
       Effect.gen(function* () {
         let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
         const activity: string[] = [];
+        const previewFocus = vi.fn();
+        let focused: { readonly id: number } | null = { id: 7 };
+        const restoreFocus = vi.fn(() => {
+          focused = { id: 7 };
+        });
+        let failMousePress = false;
         const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
           if (method === "Runtime.evaluate") {
             return {
@@ -3000,8 +3006,10 @@ describe("PreviewManager", () => {
             };
           }
           if (method === "Input.dispatchMouseEvent" && params?.type === "mousePressed") {
+            focused = { id: 42 };
             activity.push("mousePressed");
             humanInput?.({}, { kind: "pointer", x: params.x, y: params.y, button: 0 });
+            if (failMousePress) throw new Error("mouse dispatch failed");
           }
           return undefined;
         });
@@ -3013,6 +3021,7 @@ describe("PreviewManager", () => {
           getTitle: () => "Example",
           isLoading: () => false,
           isDevToolsOpened: () => false,
+          focus: previewFocus,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -3036,6 +3045,16 @@ describe("PreviewManager", () => {
             off: vi.fn(),
           },
         } as never);
+        getFocusedWebContents.mockImplementation(() => {
+          if (focused?.id === 7) {
+            return {
+              id: 7,
+              isDestroyed: () => false,
+              focus: restoreFocus,
+            } as never;
+          }
+          return focused?.id === 42 ? (fromId(42) as never) : null;
+        });
 
         yield* manager.subscribePointerEvents((event) =>
           Effect.sync(() => {
@@ -3051,6 +3070,8 @@ describe("PreviewManager", () => {
         yield* Fiber.join(click);
 
         expect(activity).toEqual(["move", "click", "mousePressed"]);
+        expect(previewFocus).not.toHaveBeenCalled();
+        expect(restoreFocus).toHaveBeenCalledOnce();
         expect(sendCommand).toHaveBeenCalledWith("Input.dispatchMouseEvent", {
           type: "mousePressed",
           x: 120,
@@ -3065,6 +3086,14 @@ describe("PreviewManager", () => {
           button: "left",
           clickCount: 1,
         });
+
+        failMousePress = true;
+        const failedClick = yield* manager
+          .automationClick("tab_1", { x: 120, y: 80 })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* TestClock.adjust(200);
+        expect(Exit.isFailure(yield* Fiber.await(failedClick))).toBe(true);
+        expect(restoreFocus).toHaveBeenCalledTimes(2);
       }),
     ),
   );
@@ -3097,13 +3126,19 @@ describe("PreviewManager", () => {
           }
           return method === "Runtime.evaluate" ? { result: { value: { ok: true } } } : undefined;
         });
-        const restoreFocus = vi.fn();
         const focus = vi.fn();
-        getFocusedWebContents.mockReturnValue({
-          id: 7,
-          isDestroyed: () => false,
-          focus: restoreFocus,
-        } as never);
+        let focused: { readonly id: number } | null = { id: 7 };
+        const restoreFocus = vi.fn(() => {
+          focused = { id: 7 };
+        });
+        getFocusedWebContents.mockImplementation(() => {
+          if (focused?.id !== 7) return { id: 42 } as never;
+          return {
+            id: 7,
+            isDestroyed: () => false,
+            focus: restoreFocus,
+          } as never;
+        });
         fromId.mockReturnValue({
           id: 42,
           isDestroyed: () => false,
@@ -3112,7 +3147,10 @@ describe("PreviewManager", () => {
           getTitle: () => "Example",
           isLoading: () => false,
           isDevToolsOpened: () => false,
-          focus,
+          focus: vi.fn(() => {
+            focused = { id: 42 };
+            focus();
+          }),
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -3247,6 +3285,8 @@ describe("PreviewManager", () => {
     withManager((manager) =>
       Effect.gen(function* () {
         let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
+        const restoreFocus = vi.fn();
+        let focused: { readonly id: number } | null = { id: 7 };
         const sendCommand = vi.fn(async (method: string) => {
           if (method === "Runtime.evaluate") {
             return {
@@ -3256,7 +3296,9 @@ describe("PreviewManager", () => {
             };
           }
           if (method === "Input.dispatchMouseEvent") {
+            focused = { id: 42 };
             humanInput?.({}, { kind: "pointer", x: 400, y: 300, button: 0 });
+            focused = { id: 8 };
           }
           return undefined;
         });
@@ -3291,6 +3333,16 @@ describe("PreviewManager", () => {
             off: vi.fn(),
           },
         } as never);
+        getFocusedWebContents.mockImplementation(() => {
+          if (focused?.id === 7) {
+            return {
+              id: 7,
+              isDestroyed: () => false,
+              focus: restoreFocus,
+            } as never;
+          }
+          return focused?.id === 42 ? (fromId(42) as never) : ({ id: 8 } as never);
+        });
 
         yield* manager.createTab("tab_1");
         yield* manager.registerWebview("tab_1", 42);
@@ -3314,6 +3366,7 @@ describe("PreviewManager", () => {
           expect(error.name).toBe("PreviewAutomationControlInterruptedError");
         }
         expect("cause" in error).toBe(false);
+        expect(restoreFocus).not.toHaveBeenCalled();
       }),
     ),
   );
