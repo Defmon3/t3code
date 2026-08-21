@@ -21,9 +21,9 @@ type PageResult =
     };
 
 type PageAtom = {
+  readonly cacheKey?: string | number;
   readonly input: {
     readonly cursor?: string;
-    readonly queryGeneration: number;
   };
   readonly result: PageResult;
 };
@@ -96,11 +96,17 @@ vi.mock("./threads", () => ({ useEnvironmentThread: () => ({}) }));
 
 vi.mock("./vcs", () => ({
   vcsEnvironment: {
-    listHistoryRefs: ({ input }: { readonly input: PageAtom["input"] }) => {
-      const result = refsState.results.get(`${input.queryGeneration}:${input.cursor ?? "first"}`);
+    listHistoryRefs: ({
+      cacheKey,
+      input,
+    }: {
+      readonly cacheKey?: string | number;
+      readonly input: PageAtom["input"];
+    }) => {
+      const result = refsState.results.get(`${cacheKey ?? 0}:${input.cursor ?? "first"}`);
       if (result === undefined)
-        throw new Error(`Missing result for ${input.queryGeneration}:${input.cursor ?? "first"}`);
-      const atom = { input, result };
+        throw new Error(`Missing result for ${cacheKey ?? 0}:${input.cursor ?? "first"}`);
+      const atom = { cacheKey, input, result };
       refsState.atoms.push(atom);
       return atom;
     },
@@ -150,8 +156,8 @@ describe("usePaginatedHistoryRefs", () => {
     render();
 
     expect(refsState.atoms.map((atom) => atom.input)).toEqual([
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
+      { cwd: "C:/workspace", limit: 100, namespace: "local" },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", refresh: true },
     ]);
   });
 
@@ -188,7 +194,7 @@ describe("usePaginatedHistoryRefs", () => {
     render();
     render();
 
-    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1]);
+    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual(["0:0", "0:1"]);
 
     const recovered = render();
     recovered.refresh();
@@ -197,6 +203,6 @@ describe("usePaginatedHistoryRefs", () => {
     render();
     render();
 
-    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1, 2, 3]);
+    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual(["0:0", "0:1", "0:2", "0:3"]);
   });
 });

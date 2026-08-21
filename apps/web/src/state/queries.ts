@@ -245,13 +245,25 @@ export function usePaginatedHistoryRefs(
   options?: {
     readonly limit?: number;
     readonly namespace?: "local" | "remote" | "tag";
+    readonly revision?: number;
   },
 ) {
   const query = target.query?.trim() ?? "";
   const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
   const namespace = options?.namespace ?? "local";
+  const revision = options?.revision ?? 0;
   const [queryGeneration, setQueryGeneration] = useState(0);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const refSearchKey = JSON.stringify([
+    target.environmentId,
+    target.cwd,
+    query,
+    limit,
+    namespace,
+    revision,
+  ]);
+  const [refreshSearchKey, setRefreshSearchKey] = useState<string | null>(null);
+  const isRefreshRequest = refreshSearchKey === refSearchKey;
   const targetKey =
     target.environmentId !== null && target.cwd !== null
       ? JSON.stringify([
@@ -260,6 +272,7 @@ export function usePaginatedHistoryRefs(
           query,
           limit,
           namespace,
+          revision,
           refreshGeneration,
         ])
       : null;
@@ -277,14 +290,14 @@ export function usePaginatedHistoryRefs(
         ? cursors.map((cursor) =>
             vcsEnvironment.listHistoryRefs({
               environmentId: target.environmentId!,
+              cacheKey: `${revision}:${queryGeneration}`,
               input: {
                 cwd: target.cwd!,
                 ...(query.length > 0 ? { query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit,
-                queryGeneration,
                 namespace,
-                ...(refreshGeneration > 0 ? { refresh: true } : {}),
+                ...(cursor === undefined && isRefreshRequest ? { refresh: true } : {}),
               },
             }),
           )
@@ -295,7 +308,11 @@ export function usePaginatedHistoryRefs(
       query,
       queryGeneration,
       namespace,
+      revision,
       refreshGeneration,
+      refreshSearchKey,
+      refSearchKey,
+      isRefreshRequest,
       target.cwd,
       target.environmentId,
     ],
@@ -336,14 +353,19 @@ export function usePaginatedHistoryRefs(
   const failed = results.find((result) => result._tag === "Failure");
   const expiredPage =
     failed?._tag === "Failure" && Schema.is(VcsSnapshotExpiredError)(Cause.squash(failed.cause));
+  const effectiveQueryGeneration = queryGeneration + revision;
   const recoveredSnapshotGeneration = useRef<number | null>(null);
   useEffect(() => {
-    if (!expiredPage || recoveredSnapshotGeneration.current === queryGeneration) return;
-    recoveredSnapshotGeneration.current = queryGeneration;
+    if (!expiredPage || recoveredSnapshotGeneration.current === effectiveQueryGeneration) return;
+    recoveredSnapshotGeneration.current = effectiveQueryGeneration;
     setQueryGeneration((generation) => generation + 1);
     setRefreshGeneration((generation) => generation + 1);
+    setRefreshSearchKey(refSearchKey);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [expiredPage, queryGeneration, targetKey]);
+  }, [effectiveQueryGeneration, expiredPage, refSearchKey, targetKey]);
+  useEffect(() => {
+    if (refreshSearchKey !== null && !isRefreshRequest) setRefreshSearchKey(null);
+  }, [isRefreshRequest, refreshSearchKey]);
   const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
   const error =
     failed?._tag === "Failure"
@@ -357,8 +379,9 @@ export function usePaginatedHistoryRefs(
   const refresh = useCallback(() => {
     setQueryGeneration((generation) => generation + 1);
     setRefreshGeneration((generation) => generation + 1);
+    setRefreshSearchKey(refSearchKey);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [targetKey]);
+  }, [refSearchKey, targetKey]);
   const retry = useCallback(() => {
     const failedIndex = results.findIndex((result) => result._tag === "Failure");
     const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];

@@ -861,10 +861,17 @@ const collectOutput = Effect.fnUntraced(function* (
     }),
   );
 
-  const remainder = truncated ? "" : decoder.decode();
-  text += remainder;
-  lineBuffer += remainder;
-  yield* emitCompleteLines(true);
+  if (truncated) {
+    if (recordSeparator === "\0") {
+      const lastCompleteRecord = text.lastIndexOf(recordSeparator);
+      text = lastCompleteRecord < 0 ? "" : text.slice(0, lastCompleteRecord + 1);
+    }
+  } else {
+    const remainder = decoder.decode();
+    text += remainder;
+    lineBuffer += remainder;
+    yield* emitCompleteLines(true);
+  }
   return {
     text,
     truncated,
@@ -882,15 +889,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     string,
     { readonly snapshotId: string; readonly offset: number }
   >();
+  const commitFilesCursorIdsBySnapshotOffset = new Map<string, Map<number, string>>();
   const deleteCommitFilesSnapshot = (snapshotId: string): void => {
     commitFilesSnapshots.delete(snapshotId);
-    for (const [cursor, value] of commitFilesCursors) {
-      if (value.snapshotId === snapshotId) commitFilesCursors.delete(cursor);
+    const cursorIdsByOffset = commitFilesCursorIdsBySnapshotOffset.get(snapshotId);
+    if (cursorIdsByOffset !== undefined) {
+      for (const cursor of cursorIdsByOffset.values()) {
+        commitFilesCursors.delete(cursor);
+      }
+      commitFilesCursorIdsBySnapshotOffset.delete(snapshotId);
     }
   };
   const newCommitFilesCursor = (snapshotId: string, offset: number): string => {
+    const cursorIdsByOffset =
+      commitFilesCursorIdsBySnapshotOffset.get(snapshotId) ?? new Map<number, string>();
+    const existingCursor = cursorIdsByOffset.get(offset);
+    if (existingCursor !== undefined) return existingCursor;
     const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     commitFilesCursors.set(cursor, { snapshotId, offset });
+    cursorIdsByOffset.set(offset, cursor);
+    commitFilesCursorIdsBySnapshotOffset.set(snapshotId, cursorIdsByOffset);
     return cursor;
   };
   const storeCommitFilesSnapshot = (snapshot: GitCommitFilesSnapshot): string => {
@@ -3053,7 +3071,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         [
           "for-each-ref",
           "--sort=refname",
-          "--format=%(refname)%09%(creatordate:unix)%09%(symref)%09%(upstream:short)%09%(worktreepath)",
+          "--format=%(refname)%09%(creatordate:unix)%09%(symref)%09%(upstream:short)%09%(upstream:track)%09%(worktreepath)",
           pattern,
         ],
         {
@@ -3065,8 +3083,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       let defaultRemoteRef: string | null = null;
       for (const line of output.stdout.split("\n")) {
         if (line.length === 0) continue;
-        const [fullName, , symbolicTarget = "", upstreamName = "", worktreePath = ""] =
-          line.split("\t");
+        const [
+          fullName,
+          ,
+          symbolicTarget = "",
+          upstreamName = "",
+          upstreamTrack = "",
+          worktreePath = "",
+        ] = line.split("\t");
         if (!fullName) continue;
         if (namespace === "remote" && symbolicTarget.startsWith(refRoot)) {
           defaultRemoteRef = symbolicTarget;
@@ -3084,7 +3108,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             isRemote: namespace === "remote",
             ...(namespace === "tag" ? { isTag: true } : {}),
             worktreePath: worktreePath.length > 0 ? worktreePath : null,
-            ...(namespace === "local" && upstreamName.length > 0 ? { upstreamName } : {}),
+            ...(namespace === "local" && upstreamName.length > 0
+              ? { upstreamName, ...parseRefUpstreamTrack(upstreamTrack) }
+              : {}),
           },
         });
       }
@@ -3297,8 +3323,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           cursor: input.cursor,
         });
       }
-      commitFilesCursors.delete(input.cursor);
-      snapshot = existing;
+      commitFilesSnapshots.delete(continuation.snapshotId);
+      snapshot = {
+        ...existing,
+        expiresAt: now + GIT_COMMIT_FILES_SNAPSHOT_TTL_MS,
+      };
+      commitFilesSnapshots.set(continuation.snapshotId, snapshot);
       snapshotId = continuation.snapshotId;
       offset = continuation.offset;
     } else {
@@ -3322,6 +3352,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ],
         {
           maxOutputBytes: GIT_COMMIT_FILES_MAX_OUTPUT_BYTES,
+          appendTruncationMarker: true,
+          stdoutRecordSeparator: "\0",
           fallbackErrorDetail: "git diff-tree failed",
         },
       );
@@ -3339,7 +3371,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const files = snapshot.files.slice(offset, offset + limit);
     const hasMore = offset + files.length < snapshot.files.length;
-    if (!hasMore) deleteCommitFilesSnapshot(snapshotId);
+    if (!hasMore && input.cursor === undefined) deleteCommitFilesSnapshot(snapshotId);
     return {
       files,
       isRepo: true,

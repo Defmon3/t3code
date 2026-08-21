@@ -1065,6 +1065,40 @@ it.effect("filters history refs with a case-insensitive substring query", () =>
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("reads ahead, behind, and diverged tracking counts from history refs", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const refOutput = [
+        "refs/heads/ahead\t0\t\torigin/ahead\t[ahead 2]\t",
+        "refs/heads/behind\t0\t\torigin/behind\t[behind 3]\t",
+        "refs/heads/diverged\t0\t\torigin/diverged\t[ahead 4, behind 5]\t",
+      ].join("\n");
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args.includes("for-each-ref")
+          ? Effect.succeed(makeSuccessfulHandle(refOutput))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* initRepoWithCommit(cwd).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+
+      const refs = yield* driver.listHistoryRefs({ cwd, namespace: "local", refresh: true });
+
+      assert.deepEqual(
+        refs.refs.map(({ name, aheadCount, behindCount }) => ({ name, aheadCount, behindCount })),
+        [
+          { name: "ahead", aheadCount: 2, behindCount: undefined },
+          { name: "behind", aheadCount: undefined, behindCount: 3 },
+          { name: "diverged", aheadCount: 4, behindCount: 5 },
+        ],
+      );
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.effect(
   "caps ref snapshots, expires cursors, evicts sessions, and invalidates on mutations",
   () =>

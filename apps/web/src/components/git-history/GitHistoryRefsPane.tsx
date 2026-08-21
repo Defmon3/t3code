@@ -322,40 +322,58 @@ export function GitRefsPane(props: {
               const behindCount = row.node.ref.behindCount ?? 0;
               const upstreamName = row.node.ref.upstreamName ?? "the configured upstream";
               const syncDescription = [
+                row.node.ref.isDefault ? "Default branch" : null,
                 aheadCount > 0 ? `${aheadCount} commits ahead of upstream ${upstreamName}` : null,
                 behindCount > 0 ? `${behindCount} commits behind upstream ${upstreamName}` : null,
               ]
                 .filter((description): description is string => description !== null)
                 .join(". ");
               return (
-                <button
-                  type="button"
-                  className={cn(
-                    "flex h-6 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/80 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                    selected && "bg-accent/70 font-medium text-foreground",
-                  )}
+                <div
+                  className="group flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-[0.6875rem] text-foreground/80"
                   style={{ paddingLeft: `${row.depth * 14 + 20}px` }}
-                  title={row.node.ref.name}
-                  onClick={() => props.sharedRefTreeProps.onSelect(row.node.ref.name, revision)}
-                  aria-pressed={selected}
-                  aria-label={
-                    syncDescription
-                      ? `${row.node.ref.name}. ${syncDescription}.`
-                      : row.node.ref.name
-                  }
                 >
-                  {row.node.ref.isDefault ? (
-                    <StarIcon className="size-3 shrink-0 fill-amber-400 text-amber-400" />
-                  ) : row.namespace === "tags" ? (
-                    <TagIcon className="size-3 shrink-0 text-amber-400" />
-                  ) : (
-                    <GitBranchIcon
-                      className={cn("size-3 shrink-0", row.node.ref.current && "text-foreground")}
-                    />
-                  )}
-                  <span className="truncate">{row.node.name}</span>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-1.5 rounded text-left hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                      selected && "bg-accent/70 font-medium text-foreground",
+                    )}
+                    title={row.node.ref.name}
+                    onClick={() => props.sharedRefTreeProps.onSelect(row.node.ref.name, revision)}
+                    aria-pressed={selected}
+                    aria-label={
+                      syncDescription
+                        ? `${row.node.ref.name}. ${syncDescription}.`
+                        : row.node.ref.name
+                    }
+                  >
+                    {row.namespace === "heads" &&
+                    props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) ? (
+                      <StarIcon className="size-3 shrink-0 fill-amber-400 text-amber-400" />
+                    ) : row.namespace === "tags" ? (
+                      <TagIcon className="size-3 shrink-0 text-amber-400" />
+                    ) : (
+                      <GitBranchIcon
+                        className={cn("size-3 shrink-0", row.node.ref.current && "text-foreground")}
+                      />
+                    )}
+                    <span className="truncate">{row.node.name}</span>
+                  </button>
+                  {row.namespace === "heads" ? (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded opacity-0 text-muted-foreground hover:text-amber-400 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                      aria-label={`${props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) ? "Remove" : "Add"} ${row.node.ref.name} ${props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) ? "from" : "to"} favorites`}
+                      onClick={() => {
+                        props.sharedRefTreeProps.onToggleFavorite(row.node.ref.name);
+                      }}
+                    >
+                      <StarIcon className="size-3" />
+                    </button>
+                  ) : null}
                   {aheadCount > 0 || behindCount > 0 ? (
-                    <span className="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem]">
+                    <span className="flex shrink-0 items-center gap-1 text-[0.5625rem]">
                       {aheadCount > 0 ? (
                         <span
                           className="flex items-center text-emerald-400"
@@ -376,7 +394,7 @@ export function GitRefsPane(props: {
                       ) : null}
                     </span>
                   ) : null}
-                </button>
+                </div>
               );
             }
             if (row.kind === "empty")

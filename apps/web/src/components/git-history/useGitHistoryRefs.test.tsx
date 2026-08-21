@@ -11,6 +11,10 @@ const refState = vi.hoisted(() => ({
   tags: [] as ReadonlyArray<VcsHistoryRef>,
   isComplete: true,
 }));
+const debounceState = vi.hoisted(() => ({ value: "" }));
+const historyRefTargets = vi.hoisted(
+  () => [] as Array<{ readonly namespace: string; readonly query: string | undefined }>,
+);
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -18,7 +22,6 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
-    useDeferredValue: <Value,>(value: Value) => value,
     useEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
     useState: reactHookHarness.useState,
@@ -31,7 +34,12 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("../../state/queries", () => ({
-  usePaginatedHistoryRefs: (_target: unknown, options: { readonly namespace: string }) => {
+  useDebouncedValue: () => debounceState.value,
+  usePaginatedHistoryRefs: (
+    target: { readonly query?: string },
+    options: { readonly namespace: string },
+  ) => {
+    historyRefTargets.push({ namespace: options.namespace, query: target.query });
     const refs =
       options.namespace === "local"
         ? refState.local
@@ -50,8 +58,16 @@ vi.mock("../../state/queries", () => ({
   },
 }));
 
+vi.mock("../../hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [[], vi.fn()],
+}));
+
 import { GitRefsPane } from "./GitHistoryRefsPane";
-import { useGitHistoryRefs } from "./useGitHistoryRefs";
+import {
+  gitHistoryFavoriteStorageKey,
+  toggleGitHistoryFavorite,
+  useGitHistoryRefs,
+} from "./useGitHistoryRefs";
 
 const environmentId = EnvironmentId.make("environment-local");
 
@@ -79,8 +95,10 @@ function renderRefs() {
       filterActive: false,
       expanded: historyRefs.expandedRefKeys,
       selectedRevision: historyRefs.selectedRevision?.revision ?? null,
+      favoriteBranches: historyRefs.favoriteBranches,
       onToggle: historyRefs.toggleRefKey,
       onSelect: historyRefs.selectRef,
+      onToggleFavorite: historyRefs.toggleFavorite,
     },
     hasMoreRefs: historyRefs.hasMoreRefs,
     isFetchingMoreRefs: historyRefs.isFetchingMoreRefs,
@@ -102,6 +120,8 @@ describe("useGitHistoryRefs", () => {
     refState.remote = Array.from({ length: 5_000 }, (_, index) => ref(`origin-${index}`, true));
     refState.tags = [];
     refState.isComplete = true;
+    debounceState.value = "";
+    historyRefTargets.length = 0;
   });
 
   it("preserves ref trees and the 10k-row virtual-list model across unchanged rerenders", () => {
@@ -124,5 +144,35 @@ describe("useGitHistoryRefs", () => {
     const rendered = renderRefs();
 
     expect(rendered.capStatus?.props.children).toBe("Showing the first 10,000 matching refs.");
+  });
+
+  it("adds and removes a branch favorite under its repository storage key", () => {
+    const key = gitHistoryFavoriteStorageKey(environmentId, "C:/workspace");
+    expect(key).toBe("t3code:git-history-favorites:v1:environment-local:C:/workspace");
+    expect(toggleGitHistoryFavorite([], "feature/ui")).toEqual(["feature/ui"]);
+    expect(toggleGitHistoryFavorite(["feature/ui"], "feature/ui")).toEqual([]);
+  });
+
+  it("keeps history-ref RPC query keys unchanged until a typed filter settles", () => {
+    const initial = renderRefs();
+    initial.historyRefs.setRefFilter("f");
+    renderRefs().historyRefs.setRefFilter("fe");
+    renderRefs().historyRefs.setRefFilter("feature");
+    const rapidInput = renderRefs();
+
+    expect(rapidInput.historyRefs.refFilter).toBe("feature");
+    expect(historyRefTargets.slice(-3)).toEqual([
+      { namespace: "local", query: "" },
+      { namespace: "remote", query: undefined },
+      { namespace: "tag", query: undefined },
+    ]);
+
+    debounceState.value = "feature";
+    renderRefs();
+    expect(historyRefTargets.slice(-3)).toEqual([
+      { namespace: "local", query: "feature" },
+      { namespace: "remote", query: "feature" },
+      { namespace: "tag", query: "feature" },
+    ]);
   });
 });
