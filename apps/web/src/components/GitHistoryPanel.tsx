@@ -130,9 +130,11 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const vcsHistoryRevision = useAtomValue(
     vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId }),
   );
-  const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd);
+  const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd, vcsHistoryRevision);
   const { selectedRevision } = historyRefs;
-  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}`;
+  const isSelectedRevisionPending = selectedRevision === undefined;
+  const resolvedSelectedRevision = selectedRevision ?? null;
+  const targetKey = `${baseTargetKey}:${isSelectedRevisionPending ? "pending" : (resolvedSelectedRevision?.revision ?? "all")}:${vcsHistoryRevision}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
     cursors: ReadonlyArray<string | undefined>;
@@ -140,24 +142,29 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_CURSORS;
   const pageAtoms = useMemo(
     () =>
-      cursors.map((cursor) =>
-        vcsEnvironment.getHistory({
-          environmentId: props.environmentId,
-          input: {
-            cwd: props.cwd,
-            queryGeneration: historyQueryGeneration + vcsHistoryRevision,
-            ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
-            ...(cursor === undefined ? {} : { cursor }),
-            limit: HISTORY_PAGE_SIZE,
-          },
-        }),
-      ),
+      isSelectedRevisionPending
+        ? []
+        : cursors.map((cursor) =>
+            vcsEnvironment.getHistory({
+              environmentId: props.environmentId,
+              cacheKey: `${vcsHistoryRevision}:${historyQueryGeneration}`,
+              input: {
+                cwd: props.cwd,
+                ...(resolvedSelectedRevision === null
+                  ? {}
+                  : { revision: resolvedSelectedRevision.revision }),
+                ...(cursor === undefined ? {} : { cursor }),
+                limit: HISTORY_PAGE_SIZE,
+              },
+            }),
+          ),
     [
       cursors,
       historyQueryGeneration,
+      isSelectedRevisionPending,
       props.cwd,
       props.environmentId,
-      selectedRevision,
+      resolvedSelectedRevision,
       vcsHistoryRevision,
     ],
   );
@@ -236,7 +243,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDetails({
           environmentId: props.environmentId,
-          input: { cwd: props.cwd, hash: selectedHash, queryGeneration: vcsHistoryRevision },
+          cacheKey: vcsHistoryRevision,
+          input: { cwd: props.cwd, hash: selectedHash },
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
@@ -262,11 +270,11 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.listCommitFiles({
           environmentId: props.environmentId,
+          cacheKey: `${vcsHistoryRevision}:${commitFilesQueryGeneration}`,
           input: {
             cwd: props.cwd,
             hash: selectedHash,
             limit: 100,
-            queryGeneration: commitFilesQueryGeneration + vcsHistoryRevision,
             ...(commitFilesCursor ? { cursor: commitFilesCursor } : {}),
           },
         }),
@@ -310,17 +318,18 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDiff({
           environmentId: props.environmentId,
+          cacheKey: vcsHistoryRevision,
           input: {
             cwd: props.cwd,
             hash: commitDiffRequest.hash,
-            queryGeneration: vcsHistoryRevision,
             ...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {}),
           },
         }),
   );
   const {
-    currentRef,
+    currentRef = null,
     expandedRefKeys,
+    favoriteBranches,
     hasMoreRefs,
     isFetchingMoreRefs,
     isRefSnapshotComplete,
@@ -340,6 +349,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     tagRefTree,
     tagRefs,
     toggleRefKey,
+    toggleFavorite,
   } = historyRefs;
   const commitRefKinds = useMemo(() => {
     const kinds = new Map<string, CommitRefKind>();
@@ -363,13 +373,15 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     filterActive: normalizedRefFilter.length > 0,
     expanded: expandedRefKeys,
     selectedRevision: selectedRevision?.revision ?? null,
+    favoriteBranches,
     onToggle: toggleRefKey,
     onSelect: selectRef,
+    onToggleFavorite: toggleFavorite,
   } satisfies Omit<RefTreeProps, "nodes" | "namespace" | "section">;
   const refPaneProps = {
     refFilter,
     onRefFilterChange: setRefFilter,
-    selectedRevision,
+    selectedRevision: resolvedSelectedRevision,
     onSelectAll: selectAllRefs,
     currentRef,
     onSelectRef: selectRef,
@@ -421,13 +433,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       }),
     [activeFilter, filteredHistory, headHash, primaryHashes],
   );
-  const graphByHash = useMemo(() => new Map(graphRows.map((row) => [row.hash, row])), [graphRows]);
   const filteredRows = useMemo(() => {
-    return filteredHistory.flatMap((commit) => {
-      const graph = graphByHash.get(commit.hash);
-      return graph ? [{ commit, graph }] : [];
-    });
-  }, [filteredHistory, graphByHash]);
+    return filteredHistory.map((commit, index) => ({ commit, graph: graphRows[index]! }));
+  }, [filteredHistory, graphRows]);
 
   useEffect(() => {
     if (selectedHash !== null && !history.some((commit) => commit.hash === selectedHash)) {

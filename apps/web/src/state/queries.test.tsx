@@ -1,12 +1,13 @@
 import {
   VcsSnapshotExpiredError,
   type EnvironmentId,
+  type VcsListHistoryRefsResult,
   type VcsListRefsResult,
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
-import { usePaginatedBranches } from "./queries";
+import { usePaginatedBranches, usePaginatedHistoryRefs } from "./queries";
 
 type PageResult =
   | {
@@ -28,10 +29,36 @@ type PageAtom = {
   readonly result: PageResult;
 };
 
+type HistoryPageResult =
+  | {
+      readonly _tag: "Success";
+      readonly waiting: false;
+      readonly value: VcsListHistoryRefsResult;
+    }
+  | {
+      readonly _tag: "Failure";
+      readonly cause: Error;
+      readonly waiting: false;
+    };
+
+type HistoryPageAtom = {
+  readonly cacheKey?: string | number;
+  readonly input: {
+    readonly cursor?: string;
+  };
+  readonly result: HistoryPageResult;
+};
+
 const refsState = vi.hoisted(() => ({
   atoms: [] as PageAtom[],
   refresh: vi.fn(),
   results: new Map<string, PageResult>(),
+}));
+
+const historyRefsState = vi.hoisted(() => ({
+  atoms: [] as HistoryPageAtom[],
+  refresh: vi.fn(),
+  results: new Map<string, HistoryPageResult>(),
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -104,6 +131,20 @@ vi.mock("./vcs", () => ({
       refsState.atoms.push(atom);
       return atom;
     },
+    listHistoryRefs: ({
+      cacheKey,
+      input,
+    }: {
+      readonly cacheKey?: string | number;
+      readonly input: HistoryPageAtom["input"];
+    }) => {
+      const result = historyRefsState.results.get(`${cacheKey ?? 0}:${input.cursor ?? "first"}`);
+      if (result === undefined)
+        throw new Error(`Missing result for ${cacheKey ?? 0}:${input.cursor ?? "first"}`);
+      const atom = { cacheKey, input, result };
+      historyRefsState.atoms.push(atom);
+      return atom;
+    },
   },
 }));
 
@@ -131,6 +172,26 @@ function page(nextCursor: string | null): PageResult {
 function render() {
   hooks.beginRender();
   return usePaginatedBranches(target);
+}
+
+function historyPage(nextCursor: string | null): HistoryPageResult {
+  return {
+    _tag: "Success",
+    waiting: false,
+    value: {
+      refs: [],
+      isRepo: true,
+      hasPrimaryRemote: false,
+      nextCursor,
+      currentRef: null,
+      isComplete: true,
+    },
+  };
+}
+
+function renderHistory(options?: { readonly revision?: number }) {
+  hooks.beginRender();
+  return usePaginatedHistoryRefs(target, options);
 }
 
 describe("usePaginatedBranches", () => {
@@ -194,5 +255,88 @@ describe("usePaginatedBranches", () => {
     render();
 
     expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1, 1, 1, 2, 3]);
+  });
+});
+
+describe("usePaginatedHistoryRefs", () => {
+  beforeEach(() => {
+    hooks.reset();
+    historyRefsState.atoms = [];
+    historyRefsState.refresh.mockReset();
+    historyRefsState.results.clear();
+  });
+
+  it("uses a string cache identity for each refresh generation", () => {
+    historyRefsState.results.set("0:0:first", historyPage(null));
+    historyRefsState.results.set("0:1:first", historyPage(null));
+
+    const initial = renderHistory();
+    initial.refresh();
+    renderHistory();
+
+    expect(historyRefsState.atoms.map((atom) => atom.cacheKey)).toEqual(["0:0", "0:1"]);
+    expect(historyRefsState.atoms.map((atom) => atom.input)).toEqual([
+      { cwd: "C:/workspace", limit: 100, namespace: "local" },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", refresh: true },
+    ]);
+  });
+
+  it("recovers an expired snapshot once per generation, including after a later refresh", () => {
+    const expired = (cursor: string) =>
+      new VcsSnapshotExpiredError({ operation: "GitVcsDriver.listHistoryRefs", cursor });
+    historyRefsState.results.set("0:0:first", {
+      _tag: "Failure",
+      cause: expired("first"),
+      waiting: false,
+    });
+    historyRefsState.results.set("0:1:first", historyPage(null));
+
+    renderHistory();
+    renderHistory();
+    renderHistory();
+
+    expect(historyRefsState.atoms.map((atom) => atom.cacheKey)).toEqual(["0:0", "0:1", "0:1"]);
+
+    const recovered = renderHistory();
+    recovered.refresh();
+    historyRefsState.results.set("0:2:first", {
+      _tag: "Failure",
+      cause: expired("second"),
+      waiting: false,
+    });
+    historyRefsState.results.set("0:3:first", historyPage(null));
+    renderHistory();
+    renderHistory();
+
+    expect(historyRefsState.atoms.map((atom) => atom.cacheKey)).toEqual([
+      "0:0",
+      "0:1",
+      "0:1",
+      "0:1",
+      "0:2",
+      "0:3",
+    ]);
+  });
+
+  it("distinguishes revision and generation pairs while recovering expired snapshots", () => {
+    const expired = (cursor: string) =>
+      new VcsSnapshotExpiredError({ operation: "GitVcsDriver.listHistoryRefs", cursor });
+    historyRefsState.results.set("1:0:first", {
+      _tag: "Failure",
+      cause: expired("revision-one"),
+      waiting: false,
+    });
+    historyRefsState.results.set("0:1:first", {
+      _tag: "Failure",
+      cause: expired("revision-zero"),
+      waiting: false,
+    });
+    historyRefsState.results.set("0:2:first", historyPage(null));
+
+    renderHistory({ revision: 1 });
+    renderHistory({ revision: 0 });
+    renderHistory({ revision: 0 });
+
+    expect(historyRefsState.atoms.map((atom) => atom.cacheKey)).toEqual(["1:0", "0:1", "0:2"]);
   });
 });

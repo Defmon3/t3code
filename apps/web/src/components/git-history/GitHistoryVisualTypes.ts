@@ -11,8 +11,10 @@ export interface RefTreeProps {
   filterActive: boolean;
   expanded: ReadonlySet<string>;
   selectedRevision: string | null;
+  favoriteBranches: ReadonlySet<string>;
   onToggle: (key: string) => void;
   onSelect: (label: string, revision: string) => void;
+  onToggleFavorite: (branch: string) => void;
 }
 
 export interface GitHistoryRow {

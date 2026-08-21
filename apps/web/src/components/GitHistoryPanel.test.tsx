@@ -44,6 +44,7 @@ const historyState = vi.hoisted(() => ({
   getCommitDiff: vi.fn(),
   getHistory: vi.fn(),
   historyRevision: 0,
+  pendingCurrentRef: false,
   pages: new Map<string | undefined, PageResult>(),
   refresh: vi.fn(),
   refreshRefs: vi.fn(),
@@ -149,14 +150,17 @@ vi.mock("../state/queries", () => ({
   usePaginatedHistoryRefs: (_target: unknown, options?: { readonly namespace?: string }) => {
     const refs = options?.namespace === "tag" ? historyState.tags : historyState.refs;
     return {
-      data: {
-        refs,
-        isRepo: true,
-        hasPrimaryRemote: false,
-        nextCursor: null,
-        currentRef: refs.find((ref) => ref.current) ?? null,
-        isComplete: true,
-      },
+      data:
+        options?.namespace === "local" && historyState.pendingCurrentRef
+          ? undefined
+          : {
+              refs,
+              isRepo: true,
+              hasPrimaryRemote: false,
+              nextCursor: null,
+              currentRef: refs.find((ref) => ref.current) ?? null,
+              isComplete: true,
+            },
       refs,
       error: null,
       isPending: false,
@@ -421,6 +425,7 @@ describe("GitHistoryPanel", () => {
     historyState.getCommitDiff.mockReset();
     historyState.getHistory.mockReset();
     historyState.historyRevision = 0;
+    historyState.pendingCurrentRef = false;
     historyState.pages.clear();
     historyState.refresh.mockReset();
     historyState.refreshRefs.mockReset();
@@ -430,6 +435,13 @@ describe("GitHistoryPanel", () => {
     historyState.refs = [];
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0 };
+  });
+
+  it("waits for the current ref before querying a selected history revision", () => {
+    historyState.pendingCurrentRef = true;
+
+    expect(() => renderPanel()).not.toThrow();
+    expect(historyState.getHistory).not.toHaveBeenCalled();
   });
 
   it("restarts the first history page after a typed continuation expiry", () => {
@@ -448,14 +460,21 @@ describe("GitHistoryPanel", () => {
     flushEffects();
     renderPanel();
 
-    const requests = historyState.getHistory.mock.calls.map(([target]) => target.input);
+    const requests = historyState.getHistory.mock.calls.map(([target]) => target);
     expect(requests).toContainEqual({
-      cwd: "C:/workspace",
-      cursor: "history-page-2",
-      limit: 100,
-      queryGeneration: 0,
+      cacheKey: "0:0",
+      environmentId,
+      input: {
+        cwd: "C:/workspace",
+        cursor: "history-page-2",
+        limit: 100,
+      },
     });
-    expect(requests.at(-1)).toEqual({ cwd: "C:/workspace", limit: 100, queryGeneration: 1 });
+    expect(requests.at(-1)).toEqual({
+      cacheKey: "0:1",
+      environmentId,
+      input: { cwd: "C:/workspace", limit: 100 },
+    });
   });
 
   it("recovers a second continuation expiry once after a successful recovery", () => {
@@ -482,12 +501,10 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     flushEffects();
 
-    const generations = historyState.getHistory.mock.calls.map(
-      ([target]) => target.input.queryGeneration,
-    );
-    expect(generations).toContain(2);
-    expect(generations).not.toContain(3);
-    expect(generations.at(-1)).toBe(2);
+    const cacheKeys = historyState.getHistory.mock.calls.map(([target]) => target.cacheKey);
+    expect(cacheKeys).toContain("0:2");
+    expect(cacheKeys).not.toContain("0:3");
+    expect(cacheKeys.at(-1)).toBe("0:2");
   });
 
   it("rekeys open history reads when the shared VCS history revision changes", () => {
@@ -518,19 +535,23 @@ describe("GitHistoryPanel", () => {
 
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 1 },
+      cacheKey: "1:0",
+      input: { cwd: "C:/workspace", limit: 100 },
     });
     expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+      cacheKey: 1,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash },
     });
     expect(historyState.listCommitFiles).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, limit: 100, queryGeneration: 1 },
+      cacheKey: "1:0",
+      input: { cwd: "C:/workspace", hash: historyCommit.hash, limit: 100 },
     });
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+      cacheKey: 1,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash },
     });
   });
 
@@ -718,7 +739,8 @@ describe("GitHistoryPanel", () => {
     ]);
     expect(historyState.getHistory).toHaveBeenCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
+      cacheKey: "0:0",
+      input: { cwd: "C:/workspace", limit: 100 },
     });
   });
 
@@ -898,7 +920,8 @@ describe("GitHistoryPanel", () => {
     ]);
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", cursor: "next-page", limit: 100, queryGeneration: 0 },
+      cacheKey: "0:0",
+      input: { cwd: "C:/workspace", cursor: "next-page", limit: 100 },
     });
   });
 
@@ -926,10 +949,10 @@ describe("GitHistoryPanel", () => {
     const initial = renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
+      cacheKey: "0:0",
       input: {
         cwd: "C:/workspace",
         limit: 100,
-        queryGeneration: 0,
         revision: "refs/heads/feature/ui",
       },
     });
@@ -986,10 +1009,10 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
+      cacheKey: "0:0",
       input: {
         cwd: "C:/workspace",
         limit: 100,
-        queryGeneration: 0,
         revision: "refs/heads/feature/ui",
       },
     });
@@ -1048,7 +1071,8 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0, revision: "refs/tags/v1.2.3" },
+      cacheKey: "0:0",
+      input: { cwd: "C:/workspace", limit: 100, revision: "refs/tags/v1.2.3" },
     });
   });
 
@@ -1078,7 +1102,8 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
+      cacheKey: 0,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash },
     });
   });
 
@@ -1199,15 +1224,16 @@ describe("GitHistoryPanel", () => {
     const diff = renderPanel();
     expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
+      cacheKey: 0,
+      input: { cwd: "C:/workspace", hash: historyCommit.hash },
     });
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
       environmentId,
+      cacheKey: 0,
       input: {
         cwd: "C:/workspace",
         hash: historyCommit.hash,
         filePath: "src/panel.tsx",
-        queryGeneration: 0,
       },
     });
     const diffView = visitElements(

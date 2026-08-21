@@ -603,7 +603,7 @@ it.effect("returns full commit details and root commit changed files", () =>
   }).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("pages commit files once, rejects replay, and cleans up after the final page", () =>
+it.effect("replays commit-file cursors and preserves terminal pages", () =>
   Effect.gen(function* () {
     const cwd = yield* makeTmpDir();
     yield* initRepoWithCommit(cwd);
@@ -620,10 +620,10 @@ it.effect("pages commit files once, rejects replay, and cleans up after the fina
     const second = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
     assert.equal(second.hasMore, false);
     assert.equal(second.nextCursor, null);
-    const replay = yield* driver
-      .listCommitFiles({ cwd, hash, cursor: first.nextCursor })
-      .pipe(Effect.flip);
-    assert.equal(replay._tag, "VcsSnapshotExpiredError");
+    const replay = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
+    assert.deepEqual(replay.files, second.files);
+    assert.equal(replay.hasMore, false);
+    assert.equal(replay.nextCursor, null);
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -661,6 +661,22 @@ it.effect(
       assert.equal(wrongHash._tag, "VcsSnapshotExpiredError");
       const third = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
       assert.ok(third.nextCursor);
+      yield* TestClock.adjust("1 minute");
+      const renewed = yield* driver.listCommitFiles({
+        cwd,
+        hash,
+        cursor: third.nextCursor,
+        limit: 1,
+      });
+      assert.equal(renewed.hasMore, false);
+      yield* TestClock.adjust("1 minute");
+      const replayed = yield* driver.listCommitFiles({
+        cwd,
+        hash,
+        cursor: third.nextCursor,
+        limit: 1,
+      });
+      assert.equal(replayed.hasMore, false);
       yield* TestClock.adjust("2 minutes");
       const expired = yield* driver
         .listCommitFiles({ cwd, hash, cursor: third.nextCursor })
@@ -707,13 +723,14 @@ it.effect(
     ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("rejects synthetic commit-file output above the 512 KiB retained-byte cap", () =>
+it.effect("drops incomplete NUL-separated commit-file records when capped", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const output = `${makeGitCommitFilesOutput(1)}A\x00${"x".repeat(512 * 1024)}`;
       const spawner = ChildProcessSpawner.make((command) =>
         ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
-          ? Effect.succeed(makeSuccessfulHandle("x".repeat(512 * 1024 + 1)))
+          ? Effect.succeed(makeSuccessfulHandle(output))
           : delegate.spawn(command),
       );
       const driver = yield* makeGitVcsDriverCore().pipe(
@@ -721,12 +738,10 @@ it.effect("rejects synthetic commit-file output above the 512 KiB retained-byte 
       );
       const cwd = yield* makeTmpDir();
       yield* driver.initRepo({ cwd });
-      const error = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) }).pipe(Effect.flip);
-      assert.deepInclude(error, {
-        _tag: "GitCommandError",
-        operation: "GitVcsDriver.listCommitFiles.diffTree",
-        outputLength: 512 * 1024 + 1,
-      });
+      const files = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) });
+      assert.deepEqual(files.files, [{ status: "A", path: "file-0.ts" }]);
+      assert.equal(files.capped, true);
+      assert.equal(files.hasMore, false);
     }),
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
@@ -830,6 +845,40 @@ it.effect("rejects glob-like and unsafe ref prefixes before listing refs", () =>
     const refs = yield* driver.listRefs({ cwd, prefix: "feature/valid-1" });
     assert.equal(refs.isRepo, true);
   }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("reads ahead, behind, and diverged tracking counts from history refs", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const refOutput = [
+        "refs/heads/ahead\t0\t\torigin/ahead\t[ahead 2]\t",
+        "refs/heads/behind\t0\t\torigin/behind\t[behind 3]\t",
+        "refs/heads/diverged\t0\t\torigin/diverged\t[ahead 4, behind 5]\t",
+      ].join("\n");
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args.includes("for-each-ref")
+          ? Effect.succeed(makeSuccessfulHandle(refOutput))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* initRepoWithCommit(cwd).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+
+      const refs = yield* driver.listHistoryRefs({ cwd, namespace: "local", refresh: true });
+
+      assert.deepEqual(
+        refs.refs.map(({ name, aheadCount, behindCount }) => ({ name, aheadCount, behindCount })),
+        [
+          { name: "ahead", aheadCount: 2, behindCount: undefined },
+          { name: "behind", aheadCount: undefined, behindCount: 3 },
+          { name: "diverged", aheadCount: 4, behindCount: 5 },
+        ],
+      );
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect(
