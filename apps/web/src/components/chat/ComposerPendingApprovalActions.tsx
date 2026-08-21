@@ -11,51 +11,49 @@ interface ComposerPendingApprovalActionsProps {
   ) => Promise<unknown>;
 }
 
-const APPROVAL_ACTION_CLASS_NAME = "font-normal";
-
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
   requestId,
   isResponding,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
   return (
-    <>
+    <div className="flex w-full flex-wrap items-center justify-end gap-1.5">
       <Button
-        size="micro"
+        size="xs"
         variant="ghost-muted"
-        className={APPROVAL_ACTION_CLASS_NAME}
+        className="mr-auto font-normal"
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "cancel")}
       >
         Cancel
       </Button>
       <Button
-        size="micro"
-        variant="ghost-muted"
-        className={`${APPROVAL_ACTION_CLASS_NAME} text-destructive-foreground [:hover,[data-pressed]]:text-destructive-foreground`}
+        size="xs"
+        variant="destructive-outline"
+        className="font-normal"
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "decline")}
       >
         Decline
       </Button>
       <Button
-        size="micro"
-        variant="ghost-muted"
-        className={APPROVAL_ACTION_CLASS_NAME}
+        size="xs"
+        variant="outline"
+        className="font-normal"
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
-        Always allow this session
+        Allow for session
       </Button>
       <Button
-        size="micro"
-        variant="ghost-muted"
-        className={`${APPROVAL_ACTION_CLASS_NAME} text-foreground`}
+        size="xs"
+        variant="default"
+        className="font-normal"
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "accept")}
       >
         Approve
       </Button>
-    </>
+    </div>
   );
 });
