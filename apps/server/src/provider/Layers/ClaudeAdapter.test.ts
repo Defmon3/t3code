@@ -344,7 +344,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("derives bypass permission mode from full-access runtime policy", () => {
+  it.effect("keeps Claude permission callbacks enabled for full-access runtime policy", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -356,8 +356,9 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
-      assert.equal(createInput?.options.permissionMode, "bypassPermissions");
-      assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
+      assert.equal(createInput?.options.permissionMode, undefined);
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+      assert.equal(typeof createInput?.options.canUseTool, "function");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -403,7 +404,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("uses bypass permissions for full-access claude sessions", () => {
+  it.effect("does not configure bypass permissions for full-access Claude sessions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -414,8 +415,8 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.permissionMode, "bypassPermissions");
-      assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
+      assert.equal(createInput?.options.permissionMode, undefined);
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -3363,6 +3364,60 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("opens an approval for native hook asks in full-access mode", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) return;
+
+      const permissionPromise = canUseTool(
+        "mcp__t3-code__run_hooked_action",
+        { action: "publish" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "native-hook-tool-use-1",
+          decisionReason: "T3 PreToolUse requires confirmation before publishing.",
+          title: "Publish changes?",
+          description: "The hook marked this MCP action as supervised.",
+        },
+      );
+
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(requested._tag, "Some");
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") return;
+      assert.deepEqual(requested.value.payload.args, {
+        toolName: "mcp__t3-code__run_hooked_action",
+        input: { action: "publish" },
+        toolUseId: "native-hook-tool-use-1",
+        approvalSource: "hook",
+        approvalTitle: "Publish changes?",
+        approvalDescription: "The hook marked this MCP action as supervised.",
+        approvalReason: "T3 PreToolUse requires confirmation before publishing.",
+      });
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.make(String(requested.value.requestId)),
+        "accept",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("surfaces hook-requested approval in full-access mode", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -4142,7 +4197,7 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect.each<{ runtimeMode: RuntimeMode; expectedBase: PermissionMode }>([
-    { runtimeMode: "full-access", expectedBase: "bypassPermissions" },
+    { runtimeMode: "full-access", expectedBase: "default" },
     { runtimeMode: "approval-required", expectedBase: "default" },
     { runtimeMode: "auto-accept-edits", expectedBase: "acceptEdits" },
   ])(

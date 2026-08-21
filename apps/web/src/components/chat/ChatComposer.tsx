@@ -3055,8 +3055,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               className={cn(
                 "relative px-3 pb-2 sm:px-4",
                 "pt-3.5 sm:pt-4",
-                isComposerApprovalState && "pb-3 sm:pb-4",
-                isComposerCollapsedMobile && "hidden",
+                (isComposerCollapsedMobile || isComposerApprovalState) && "hidden",
               )}
             >
               {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (

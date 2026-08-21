@@ -51,8 +51,9 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain("File read approval");
   });
 
-  it("renders hook context inside the chat approval panel", () => {
+  it("keeps a long hook request bounded, wrapped, and keyboard-scrollable", () => {
     const reason = "Protected branch policy\nWorking Dir: G:\\argus\nBranch: main";
+    const detail = `mcp__issues__issue_create: ${"x".repeat(1_133)}`;
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
         approval={{
@@ -63,7 +64,7 @@ describe("ComposerPendingApprovalPanel", () => {
           title: "Push protected branch?",
           description: "This command updates the shared remote branch.",
           reason,
-          detail: "Bash: git push origin main",
+          detail,
         }}
         pendingCount={1}
       />,
@@ -71,10 +72,22 @@ describe("ComposerPendingApprovalPanel", () => {
 
     expect(markup).toContain("Push protected branch?");
     expect(markup).toContain("Project hook");
+    expect(markup).toContain("Requested action");
     expect(markup).toContain('data-approval-reason="complete"');
     expect(markup).toContain(reason);
     expect(markup).toContain("This command updates the shared remote branch.");
-    expect(markup).toContain("Bash: git push origin main");
+    expect(detail).toHaveLength(1_160);
+    expect(markup).toContain(detail);
+    expect(markup).toContain('aria-label="Requested action"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).toContain("max-h-28");
+    expect(markup).toContain("overflow-auto");
+    expect(markup).toContain("whitespace-pre-wrap");
+    expect(markup).toContain("[overflow-wrap:anywhere]");
+    expect(markup).toContain("[scrollbar-width:thin]");
+    expect(markup).not.toContain("truncate");
+    expect(markup).not.toContain("line-clamp");
+    expect(markup).toContain("min-w-0");
     expect(markup).not.toContain('role="alertdialog"');
   });
 });

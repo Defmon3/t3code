@@ -92,9 +92,11 @@ also accepted. Empty output with exit code 0 allows the tool; exit code 2 denies
 standard error as the reason. Other script failures are shown as an approval instead of being
 silently ignored.
 
-Hook approvals appear only in the thread that triggered them. **Always allow this session** skips
-later hook prompts for that provider session. Other permission modes keep their provider's built-in
-protections and do not run T3 project hooks.
+Hook approvals appear only in the thread that triggered them. The approval card keeps the full
+requested action in a scrollable code area, so you can review long commands and tool inputs before
+choosing **Cancel**, **Decline**, **Allow for session**, or **Approve**. **Allow for session**
+skips later hook prompts for that provider session. Other permission modes keep their provider's
+built-in protections and do not run T3 project hooks.
 
 **Live changes.** T3 Code re-reads `.t3code/hooks.json` before every hook check, so edits do not
 need a restart. In a Claude thread, creating, editing, or deleting the file affects the very next
