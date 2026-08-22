@@ -26,9 +26,20 @@ import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from
 import { cn } from "~/lib/utils";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import {
+  applyProjectSkillShortcutLocalChange,
+  createProjectSkillShortcutSyncState,
+  reconcileProjectSkillShortcutProjection,
+} from "./ProjectSkillShortcutBar.logic";
 
 export const projectSkillShortcutBarClassName =
   "flex h-auto min-h-9 w-full flex-wrap items-center gap-1 overflow-visible rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
+
+export const projectSkillShortcutEmptyBarClassName =
+  "inline-flex h-9 items-center rounded-t-[19px] border-b border-border/65 bg-muted/20 p-1";
+
+export const projectSkillShortcutButtonClassName =
+  "min-w-0 max-w-[min(100%,20rem)] shrink-0 truncate rounded-md border border-border/70 bg-background px-2 py-1 text-xs font-medium hover:bg-accent";
 
 export function normalizeProjectSkillShortcut(value: string): string | null {
   const trimmed = value.trim();
@@ -158,7 +169,7 @@ function SortableShortcut(props: {
                   ref={setNodeRef}
                   type="button"
                   className={cn(
-                    "shrink-0 whitespace-nowrap rounded-md border border-border/70 bg-background px-2 py-1 text-xs font-medium hover:bg-accent",
+                    projectSkillShortcutButtonClassName,
                     props.color && shortcutColorClassNames[props.color],
                     isDragging && "opacity-50",
                   )}
@@ -175,9 +186,12 @@ function SortableShortcut(props: {
                     event.preventDefault();
                     setPaletteOpen(true);
                   }}
+                  aria-label={props.shortcut}
                   {...attributes}
                   {...listeners}
-                />
+                >
+                  <span className="block truncate">{props.shortcut}</span>
+                </button>
               }
             />
           }
@@ -257,6 +271,9 @@ export function ProjectSkillShortcutBar(props: {
   const [colors, setColors] = useState<ProjectSkillShortcutColors>(() => ({ ...props.colors }));
   const shortcutsRef = useRef(shortcuts);
   const colorsRef = useRef(colors);
+  const syncRef = useRef(
+    createProjectSkillShortcutSyncState({ shortcuts: props.shortcuts, colors: props.colors }),
+  );
   const [adding, setAdding] = useState(false);
   const [value, setValue] = useState("");
   const sensors = useSensors(
@@ -264,14 +281,19 @@ export function ProjectSkillShortcutBar(props: {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   useEffect(() => {
+    const next = reconcileProjectSkillShortcutProjection(syncRef.current, {
+      shortcuts: [...props.shortcuts],
+      colors: { ...props.colors },
+    });
+    syncRef.current = next;
     if (
-      shortcutsEqual(shortcutsRef.current, props.shortcuts) &&
-      shortcutColorsEqual(colorsRef.current, props.colors)
+      shortcutsEqual(shortcutsRef.current, next.current.shortcuts) &&
+      shortcutColorsEqual(colorsRef.current, next.current.colors)
     ) {
       return;
     }
-    const nextShortcuts = [...props.shortcuts];
-    const nextColors = { ...props.colors };
+    const nextShortcuts = next.current.shortcuts;
+    const nextColors = next.current.colors;
     shortcutsRef.current = nextShortcuts;
     colorsRef.current = nextColors;
     setShortcuts(nextShortcuts);
@@ -293,6 +315,7 @@ export function ProjectSkillShortcutBar(props: {
     }
     shortcutsRef.current = next.shortcuts;
     colorsRef.current = next.colors;
+    syncRef.current = applyProjectSkillShortcutLocalChange(syncRef.current, next);
     setShortcuts(next.shortcuts);
     setColors(next.colors);
     props.onChange(next.shortcuts, next.colors);
@@ -332,7 +355,15 @@ export function ProjectSkillShortcutBar(props: {
     }));
   };
   return (
-    <div className={projectSkillShortcutBarClassName} aria-label="Project quick slots">
+    <div
+      className={
+        shortcuts.length > 0
+          ? projectSkillShortcutBarClassName
+          : projectSkillShortcutEmptyBarClassName
+      }
+      aria-label="Project quick slots"
+      data-project-skill-shortcut-bar="true"
+    >
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={shortcuts} strategy={rectSortingStrategy}>
           {shortcuts.map((shortcut) => (
@@ -372,11 +403,12 @@ export function ProjectSkillShortcutBar(props: {
       ) : (
         <button
           type="button"
-          className="flex size-7 shrink-0 items-center justify-center rounded-md border border-dashed border-border text-muted-foreground hover:bg-accent"
+          className="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 text-xs text-muted-foreground hover:bg-accent"
           aria-label="Add quick slot"
           onClick={() => setAdding(true)}
         >
           <PlusIcon className="size-3.5" />
+          <span>Add quick slot</span>
         </button>
       )}
     </div>

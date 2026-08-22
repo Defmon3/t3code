@@ -131,6 +131,20 @@ type ComposerCommandMenuPosition = {
   width: number;
 };
 
+export function resolveComposerCommandMenuPosition(input: {
+  verticalAnchor: Pick<DOMRect, "top">;
+  horizontalAnchor: Pick<DOMRect, "left" | "width">;
+  viewportHeight: number;
+  drawerInset: number;
+}): ComposerCommandMenuPosition {
+  return {
+    bottom: input.viewportHeight - input.verticalAnchor.top,
+    left: input.horizontalAnchor.left + input.drawerInset,
+    maxHeight: Math.max(96, input.verticalAnchor.top - 24),
+    width: Math.max(0, input.horizontalAnchor.width - input.drawerInset * 2),
+  };
+}
+
 function composerCommandMenuPositionsEqual(
   a: ComposerCommandMenuPosition,
   b: ComposerCommandMenuPosition,
@@ -155,7 +169,8 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
       const mainSurface = form?.querySelector<HTMLElement>(
         '[data-chat-composer-main-surface="true"]',
       );
-      const rect = (mainSurface ?? form ?? anchor).getBoundingClientRect();
+      const verticalAnchor = form ?? mainSurface ?? anchor;
+      const horizontalAnchor = mainSurface ?? form ?? anchor;
       const rootFontSizePx =
         Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
       const drawerInsetRem =
@@ -163,16 +178,12 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
           window.getComputedStyle(form ?? anchor).getPropertyValue("--chat-composer-drawer-inset"),
         ) || 1.375;
       const drawerInset = drawerInsetRem * rootFontSizePx;
-      // One extra pixel prevents fractional layout coordinates from exposing
-      // the canvas between the drawer mask and the composer's foreground edge.
-      // Mirrors --chat-composer-attachment-overlap: calc(1rem + 1px).
-      const composerOverlap = rootFontSizePx + 1;
-      const next = {
-        bottom: window.innerHeight - rect.top - composerOverlap,
-        left: rect.left + drawerInset,
-        maxHeight: Math.max(96, rect.top - 24 + composerOverlap),
-        width: Math.max(0, rect.width - drawerInset * 2),
-      };
+      const next = resolveComposerCommandMenuPosition({
+        verticalAnchor: verticalAnchor.getBoundingClientRect(),
+        horizontalAnchor: horizontalAnchor.getBoundingClientRect(),
+        viewportHeight: window.innerHeight,
+        drawerInset,
+      });
       setPosition((current) =>
         current && composerCommandMenuPositionsEqual(current, next) ? current : next,
       );
@@ -1198,6 +1209,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
     (!isComposerCollapsedMobile && showPlanFollowUpPrompt && activeProposedPlan !== null);
+  const topSlotAttached =
+    props.externalDrawerAttached || showComposerTopDrawer || isTasksDrawerOpen;
   const showCollapsedMobilePromptRow =
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
@@ -2972,7 +2985,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           steps={visibleTaskSteps}
         />
       ) : null}
-      {topSlot}
+      {topSlot ? (
+        <div data-chat-composer-top-slot="true" data-attached={topSlotAttached}>
+          {topSlot}
+        </div>
+      ) : null}
       <div className="relative">
         {showShoulderTabs && visibleTasksProgress && visibleTaskSteps ? (
           <ComposerTasksBadge
