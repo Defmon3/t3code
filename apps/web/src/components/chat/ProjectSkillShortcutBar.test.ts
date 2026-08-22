@@ -4,6 +4,8 @@ import {
   addProjectSkillShortcut,
   normalizeProjectSkillShortcut,
   projectSkillShortcutBarClassName,
+  projectSkillShortcutButtonClassName,
+  projectSkillShortcutEmptyBarClassName,
   removeProjectSkillShortcut,
   reorderProjectSkillShortcuts,
   resolveProjectSkillShortcutActivation,
@@ -20,6 +22,13 @@ describe("project skill shortcuts", () => {
     expect(projectSkillShortcutBarClassName).not.toContain("overflow-x-auto");
     expect(projectSkillShortcutBarClassName).not.toContain("overflow-hidden");
     expect(projectSkillShortcutBarClassName).not.toContain("scrollbar");
+  });
+
+  it("bounds labels and renders an intentional compact empty state", () => {
+    expect(projectSkillShortcutButtonClassName).toContain("max-w-[min(100%,20rem)]");
+    expect(projectSkillShortcutButtonClassName).toContain("truncate");
+    expect(projectSkillShortcutEmptyBarClassName).toContain("inline-flex");
+    expect(projectSkillShortcutEmptyBarClassName).not.toContain("w-full");
   });
 
   it("preserves quick-slot text and rejects empty or duplicate additions", () => {
