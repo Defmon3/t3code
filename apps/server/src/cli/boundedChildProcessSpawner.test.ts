@@ -1,5 +1,6 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -292,14 +293,15 @@ it.effect("returns from scope close before the delegate finalizer can block", ()
   }),
 );
 
-it.effect("kills a Windows child process tree without blocking scope close", () => {
-  if (process.platform !== "win32") return Effect.void;
+it.effect("kills a Windows child process tree without blocking scope close", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcessPlatform) !== "win32") return;
 
-  const descendantScript = `
+    const descendantScript = `
     process.stdout.write("ready\\n");
     setInterval(() => {}, 1_000);
   `;
-  const childScript = `
+    const childScript = `
     const { spawn } = require("node:child_process");
     const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
       stdio: ["ignore", "pipe", "inherit"],
@@ -309,33 +311,34 @@ it.effect("kills a Windows child process tree without blocking scope close", () 
     });
     setInterval(() => {}, 1_000);
   `;
-  const boundedLayer = BoundedChildProcessSpawner.layer({
-    termGraceMs: 100,
-    killGraceMs: 1_000,
-    pollIntervalMs: 10,
-  }).pipe(Layer.provideMerge(NodeServices.layer));
+    const boundedLayer = BoundedChildProcessSpawner.layer({
+      termGraceMs: 100,
+      killGraceMs: 1_000,
+      pollIntervalMs: 10,
+    }).pipe(Layer.provideMerge(NodeServices.layer));
 
-  return Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const callerScope = yield* Scope.make();
-    yield* Effect.addFinalizer(() => Scope.close(callerScope, Exit.void).pipe(Effect.ignore));
-    const handle = yield* spawner
-      .spawn(ChildProcess.make(process.execPath, ["-e", childScript]))
-      .pipe(Effect.provideService(Scope.Scope, callerScope));
-    const line = yield* handle.stdout.pipe(
-      Stream.decodeText(),
-      Stream.splitLines,
-      Stream.runHead,
-      Effect.timeout("2 seconds"),
-      Effect.map(Option.getOrThrow),
-    );
-    const pids = readFixturePids(line);
+    yield* Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const callerScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(callerScope, Exit.void).pipe(Effect.ignore));
+      const handle = yield* spawner
+        .spawn(ChildProcess.make(process.execPath, ["-e", childScript]))
+        .pipe(Effect.provideService(Scope.Scope, callerScope));
+      const line = yield* handle.stdout.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.runHead,
+        Effect.timeout("2 seconds"),
+        Effect.map(Option.getOrThrow),
+      );
+      const pids = readFixturePids(line);
 
-    const closeFiber = yield* Scope.close(callerScope, Exit.void).pipe(
-      Effect.forkDetach({ startImmediately: true }),
-    );
-    yield* Fiber.join(closeFiber).pipe(Effect.timeout("2 seconds"));
+      const closeFiber = yield* Scope.close(callerScope, Exit.void).pipe(
+        Effect.forkDetach({ startImmediately: true }),
+      );
+      yield* Fiber.join(closeFiber).pipe(Effect.timeout("2 seconds"));
 
-    expect(yield* waitForProcessesToStop([pids.pid, pids.descendantPid], 2_000)).toBe(true);
-  }).pipe(Effect.scoped, Effect.provide(boundedLayer), TestClock.withLive);
-});
+      expect(yield* waitForProcessesToStop([pids.pid, pids.descendantPid], 2_000)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(boundedLayer), TestClock.withLive);
+  }),
+);
