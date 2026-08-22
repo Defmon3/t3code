@@ -110,9 +110,9 @@ function renderRefs() {
   const pane = GitRefsPane({
     refFilter: historyRefs.refFilter,
     onRefFilterChange: historyRefs.setRefFilter,
-    selectedRevision: historyRefs.selectedRevision,
+    selectedRevision: historyRefs.selectedRevision ?? null,
     onSelectAll: historyRefs.selectAllRefs,
-    currentRef: historyRefs.currentRef,
+    currentRef: historyRefs.currentRef ?? null,
     onSelectRef: historyRefs.selectRef,
     normalizedRefFilter: historyRefs.normalizedRefFilter,
     localRefTree: historyRefs.localRefTree,

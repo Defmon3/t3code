@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - the test patches Node's real spawn/exec to drive the spawner.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeModule from "node:module";
