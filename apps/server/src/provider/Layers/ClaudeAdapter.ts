@@ -8,6 +8,7 @@
  */
 import {
   type CanUseTool,
+  type HookCallback,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -74,7 +75,7 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import type { T3HookPlan, T3HookRunner } from "../../hooks/T3HookRunner.ts";
+import type { T3HookDecision, T3HookPlan, T3HookRunner } from "../../hooks/T3HookRunner.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
@@ -158,7 +159,7 @@ interface PendingApproval {
   readonly requestType: CanonicalRequestType;
   readonly detail?: string;
   readonly suggestions?: ReadonlyArray<PermissionUpdate>;
-  readonly source?: "hook";
+  readonly source?: "hook" | "engine";
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
 }
 
@@ -1661,6 +1662,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           hasPreToolUseHooks: false,
           hasPreToolUseHooksNow: Effect.succeed(false),
           evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
+          evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
         } satisfies T3HookPlan);
     hookPlans.set(cwd, prepared);
     return prepared;
@@ -2331,6 +2333,111 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         rawMethod: "claude/result",
         rawPayload: result ?? { status },
       });
+    }
+
+    const cwd = context.session.cwd;
+    if (
+      status === "completed" &&
+      result !== undefined &&
+      turnState.synthetic !== true &&
+      context.session.runtimeMode === "full-access" &&
+      cwd !== undefined
+    ) {
+      const stopDecision = yield* getHookPlan(cwd).pipe(
+        Effect.flatMap((plan) =>
+          plan.evaluateStop({
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+          }),
+        ),
+        Effect.catch((cause) =>
+          Effect.succeed({
+            decision: "ask" as const,
+            title: "T3 hook failed",
+            description: undefined,
+            reason:
+              cause instanceof Error
+                ? cause.message
+                : "A T3 project hook failed before this turn could finish.",
+          }),
+        ),
+      );
+      if (stopDecision.decision !== "allow") {
+        const message =
+          stopDecision.reason ?? "A T3 project hook prevented this turn from finishing.";
+        if (stopDecision.decision === "ask") {
+          const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
+          const decision = yield* Deferred.make<ProviderApprovalDecision>();
+          context.pendingApprovals.set(requestId, {
+            requestType: "command_execution_approval",
+            detail: "Claude turn completion",
+            decision,
+            source: "hook",
+          });
+          const requestedStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "request.opened",
+            eventId: requestedStamp.eventId,
+            provider: PROVIDER,
+            createdAt: requestedStamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: asCanonicalTurnId(turnState.turnId),
+            requestId: asRuntimeRequestId(requestId),
+            payload: {
+              requestType: "command_execution_approval",
+              detail: "Claude turn completion",
+              args: {
+                approvalSource: "hook",
+                ...(stopDecision.title ? { approvalTitle: stopDecision.title } : {}),
+                ...(stopDecision.description
+                  ? { approvalDescription: stopDecision.description }
+                  : {}),
+                approvalReason: message,
+              },
+            },
+            providerRefs: nativeProviderRefs(context),
+            raw: {
+              source: "claude.sdk.message",
+              method: "stop-hook/request",
+              payload: result,
+            },
+          });
+          const approval = yield* Deferred.await(decision);
+          context.pendingApprovals.delete(requestId);
+          if (approval === "cancel" && context.stopped) {
+            return;
+          }
+          const resolvedStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "request.resolved",
+            eventId: resolvedStamp.eventId,
+            provider: PROVIDER,
+            createdAt: resolvedStamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: asCanonicalTurnId(turnState.turnId),
+            requestId: asRuntimeRequestId(requestId),
+            payload: {
+              requestType: "command_execution_approval",
+              decision: approval,
+            },
+            providerRefs: nativeProviderRefs(context),
+            raw: {
+              source: "claude.sdk.message",
+              method: "stop-hook/decision",
+              payload: { decision: approval },
+            },
+          });
+          if (approval !== "accept" && approval !== "acceptForSession") {
+            yield* emitRuntimeError(context, message);
+            status = "failed";
+            errorMessage = message;
+          }
+        } else {
+          yield* emitRuntimeError(context, message);
+          status = "failed";
+          errorMessage = message;
+        }
+      }
     }
 
     context.turns.push({
@@ -3776,6 +3883,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       );
 
       const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
+      const pendingT3HookDecisions = new Map<string, T3HookDecision>();
       const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
       const inFlightTools = new Map<number, ToolInFlight>();
       const claudeTasks = new Map<string, ClaudeTaskState>();
@@ -3784,6 +3892,39 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const liveTaskIds = new Set<string>();
 
       const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
+
+      const evaluateT3PreToolUse = Effect.fn("evaluateT3PreToolUse")(function* (
+        context: ClaudeSessionContext,
+        toolName: string,
+        toolInput: unknown,
+      ) {
+        const runtimeMode = input.runtimeMode ?? "full-access";
+        if (runtimeMode !== "full-access" || !input.cwd || context.allowHookApprovalsForSession) {
+          return { decision: "allow" } as const;
+        }
+
+        return yield* getHookPlan(input.cwd).pipe(
+          Effect.flatMap((plan) =>
+            plan.evaluatePreToolUse({
+              provider: PROVIDER,
+              threadId: context.session.threadId,
+              toolName,
+              toolInput,
+            }),
+          ),
+          Effect.catch((cause) =>
+            Effect.succeed({
+              decision: "ask" as const,
+              title: "T3 hook failed",
+              description: undefined,
+              reason:
+                cause instanceof Error
+                  ? cause.message
+                  : "A T3 project hook failed before this tool could run.",
+            }),
+          ),
+        );
+      });
 
       /**
        * Handle AskUserQuestion tool calls by emitting a `user-input.requested`
@@ -3960,45 +4101,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }
 
         const runtimeMode = input.runtimeMode ?? "full-access";
+        const cachedT3HookDecision = callbackOptions.toolUseID
+          ? pendingT3HookDecisions.get(callbackOptions.toolUseID)
+          : undefined;
+        if (callbackOptions.toolUseID) {
+          pendingT3HookDecisions.delete(callbackOptions.toolUseID);
+        }
         const t3HookDecision =
-          runtimeMode === "full-access" && input.cwd && !context.allowHookApprovalsForSession
-            ? yield* getHookPlan(input.cwd).pipe(
-                Effect.flatMap((plan) =>
-                  plan.evaluatePreToolUse({
-                    provider: PROVIDER,
-                    threadId: context.session.threadId,
-                    toolName,
-                    toolInput,
-                  }),
-                ),
-                Effect.catch((cause) =>
-                  Effect.succeed({
-                    decision: "ask" as const,
-                    title: "T3 hook failed",
-                    description: undefined,
-                    reason:
-                      cause instanceof Error
-                        ? cause.message
-                        : "A T3 project hook failed before this tool could run.",
-                  }),
-                ),
-              )
-            : ({ decision: "allow" } as const);
+          cachedT3HookDecision ?? (yield* evaluateT3PreToolUse(context, toolName, toolInput));
         if (t3HookDecision.decision === "deny") {
           return {
             behavior: "deny",
             message: t3HookDecision.reason,
           } satisfies PermissionResult;
         }
-        const nativeHookApprovalReason = context.allowHookApprovalsForSession
-          ? undefined
-          : callbackOptions.decisionReason?.trim();
         const t3HookApproval = t3HookDecision.decision === "ask" ? t3HookDecision : undefined;
-        const hookApprovalReason = t3HookApproval?.reason ?? nativeHookApprovalReason;
-        const hookApprovalTitle = t3HookApproval?.title ?? callbackOptions.title?.trim();
-        const hookApprovalDescription =
+        const approvalReason = t3HookApproval?.reason ?? callbackOptions.decisionReason?.trim();
+        const approvalTitle = t3HookApproval?.title ?? callbackOptions.title?.trim();
+        const approvalDescription =
           t3HookApproval?.description ?? callbackOptions.description?.trim();
-        const isHookApproval = runtimeMode === "full-access" && Boolean(hookApprovalReason);
+        const isHookApproval = t3HookApproval !== undefined;
         if (runtimeMode === "full-access" && !isHookApproval) {
           return {
             behavior: "allow",
@@ -4014,7 +4136,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           requestType,
           detail,
           decision: decisionDeferred,
-          ...(isHookApproval ? { source: "hook" } : {}),
+          source: isHookApproval ? "hook" : "engine",
           ...(callbackOptions.suggestions ? { suggestions: callbackOptions.suggestions } : {}),
         };
 
@@ -4034,10 +4156,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               toolName,
               input: toolInput,
               ...(callbackOptions.toolUseID ? { toolUseId: callbackOptions.toolUseID } : {}),
-              ...(isHookApproval ? { approvalSource: "hook" } : {}),
-              ...(hookApprovalTitle ? { approvalTitle: hookApprovalTitle } : {}),
-              ...(hookApprovalDescription ? { approvalDescription: hookApprovalDescription } : {}),
-              ...(hookApprovalReason ? { approvalReason: hookApprovalReason } : {}),
+              approvalSource: isHookApproval ? "hook" : "engine",
+              ...(approvalTitle ? { approvalTitle } : {}),
+              ...(approvalDescription ? { approvalDescription } : {}),
+              ...(approvalReason ? { approvalReason } : {}),
             },
           },
           providerRefs: nativeProviderRefs(context, {
@@ -4122,6 +4244,50 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const canUseTool: CanUseTool = (toolName, toolInput, callbackOptions) =>
         runPromise(canUseToolEffect(toolName, toolInput, callbackOptions));
 
+      const t3PreToolUseHook: HookCallback = (hookInput, toolUseID) =>
+        runPromise(
+          Effect.gen(function* () {
+            if (hookInput.hook_event_name !== "PreToolUse") {
+              return { continue: true };
+            }
+
+            const context = yield* Ref.get(contextRef);
+            if (!context) {
+              return {
+                continue: false,
+                stopReason: "Claude session context is unavailable.",
+              };
+            }
+
+            if (
+              hookInput.tool_name === "AskUserQuestion" ||
+              hookInput.tool_name === "ExitPlanMode"
+            ) {
+              return { continue: true };
+            }
+
+            const decision = yield* evaluateT3PreToolUse(
+              context,
+              hookInput.tool_name,
+              hookInput.tool_input,
+            );
+            const requestToolUseId = toolUseID ?? hookInput.tool_use_id;
+            if (decision.decision === "ask") {
+              pendingT3HookDecisions.set(requestToolUseId, decision);
+            }
+
+            return {
+              hookSpecificOutput: {
+                hookEventName: "PreToolUse" as const,
+                permissionDecision: decision.decision,
+                ...(decision.decision === "allow"
+                  ? {}
+                  : { permissionDecisionReason: decision.reason }),
+              },
+            };
+          }),
+        );
+
       const claudeBinaryPath = claudeSdkExecutablePath;
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
@@ -4149,9 +4315,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
         auto: "auto",
-        "full-access": "bypassPermissions",
       };
-      const permissionMode = runtimeModeToPermission[input.runtimeMode];
+      const permissionMode =
+        input.runtimeMode === "full-access"
+          ? "bypassPermissions"
+          : runtimeModeToPermission[input.runtimeMode];
       const settings = {
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
@@ -4180,8 +4348,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             }
           : {}),
         ...(permissionMode ? { permissionMode } : {}),
-        ...(permissionMode === "bypassPermissions"
-          ? { allowDangerouslySkipPermissions: true }
+        ...(input.runtimeMode === "full-access" ? { allowDangerouslySkipPermissions: true } : {}),
+        ...(input.runtimeMode === "full-access"
+          ? {
+              hooks: {
+                PreToolUse: [{ hooks: [t3PreToolUseHook] }],
+              },
+            }
           : {}),
         ...(Object.keys(settings).length > 0 ? { settings } : {}),
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
@@ -4220,7 +4393,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.model": apiModelId ?? "",
         "claude.query.effort": effectiveEffort ?? "",
         "claude.query.permission_mode": permissionMode ?? "",
-        "claude.query.allow_dangerously_skip_permissions": permissionMode === "bypassPermissions",
+        "claude.query.allow_dangerously_skip_permissions": input.runtimeMode === "full-access",
         "claude.query.resume": existingResumeSessionId ?? "",
         "claude.query.session_id": newSessionId ?? "",
         "claude.query.include_partial_messages": true,

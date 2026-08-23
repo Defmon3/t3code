@@ -23,24 +23,33 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         ? "File to read"
         : "File change";
   const isHookApproval = approval.source === "hook";
+  const isEngineApproval = approval.source === "engine";
+  const hasSourceContext = isHookApproval || isEngineApproval;
+  const sourceLabel = isHookApproval
+    ? "Project hook"
+    : isEngineApproval
+      ? "Engine permission"
+      : null;
 
   return (
     <div className="px-4 py-3.5 sm:px-5 sm:py-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="uppercase text-sm tracking-[0.2em]">PENDING APPROVAL</span>
         <span className="text-sm font-medium">
-          {isHookApproval ? (approval.title ?? "Hook approval requested") : approvalSummary}
+          {hasSourceContext
+            ? (approval.title ?? (isHookApproval ? "Hook approval requested" : approvalSummary))
+            : approvalSummary}
         </span>
-        {isHookApproval ? (
+        {sourceLabel ? (
           <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-warning text-xs">
-            Project hook
+            {sourceLabel}
           </span>
         ) : null}
         {pendingCount > 1 ? (
           <span className="text-xs text-muted-foreground">1/{pendingCount}</span>
         ) : null}
       </div>
-      {isHookApproval && approval.reason ? (
+      {hasSourceContext && approval.reason ? (
         <div className="mt-3">
           <p className="text-xs font-medium text-muted-foreground">Reason</p>
           <p
@@ -51,7 +60,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           </p>
         </div>
       ) : null}
-      {isHookApproval && approval.description && approval.description !== approval.reason ? (
+      {hasSourceContext && approval.description && approval.description !== approval.reason ? (
         <div className="mt-3">
           <p className="text-xs font-medium text-muted-foreground">Details</p>
           <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-muted-foreground">

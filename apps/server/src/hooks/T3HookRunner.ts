@@ -29,6 +29,7 @@ const HookMatcher = Schema.Struct({
 const HooksConfig = Schema.Struct({
   hooks: Schema.Struct({
     PreToolUse: Schema.optional(Schema.Array(HookMatcher)),
+    Stop: Schema.optional(Schema.Array(HookMatcher)),
   }),
 });
 
@@ -42,7 +43,7 @@ const decodeHooksConfigEventKeysJson = Schema.decodeUnknownEffect(
   fromLenientJson(HooksConfigEventKeys),
 );
 
-const SUPPORTED_HOOK_EVENTS = ["PreToolUse"] as const;
+const SUPPORTED_HOOK_EVENTS = ["PreToolUse", "Stop"] as const;
 
 const HookSpecificOutput = Schema.Struct({
   hookEventName: Schema.optional(Schema.String),
@@ -71,10 +72,32 @@ const PreToolUsePayload = Schema.Struct({
   tool_name: Schema.String,
   tool_input: Schema.Unknown,
 });
-const encodePreToolUsePayloadJson = Schema.encodeSync(Schema.fromJsonString(PreToolUsePayload));
+const StopPayload = Schema.Struct({
+  hook_event_name: Schema.Literal("Stop"),
+  provider: Schema.String,
+  thread_id: Schema.String,
+  cwd: Schema.String,
+});
+const HookPayload = Schema.Union([PreToolUsePayload, StopPayload]);
+const encodeHookPayloadJson = Schema.encodeSync(Schema.fromJsonString(HookPayload));
 
 type HookCommandConfig = typeof HookCommand.Type;
 type HookMatcherConfig = typeof HookMatcher.Type;
+type HookCommandPayload =
+  | {
+      readonly hook_event_name: "PreToolUse";
+      readonly provider: string;
+      readonly thread_id: string;
+      readonly cwd: string;
+      readonly tool_name: string;
+      readonly tool_input: unknown;
+    }
+  | {
+      readonly hook_event_name: "Stop";
+      readonly provider: string;
+      readonly thread_id: string;
+      readonly cwd: string;
+    };
 
 export type T3HookDecision =
   | { readonly decision: "allow" }
@@ -93,12 +116,21 @@ export interface T3PreToolUseInput {
   readonly toolInput: unknown;
 }
 
+export interface T3StopInput {
+  readonly provider: string;
+  readonly threadId: string;
+  readonly cwd: string;
+}
+
 export interface T3HookPlan {
   readonly configPath: string | undefined;
   readonly hasPreToolUseHooks: boolean;
   readonly hasPreToolUseHooksNow: Effect.Effect<boolean>;
   readonly evaluatePreToolUse: (
     input: Omit<T3PreToolUseInput, "cwd">,
+  ) => Effect.Effect<T3HookDecision, T3HookCommandError>;
+  readonly evaluateStop: (
+    input: Omit<T3StopInput, "cwd">,
   ) => Effect.Effect<T3HookDecision, T3HookCommandError>;
 }
 
@@ -168,6 +200,26 @@ function matchesTool(matcher: string | undefined, toolName: string): boolean {
     return true;
   }
   return new RegExp(`^(?:${matcher})$`).test(toolName);
+}
+
+function toPreToolUsePayload(input: T3PreToolUseInput): HookCommandPayload {
+  return {
+    hook_event_name: "PreToolUse",
+    provider: input.provider,
+    thread_id: input.threadId,
+    cwd: input.cwd,
+    tool_name: input.toolName,
+    tool_input: input.toolInput,
+  };
+}
+
+function toStopPayload(input: T3StopInput): HookCommandPayload {
+  return {
+    hook_event_name: "Stop",
+    provider: input.provider,
+    thread_id: input.threadId,
+    cwd: input.cwd,
+  };
 }
 
 function commandInvocation(platform: string, command: string) {
@@ -248,7 +300,7 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
           }),
       ),
     );
-    for (const entry of config.hooks.PreToolUse ?? []) {
+    for (const entry of [...(config.hooks.PreToolUse ?? []), ...(config.hooks.Stop ?? [])]) {
       if (entry.matcher) {
         yield* Effect.try({
           try: () => new RegExp(`^(?:${entry.matcher})$`),
@@ -290,7 +342,7 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
     readonly command: HookCommandConfig;
     readonly configPath: string;
     readonly projectDirectory: string;
-    readonly payload: T3PreToolUseInput;
+    readonly payload: HookCommandPayload;
   }) {
     const expanded = expandProjectDirectory(input.command.command, input.projectDirectory);
     const invocation = commandInvocation(platform, expanded);
@@ -299,14 +351,7 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
         command: invocation.command,
         args: invocation.args,
         cwd: input.projectDirectory,
-        stdin: encodePreToolUsePayloadJson({
-          hook_event_name: "PreToolUse",
-          provider: input.payload.provider,
-          thread_id: input.payload.threadId,
-          cwd: input.payload.cwd,
-          tool_name: input.payload.toolName,
-          tool_input: input.payload.toolInput,
-        }),
+        stdin: encodeHookPayloadJson(input.payload),
         env: {
           T3_PROJECT_DIR: input.projectDirectory,
           CLAUDE_PROJECT_DIR: input.projectDirectory,
@@ -373,7 +418,7 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
           command,
           configPath: input.configPath,
           projectDirectory: input.projectDirectory,
-          payload: input.payload,
+          payload: toPreToolUsePayload(input.payload),
         });
         if (decision.decision !== "allow") {
           return decision;
@@ -388,7 +433,8 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
     if (Option.isNone(configPathOption)) {
       return {
         configPath: undefined,
-        entries: [] as ReadonlyArray<HookMatcherConfig>,
+        preToolUseEntries: [] as ReadonlyArray<HookMatcherConfig>,
+        stopEntries: [] as ReadonlyArray<HookMatcherConfig>,
         projectDirectory: undefined,
       };
     }
@@ -397,7 +443,8 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
     const config = yield* readConfig(configPath);
     return {
       configPath,
-      entries: config.hooks.PreToolUse ?? ([] as ReadonlyArray<HookMatcherConfig>),
+      preToolUseEntries: config.hooks.PreToolUse ?? ([] as ReadonlyArray<HookMatcherConfig>),
+      stopEntries: config.hooks.Stop ?? ([] as ReadonlyArray<HookMatcherConfig>),
       projectDirectory: path.dirname(path.dirname(configPath)),
     };
   });
@@ -405,12 +452,12 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
   const prepare: T3HookRunner["Service"]["prepare"] = Effect.fn("T3HookRunner.prepare")(
     function* (cwd) {
       const snapshot = yield* resolvePlanState(cwd);
-      const snapshotHasHooks = snapshot.entries.length > 0;
+      const snapshotHasHooks = snapshot.preToolUseEntries.length > 0;
       return {
         configPath: snapshot.configPath,
         hasPreToolUseHooks: snapshotHasHooks,
         hasPreToolUseHooksNow: resolvePlanState(cwd).pipe(
-          Effect.map((state) => state.entries.length > 0),
+          Effect.map((state) => state.preToolUseEntries.length > 0),
           Effect.catchTag("T3HookConfigError", (error) =>
             logConfigFailure(error).pipe(Effect.as(true)),
           ),
@@ -422,11 +469,46 @@ export const make = Effect.fn("T3HookRunner.make")(function* () {
               return { decision: "allow" } satisfies T3HookDecision;
             }
             return yield* evaluateEntries({
-              entries: state.entries,
+              entries: state.preToolUseEntries,
               configPath: state.configPath,
               projectDirectory: state.projectDirectory,
               payload: { ...input, cwd },
             });
+          }).pipe(
+            Effect.catchTag("T3HookConfigError", (error) =>
+              logConfigFailure(error).pipe(
+                Effect.as({
+                  decision: "ask",
+                  title: "T3 hook config failed",
+                  reason: `T3 project hooks could not be loaded from ${error.configPath}.`,
+                } satisfies T3HookDecision),
+              ),
+            ),
+          ),
+        evaluateStop: (input) =>
+          Effect.gen(function* () {
+            const state = yield* resolvePlanState(cwd);
+            if (state.configPath === undefined) {
+              return { decision: "allow" } satisfies T3HookDecision;
+            }
+            let askDecision: T3HookDecision | undefined;
+            for (const entry of state.stopEntries) {
+              for (const command of entry.hooks) {
+                const decision = yield* runCommand({
+                  command,
+                  configPath: state.configPath,
+                  projectDirectory: state.projectDirectory,
+                  payload: toStopPayload({ ...input, cwd }),
+                });
+                if (decision.decision === "deny") {
+                  return decision;
+                }
+                if (decision.decision === "ask" && askDecision === undefined) {
+                  askDecision = decision;
+                }
+              }
+            }
+            return askDecision ?? ({ decision: "allow" } satisfies T3HookDecision);
           }).pipe(
             Effect.catchTag("T3HookConfigError", (error) =>
               logConfigFailure(error).pipe(

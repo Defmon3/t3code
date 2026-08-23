@@ -60,6 +60,97 @@ describe("T3HookRunner", () => {
     testLayer((input) =>
       Effect.sync(() => {
         const payload = decodeJson(input.stdin ?? "") as Record<string, unknown>;
+        assert.equal(payload.hook_event_name, "Stop");
+        assert.equal(payload.provider, "codex");
+        assert.equal(payload.thread_id, "thread-stop");
+        assert.isString(payload.cwd);
+        assert.isUndefined(payload.tool_name);
+        assert.isUndefined(payload.tool_input);
+        return successfulOutput(
+          encodeJson({
+            hookSpecificOutput: {
+              hookEventName: "Stop",
+              permissionDecision: "ask",
+              permissionDecisionReason: "Stopping requires confirmation.",
+              title: "Stop this thread?",
+              description: "The hook requests a final review.",
+            },
+          }),
+        );
+      }),
+    ),
+  )("evaluates Stop hooks with a provider-neutral payload", (it) => {
+    it.effect("returns the command's ask decision", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-hook-runner-" });
+        yield* writeHooksConfig(root, {
+          Stop: [{ hooks: [{ type: "command", command: "policy" }] }],
+        });
+
+        const runner = yield* T3HookRunner.T3HookRunner;
+        const plan = yield* runner.prepare(root);
+        const decision = yield* plan.evaluateStop({
+          provider: "codex",
+          threadId: "thread-stop",
+        });
+
+        assert.deepEqual(decision, {
+          decision: "ask",
+          reason: "Stopping requires confirmation.",
+          title: "Stop this thread?",
+          description: "The hook requests a final review.",
+        });
+      }),
+    );
+  });
+
+  it.layer(
+    testLayer((input) =>
+      Effect.succeed(
+        successfulOutput(
+          encodeJson({
+            decision: input.args.at(-1)?.includes("deny") ? "deny" : "ask",
+            reason: input.args.at(-1)?.includes("deny") ? "Denied by policy." : "Review requested.",
+          }),
+        ),
+      ),
+    ),
+  )("combines multiple Stop hook decisions", (it) => {
+    it.effect("does not let an earlier ask hide a later deny", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-hook-runner-" });
+        yield* writeHooksConfig(root, {
+          Stop: [
+            {
+              hooks: [
+                { type: "command", command: "ask-policy" },
+                { type: "command", command: "deny-policy" },
+              ],
+            },
+          ],
+        });
+
+        const runner = yield* T3HookRunner.T3HookRunner;
+        const plan = yield* runner.prepare(root);
+        const decision = yield* plan.evaluateStop({
+          provider: "codex",
+          threadId: "thread-stop-denied",
+        });
+
+        assert.deepEqual(decision, {
+          decision: "deny",
+          reason: "Denied by policy.",
+        });
+      }),
+    );
+  });
+
+  it.layer(
+    testLayer((input) =>
+      Effect.sync(() => {
+        const payload = decodeJson(input.stdin ?? "") as Record<string, unknown>;
         assert.equal(payload.hook_event_name, "PreToolUse");
         assert.equal(payload.provider, "codex");
         assert.equal(payload.tool_name, "Bash");
@@ -370,7 +461,6 @@ describe("T3HookRunner", () => {
         const configPath = yield* writeHooksConfig(root, {
           PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "policy" }] }],
           PostToolUse: [{ hooks: [{ type: "command", command: "after" }] }],
-          Stop: [{ hooks: [{ type: "command", command: "stop" }] }],
         });
 
         const runner = yield* T3HookRunner.T3HookRunner;
@@ -403,7 +493,6 @@ describe("T3HookRunner", () => {
         assert.equal(warnings.length, 2);
         const rendered = encodeJson(warnings[0]?.message);
         assert.match(rendered, /PostToolUse/);
-        assert.match(rendered, /Stop/);
         assert.include(rendered, encodeJson(configPath));
         assert.match(encodeJson(warnings[1]?.message), /PostToolUse,Stop/);
         assert.deepEqual(decisions, [
