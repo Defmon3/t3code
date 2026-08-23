@@ -8,6 +8,7 @@ import {
   surfaceShortcutTargetsTypingContext,
   tabMuteMenuItem,
 } from "./RightPanelTabs";
+import type { RightPanelSurface } from "~/rightPanelStore";
 
 function shortcutEvent(
   key: string,
@@ -83,12 +84,15 @@ function renderTabs(
   second?: DesktopPreviewFavicon,
   audio?: { audible?: boolean; audioMuted?: boolean },
   previewRuntimeTabId: ((tabId: string) => string) | null = (tabId) => `runtime:${tabId}`,
+  surfaces: readonly RightPanelSurface[] = second
+    ? [previewSurface, secondSurface]
+    : [previewSurface],
 ) {
   return renderToStaticMarkup(
     <RightPanelTabs
       mode="inline"
-      surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
-      activeSurfaceId={previewSurface.id}
+      surfaces={surfaces}
+      activeSurfaceId={surfaces[0]?.id ?? null}
       pendingSurfaceIds={new Set()}
       previewSessions={sessions}
       desktopByTabId={{
@@ -109,6 +113,7 @@ function renderTabs(
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
+      onAddProcesses={() => undefined}
       liveAgentCount={0}
       browserAvailable
       terminalAvailable={false}
@@ -116,6 +121,7 @@ function renderTabs(
       filesAvailable={false}
       pullRequestAvailable={false}
       agentsAvailable={false}
+      processesAvailable={false}
     >
       <div>content</div>
     </RightPanelTabs>,
@@ -142,6 +148,15 @@ describe("RightPanelTabs preview favicon", () => {
   it("hides a capture while the server session still describes another origin", () => {
     const html = renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
     expect(html).not.toContain("data:image/png;base64,AAAA");
+  });
+});
+
+describe("RightPanelTabs processes surface", () => {
+  it("renders the persisted processes tab title", () => {
+    const html = renderTabs(null, undefined, undefined, undefined, [
+      { id: "processes", kind: "processes" },
+    ]);
+    expect(html).toContain("Processes");
   });
 });
 

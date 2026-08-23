@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::io::{self, BufRead, BufWriter, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
@@ -8,7 +9,7 @@ use sysinfo::{
     MINIMUM_CPU_UPDATE_INTERVAL, Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind,
 };
 
-const PROTOCOL_VERSION: u32 = 2;
+const PROTOCOL_VERSION: u32 = 4;
 const MIN_SAMPLE_INTERVAL_MS: u64 = 250;
 const MAX_SAMPLE_INTERVAL_MS: u64 = 60_000;
 const PROCESS_START_TIME_PRECISION_MS: u64 = 1_000;
@@ -19,8 +20,14 @@ const MAX_HISTORY_RETAINED_ENTRIES: usize = 20_000;
 const MAX_HISTORY_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROCESS_NAME_BYTES: usize = 1_024;
 const MAX_PROCESS_COMMAND_BYTES: usize = 16 * 1_024;
+const MAX_PROCESS_ARGV_ENTRIES: usize = 256;
+const MAX_PROCESS_CWD_BYTES: usize = 16 * 1_024;
 const MAX_PROCESS_STATUS_BYTES: usize = 256;
 const HISTORY_CHUNK_SNAPSHOTS: usize = 32;
+const MAX_DISCOVERY_ROOTS: usize = 512;
+const MAX_DISCOVERY_ROOT_PATH_BYTES: usize = 16 * 1024;
+const MAX_DISCOVERY_PROCESSES: usize = 512;
+const MAX_DISCOVERY_TOTAL_PROCESSES: usize = 4_096;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +78,11 @@ enum Command {
         request_id: String,
         window_ms: u64,
     },
+    DiscoverProcesses {
+        version: u32,
+        request_id: String,
+        roots: Vec<String>,
+    },
     Shutdown {
         version: u32,
     },
@@ -85,6 +97,7 @@ impl Command {
             | Self::SetStreaming { version, .. }
             | Self::SampleNow { version, .. }
             | Self::ReadHistory { version, .. }
+            | Self::DiscoverProcesses { version, .. }
             | Self::Shutdown { version } => *version,
         }
     }
@@ -155,6 +168,17 @@ impl ProcessSample {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscoveredProcessSample {
+    #[serde(flatten)]
+    process: ProcessSample,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    argv: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotEvent {
@@ -210,6 +234,17 @@ struct HistoryChunkEvent<'a> {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ProcessDiscoveryEvent<'a> {
+    version: u32,
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    request_id: &'a str,
+    done: bool,
+    processes: &'a [DiscoveredProcessSample],
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ErrorEvent {
     version: u32,
     #[serde(rename = "type")]
@@ -217,6 +252,8 @@ struct ErrorEvent {
     code: &'static str,
     message: String,
     recoverable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +261,11 @@ struct CollectorConfig {
     root_pid: u32,
     sample_interval: Option<Duration>,
     external_processes: HashMap<u32, Option<u64>>,
+}
+
+struct DiscoveryError {
+    code: &'static str,
+    message: String,
 }
 
 #[derive(Default)]
@@ -320,16 +362,20 @@ impl HistoryRecorder {
 
 struct Collector {
     system: System,
+    discovery_system: System,
     sequence: u64,
     cpu_baseline_refreshed_at: Option<Instant>,
+    discovery_cpu_baseline_refreshed_at: Option<Instant>,
 }
 
 impl Collector {
     fn new() -> Self {
         Self {
             system: System::new(),
+            discovery_system: System::new(),
             sequence: 0,
             cpu_baseline_refreshed_at: None,
+            discovery_cpu_baseline_refreshed_at: None,
         }
     }
 
@@ -337,7 +383,7 @@ impl Collector {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            process_refresh_kind(),
+            global_process_refresh_kind(),
         );
         self.cpu_baseline_refreshed_at = Some(Instant::now());
     }
@@ -352,7 +398,7 @@ impl Collector {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            process_refresh_kind(),
+            global_process_refresh_kind(),
         );
         self.cpu_baseline_refreshed_at = Some(Instant::now());
 
@@ -391,41 +437,9 @@ impl Collector {
         let mut processes = tracked
             .into_iter()
             .filter_map(|pid| {
-                let process = self.system.process(Pid::from_u32(pid))?;
-                let disk_usage = process.disk_usage();
-                let command = if process.cmd().is_empty() {
-                    process.name().to_string_lossy().into_owned()
-                } else {
-                    process
-                        .cmd()
-                        .iter()
-                        .map(|part| part.to_string_lossy())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                };
-
-                Some(ProcessSample {
-                    pid,
-                    ppid: process.parent().map(Pid::as_u32).unwrap_or(0),
-                    start_time_ms: process.start_time().saturating_mul(1_000),
-                    run_time_ms: process.run_time().saturating_mul(1_000),
-                    name: truncate_utf8(
-                        process.name().to_string_lossy().into_owned(),
-                        MAX_PROCESS_NAME_BYTES,
-                    ),
-                    command: truncate_utf8(command, MAX_PROCESS_COMMAND_BYTES),
-                    status: truncate_utf8(
-                        format!("{:?}", process.status()),
-                        MAX_PROCESS_STATUS_BYTES,
-                    ),
-                    cpu_percent: process.cpu_usage(),
-                    cpu_time_ms: process.accumulated_cpu_time(),
-                    resident_bytes: process.memory(),
-                    virtual_bytes: process.virtual_memory(),
-                    io_read_bytes: disk_usage.total_read_bytes,
-                    io_write_bytes: disk_usage.total_written_bytes,
-                    io_semantics: io_semantics(),
-                })
+                self.system
+                    .process(Pid::from_u32(pid))
+                    .map(|process| process_sample(pid, process))
             })
             .collect::<Vec<_>>();
         processes.sort_by_key(|process| process.pid);
@@ -448,15 +462,199 @@ impl Collector {
             processes,
         }
     }
+
+    fn discover_processes(
+        &mut self,
+        roots: Vec<String>,
+    ) -> Result<Vec<DiscoveredProcessSample>, DiscoveryError> {
+        let roots = normalize_discovery_roots(roots).map_err(|message| DiscoveryError {
+            code: "invalid-discovery",
+            message,
+        })?;
+        let primed_pids = self.refresh_discovery_cpu_usage();
+        let mut processes = Vec::new();
+        for (pid, process) in self.discovery_system.processes() {
+            if !discovery_process_has_cpu_sample(pid.as_u32(), &primed_pids) {
+                continue;
+            }
+            let Some(cwd) = process.cwd() else {
+                continue;
+            };
+            if !cwd_is_within_roots(&cwd.to_string_lossy(), &roots) {
+                continue;
+            }
+            if processes.len() == MAX_DISCOVERY_TOTAL_PROCESSES {
+                return Err(DiscoveryError {
+                    code: "discovery-limit-exceeded",
+                    message: format!(
+                        "discoverProcesses found more than {MAX_DISCOVERY_TOTAL_PROCESSES} processes; narrow the requested roots"
+                    ),
+                });
+            }
+            processes.push(discovered_process_sample(pid.as_u32(), process));
+        }
+        sort_discovered_processes(&mut processes);
+        Ok(processes)
+    }
+
+    fn refresh_discovery_cpu_usage(&mut self) -> HashSet<u32> {
+        self.discovery_system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            discovery_cpu_priming_refresh_kind(),
+        );
+        let primed_pids = self
+            .discovery_system
+            .processes()
+            .keys()
+            .map(|pid| pid.as_u32())
+            .collect::<HashSet<_>>();
+        self.discovery_cpu_baseline_refreshed_at = Some(Instant::now());
+        if let Some(delay) = remaining_cpu_measurement_delay(
+            self.discovery_cpu_baseline_refreshed_at.take(),
+            Instant::now(),
+        ) {
+            thread::sleep(delay);
+        }
+        self.discovery_system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            discovery_process_refresh_kind(),
+        );
+        self.discovery_cpu_baseline_refreshed_at = Some(Instant::now());
+        primed_pids
+    }
 }
 
-fn process_refresh_kind() -> ProcessRefreshKind {
+fn refresh_cpu_measurement_window<T>(
+    baseline_refreshed_at: &mut Option<Instant>,
+    mut prime_cpu: impl FnMut() -> T,
+    mut materialize: impl FnMut(),
+    mut sleep: impl FnMut(Duration),
+) -> T {
+    let primed = prime_cpu();
+    *baseline_refreshed_at = Some(Instant::now());
+    if let Some(delay) =
+        remaining_cpu_measurement_delay(baseline_refreshed_at.take(), Instant::now())
+    {
+        sleep(delay);
+    }
+    materialize();
+    *baseline_refreshed_at = Some(Instant::now());
+    primed
+}
+
+fn discovery_process_has_cpu_sample(pid: u32, primed_pids: &HashSet<u32>) -> bool {
+    primed_pids.contains(&pid)
+}
+
+fn sort_discovered_processes(processes: &mut [DiscoveredProcessSample]) {
+    processes.sort_by_key(|process| process.process.pid);
+}
+
+fn process_sample(pid: u32, process: &sysinfo::Process) -> ProcessSample {
+    let disk_usage = process.disk_usage();
+    let command = bounded_process_argv(process.cmd()).map_or_else(
+        || process.name().to_string_lossy().into_owned(),
+        |argv| argv.join(" "),
+    );
+    ProcessSample {
+        pid,
+        ppid: process.parent().map(Pid::as_u32).unwrap_or(0),
+        start_time_ms: process.start_time().saturating_mul(1_000),
+        run_time_ms: process.run_time().saturating_mul(1_000),
+        name: truncate_utf8(
+            process.name().to_string_lossy().into_owned(),
+            MAX_PROCESS_NAME_BYTES,
+        ),
+        command: truncate_utf8(command, MAX_PROCESS_COMMAND_BYTES),
+        status: truncate_utf8(format!("{:?}", process.status()), MAX_PROCESS_STATUS_BYTES),
+        cpu_percent: process.cpu_usage(),
+        cpu_time_ms: process.accumulated_cpu_time(),
+        resident_bytes: process.memory(),
+        virtual_bytes: process.virtual_memory(),
+        io_read_bytes: disk_usage.total_read_bytes,
+        io_write_bytes: disk_usage.total_written_bytes,
+        io_semantics: io_semantics(),
+    }
+}
+
+fn discovered_process_sample(pid: u32, process: &sysinfo::Process) -> DiscoveredProcessSample {
+    DiscoveredProcessSample {
+        process: process_sample(pid, process),
+        argv: bounded_process_argv(process.cmd()),
+        cwd: process
+            .cwd()
+            .map(|path| truncate_utf8(path.to_string_lossy().into_owned(), MAX_PROCESS_CWD_BYTES)),
+    }
+}
+
+fn global_process_refresh_kind() -> ProcessRefreshKind {
     ProcessRefreshKind::nothing()
         .with_memory()
         .with_cpu()
         .with_disk_usage()
         .with_cmd(UpdateKind::Always)
         .without_tasks()
+}
+
+fn discovery_process_refresh_kind() -> ProcessRefreshKind {
+    global_process_refresh_kind().with_cwd(UpdateKind::Always)
+}
+
+fn discovery_cpu_priming_refresh_kind() -> ProcessRefreshKind {
+    ProcessRefreshKind::nothing().with_cpu().without_tasks()
+}
+
+fn normalize_discovery_roots(roots: Vec<String>) -> Result<Vec<String>, String> {
+    if roots.is_empty() || roots.len() > MAX_DISCOVERY_ROOTS {
+        return Err(format!(
+            "discoverProcesses requires between 1 and {MAX_DISCOVERY_ROOTS} roots"
+        ));
+    }
+    let mut normalized = HashSet::new();
+    for root in roots {
+        if root.len() > MAX_DISCOVERY_ROOT_PATH_BYTES {
+            return Err(format!(
+                "discoverProcesses root exceeds {MAX_DISCOVERY_ROOT_PATH_BYTES} bytes"
+            ));
+        }
+        let root = normalize_discovery_path(&root);
+        if root.is_empty() {
+            return Err("discoverProcesses roots must be non-empty".to_owned());
+        }
+        normalized.insert(root);
+    }
+    let mut roots = normalized.into_iter().collect::<Vec<_>>();
+    roots.sort();
+    Ok(roots)
+}
+
+fn normalize_discovery_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let path = if path == "/" {
+        path.as_str()
+    } else {
+        path.trim_end_matches('/')
+    };
+    #[cfg(windows)]
+    {
+        path.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_owned()
+    }
+}
+
+fn cwd_is_within_roots(cwd: &str, roots: &[String]) -> bool {
+    let cwd = normalize_discovery_path(cwd);
+    roots.iter().any(|root| {
+        cwd == *root
+            || cwd
+                .strip_prefix(root)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
 }
 
 fn inaccessible_process_count(selected: usize, materialized: usize) -> usize {
@@ -534,6 +732,40 @@ fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
     }
     value.truncate(boundary);
     value
+}
+
+fn bounded_process_argv(command: &[OsString]) -> Option<Vec<String>> {
+    if command.is_empty() {
+        return None;
+    }
+    let mut argv = Vec::with_capacity(command.len().min(MAX_PROCESS_ARGV_ENTRIES));
+    let mut serialized_bytes = 2usize;
+    for part in command.iter().take(MAX_PROCESS_ARGV_ENTRIES) {
+        let entry_overhead = 2 + usize::from(!argv.is_empty());
+        if serialized_bytes.saturating_add(entry_overhead) > MAX_PROCESS_COMMAND_BYTES {
+            break;
+        }
+        let remaining_bytes = MAX_PROCESS_COMMAND_BYTES
+            .saturating_sub(serialized_bytes)
+            .saturating_sub(entry_overhead);
+        let value = truncate_utf8(part.to_string_lossy().into_owned(), remaining_bytes);
+        serialized_bytes = serialized_bytes
+            .saturating_add(entry_overhead)
+            .saturating_add(value.len());
+        argv.push(value);
+    }
+    Some(argv)
+}
+
+#[cfg(test)]
+fn estimated_argv_json_bytes(argv: &[String]) -> usize {
+    if argv.is_empty() {
+        return 0;
+    }
+    2usize
+        .saturating_add(argv.len().saturating_mul(2))
+        .saturating_add(argv.len().saturating_sub(1))
+        .saturating_add(argv.iter().map(String::len).sum::<usize>())
 }
 
 fn io_semantics() -> IoSemantics {
@@ -624,6 +856,26 @@ fn write_error(
             code,
             message: message.into(),
             recoverable,
+            request_id: None,
+        },
+    )
+}
+
+fn write_discovery_error(
+    writer: &mut impl Write,
+    request_id: String,
+    code: &'static str,
+    message: impl Into<String>,
+) -> io::Result<()> {
+    write_event(
+        writer,
+        &ErrorEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "error",
+            code,
+            message: message.into(),
+            recoverable: true,
+            request_id: Some(request_id),
         },
     )
 }
@@ -656,6 +908,44 @@ fn write_history(
                 request_id,
                 done: index + 1 == chunk_count,
                 snapshots: chunk,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn discovery_chunk_count(process_count: usize) -> usize {
+    process_count.div_ceil(MAX_DISCOVERY_PROCESSES).max(1)
+}
+
+fn write_process_discovery(
+    writer: &mut impl Write,
+    request_id: &str,
+    processes: &[DiscoveredProcessSample],
+) -> io::Result<()> {
+    if processes.is_empty() {
+        return write_event(
+            writer,
+            &ProcessDiscoveryEvent {
+                version: PROTOCOL_VERSION,
+                event_type: "processDiscovery",
+                request_id,
+                done: true,
+                processes,
+            },
+        );
+    }
+
+    let chunk_count = discovery_chunk_count(processes.len());
+    for (index, chunk) in processes.chunks(MAX_DISCOVERY_PROCESSES).enumerate() {
+        write_event(
+            writer,
+            &ProcessDiscoveryEvent {
+                version: PROTOCOL_VERSION,
+                event_type: "processDiscovery",
+                request_id,
+                done: index + 1 == chunk_count,
+                processes: chunk,
             },
         )?;
     }
@@ -823,6 +1113,19 @@ fn main() -> io::Result<()> {
                             )?;
                         }
                     }
+                    Command::DiscoverProcesses {
+                        request_id, roots, ..
+                    } => match collector.discover_processes(roots) {
+                        Ok(processes) => {
+                            write_process_discovery(&mut writer, &request_id, &processes)?
+                        }
+                        Err(error) => write_discovery_error(
+                            &mut writer,
+                            request_id,
+                            error.code,
+                            error.message,
+                        )?,
+                    },
                     Command::Shutdown { .. } => return Ok(()),
                 }
             }
@@ -835,6 +1138,29 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn discovered_process(pid: u32) -> DiscoveredProcessSample {
+        DiscoveredProcessSample {
+            process: ProcessSample {
+                pid,
+                ppid: 0,
+                start_time_ms: 0,
+                run_time_ms: 0,
+                name: "process".to_owned(),
+                command: "vp test".to_owned(),
+                status: "Run".to_owned(),
+                cpu_percent: 0.0,
+                cpu_time_ms: 0,
+                resident_bytes: 0,
+                virtual_bytes: 0,
+                io_read_bytes: 0,
+                io_write_bytes: 0,
+                io_semantics: IoSemantics::Storage,
+            },
+            argv: Some(vec!["vp".to_owned(), "test".to_owned()]),
+            cwd: Some("/workspace".to_owned()),
+        }
+    }
 
     #[test]
     fn selects_roots_and_all_descendants() {
@@ -883,7 +1209,7 @@ mod tests {
     #[test]
     fn decodes_protocol_commands() {
         let configure = serde_json::from_str::<Command>(
-            r#"{"version":2,"type":"configure","rootPid":42,"sampleIntervalMs":1000,"externalProcesses":[{"pid":7}]}"#,
+            r#"{"version":4,"type":"configure","rootPid":42,"sampleIntervalMs":1000,"externalProcesses":[{"pid":7}]}"#,
         )
         .expect("configure command");
 
@@ -903,7 +1229,7 @@ mod tests {
         }
 
         let read_history = serde_json::from_str::<Command>(
-            r#"{"version":2,"type":"readHistory","requestId":"history-1","windowMs":60000}"#,
+            r#"{"version":4,"type":"readHistory","requestId":"history-1","windowMs":60000}"#,
         )
         .expect("read history command");
         assert!(matches!(
@@ -913,6 +1239,16 @@ mod tests {
                 window_ms: 60_000,
                 ..
             } if request_id == "history-1"
+        ));
+
+        let discovery = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"discoverProcesses","requestId":"discovery-1","roots":["/workspace"]}"#,
+        )
+        .expect("discovery command");
+        assert!(matches!(
+            discovery,
+            Command::DiscoverProcesses { request_id, roots, .. }
+                if request_id == "discovery-1" && roots == ["/workspace"]
         ));
     }
 
@@ -987,6 +1323,54 @@ mod tests {
                 .len(),
             11
         );
+    }
+
+    #[test]
+    fn refreshes_a_fresh_cpu_baseline_for_every_discovery() {
+        let mut baseline = None;
+        let mut priming_refreshes = 0;
+        let mut materializing_refreshes = 0;
+        let mut delays = Vec::new();
+
+        for _ in 0..2 {
+            refresh_cpu_measurement_window(
+                &mut baseline,
+                || priming_refreshes += 1,
+                || materializing_refreshes += 1,
+                |delay| delays.push(delay),
+            );
+        }
+
+        assert_eq!(priming_refreshes, 2);
+        assert_eq!(materializing_refreshes, 2);
+        assert_eq!(delays.len(), 2);
+        assert!(
+            delays
+                .iter()
+                .all(|delay| *delay <= MINIMUM_CPU_UPDATE_INTERVAL)
+        );
+        assert!(baseline.is_some());
+    }
+
+    #[test]
+    fn excludes_processes_that_appear_after_discovery_cpu_priming() {
+        let mut baseline = None;
+        let mut materialized_pids = HashSet::from([10]);
+        let primed_pids = refresh_cpu_measurement_window(
+            &mut baseline,
+            || HashSet::from([10]),
+            || {
+                materialized_pids.insert(11);
+            },
+            |_| {},
+        );
+
+        let emitted_pids = materialized_pids
+            .into_iter()
+            .filter(|pid| discovery_process_has_cpu_sample(*pid, &primed_pids))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(emitted_pids, HashSet::from([10]));
     }
 
     #[test]
@@ -1133,14 +1517,164 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_commands_without_enumerating_linux_tasks() {
-        let refresh_kind = process_refresh_kind();
+    fn preserves_a_bounded_structured_process_argv() {
+        let argv = bounded_process_argv(&[OsString::from("codex"), OsString::from("app-server")]);
+        assert_eq!(
+            argv,
+            Some(vec!["codex".to_owned(), "app-server".to_owned()])
+        );
 
-        assert_eq!(refresh_kind.cmd(), UpdateKind::Always);
-        assert!(!refresh_kind.tasks());
-        assert!(refresh_kind.cpu());
-        assert!(refresh_kind.memory());
-        assert!(refresh_kind.disk_usage());
+        let oversized =
+            bounded_process_argv(&[OsString::from("x".repeat(MAX_PROCESS_COMMAND_BYTES + 1))]);
+        assert_eq!(
+            oversized.as_ref().map(|argv| argv[0].len()),
+            Some(MAX_PROCESS_COMMAND_BYTES - 4)
+        );
+        assert_eq!(
+            oversized
+                .as_ref()
+                .map(|argv| estimated_argv_json_bytes(argv)),
+            Some(MAX_PROCESS_COMMAND_BYTES)
+        );
+    }
+
+    #[test]
+    fn keeps_discovery_metadata_out_of_snapshot_samples() {
+        let process = ProcessSample {
+            pid: 1,
+            ppid: 0,
+            start_time_ms: 0,
+            run_time_ms: 0,
+            name: "process".to_owned(),
+            command: "process".to_owned(),
+            status: "Run".to_owned(),
+            cpu_percent: 0.0,
+            cpu_time_ms: 0,
+            resident_bytes: 0,
+            virtual_bytes: 0,
+            io_read_bytes: 0,
+            io_write_bytes: 0,
+            io_semantics: IoSemantics::Storage,
+        };
+        let snapshot = serde_json::to_value(&process).expect("serialize snapshot process");
+        assert!(snapshot.get("argv").is_none());
+        assert!(snapshot.get("cwd").is_none());
+
+        let discovery = DiscoveredProcessSample {
+            process,
+            argv: Some(vec!["codex".to_owned()]),
+            cwd: Some("/workspace".to_owned()),
+        };
+        let discovery = serde_json::to_value(&discovery).expect("serialize discovery process");
+        assert_eq!(discovery["argv"][0], "codex");
+        assert_eq!(discovery["cwd"], "/workspace");
+    }
+
+    #[test]
+    fn bounds_structured_process_argv_entries_and_empty_argument_overhead() {
+        let command = vec![OsString::new(); MAX_PROCESS_ARGV_ENTRIES * 2];
+        let argv = bounded_process_argv(&command).expect("argv");
+
+        assert_eq!(argv.len(), MAX_PROCESS_ARGV_ENTRIES);
+        assert!(argv.iter().all(String::is_empty));
+        assert!(estimated_argv_json_bytes(&argv) <= MAX_PROCESS_COMMAND_BYTES);
+    }
+
+    #[test]
+    fn refreshes_global_metrics_without_discovery_metadata() {
+        let global_refresh_kind = global_process_refresh_kind();
+        let discovery_refresh_kind = discovery_process_refresh_kind();
+        let priming_refresh_kind = discovery_cpu_priming_refresh_kind();
+
+        assert_eq!(global_refresh_kind.cmd(), UpdateKind::Always);
+        assert_eq!(global_refresh_kind.cwd(), UpdateKind::Never);
+        assert!(!global_refresh_kind.tasks());
+        assert!(global_refresh_kind.cpu());
+        assert!(global_refresh_kind.memory());
+        assert!(global_refresh_kind.disk_usage());
+        assert_eq!(discovery_refresh_kind.cwd(), UpdateKind::Always);
+        assert!(discovery_refresh_kind.cpu());
+        assert!(discovery_refresh_kind.memory());
+        assert!(priming_refresh_kind.cpu());
+        assert_eq!(priming_refresh_kind.cmd(), UpdateKind::Never);
+        assert_eq!(priming_refresh_kind.cwd(), UpdateKind::Never);
+        assert!(!priming_refresh_kind.memory());
+        assert!(!priming_refresh_kind.disk_usage());
+        assert!(!priming_refresh_kind.tasks());
+    }
+
+    #[test]
+    fn keeps_discovery_refresh_state_separate_from_sampling_state() {
+        let collector = Collector::new();
+
+        assert_ne!(
+            std::ptr::addr_of!(collector.system),
+            std::ptr::addr_of!(collector.discovery_system)
+        );
+        assert!(collector.cpu_baseline_refreshed_at.is_none());
+        assert!(collector.discovery_cpu_baseline_refreshed_at.is_none());
+    }
+
+    #[test]
+    fn splits_discovery_results_into_bounded_chunks() {
+        let mut processes = (1..=513).rev().map(discovered_process).collect::<Vec<_>>();
+
+        sort_discovered_processes(&mut processes);
+        let mut output = Vec::new();
+        write_process_discovery(&mut output, "discovery-1", &processes)
+            .expect("write discovery chunks");
+        let chunks = String::from_utf8(output)
+            .expect("utf8 output")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("chunk json"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(processes.len(), 513);
+        assert_eq!(
+            processes.last().map(|process| process.process.pid),
+            Some(513)
+        );
+        assert_eq!(discovery_chunk_count(processes.len()), 2);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0]["processes"].as_array().map(Vec::len), Some(512));
+        assert_eq!(chunks[1]["processes"].as_array().map(Vec::len), Some(1));
+        assert_eq!(chunks[1]["done"], true);
+    }
+
+    #[test]
+    fn completes_empty_discovery_with_one_chunk() {
+        let mut output = Vec::new();
+        write_process_discovery(&mut output, "discovery-1", &[])
+            .expect("write empty discovery completion");
+        let completion =
+            serde_json::from_slice::<serde_json::Value>(&output).expect("completion json");
+
+        assert_eq!(discovery_chunk_count(0), 1);
+        assert_eq!(discovery_chunk_count(MAX_DISCOVERY_PROCESSES), 1);
+        assert_eq!(discovery_chunk_count(MAX_DISCOVERY_PROCESSES + 1), 2);
+        assert_eq!(completion["done"], true);
+        assert_eq!(completion["processes"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn bounds_total_discovery_results_without_silent_truncation() {
+        assert_eq!(MAX_DISCOVERY_TOTAL_PROCESSES, 4_096);
+    }
+
+    #[test]
+    fn normalizes_and_deduplicates_discovery_roots() {
+        assert_eq!(
+            normalize_discovery_roots(vec!["/workspace/".to_owned(), "/workspace".to_owned()]),
+            Ok(vec!["/workspace".to_owned()])
+        );
+    }
+
+    #[test]
+    fn only_matches_cwds_equal_to_or_below_a_discovery_root() {
+        let roots = vec!["/workspace/project".to_owned()];
+        assert!(cwd_is_within_roots("/workspace/project", &roots));
+        assert!(cwd_is_within_roots("/workspace/project/src", &roots));
+        assert!(!cwd_is_within_roots("/workspace/project-other", &roots));
     }
 
     #[test]
