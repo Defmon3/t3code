@@ -341,15 +341,24 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
 type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
 type SessionActivityState = Pick<NonNullable<Thread["session"]>, "status" | "activeTurnId">;
 
+export function isSessionActivelyRunningTurn(
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+): boolean {
+  if (!session || session.status !== "running") return false;
+  if (!latestTurn) return true;
+  if (session.activeTurnId === null) return latestTurn.completedAt === null;
+  if (latestTurn.turnId !== session.activeTurnId) return true;
+  return latestTurn.completedAt === null;
+}
+
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
   session: SessionActivityState | null,
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  if (session.status === "running") return false;
-  return true;
+  return !isSessionActivelyRunningTurn(latestTurn, session);
 }
 
 export function deriveActiveWorkStartedAt(
@@ -358,7 +367,9 @@ export function deriveActiveWorkStartedAt(
   sendStartedAt: string | null,
   latestUserMessageAt: string | null = null,
 ): string | null {
-  const runningTurnId = session?.status === "running" ? session.activeTurnId : null;
+  const runningTurnId = isSessionActivelyRunningTurn(latestTurn, session)
+    ? session?.activeTurnId ?? null
+    : null;
   if (runningTurnId !== null) {
     if (latestTurn?.turnId === runningTurnId) {
       return latestTurn.startedAt ?? sendStartedAt ?? latestUserMessageAt;

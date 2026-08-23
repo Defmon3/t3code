@@ -252,6 +252,13 @@ describe("ComposerPrimaryActions", () => {
     expect(markup).not.toContain('aria-label="Send message"');
   });
 
+  it("renders Send rather than Stop when no active turn is supplied", () => {
+    const markup = renderSendButton();
+
+    expect(markup).toContain('aria-label="Send message"');
+    expect(markup).not.toContain('aria-label="Stop generation"');
+  });
+
   it("renders send alongside stop while running when Enter-to-send is unavailable", () => {
     const markup = renderRunningActions(true, true);
 
