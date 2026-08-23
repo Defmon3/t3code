@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
 
-export const RESOURCE_MONITOR_PROTOCOL_VERSION = 2 as const;
+export const RESOURCE_MONITOR_PROTOCOL_VERSION = 4 as const;
 
 export const ResourceTelemetryIoSemantics = Schema.Literals([
   "storage",
@@ -77,6 +77,14 @@ export const ResourceMonitorProcessSample = Schema.Struct({
 });
 export type ResourceMonitorProcessSample = typeof ResourceMonitorProcessSample.Type;
 
+export const ResourceMonitorDiscoveredProcessSample = Schema.Struct({
+  ...ResourceMonitorProcessSample.fields,
+  argv: Schema.optionalKey(Schema.Array(Schema.String)),
+  cwd: Schema.optionalKey(Schema.String),
+});
+export type ResourceMonitorDiscoveredProcessSample =
+  typeof ResourceMonitorDiscoveredProcessSample.Type;
+
 export const ResourceMonitorConfigureCommand = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("configure"),
@@ -124,6 +132,22 @@ export const ResourceMonitorReadHistoryCommand = Schema.Struct({
 });
 export type ResourceMonitorReadHistoryCommand = typeof ResourceMonitorReadHistoryCommand.Type;
 
+export const RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS = 512;
+export const RESOURCE_MONITOR_DISCOVERY_MAX_ROOT_PATH_BYTES = 16 * 1024;
+export const RESOURCE_MONITOR_DISCOVERY_MAX_PROCESSES = 512;
+export const RESOURCE_MONITOR_DISCOVERY_MAX_TOTAL_PROCESSES = 4_096;
+
+export const ResourceMonitorDiscoverProcessesCommand = Schema.Struct({
+  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  type: Schema.Literal("discoverProcesses"),
+  requestId: TrimmedNonEmptyString,
+  roots: Schema.Array(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(RESOURCE_MONITOR_DISCOVERY_MAX_ROOT_PATH_BYTES)),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS)),
+});
+export type ResourceMonitorDiscoverProcessesCommand =
+  typeof ResourceMonitorDiscoverProcessesCommand.Type;
+
 export const ResourceMonitorShutdownCommand = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("shutdown"),
@@ -137,6 +161,7 @@ export const ResourceMonitorCommand = Schema.Union([
   ResourceMonitorSetStreamingCommand,
   ResourceMonitorSampleNowCommand,
   ResourceMonitorReadHistoryCommand,
+  ResourceMonitorDiscoverProcessesCommand,
   ResourceMonitorShutdownCommand,
 ]);
 export type ResourceMonitorCommand = typeof ResourceMonitorCommand.Type;
@@ -176,12 +201,24 @@ export const ResourceMonitorHistoryChunkEvent = Schema.Struct({
 });
 export type ResourceMonitorHistoryChunkEvent = typeof ResourceMonitorHistoryChunkEvent.Type;
 
+export const ResourceMonitorProcessDiscoveryEvent = Schema.Struct({
+  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  type: Schema.Literal("processDiscovery"),
+  requestId: TrimmedNonEmptyString,
+  done: Schema.Boolean,
+  processes: Schema.Array(ResourceMonitorDiscoveredProcessSample).check(
+    Schema.isMaxLength(RESOURCE_MONITOR_DISCOVERY_MAX_PROCESSES),
+  ),
+});
+export type ResourceMonitorProcessDiscoveryEvent = typeof ResourceMonitorProcessDiscoveryEvent.Type;
+
 export const ResourceMonitorErrorEvent = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("error"),
   code: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
   recoverable: Schema.Boolean,
+  requestId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ResourceMonitorErrorEvent = typeof ResourceMonitorErrorEvent.Type;
 
@@ -189,6 +226,7 @@ export const ResourceMonitorEvent = Schema.Union([
   ResourceMonitorHelloEvent,
   ResourceMonitorSnapshotEvent,
   ResourceMonitorHistoryChunkEvent,
+  ResourceMonitorProcessDiscoveryEvent,
   ResourceMonitorErrorEvent,
 ]);
 export type ResourceMonitorEvent = typeof ResourceMonitorEvent.Type;

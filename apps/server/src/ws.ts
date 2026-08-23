@@ -27,6 +27,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationShellSnapshot,
   type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
@@ -37,6 +38,7 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
+  RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchContentsError,
@@ -133,6 +135,17 @@ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchComma
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
+
+export function processDiscoveryRoots(snapshot: OrchestrationShellSnapshot): ReadonlyArray<string> {
+  return [
+    ...new Set([
+      ...snapshot.projects.map((project) => project.workspaceRoot),
+      ...snapshot.threads.flatMap((thread) =>
+        thread.worktreePath === null ? [] : [thread.worktreePath],
+      ),
+    ]),
+  ].slice(0, RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS);
+}
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
@@ -1647,10 +1660,29 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverGetProcessDiagnostics]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetProcessDiagnostics, processDiagnostics.read, {
-            "rpc.aggregate": "server",
-          }),
+        [WS_METHODS.serverGetProcessDiagnostics]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetProcessDiagnostics,
+            input.scope === "registered-project-tests"
+              ? Effect.gen(function* () {
+                  const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+                  const roots = processDiscoveryRoots(snapshot);
+                  return yield* processDiagnostics.read(roots.length === 0 ? {} : { roots });
+                }).pipe(
+                  Effect.tapError((cause) =>
+                    Effect.logError("process discovery root load failed", { cause }),
+                  ),
+                  Effect.catch(() =>
+                    processDiagnostics.unavailable(
+                      "Process discovery could not load registered projects.",
+                    ),
+                  ),
+                )
+              : processDiagnostics.read({}),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverGetProcessResourceHistory,

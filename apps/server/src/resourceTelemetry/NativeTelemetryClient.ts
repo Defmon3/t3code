@@ -2,17 +2,21 @@ import type {
   HostPowerSnapshot,
   ResourceMonitorCapabilities,
   ResourceMonitorCommand,
+  ResourceMonitorDiscoveredProcessSample,
   ResourceMonitorEvent,
   ResourceMonitorExternalProcess,
   ResourceMonitorHelloEvent,
+  ResourceMonitorProcessDiscoveryEvent,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetrySourceStatus,
 } from "@t3tools/contracts";
 import {
+  RESOURCE_MONITOR_DISCOVERY_MAX_TOTAL_PROCESSES,
   RESOURCE_MONITOR_PROTOCOL_VERSION,
   ResourceMonitorCommand as ResourceMonitorCommandSchema,
   ResourceMonitorEvent as ResourceMonitorEventSchema,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -45,10 +49,30 @@ const CONSTRAINED_SAMPLE_INTERVAL_MS = 15_000;
 const HANDSHAKE_TIMEOUT = Duration.seconds(5);
 const SAMPLE_REQUEST_TIMEOUT = Duration.seconds(5);
 const HISTORY_REQUEST_TIMEOUT = Duration.seconds(15);
+const PROCESS_DISCOVERY_REQUEST_TIMEOUT = Duration.seconds(10);
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
 const FAILURE_WINDOW_MS = 60_000;
 const MAX_FAILURES_PER_WINDOW = 5;
+
+function normalizeProcessDiscoveryRoots(
+  roots: ReadonlyArray<string>,
+  platform: string,
+): ReadonlyArray<string> {
+  const normalizedRoots = new Set<string>();
+  for (const root of roots) {
+    const normalized =
+      platform === "win32"
+        ? root === "/"
+          ? root
+          : root.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
+        : root === "/"
+          ? root
+          : root.replace(/\/+$/, "");
+    normalizedRoots.add(normalized);
+  }
+  return [...normalizedRoots];
+}
 
 export class NativeTelemetrySpawnFailed extends Schema.TaggedErrorClass<NativeTelemetrySpawnFailed>()(
   "NativeTelemetrySpawnFailed",
@@ -76,7 +100,7 @@ export class NativeTelemetryHandshakeTimedOut extends Schema.TaggedErrorClass<Na
 export class NativeTelemetryRequestTimedOut extends Schema.TaggedErrorClass<NativeTelemetryRequestTimedOut>()(
   "NativeTelemetryRequestTimedOut",
   {
-    operation: Schema.Literals(["readHistory", "sampleNow"]),
+    operation: Schema.Literals(["discoverProcesses", "readHistory", "sampleNow"]),
     timeoutMs: Schema.Number,
   },
 ) {
@@ -185,6 +209,12 @@ export class NativeTelemetryClient extends Context.Service<
     readonly readHistory: (
       windowMs: number,
     ) => Effect.Effect<ReadonlyArray<ResourceMonitorSnapshotEvent>, NativeTelemetryClientError>;
+    readonly discoverProcesses: (
+      roots: ReadonlyArray<string>,
+    ) => Effect.Effect<
+      ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+      NativeTelemetryClientError
+    >;
     readonly setExternalProcesses: (
       processes: ReadonlyArray<ResourceMonitorExternalProcess>,
     ) => Effect.Effect<void, NativeTelemetryClientError>;
@@ -226,6 +256,39 @@ interface PendingHistoryRequest {
     NativeTelemetryClientError
   >;
   readonly snapshots: ReadonlyArray<ResourceMonitorSnapshotEvent>;
+}
+
+interface PendingDiscoveryRequest {
+  readonly deferred: Deferred.Deferred<
+    ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+    NativeTelemetryClientError
+  >;
+  readonly processes: ReadonlyArray<ResourceMonitorDiscoveredProcessSample>;
+}
+
+type DiscoveryCompletionOutcome =
+  | {
+      readonly type: "completed";
+      readonly processes: ReadonlyArray<ResourceMonitorDiscoveredProcessSample>;
+    }
+  | {
+      readonly type: "failed";
+      readonly error: NativeTelemetryCommandFailed;
+    };
+
+interface DiscoveryCompletion {
+  readonly deferred: Deferred.Deferred<
+    ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+    NativeTelemetryClientError
+  >;
+  readonly outcome: DiscoveryCompletionOutcome;
+}
+
+export function appendProcessDiscoveryChunk(
+  processes: ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+  event: ResourceMonitorProcessDiscoveryEvent,
+): ReadonlyArray<ResourceMonitorDiscoveredProcessSample> {
+  return [...processes, ...event.processes];
 }
 
 const initialState: ClientState = {
@@ -363,6 +426,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const config = yield* ServerConfig;
+  const platform = yield* HostProcessPlatform;
   const initializedAt = yield* DateTime.now;
   const state = yield* Ref.make(initialState);
   const collectionControl = yield* Ref.make<CollectionControl>({
@@ -387,6 +451,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     new Map<string, Deferred.Deferred<NativeTelemetrySnapshot, NativeTelemetryClientError>>(),
   );
   const pendingHistories = yield* Ref.make(new Map<string, PendingHistoryRequest>());
+  const pendingDiscoveries = yield* Ref.make(new Map<string, PendingDiscoveryRequest>());
   const snapshots = yield* PubSub.sliding<NativeTelemetrySnapshot>(8);
   const healthChanges = yield* PubSub.sliding<NativeTelemetryClientHealth>(4);
   const retryQueue = yield* Queue.sliding<void>(1);
@@ -404,11 +469,17 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     Effect.gen(function* () {
       const samples = yield* Ref.getAndSet(pendingSamples, new Map());
       const histories = yield* Ref.getAndSet(pendingHistories, new Map());
+      const discoveries = yield* Ref.getAndSet(pendingDiscoveries, new Map());
       yield* Effect.forEach(samples.values(), (deferred) => Deferred.fail(deferred, error), {
         discard: true,
       });
       yield* Effect.forEach(
         histories.values(),
+        (request) => Deferred.fail(request.deferred, error),
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        discoveries.values(),
         (request) => Deferred.fail(request.deferred, error),
         { discard: true },
       );
@@ -510,24 +581,88 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
             yield* Deferred.succeed(completed.value.deferred, completed.value.snapshots);
           }
         });
-      case "error":
-        return Ref.update(state, (current) => ({
-          ...current,
-          status: "degraded" as const,
-          lastError: Option.some(event.message),
-        })).pipe(
-          Effect.andThen(publishHealth),
-          Effect.andThen(
-            event.recoverable
-              ? Effect.void
-              : Effect.fail(
-                  new NativeTelemetryCommandFailed({
-                    operation: event.code,
-                    cause: event.message,
+      case "processDiscovery":
+        return Effect.gen(function* () {
+          const completed = yield* Ref.modify(
+            pendingDiscoveries,
+            (
+              pending,
+            ): [Option.Option<DiscoveryCompletion>, Map<string, PendingDiscoveryRequest>] => {
+              const next = new Map(pending);
+              const request = next.get(event.requestId);
+              if (!request) return [Option.none(), pending];
+              const processes = appendProcessDiscoveryChunk(request.processes, event);
+              if (processes.length > RESOURCE_MONITOR_DISCOVERY_MAX_TOTAL_PROCESSES) {
+                next.delete(event.requestId);
+                return [
+                  Option.some({
+                    deferred: request.deferred,
+                    outcome: {
+                      type: "failed" as const,
+                      error: new NativeTelemetryCommandFailed({
+                        operation: "discovery-limit-exceeded",
+                        cause: "sidecar exceeded the discovery process limit",
+                      }),
+                    },
                   }),
-                ),
-          ),
-        );
+                  next,
+                ];
+              }
+              if (event.done) {
+                next.delete(event.requestId);
+                return [
+                  Option.some({
+                    deferred: request.deferred,
+                    outcome: { type: "completed" as const, processes },
+                  }),
+                  next,
+                ];
+              }
+              next.set(event.requestId, { deferred: request.deferred, processes });
+              return [Option.none(), next];
+            },
+          );
+          if (Option.isSome(completed)) {
+            if (completed.value.outcome.type === "failed") {
+              yield* Deferred.fail(completed.value.deferred, completed.value.outcome.error);
+            } else {
+              yield* Deferred.succeed(completed.value.deferred, completed.value.outcome.processes);
+            }
+          }
+        });
+      case "error":
+        return Effect.gen(function* () {
+          if (event.recoverable && event.requestId) {
+            const request = yield* Ref.modify(pendingDiscoveries, (pending) => {
+              const next = new Map(pending);
+              const request = next.get(event.requestId!);
+              next.delete(event.requestId!);
+              return [Option.fromUndefinedOr(request), next] as const;
+            });
+            if (Option.isSome(request)) {
+              yield* Deferred.fail(
+                request.value.deferred,
+                new NativeTelemetryCommandFailed({
+                  operation: event.code,
+                  cause: event.message,
+                }),
+              );
+            }
+            return;
+          }
+          yield* Ref.update(state, (current) => ({
+            ...current,
+            status: "degraded" as const,
+            lastError: Option.some(event.message),
+          }));
+          yield* publishHealth;
+          if (!event.recoverable) {
+            return yield* new NativeTelemetryCommandFailed({
+              operation: event.code,
+              cause: event.message,
+            });
+          }
+        });
     }
   };
 
@@ -879,6 +1014,65 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       );
     });
 
+  const discoverProcesses: NativeTelemetryClient["Service"]["discoverProcesses"] = (roots) =>
+    Effect.gen(function* () {
+      const current = yield* Ref.get(state);
+      if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) {
+        return yield* new NativeTelemetryUnavailable({
+          reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
+        });
+      }
+      const requestId = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new NativeTelemetryCommandFailed({
+              operation: "createProcessDiscoveryRequestId",
+              cause,
+            }),
+        ),
+      );
+      const deferred = yield* Deferred.make<
+        ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+        NativeTelemetryClientError
+      >();
+      yield* Ref.update(pendingDiscoveries, (pending) => {
+        const next = new Map(pending);
+        next.set(requestId, { deferred, processes: [] });
+        return next;
+      });
+      return yield* writeCommand(Option.getOrThrow(current.handle), {
+        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        type: "discoverProcesses",
+        requestId,
+        roots: [...normalizeProcessDiscoveryRoots(roots, platform)],
+      }).pipe(
+        Effect.andThen(
+          Deferred.await(deferred).pipe(
+            Effect.timeoutOption(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new NativeTelemetryRequestTimedOut({
+                      operation: "discoverProcesses",
+                      timeoutMs: Duration.toMillis(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+                    }),
+                  ),
+                onSome: Effect.succeed,
+              }),
+            ),
+          ),
+        ),
+        Effect.ensuring(
+          Ref.update(pendingDiscoveries, (pending) => {
+            const next = new Map(pending);
+            next.delete(requestId);
+            return next;
+          }),
+        ),
+      );
+    });
+
   const sampleNow: NativeTelemetryClient["Service"]["sampleNow"] = Effect.gen(function* () {
     const current = yield* Ref.get(state);
     if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) {
@@ -951,6 +1145,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       ),
     ),
     snapshots: liveSnapshots,
+    discoverProcesses,
     readHistory,
     setExternalProcesses,
     setHostPowerState,
@@ -995,6 +1190,12 @@ export const layerTest = (
         processTree: true,
       }),
       snapshots: Stream.empty,
+      discoverProcesses: () =>
+        Effect.fail(
+          new NativeTelemetryUnavailable({
+            reason: "No resource monitor process discovery was configured for this test.",
+          }),
+        ),
       readHistory: () =>
         Effect.fail(
           new NativeTelemetryUnavailable({

@@ -166,6 +166,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
+import { ProcessPanel } from "./ProcessPanel";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -266,6 +267,7 @@ import {
   useProjects,
   useThread,
   useThreadRefs,
+  useThreadShells,
   useThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
@@ -1506,6 +1508,7 @@ function ChatViewContent(props: ChatViewProps) {
   const storeSetActiveTerminal = useTerminalUiStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
   const serverThreadRefs = useThreadRefs();
+  const serverThreadShells = useThreadShells();
   const serverThreadKeys = useMemo(() => serverThreadRefs.map(scopedThreadKey), [serverThreadRefs]);
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftThreadKeys = useMemo(
@@ -3390,6 +3393,10 @@ function ChatViewContent(props: ChatViewProps) {
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
+  }, [activeThreadRef]);
+  const addProcessesSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "processes");
   }, [activeThreadRef]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
@@ -6448,6 +6455,15 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  const processPanelProjects = useMemo(
+    () => allProjects.filter((project) => project.environmentId === activeThread.environmentId),
+    [activeThread.environmentId, allProjects],
+  );
+  const processPanelThreads = useMemo(
+    () =>
+      serverThreadShells.filter((thread) => thread.environmentId === activeThread.environmentId),
+    [activeThread.environmentId, serverThreadShells],
+  );
   const rightPanelContent = activeThreadRef ? (
     activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
@@ -6534,6 +6550,13 @@ function ChatViewContent(props: ChatViewProps) {
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
+      />
+    ) : activeRightPanelSurface?.kind === "processes" ? (
+      <ProcessPanel
+        environmentId={activeThread.environmentId}
+        environmentConnectionPhase={activeEnvironmentConnectionPhase}
+        projects={processPanelProjects}
+        threads={processPanelThreads}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
@@ -7004,12 +7027,14 @@ function ChatViewContent(props: ChatViewProps) {
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddAgents={addAgentsSurface}
+          onAddProcesses={addProcessesSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
+          processesAvailable={activeThread !== undefined}
           pullRequestStatuses={pullRequestTabStatuses}
           liveAgentCount={agentPanelModel.liveCount}
         >
@@ -7044,12 +7069,14 @@ function ChatViewContent(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
+            onAddProcesses={addProcessesSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
+            processesAvailable={activeThread !== undefined}
             pullRequestStatuses={pullRequestTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}
           >
