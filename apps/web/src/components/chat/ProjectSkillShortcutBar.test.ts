@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
@@ -48,6 +50,31 @@ describe("project skill shortcuts", () => {
     expect(markup).toContain('class="flex size-7 shrink-0');
     expect(markup).toContain('aria-label="Add quick slot"');
     expect(markup).not.toContain(">Add quick slot<");
+  });
+
+  it("keeps its split composer surface hook and glass fallback", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ProjectSkillShortcutBar, {
+        shortcuts: [],
+        colors: {},
+        onChange: () => {},
+        onInvoke: () => {},
+        onInsert: () => {},
+      }),
+    );
+    const stylesheet = NodeFS.readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+    const ruleStart = stylesheet.indexOf(
+      ".chat-composer-glass-shell:is(\n      .chat-composer-glass-shell-attached,\n      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))\n    )\n    [data-project-skill-shortcut-bar]",
+    );
+    const ruleEnd = stylesheet.indexOf("\n  }", ruleStart) + "\n  }".length;
+    const splitSurfaceRule = stylesheet.slice(ruleStart, ruleEnd);
+
+    expect(markup).toContain('data-project-skill-shortcut-bar="true"');
+    expect(splitSurfaceRule).toContain("var(--chat-composer-glass-surface) var(--glass-opacity)");
+    expect(splitSurfaceRule).toContain("-webkit-backdrop-filter");
+    expect(splitSurfaceRule).toContain("backdrop-filter");
+    expect(splitSurfaceRule).toContain("@supports not");
+    expect(splitSurfaceRule).toContain("background: var(--chat-composer-glass-surface)");
   });
 
   it("preserves quick-slot text and rejects empty or duplicate additions", () => {
