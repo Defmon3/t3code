@@ -277,7 +277,7 @@ const makeDefaultOrchestrationThreadShell = (
   };
 };
 
-it("derives process discovery roots from all active projects and thread worktrees", () => {
+it("derives process discovery roots from projects, threads, and independent worktrees", () => {
   const snapshot = {
     snapshotSequence: 0,
     projects: [
@@ -311,11 +311,19 @@ it("derives process discovery roots from all active projects and thread worktree
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
 
-  assert.deepEqual(processDiscoveryRoots(snapshot), [
-    "/tmp/default-project",
-    "/tmp/second-project",
-    "/tmp/default-project-worktree",
-  ]);
+  assert.deepEqual(
+    processDiscoveryRoots(snapshot, [
+      { projectId: defaultProjectId, path: "/tmp/default-project-detached-worktree" },
+      { projectId: ProjectId.make("project-second"), path: "/tmp/second-project-independent" },
+    ]),
+    [
+      "/tmp/default-project",
+      "/tmp/second-project",
+      "/tmp/default-project-worktree",
+      "/tmp/default-project-detached-worktree",
+      "/tmp/second-project-independent",
+    ],
+  );
 });
 
 const browserOtlpTracingLayer = Layer.mergeAll(

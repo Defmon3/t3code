@@ -136,15 +136,36 @@ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchComma
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
 
-export function processDiscoveryRoots(snapshot: OrchestrationShellSnapshot): ReadonlyArray<string> {
+interface ProcessDiscoveryWorktree {
+  readonly projectId: ProjectId;
+  readonly path: string;
+}
+
+export function processDiscoveryRoots(
+  snapshot: OrchestrationShellSnapshot,
+  worktrees: ReadonlyArray<ProcessDiscoveryWorktree> = [],
+): ReadonlyArray<string> {
   return [
     ...new Set([
       ...snapshot.projects.map((project) => project.workspaceRoot),
       ...snapshot.threads.flatMap((thread) =>
         thread.worktreePath === null ? [] : [thread.worktreePath],
       ),
+      ...worktrees.map((worktree) => worktree.path),
     ]),
   ].slice(0, RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS);
+}
+
+function processDiscoveryWorktrees(
+  snapshot: OrchestrationShellSnapshot,
+  git: GitVcsDriver.GitVcsDriver["Service"],
+) {
+  return Effect.forEach(snapshot.projects, (project) =>
+    git.listWorktreePaths(project.workspaceRoot).pipe(
+      Effect.map((paths) => paths.map((path) => ({ projectId: project.id, path }))),
+      Effect.orElseSucceed(() => []),
+    ),
+  ).pipe(Effect.map((worktrees) => worktrees.flat()));
 }
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
@@ -404,6 +425,7 @@ const makeWsRpcLayer = (
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
+      const git = yield* GitVcsDriver.GitVcsDriver;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const analytics = yield* AnalyticsService.AnalyticsService;
@@ -1666,8 +1688,12 @@ const makeWsRpcLayer = (
             input.scope === "registered-project-tests"
               ? Effect.gen(function* () {
                   const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-                  const roots = processDiscoveryRoots(snapshot);
-                  return yield* processDiagnostics.read(roots.length === 0 ? {} : { roots });
+                  const worktrees = yield* processDiscoveryWorktrees(snapshot, git);
+                  const roots = processDiscoveryRoots(snapshot, worktrees);
+                  const diagnostics = yield* processDiagnostics.read(
+                    roots.length === 0 ? {} : { roots },
+                  );
+                  return { ...diagnostics, registeredProjectWorktrees: worktrees };
                 }).pipe(
                   Effect.tapError((cause) =>
                     Effect.logError("process discovery root load failed", { cause }),
