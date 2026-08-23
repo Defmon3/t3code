@@ -703,9 +703,13 @@ const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRo
   return hash.toLowerCase();
 });
 
-export function isCustomDesktopBuildBranch(branchName: string): boolean {
+export function isCustomDesktopBuild(branchName: string, appVersion: string): boolean {
   const normalizedBranch = branchName.trim();
-  return normalizedBranch.length > 0 && normalizedBranch !== "main";
+  return (
+    (normalizedBranch.length > 0 && normalizedBranch !== "main") ||
+    appVersion.includes("-custom.") ||
+    appVersion.endsWith("-custom")
+  );
 }
 
 const resolveGitBranchName = Effect.fn("resolveGitBranchName")(function* (repoRoot: string) {
@@ -2752,7 +2756,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
-  const isCustomBuild = isCustomDesktopBuildBranch(yield* resolveGitBranchName(repoRoot));
+  const isCustomBuild = isCustomDesktopBuild(yield* resolveGitBranchName(repoRoot), appVersion);
   const buildTime = DateTime.formatIso(yield* DateTime.now);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({

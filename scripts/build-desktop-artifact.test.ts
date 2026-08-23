@@ -23,7 +23,7 @@ import {
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
-  isCustomDesktopBuildBranch,
+  isCustomDesktopBuild,
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
@@ -82,12 +82,11 @@ function mockProcess(exitCode: number) {
   });
 }
 
-it("identifies non-main branch builds as custom without inspecting the version", () => {
-  assert.isTrue(isCustomDesktopBuildBranch("custom-main"));
-  assert.isTrue(isCustomDesktopBuildBranch("custom-tweaks"));
-  assert.isTrue(isCustomDesktopBuildBranch("feat/worktree-adoption"));
-  assert.isFalse(isCustomDesktopBuildBranch("main"));
-  assert.isFalse(isCustomDesktopBuildBranch(""));
+it("identifies custom desktop builds from their branch or resolved version", () => {
+  assert.isTrue(isCustomDesktopBuild("", "0.0.34-custom.abc1234"));
+  assert.isFalse(isCustomDesktopBuild("", "0.0.34"));
+  assert.isFalse(isCustomDesktopBuild("", "0.0.34-nightly.abc1234"));
+  assert.isTrue(isCustomDesktopBuild("custom-main", "0.0.34"));
 });
 
 function iconResizeSpawnerLayer(
