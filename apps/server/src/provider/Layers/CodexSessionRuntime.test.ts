@@ -1,8 +1,15 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeAssert from "node:assert/strict";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
 import { DEFAULT_MODEL, ThreadId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -18,8 +25,10 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
   hasConfiguredMcpServer,
+  isCodexStopHookBoundary,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
+  makeCodexSessionRuntime,
   openCodexThread,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
@@ -271,6 +280,142 @@ describe("buildTurnStartParams", () => {
         },
       ],
     });
+  });
+});
+
+describe("isCodexStopHookBoundary", () => {
+  const rootCompletion = {
+    isClosed: false,
+    hasHookPlan: true,
+    providerThreadId: "root-thread",
+    notificationThreadId: "root-thread",
+    turnStatus: "completed",
+  };
+
+  it("accepts the root normal completion boundary", () => {
+    NodeAssert.equal(isCodexStopHookBoundary(rootCompletion), true);
+  });
+
+  it("rejects child completion, explicit interruption, and closed sessions", () => {
+    NodeAssert.equal(
+      isCodexStopHookBoundary({ ...rootCompletion, notificationThreadId: "child-thread" }),
+      false,
+    );
+    NodeAssert.equal(
+      isCodexStopHookBoundary({ ...rootCompletion, turnStatus: "interrupted" }),
+      false,
+    );
+    NodeAssert.equal(isCodexStopHookBoundary({ ...rootCompletion, isClosed: true }), false);
+  });
+});
+
+describe("CodexSessionRuntime Stop hooks", () => {
+  it.live("awaits Stop-hook confirmation before settling a root turn", () => {
+    return Effect.gen(function* () {
+      const platform = yield* HostProcessPlatform;
+      const scriptPath = NodePath.join(
+        import.meta.dirname,
+        `../testFixtures/.stop-hook-script-${process.pid}.json`,
+      );
+      const fixturePath = NodePath.join(
+        import.meta.dirname,
+        "../testFixtures/codexMultiAgentWire.json",
+      );
+      const mockPeerPath = NodePath.join(
+        import.meta.dirname,
+        "../testFixtures/codexCollabMockPeer.mjs",
+      );
+      const peerPath =
+        platform === "win32"
+          ? NodePath.join(import.meta.dirname, `../testFixtures/.stop-hook-peer-${process.pid}.cmd`)
+          : NodePath.join(import.meta.dirname, "../testFixtures/codexCollabMockPeer.sh");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const fixture = JSON.parse(NodeFS.readFileSync(fixturePath, "utf8")) as {
+        readonly rootThreadId: string;
+      };
+      NodeFS.writeFileSync(
+        scriptPath,
+        `{"rootThreadId":"${fixture.rootThreadId}","notifications":[]}`,
+        "utf8",
+      );
+      if (platform === "win32") {
+        NodeFS.writeFileSync(
+          peerPath,
+          `@echo off\r\nshift\r\n"${process.execPath}" "${mockPeerPath}" %*\r\n`,
+          "utf8",
+        );
+      }
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+      if (platform === "win32") {
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(peerPath, { force: true })),
+        );
+      }
+
+      let stopHookEvaluations = 0;
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-stop-hook-confirmation"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        hookPlan: {
+          configPath: "G:/project/.t3code/hooks.json",
+          hasPreToolUseHooks: false,
+          hasPreToolUseHooksNow: Effect.succeed(false),
+          evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
+          evaluateStop: () =>
+            Effect.sync(() => {
+              stopHookEvaluations += 1;
+              return {
+                decision: "ask" as const,
+                title: "Confirm completion?",
+                reason: "Project policy requires confirmation before completion.",
+              };
+            }),
+        },
+      });
+      yield* Effect.addFinalizer(() => runtime.close);
+
+      const approvalFiber = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.kind === "request" && event.method === "item/commandExecution/requestApproval",
+        ),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Finish this turn" });
+
+      const approval = yield* Fiber.join(approvalFiber);
+      if (approval._tag !== "Some") {
+        throw new Error("Stop-hook completion did not request approval.");
+      }
+      const requestId = approval.value.requestId;
+      if (!requestId) {
+        throw new Error("Stop-hook approval request did not include a request id.");
+      }
+      NodeAssert.equal(stopHookEvaluations, 1);
+      NodeAssert.deepStrictEqual(approval.value.payload, {
+        command: "T3 Stop hook confirmation",
+        approvalSource: "hook",
+        approvalTitle: "Confirm completion?",
+        approvalReason: "Project policy requires confirmation before completion.",
+      });
+
+      const waitingSession = yield* runtime.getSession;
+      NodeAssert.equal(waitingSession.status, "running");
+
+      yield* runtime.respondToRequest(requestId, "accept");
+      yield* Effect.yieldNow;
+
+      const session = yield* runtime.getSession;
+      NodeAssert.equal(session.status, "ready");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
   });
 });
 

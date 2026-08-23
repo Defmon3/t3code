@@ -66,15 +66,27 @@ root and uses the first configuration it finds.
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${T3_PROJECT_DIR}/.t3code/confirm-stop.js\""
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-The matcher is a regular expression over T3's normalized tool names, such as `Bash`, `Read`,
-`Edit`, and `Write`. Each command receives JSON on standard input with `provider`, `thread_id`,
-`cwd`, `tool_name`, and `tool_input`. T3 Code also sets `T3_PROJECT_DIR` and
-`CLAUDE_PROJECT_DIR` to the directory that contains `.t3code`.
+The matcher is a regular expression over the normalized tool names exposed by the active provider;
+examples include `Bash`, `Read`, `Edit`, and `Write`, but availability varies by provider.
+`PreToolUse` commands receive JSON on standard input with `provider`,
+`thread_id`, `cwd`, `tool_name`, and `tool_input`. `Stop` commands receive `provider`, `thread_id`,
+`cwd`, and `hook_event_name` after a root agent turn finishes normally. T3 Code also sets
+`T3_PROJECT_DIR` and `CLAUDE_PROJECT_DIR` to the directory that contains `.t3code`.
 
 A hook can return a small T3 response:
 
@@ -104,9 +116,11 @@ tool call. In a Codex thread, edits to hook commands and matchers apply to the n
 adding hooks to a project that had none (or removing the last hook) changes how Codex routes
 approvals starting with the next message you send in that thread.
 
-**Supported events.** Only `PreToolUse` runs. Other event names copied from a Claude hooks file
-(`PostToolUse`, `Stop`, and so on) never run and are reported once as a warning in the T3 Code
-server log, naming the file and the ignored events.
+**Supported events.** `PreToolUse` runs before matching tool calls. `Stop` runs once after a root
+Claude or Codex turn finishes normally; an `ask` response keeps the turn open until the user
+accepts or declines the confirmation. Child-agent completion, interruption, and shutdown do not
+run `Stop`. Other event names copied from a Claude hooks file (such as `PostToolUse`) never run and
+are reported once as a warning in the T3 Code server log, naming the file and the ignored events.
 
 **Unreadable config.** If the file becomes unreadable or invalid while a thread is running, the
 affected tool call turns into an approval prompt rather than being allowed silently, and the

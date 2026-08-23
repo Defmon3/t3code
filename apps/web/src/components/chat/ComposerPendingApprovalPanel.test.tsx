@@ -90,4 +90,26 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain("min-w-0");
     expect(markup).not.toContain('role="alertdialog"');
   });
+
+  it("labels Claude permission requests as engine approvals", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerPendingApprovalPanel
+        approval={{
+          requestId: ApprovalRequestId.make("approval-engine-1"),
+          requestKind: "file-read",
+          createdAt: "2026-08-23T14:55:00.000Z",
+          source: "engine",
+          title: "Read outside working directory?",
+          reason: "Path is outside allowed working directories.",
+          detail: "C:\\Users\\defmon3\\.claude\\house-rules.md",
+        }}
+        pendingCount={1}
+      />,
+    );
+
+    expect(markup).toContain("Read outside working directory?");
+    expect(markup).toContain("Engine permission");
+    expect(markup).toContain("Path is outside allowed working directories.");
+    expect(markup).not.toContain("Project hook");
+  });
 });

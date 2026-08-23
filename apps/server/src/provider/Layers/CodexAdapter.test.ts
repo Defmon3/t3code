@@ -444,6 +444,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       hasPreToolUseHooks: true,
       hasPreToolUseHooksNow: Effect.succeed(true),
       evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
+      evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
     };
     const hookRunner = {
       prepare: (cwd: string) => {
