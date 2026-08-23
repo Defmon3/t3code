@@ -158,7 +158,7 @@ export function ProcessPanel(input: {
                         <div className="flex min-w-0 items-baseline gap-2">
                           <span className="shrink-0 font-medium text-foreground">{test.label}</span>
                           {test.args.length > 0 ? (
-                            <span className="min-w-0 truncate text-muted-foreground">
+                            <span className="min-w-0 text-muted-foreground">
                               {test.args.join(" ")}
                             </span>
                           ) : null}
