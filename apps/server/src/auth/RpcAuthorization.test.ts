@@ -37,10 +37,9 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
   });
 
-  it("allows Git history reads with the orchestration read scope", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.vcsGetHistory)).toBe(AuthOrchestrationReadScope);
-    expect(requiredScopeForRpcMethod(WS_METHODS.vcsGetCommitDetails)).toBe(
-      AuthOrchestrationReadScope,
+  it("requires permission to operate on a thread before uploading feedback", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.providerUploadFeedback)).toBe(
+      AuthOrchestrationOperateScope,
     );
   });
 
