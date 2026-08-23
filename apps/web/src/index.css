@@ -1111,6 +1111,24 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   .chat-composer-glass-shell:is(
       .chat-composer-glass-shell-attached,
+      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
+    )
+    [data-project-skill-shortcut-bar] {
+    background: color-mix(
+      in srgb,
+      var(--chat-composer-glass-surface) var(--glass-opacity),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+
+    @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+      background: var(--chat-composer-glass-surface);
+    }
+  }
+
+  .chat-composer-glass-shell:is(
+      .chat-composer-glass-shell-attached,
       :has(.chat-composer-top-drawer)
     )
     .chat-composer-glass-host
