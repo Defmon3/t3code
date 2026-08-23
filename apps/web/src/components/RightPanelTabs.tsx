@@ -14,6 +14,7 @@ import {
   GitGraph,
   GitPullRequest,
   Globe2,
+  Activity,
   Plus,
   TerminalSquare,
   Volume2,
@@ -90,6 +91,7 @@ interface RightPanelTabsProps {
    */
   onAddIssue: () => void;
   issueAvailable: boolean;
+  onAddProcesses: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -97,6 +99,7 @@ interface RightPanelTabsProps {
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  processesAvailable: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   issueStatuses?: Readonly<Record<string, IssueTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
@@ -129,6 +132,7 @@ const SURFACE_DISABLED_REASONS = {
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
   agents: "Agents are only available from a thread.",
+  processes: "Processes are only available from a connected environment.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -152,6 +156,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequest: "No pull request on this branch yet.",
   issue: "Available for projects with a host.",
   agents: "Available from a thread.",
+  processes: "Available from a connected environment.",
 } as const;
 
 type TabContextMenuAction =
@@ -285,6 +290,7 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddIssue: () => void;
   onAddAgents: () => void;
+  onAddProcesses: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -293,6 +299,7 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
   agentsAvailable: boolean;
+  processesAvailable: boolean;
   liveAgentCount: number;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
@@ -378,6 +385,16 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.agents,
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
+    },
+    {
+      label: "Processes",
+      description: "Follow running tests.",
+      icon: Activity,
+      shortcut: "R",
+      available: props.processesAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.processes,
+      onClick: props.onAddProcesses,
+      badgeCount: 0,
     },
   ] as const;
 
@@ -569,6 +586,8 @@ function surfaceTitle(
       return surface.selected ? `#${surface.selected.number}` : "Issues";
     case "agents":
       return "Agents";
+    case "processes":
+      return "Processes";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -678,6 +697,8 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "processes":
+      return <Activity className="size-3 shrink-0" />;
   }
 }
 
@@ -751,6 +772,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.agentsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
+    },
+    {
+      label: "Processes",
+      icon: Activity,
+      shortcut: "R",
+      available: props.processesAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.processes,
+      onClick: props.onAddProcesses,
     },
   ] as const;
 
@@ -1050,6 +1079,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
             onAddAgents={props.onAddAgents}
+            onAddProcesses={props.onAddProcesses}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
@@ -1058,6 +1088,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}
             agentsAvailable={props.agentsAvailable}
+            processesAvailable={props.processesAvailable}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (

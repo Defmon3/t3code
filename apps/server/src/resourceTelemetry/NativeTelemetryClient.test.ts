@@ -1,4 +1,8 @@
-import type { HostPowerSnapshot } from "@t3tools/contracts";
+import type {
+  HostPowerSnapshot,
+  ResourceMonitorDiscoveredProcessSample,
+  ResourceMonitorProcessDiscoveryEvent,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -11,6 +15,7 @@ import * as Semaphore from "effect/Semaphore";
 import {
   NativeTelemetryRequestTimedOut,
   NativeTelemetryStreamClosed,
+  appendProcessDiscoveryChunk,
   canCommandNativeTelemetrySidecar,
   canRequestNativeTelemetryRetry,
   commitCollectionControlUpdate,
@@ -19,6 +24,34 @@ import {
   resolveNativeSampleIntervalMs,
   synchronizeCollectionControlOnStart,
 } from "./NativeTelemetryClient.ts";
+
+const discoveryProcess = (pid: number): ResourceMonitorDiscoveredProcessSample => ({
+  pid,
+  ppid: 1,
+  startTimeMs: 0,
+  runTimeMs: 0,
+  name: "vitest",
+  command: "vp test",
+  status: "Run",
+  cpuPercent: 0,
+  cpuTimeMs: 0,
+  residentBytes: 0,
+  virtualBytes: 0,
+  ioReadBytes: 0,
+  ioWriteBytes: 0,
+  ioSemantics: "storage",
+});
+
+const discoveryChunk = (
+  done: boolean,
+  processes: ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+): ResourceMonitorProcessDiscoveryEvent => ({
+  version: 4,
+  type: "processDiscovery",
+  requestId: "discovery-1",
+  done,
+  processes,
+});
 
 const basePower: HostPowerSnapshot = {
   source: "electron-main",
@@ -78,6 +111,22 @@ describe("canCommandNativeTelemetrySidecar", () => {
     expect(canCommandNativeTelemetrySidecar("degraded", true)).toBe(true);
     expect(canCommandNativeTelemetrySidecar("unavailable", true)).toBe(false);
     expect(canCommandNativeTelemetrySidecar("degraded", false)).toBe(false);
+  });
+});
+
+describe("appendProcessDiscoveryChunk", () => {
+  it("retains all bounded chunks until the completion event", () => {
+    const first = appendProcessDiscoveryChunk([], discoveryChunk(false, [discoveryProcess(1)]));
+    const completed = appendProcessDiscoveryChunk(
+      first,
+      discoveryChunk(true, [discoveryProcess(513)]),
+    );
+
+    expect(completed.map((process) => process.pid)).toEqual([1, 513]);
+  });
+
+  it("keeps an empty completion event as a successful empty discovery", () => {
+    expect(appendProcessDiscoveryChunk([], discoveryChunk(true, []))).toEqual([]);
   });
 });
 

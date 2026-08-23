@@ -316,9 +316,12 @@ export const ServerProcessDiagnosticsEntry = Schema.Struct({
   pgid: Schema.Option(Schema.Int),
   status: TrimmedNonEmptyString,
   cpuPercent: Schema.Number,
+  cpuTimeMs: NonNegativeInt,
   rssBytes: NonNegativeInt,
   elapsed: TrimmedNonEmptyString,
   command: TrimmedNonEmptyString,
+  argv: Schema.optionalKey(Schema.Array(Schema.String)),
+  cwd: Schema.optionalKey(Schema.String),
   depth: NonNegativeInt,
   childPids: Schema.Array(PositiveInt),
 });
@@ -330,6 +333,9 @@ export const ServerProcessDiagnosticsResult = Schema.Struct({
   processCount: NonNegativeInt,
   totalRssBytes: NonNegativeInt,
   totalCpuPercent: Schema.Number,
+  hostCpuPercent: Schema.Number,
+  hostMemoryUsedBytes: NonNegativeInt,
+  hostMemoryTotalBytes: NonNegativeInt,
   processes: Schema.Array(ServerProcessDiagnosticsEntry),
   error: Schema.Option(
     Schema.Struct({

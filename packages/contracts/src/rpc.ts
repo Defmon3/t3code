@@ -467,7 +467,9 @@ export const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTrace
 });
 
 export const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    scope: Schema.optionalKey(Schema.Literal("registered-project-tests")),
+  }),
   success: ServerProcessDiagnosticsResult,
   error: EnvironmentAuthorizationError,
 });

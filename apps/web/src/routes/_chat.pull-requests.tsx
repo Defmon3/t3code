@@ -1606,6 +1606,7 @@ function PullRequestsRouteView() {
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
             onAddAgents={() => undefined}
+            onAddProcesses={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
@@ -1614,6 +1615,7 @@ function PullRequestsRouteView() {
             pullRequestAvailable={false}
             issueAvailable={false}
             agentsAvailable={false}
+            processesAvailable={false}
             liveAgentCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
             issueStatuses={issueTabStatuses}

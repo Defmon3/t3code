@@ -25,6 +25,7 @@ export const RIGHT_PANEL_KINDS = [
   "issue",
   "issues",
   "agents",
+  "processes",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -90,7 +91,8 @@ export type RightPanelSurface =
       kind: "issues";
       selected: { projectId: string; repository: string; number: number } | null;
     }
-  | { id: "agents"; kind: "agents" };
+  | { id: "agents"; kind: "agents" }
+  | { id: "processes"; kind: "processes" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
@@ -98,7 +100,9 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the Git History singleton and issue surface kinds.
 // v13 adds the "issues" browser surface and stops persisting the issues list's shared panel.
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+// v14 stores the selected view in the unified repository surface.
+// v15 adds the persisted processes surface.
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -188,6 +192,8 @@ const singletonSurface = (
       return { id: "files", kind };
     case "agents":
       return { id: "agents", kind };
+    case "processes":
+      return { id: "processes", kind };
   }
 };
 

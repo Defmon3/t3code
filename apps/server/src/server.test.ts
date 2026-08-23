@@ -102,7 +102,11 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
-import { isThreadDetailEvent, resolveAvailableEditorsForConfig } from "./ws.ts";
+import {
+  isThreadDetailEvent,
+  processDiscoveryRoots,
+  resolveAvailableEditorsForConfig,
+} from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -273,6 +277,47 @@ const makeDefaultOrchestrationThreadShell = (
     ...overrides,
   };
 };
+
+it("derives process discovery roots from all active projects and thread worktrees", () => {
+  const snapshot = {
+    snapshotSequence: 0,
+    projects: [
+      {
+        id: defaultProjectId,
+        title: "Default Project",
+        workspaceRoot: "/tmp/default-project",
+        defaultModelSelection,
+        scripts: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: ProjectId.make("project-second"),
+        title: "Second Project",
+        workspaceRoot: "/tmp/second-project",
+        defaultModelSelection,
+        scripts: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    threads: [
+      makeDefaultOrchestrationThreadShell({ worktreePath: "/tmp/default-project-worktree" }),
+      makeDefaultOrchestrationThreadShell({
+        id: ThreadId.make("thread-second"),
+        projectId: ProjectId.make("project-second"),
+        worktreePath: "/tmp/second-project",
+      }),
+    ],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  assert.deepEqual(processDiscoveryRoots(snapshot), [
+    "/tmp/default-project",
+    "/tmp/second-project",
+    "/tmp/default-project-worktree",
+  ]);
+});
 
 const browserOtlpTracingLayer = Layer.mergeAll(
   FetchHttpClient.layer,
@@ -675,15 +720,32 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({
-          read: Effect.succeed({
-            serverPid: process.pid,
-            readAt: TEST_EPOCH,
-            processCount: 0,
-            totalRssBytes: 0,
-            totalCpuPercent: 0,
-            processes: [],
-            error: Option.none(),
-          }),
+          read: () =>
+            Effect.succeed({
+              serverPid: process.pid,
+              readAt: TEST_EPOCH,
+              processCount: 0,
+              totalRssBytes: 0,
+              totalCpuPercent: 0,
+              hostCpuPercent: 0,
+              hostMemoryUsedBytes: 0,
+              hostMemoryTotalBytes: 0,
+              processes: [],
+              error: Option.none(),
+            }),
+          unavailable: (message) =>
+            Effect.succeed({
+              serverPid: process.pid,
+              readAt: TEST_EPOCH,
+              processCount: 0,
+              totalRssBytes: 0,
+              totalCpuPercent: 0,
+              hostCpuPercent: 0,
+              hostMemoryUsedBytes: 0,
+              hostMemoryTotalBytes: 0,
+              processes: [],
+              error: Option.some({ message }),
+            }),
           signal: (input) =>
             Effect.succeed({
               pid: input.pid,

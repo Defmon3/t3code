@@ -47,8 +47,9 @@ function nativeSnapshot(input: {
   readonly childCpuTimeMs: number;
   readonly childWriteBytes: number;
   readonly externalProcesses?: ResourceMonitorSnapshotEvent["externalProcesses"];
+  readonly processes?: ResourceMonitorSnapshotEvent["processes"];
 }): ResourceMonitorSnapshotEvent {
-  const processes = [
+  const defaultProcesses = [
     processSample({
       pid: process.pid,
       ppid: 1,
@@ -82,18 +83,18 @@ function nativeSnapshot(input: {
     }),
   ];
   return {
-    version: 2,
+    version: 4,
     type: "snapshot",
     sequence: input.sequence,
     sampledAtUnixMs: input.sampledAtUnixMs,
     collectionDurationMicros: 300,
     scannedProcessCount: 80,
-    retainedProcessCount: processes.length,
+    retainedProcessCount: input.processes?.length ?? defaultProcesses.length,
     inaccessibleProcessCount: 1,
     ...(input.externalProcesses === undefined
       ? {}
       : { externalProcesses: input.externalProcesses }),
-    processes,
+    processes: input.processes ?? defaultProcesses,
   };
 }
 
@@ -142,6 +143,52 @@ function desktopSnapshot(sampledAtUnixMs: number): DesktopHostTelemetrySnapshot 
 }
 
 describe("ResourceTelemetry", () => {
+  it.effect("keeps discovery metadata out of telemetry snapshots", () =>
+    Effect.gen(function* () {
+      const sampledAtUnixMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const snapshot = nativeSnapshot({
+        sequence: 1,
+        sampledAtUnixMs,
+        childCpuTimeMs: 0,
+        childWriteBytes: 0,
+        processes: [
+          processSample({
+            pid: 4_242,
+            ppid: process.pid,
+            startTimeMs: 1_000,
+          }),
+        ],
+      });
+      const telemetryLayer = ResourceTelemetry.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NativeTelemetryClient.layerTest({
+              sampleNow: Effect.succeed(nativeGeneration(snapshot, 0)),
+              health: Effect.succeed({
+                status: "healthy",
+                hello: Option.none(),
+                lastSampleAt: Option.none(),
+                lastError: Option.none(),
+                restartCount: 0,
+                sampleIntervalMs: 1_000,
+              }),
+            }),
+            DesktopTelemetryReceiver.layerTest(),
+            ResourceAttribution.layer,
+          ),
+        ),
+      );
+      const result = yield* Effect.gen(function* () {
+        const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
+        return yield* telemetry.refresh;
+      }).pipe(Effect.provide(telemetryLayer));
+
+      expect(result.processes).toHaveLength(1);
+      expect(result.processes[0]).not.toHaveProperty("argv");
+      expect(result.processes[0]).not.toHaveProperty("cwd");
+    }),
+  );
+
   it.effect("enables live native and Electron collection only while changes are retained", () =>
     Effect.gen(function* () {
       const sampledAtUnixMs = DateTime.toEpochMillis(yield* DateTime.now);
@@ -497,7 +544,7 @@ describe("ResourceTelemetry", () => {
       const nativeHealth = yield* Ref.make<NativeTelemetryClient.NativeTelemetryClientHealth>({
         status: "healthy",
         hello: Option.some({
-          version: 2,
+          version: 4,
           type: "hello",
           sidecarVersion: "0.1.0",
           sidecarPid: 9_000,
