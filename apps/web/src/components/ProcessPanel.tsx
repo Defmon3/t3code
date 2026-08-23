@@ -69,8 +69,9 @@ export function ProcessPanel(input: {
         processes: query.data?.processes ?? [],
         projects: input.projects,
         threads: input.threads,
+        worktrees: query.data?.registeredProjectWorktrees ?? [],
       }),
-    [input.projects, input.threads, query.data?.processes],
+    [input.projects, input.threads, query.data?.processes, query.data?.registeredProjectWorktrees],
   );
   const status = processPanelStatus({
     environmentConnectionPhase: input.environmentConnectionPhase,

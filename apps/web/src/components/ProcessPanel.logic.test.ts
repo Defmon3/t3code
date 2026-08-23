@@ -146,6 +146,23 @@ describe("deriveProcessPanelGroups", () => {
     expect(groups[0]?.worktreeLabel).toBe("issue-451");
   });
 
+  it("attributes an independent detached worktree to its registered project", () => {
+    const groups = deriveProcessPanelGroups({
+      processes: [process({ cwd: "C:\\argus-worktrees\\ff-baseline\\src\\Argus.Web" })],
+      projects: [{ ...project, title: "Argus", workspaceRoot: "C:\\argus" }],
+      threads: [],
+      worktrees: [{ projectId: project.id, path: "C:\\argus-worktrees\\ff-baseline" }],
+    });
+
+    expect(groups).toMatchObject([
+      {
+        project: { id: project.id, title: "Argus" },
+        cwd: "C:\\argus-worktrees\\ff-baseline",
+        worktreeLabel: "ff-baseline",
+      },
+    ]);
+  });
+
   it("labels a project checkout by its workspace directory", () => {
     const groups = deriveProcessPanelGroups({
       processes: [process({ cwd: "C:\\code\\t3code\\src" })],

@@ -1018,6 +1018,23 @@ it.effect("ignores worktree metadata for directories that no longer exist", () =
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+it.effect("lists detached worktrees from the cached Git snapshot", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const path = yield* Path.Path;
+      const cwd = yield* makeTmpDir();
+      const detachedWorktreePath = path.join(cwd, "detached-worktree");
+      yield* initRepoWithCommit(cwd);
+      yield* git(cwd, ["worktree", "add", "--detach", detachedWorktreePath, "HEAD"]);
+
+      const worktreePaths = yield* driver.listWorktreePaths(cwd);
+
+      assert.include(worktreePaths, detachedWorktreePath);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("refreshes the current branch after an external checkout", () =>
   Effect.scoped(
     Effect.gen(function* () {

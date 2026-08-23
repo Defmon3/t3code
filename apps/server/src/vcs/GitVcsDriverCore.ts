@@ -123,6 +123,11 @@ interface GitRefSnapshot {
   expiresAt: number;
 }
 
+interface GitWorktreeSnapshot {
+  readonly paths: ReadonlyArray<string>;
+  readonly expiresAt: number;
+}
+
 interface GitCommitFilesSnapshot {
   readonly gitCommonDir: string;
   readonly worktreePath: string | null;
@@ -362,18 +367,16 @@ function parseGitCommitChangedFiles(stdout: string): ReadonlyArray<GitCommitChan
   return files;
 }
 
-function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
-  const worktreePaths = new Map<string, string>();
+function parseWorktreePaths(stdout: string): ReadonlyArray<string> {
+  const worktrees: string[] = [];
   let currentPath: string | null = null;
-  let currentBranch: string | null = null;
   let currentPrunable = false;
 
   const flush = () => {
-    if (currentPath !== null && currentBranch !== null && !currentPrunable) {
-      worktreePaths.set(currentBranch, currentPath);
+    if (currentPath !== null && !currentPrunable) {
+      worktrees.push(currentPath);
     }
     currentPath = null;
-    currentBranch = null;
     currentPrunable = false;
   };
 
@@ -382,15 +385,13 @@ function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
       flush();
     } else if (field.startsWith("worktree ")) {
       currentPath = field.slice("worktree ".length);
-    } else if (field.startsWith("branch refs/heads/")) {
-      currentBranch = field.slice("branch refs/heads/".length);
     } else if (field === "prunable" || field.startsWith("prunable ")) {
       currentPrunable = true;
     }
   }
   flush();
 
-  return worktreePaths;
+  return worktrees;
 }
 
 function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
@@ -825,6 +826,7 @@ const collectOutput = Effect.fnUntraced(function* (
 });
 
 export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* () {
+  const worktreeSnapshots = new Map<string, GitWorktreeSnapshot>();
   const historySnapshots = new Map<string, GitHistorySnapshot>();
   const historyCursors = new Map<
     string,
@@ -2704,6 +2706,49 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
+  const listWorktreePaths: GitVcsDriver.GitVcsDriver["Service"]["listWorktreePaths"] = Effect.fn(
+    "listWorktreePaths",
+  )(function* (cwd) {
+    const repositoryPaths = yield* resolveRepositoryPaths(cwd).pipe(
+      Effect.catchTags({
+        GitCommandError: (error) =>
+          isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
+      }),
+    );
+    if (repositoryPaths === null) return [];
+    const now = yield* Clock.currentTimeMillis;
+    const cached = worktreeSnapshots.get(repositoryPaths.gitCommonDir);
+    if (cached !== undefined && cached.expiresAt > now) return cached.paths;
+
+    const output = yield* executeGit(
+      "GitVcsDriver.listWorktreePaths",
+      cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      { maxOutputBytes: GIT_REF_SNAPSHOT_MAX_OUTPUT_BYTES },
+    );
+    const paths = yield* Effect.filter(
+      parseWorktreePaths(output.stdout).map((worktreePath) =>
+        path.normalize(path.resolve(worktreePath)),
+      ),
+      (worktreePath) =>
+        fileSystem.stat(worktreePath).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ),
+      { concurrency: 16 },
+    );
+    worktreeSnapshots.set(repositoryPaths.gitCommonDir, {
+      paths,
+      expiresAt: now + GIT_REF_SNAPSHOT_TTL_MS,
+    });
+    while (worktreeSnapshots.size > GIT_REF_SNAPSHOT_MAX_SESSIONS) {
+      const oldest = worktreeSnapshots.keys().next().value;
+      if (oldest === undefined) break;
+      worktreeSnapshots.delete(oldest);
+    }
+    return paths;
+  });
+
   const listRefs: GitVcsDriver.GitVcsDriver["Service"]["listRefs"] = Effect.fn("listRefs")(
     function* (input) {
       const repositoryPaths = yield* resolveRepositoryPaths(input.cwd, input.refresh === true).pipe(
@@ -3554,6 +3599,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     for (const [snapshotId, snapshot] of refSnapshots) {
       if (snapshot.gitCommonDir === repositoryPaths.gitCommonDir) refSnapshots.delete(snapshotId);
     }
+    worktreeSnapshots.delete(repositoryPaths.gitCommonDir);
     yield* Cache.invalidate(repositoryPathsCache, normalizeRepositoryPathsCacheKey(cwd));
   });
 
@@ -3599,6 +3645,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffFileContents,
     readConfigValue,
     listRefs,
+    listWorktreePaths,
     listHistoryRefs,
     getHistory,
     getCommitDetails,

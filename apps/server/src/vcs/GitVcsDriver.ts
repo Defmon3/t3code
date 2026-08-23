@@ -282,6 +282,9 @@ export class GitVcsDriver extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly listWorktreePaths: (
+      cwd: string,
+    ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
     readonly listHistoryRefs: (
       input: VcsListHistoryRefsInput,
     ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;

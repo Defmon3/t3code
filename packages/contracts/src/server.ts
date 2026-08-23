@@ -327,6 +327,12 @@ export const ServerProcessDiagnosticsEntry = Schema.Struct({
 });
 export type ServerProcessDiagnosticsEntry = typeof ServerProcessDiagnosticsEntry.Type;
 
+export const ServerProcessDiagnosticsWorktree = Schema.Struct({
+  projectId: ProjectId,
+  path: TrimmedNonEmptyString,
+});
+export type ServerProcessDiagnosticsWorktree = typeof ServerProcessDiagnosticsWorktree.Type;
+
 export const ServerProcessDiagnosticsResult = Schema.Struct({
   serverPid: PositiveInt,
   readAt: Schema.DateTimeUtc,
@@ -337,6 +343,7 @@ export const ServerProcessDiagnosticsResult = Schema.Struct({
   hostMemoryUsedBytes: NonNegativeInt,
   hostMemoryTotalBytes: NonNegativeInt,
   processes: Schema.Array(ServerProcessDiagnosticsEntry),
+  registeredProjectWorktrees: Schema.optionalKey(Schema.Array(ServerProcessDiagnosticsWorktree)),
   error: Schema.Option(
     Schema.Struct({
       message: TrimmedNonEmptyString,

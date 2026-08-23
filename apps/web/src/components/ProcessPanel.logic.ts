@@ -29,6 +29,11 @@ export interface ProcessPanelThread {
   readonly worktreePath: string | null;
 }
 
+export interface ProcessPanelWorktree {
+  readonly projectId: string;
+  readonly path: string;
+}
+
 export interface ProcessPanelGroup {
   readonly project: ProcessPanelProject;
   readonly cwd: string;
@@ -92,6 +97,7 @@ function basename(path: string): string {
 function attributionCandidates(
   projects: readonly ProcessPanelProject[],
   threads: readonly ProcessPanelThread[],
+  worktrees: readonly ProcessPanelWorktree[],
 ): readonly AttributionCandidate[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const candidates: AttributionCandidate[] = projects.map((project) => ({
@@ -108,6 +114,16 @@ function attributionCandidates(
       cwd: thread.worktreePath,
       worktreeLabel: basename(thread.worktreePath),
       normalizedCwd: normalizePath(thread.worktreePath),
+    });
+  }
+  for (const worktree of worktrees) {
+    const project = projectById.get(worktree.projectId);
+    if (!project) continue;
+    candidates.push({
+      project,
+      cwd: worktree.path,
+      worktreeLabel: basename(worktree.path),
+      normalizedCwd: normalizePath(worktree.path),
     });
   }
   return candidates.sort(
@@ -167,9 +183,14 @@ export function deriveProcessPanelGroups(input: {
   readonly processes: readonly ProcessPanelEntry[];
   readonly projects: readonly ProcessPanelProject[];
   readonly threads: readonly ProcessPanelThread[];
+  readonly worktrees?: readonly ProcessPanelWorktree[];
 }): readonly ProcessPanelGroup[] {
   const processesByPid = new Map(input.processes.map((process) => [process.pid, process]));
-  const candidatesByPath = attributionCandidates(input.projects, input.threads);
+  const candidatesByPath = attributionCandidates(
+    input.projects,
+    input.threads,
+    input.worktrees ?? [],
+  );
   const candidates = input.processes.flatMap((entry) => {
     if (!isTestCommand(entry.command, entry.argv)) return [];
     const attribution = attributeProcess(entry.cwd, candidatesByPath);
