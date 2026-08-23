@@ -35,9 +35,6 @@ import {
 export const projectSkillShortcutBarClassName =
   "flex h-auto min-h-9 w-full flex-wrap items-center gap-1 overflow-visible rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
 
-export const projectSkillShortcutEmptyBarClassName =
-  "inline-flex h-9 items-center rounded-t-[19px] border-b border-border/65 bg-muted/20 p-1";
-
 export const projectSkillShortcutButtonClassName =
   "min-w-0 max-w-[min(100%,20rem)] shrink-0 truncate rounded-md border border-border/70 bg-background px-2 py-1 text-xs font-medium hover:bg-accent";
 
@@ -356,11 +353,7 @@ export function ProjectSkillShortcutBar(props: {
   };
   return (
     <div
-      className={
-        shortcuts.length > 0
-          ? projectSkillShortcutBarClassName
-          : projectSkillShortcutEmptyBarClassName
-      }
+      className={projectSkillShortcutBarClassName}
       aria-label="Project quick slots"
       data-project-skill-shortcut-bar="true"
     >
@@ -403,12 +396,11 @@ export function ProjectSkillShortcutBar(props: {
       ) : (
         <button
           type="button"
-          className="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 text-xs text-muted-foreground hover:bg-accent"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md border border-dashed border-border text-muted-foreground hover:bg-accent"
           aria-label="Add quick slot"
           onClick={() => setAdding(true)}
         >
           <PlusIcon className="size-3.5" />
-          <span>Add quick slot</span>
         </button>
       )}
     </div>

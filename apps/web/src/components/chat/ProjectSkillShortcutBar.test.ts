@@ -1,11 +1,13 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   addProjectSkillShortcut,
   normalizeProjectSkillShortcut,
+  ProjectSkillShortcutBar,
   projectSkillShortcutBarClassName,
   projectSkillShortcutButtonClassName,
-  projectSkillShortcutEmptyBarClassName,
   removeProjectSkillShortcut,
   reorderProjectSkillShortcuts,
   resolveProjectSkillShortcutActivation,
@@ -24,11 +26,28 @@ describe("project skill shortcuts", () => {
     expect(projectSkillShortcutBarClassName).not.toContain("scrollbar");
   });
 
-  it("bounds labels and renders an intentional compact empty state", () => {
+  it("bounds labels and keeps the empty state on the full-width bar geometry", () => {
     expect(projectSkillShortcutButtonClassName).toContain("max-w-[min(100%,20rem)]");
     expect(projectSkillShortcutButtonClassName).toContain("truncate");
-    expect(projectSkillShortcutEmptyBarClassName).toContain("inline-flex");
-    expect(projectSkillShortcutEmptyBarClassName).not.toContain("w-full");
+    expect(projectSkillShortcutBarClassName).toContain("w-full");
+    expect(projectSkillShortcutBarClassName).toContain("rounded-t-[19px]");
+  });
+
+  it("renders an icon-only accessible add control on the full-width empty bar", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ProjectSkillShortcutBar, {
+        shortcuts: [],
+        colors: {},
+        onChange: () => {},
+        onInvoke: () => {},
+        onInsert: () => {},
+      }),
+    );
+
+    expect(markup).toContain(projectSkillShortcutBarClassName);
+    expect(markup).toContain('class="flex size-7 shrink-0');
+    expect(markup).toContain('aria-label="Add quick slot"');
+    expect(markup).not.toContain(">Add quick slot<");
   });
 
   it("preserves quick-slot text and rejects empty or duplicate additions", () => {
