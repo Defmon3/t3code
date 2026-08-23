@@ -546,8 +546,9 @@ export interface ChatComposerProps {
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
-  // Session phase
+  // Connection presentation
   phase: SessionPhase;
+  isTurnRunning: boolean;
   isConnecting: boolean;
   isSendBusy: boolean;
   sendDisabledReason: string | null;
@@ -658,6 +659,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     forceExpandedOnMobile,
     projectSelectionRequired,
     phase,
+    isTurnRunning,
     isConnecting,
     isSendBusy,
     sendDisabledReason,
@@ -1212,7 +1214,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
-    if (phase === "running") {
+    if (isTurnRunning) {
       return "running";
     }
     if (showPlanFollowUpPrompt) {
@@ -1226,7 +1228,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting,
     isPreparingWorktree,
     isSendBusy,
-    phase,
+    isTurnRunning,
     prompt,
     showPlanFollowUpPrompt,
   ]);
@@ -1299,7 +1301,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
+    isTurnRunning ||
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
@@ -1872,7 +1874,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isConnecting ||
       noProviderAvailable ||
       environmentUnavailable !== null ||
-      phase === "running"
+      isTurnRunning
     ) {
       return false;
     }
@@ -1890,7 +1892,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     isSendDisabled,
     noProviderAvailable,
-    phase,
+    isTurnRunning,
     showPlanFollowUpPrompt,
   ]);
 
@@ -3396,7 +3398,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeContextWindow={activeContextWindow}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
-                    isRunning={phase === "running"}
+                    isRunning={isTurnRunning}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }

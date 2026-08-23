@@ -18,6 +18,7 @@ import {
   deriveWorkLogEntries,
   findLatestProposedPlan,
   hasActionableProposedPlan,
+  isSessionActivelyRunningTurn,
   isLatestTurnSettled,
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolNeutralStatus,
@@ -1878,16 +1879,28 @@ describe("isLatestTurnSettled", () => {
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("returns false while the same turn is still active in a running session", () => {
+  it("returns false while the same turn is incomplete in a running session", () => {
+    expect(
+      isLatestTurnSettled(
+        { ...latestTurn, completedAt: null },
+        {
+          status: "running",
+          activeTurnId: TurnId.make("turn-1"),
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("returns true when the latest turn completed but the session status is stale-running", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         status: "running",
         activeTurnId: TurnId.make("turn-1"),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("returns false while any turn is running to avoid stale latest-turn banners", () => {
+  it("returns false while a different turn is running", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         status: "running",
@@ -1919,6 +1932,44 @@ describe("isLatestTurnSettled", () => {
   });
 });
 
+describe("isSessionActivelyRunningTurn", () => {
+  const completedTurn = {
+    turnId: TurnId.make("turn-1"),
+    startedAt: "2026-02-27T21:10:00.000Z",
+    completedAt: "2026-02-27T21:10:06.000Z",
+  } as const;
+
+  it("returns true when the latest turn is incomplete", () => {
+    expect(
+      isSessionActivelyRunningTurn(
+        { ...completedTurn, completedAt: null },
+        {
+          status: "running",
+          activeTurnId: TurnId.make("turn-1"),
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when only the completed latest turn has a stale running status", () => {
+    expect(
+      isSessionActivelyRunningTurn(completedTurn, {
+        status: "running",
+        activeTurnId: TurnId.make("turn-1"),
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when a different active turn is running", () => {
+    expect(
+      isSessionActivelyRunningTurn(completedTurn, {
+        status: "running",
+        activeTurnId: TurnId.make("turn-2"),
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("deriveActiveWorkStartedAt", () => {
   const latestTurn = {
     turnId: TurnId.make("turn-1"),
@@ -1929,7 +1980,7 @@ describe("deriveActiveWorkStartedAt", () => {
   it("prefers the in-flight turn start when the latest turn is not settled", () => {
     expect(
       deriveActiveWorkStartedAt(
-        latestTurn,
+        { ...latestTurn, completedAt: null },
         {
           status: "running",
           activeTurnId: TurnId.make("turn-1"),
@@ -1937,6 +1988,19 @@ describe("deriveActiveWorkStartedAt", () => {
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:10:00.000Z");
+  });
+
+  it("falls back to the new send start when only the session status is stale-running", () => {
+    expect(
+      deriveActiveWorkStartedAt(
+        latestTurn,
+        {
+          status: "running",
+          activeTurnId: TurnId.make("turn-1"),
+        },
+        "2026-02-27T21:11:00.000Z",
+      ),
+    ).toBe("2026-02-27T21:11:00.000Z");
   });
 
   it("uses the new send start while the session is running a different turn", () => {
