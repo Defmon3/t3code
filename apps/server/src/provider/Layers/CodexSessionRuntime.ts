@@ -216,7 +216,7 @@ interface PendingApproval {
   readonly requestKind: ProviderRequestKind;
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
-  readonly source?: "hook";
+  readonly source?: "hook" | "stop-hook";
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
 }
 
@@ -232,6 +232,21 @@ interface PendingUserInput {
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
+}
+
+export function isCodexStopHookBoundary(input: {
+  readonly isClosed: boolean;
+  readonly hasHookPlan: boolean;
+  readonly providerThreadId: string | undefined;
+  readonly notificationThreadId: string;
+  readonly turnStatus: string;
+}): boolean {
+  return (
+    !input.isClosed &&
+    input.hasHookPlan &&
+    input.providerThreadId === input.notificationThreadId &&
+    input.turnStatus === "completed"
+  );
 }
 
 type CodexServerNotification = {
@@ -923,6 +938,7 @@ export const makeCodexSessionRuntime = (
     const collabChildLiveTurnsRef = yield* Ref.make(new Map<string, string>());
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
+    const stopHookEvaluatedTurnIdsRef = yield* Ref.make(new Set<string>());
     const allowHookApprovalsForSessionRef = yield* Ref.make(false);
     const interceptApprovalsAtStart = options.hookPlan?.hasPreToolUseHooks === true;
 
@@ -953,6 +969,30 @@ export const makeCodexSessionRuntime = (
           );
       },
     );
+
+    const evaluateStopHook = Effect.fn("CodexSessionRuntime.evaluateStopHook")(function* () {
+      if (!options.hookPlan) {
+        return { decision: "allow" as const };
+      }
+      return yield* options.hookPlan
+        .evaluateStop({
+          provider: PROVIDER,
+          threadId: options.threadId,
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.succeed({
+              decision: "ask" as const,
+              title: "T3 hook failed",
+              description: undefined,
+              reason:
+                cause instanceof Error
+                  ? cause.message
+                  : "A T3 project hook failed before this turn could complete.",
+            }),
+          ),
+        );
+    });
 
     // `~` is not shell-expanded when env vars are set via
     // `child_process.spawn`; `expandHomePath` lets a configured
@@ -1505,14 +1545,138 @@ export const makeCodexSessionRuntime = (
           if (providerThreadId && payload.threadId !== providerThreadId) {
             return Effect.void;
           }
-          const lastError =
-            payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
-              ? payload.turn.error.message
-              : undefined;
-          return updateSession(sessionRef, {
-            status: payload.turn.status === "failed" ? "error" : "ready",
-            activeTurnId: undefined,
-            ...(lastError ? { lastError } : {}),
+          return Effect.gen(function* () {
+            const isClosed = yield* Ref.get(closedRef);
+            if (
+              isCodexStopHookBoundary({
+                isClosed,
+                hasHookPlan: options.hookPlan !== undefined,
+                providerThreadId,
+                notificationThreadId: payload.threadId,
+                turnStatus: payload.turn.status,
+              })
+            ) {
+              const turnId = TurnId.make(payload.turn.id);
+              const shouldEvaluate = yield* Ref.modify(stopHookEvaluatedTurnIdsRef, (current) => {
+                if (current.has(payload.turn.id)) {
+                  return [false, current] as const;
+                }
+                const next = new Set(current);
+                next.add(payload.turn.id);
+                return [true, next] as const;
+              });
+              if (!shouldEvaluate) {
+                return;
+              }
+              yield* Effect.gen(function* () {
+                const decision = yield* evaluateStopHook();
+                if (yield* Ref.get(closedRef)) {
+                  return;
+                }
+                if (decision.decision === "allow") {
+                  yield* updateSession(sessionRef, {
+                    status: "ready",
+                    activeTurnId: undefined,
+                  });
+                  return;
+                }
+                if (decision.decision === "deny") {
+                  const message = decision.reason ?? "A T3 project hook denied turn completion.";
+                  yield* updateSession(sessionRef, {
+                    status: "error",
+                    activeTurnId: undefined,
+                    lastError: message,
+                  });
+                  yield* emitEvent({
+                    kind: "error",
+                    threadId: options.threadId,
+                    method: "t3/stopHook/denied",
+                    message,
+                  });
+                  return;
+                }
+
+                const requestId = ApprovalRequestId.make(
+                  yield* randomUUIDv4("command-approval-request"),
+                );
+                const approval = yield* Deferred.make<ProviderApprovalDecision>();
+                yield* Ref.update(pendingApprovalsRef, (current) => {
+                  const next = new Map(current);
+                  next.set(requestId, {
+                    requestId,
+                    jsonRpcId: `stop-hook:${payload.turn.id}`,
+                    requestKind: "command",
+                    turnId,
+                    itemId: undefined,
+                    source: "stop-hook",
+                    decision: approval,
+                  });
+                  return next;
+                });
+                yield* emitEvent({
+                  kind: "request",
+                  threadId: options.threadId,
+                  method: "item/commandExecution/requestApproval",
+                  requestId,
+                  requestKind: "command",
+                  turnId,
+                  payload: {
+                    command: "T3 Stop hook confirmation",
+                    approvalSource: "hook",
+                    ...(decision.title ? { approvalTitle: decision.title } : {}),
+                    ...(decision.description ? { approvalDescription: decision.description } : {}),
+                    approvalReason: decision.reason,
+                  },
+                });
+                const response = yield* Deferred.await(approval).pipe(
+                  Effect.ensuring(
+                    Ref.update(pendingApprovalsRef, (current) => {
+                      const next = new Map(current);
+                      next.delete(requestId);
+                      return next;
+                    }),
+                  ),
+                );
+                if (yield* Ref.get(closedRef)) {
+                  return;
+                }
+                if (response === "accept" || response === "acceptForSession") {
+                  yield* updateSession(sessionRef, {
+                    status: "ready",
+                    activeTurnId: undefined,
+                  });
+                  return;
+                }
+                const message = "T3 project hook confirmation denied turn completion.";
+                yield* updateSession(sessionRef, {
+                  status: "error",
+                  activeTurnId: undefined,
+                  lastError: message,
+                });
+                yield* emitEvent({
+                  kind: "error",
+                  threadId: options.threadId,
+                  method: "t3/stopHook/denied",
+                  message,
+                });
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError("Failed to process Codex Stop hook.", { cause }),
+                ),
+                Effect.forkIn(runtimeScope),
+                Effect.asVoid,
+              );
+              return;
+            }
+            const lastError =
+              payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
+                ? payload.turn.error.message
+                : undefined;
+            yield* updateSession(sessionRef, {
+              status: payload.turn.status === "failed" ? "error" : "ready",
+              activeTurnId: undefined,
+              ...(lastError ? { lastError } : {}),
+            });
           });
         }),
       ),

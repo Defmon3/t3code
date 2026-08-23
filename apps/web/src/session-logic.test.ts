@@ -112,6 +112,32 @@ describe("derivePendingApprovals", () => {
     ]);
   });
 
+  it("preserves engine permission source metadata", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-engine-1",
+          requestKind: "file-read",
+          detail: "C:\\Users\\defmon3\\.claude\\house-rules.md",
+          approvalSource: "engine",
+          approvalTitle: "Read outside working directory?",
+          approvalReason: "Path is outside allowed working directories.",
+        },
+      }),
+    ]);
+
+    expect(approvals).toEqual([
+      expect.objectContaining({
+        requestId: "req-engine-1",
+        source: "engine",
+        title: "Read outside working directory?",
+        reason: "Path is outside allowed working directories.",
+      }),
+    ]);
+  });
+
   it("maps canonical requestType payloads into pending approvals", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

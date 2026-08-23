@@ -26,8 +26,10 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         ? "File to read"
         : "File change";
   const isHookApproval = approval.source === "hook";
+  const isEngineApproval = approval.source === "engine";
+  const hasSourceContext = isHookApproval || isEngineApproval;
 
-  if (!isHookApproval) {
+  if (!hasSourceContext) {
     return (
       <div
         aria-label={fallbackLabel}
@@ -51,7 +53,9 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
     );
   }
 
-  const title = approval.title ?? "Hook approval requested";
+  const title =
+    approval.title ?? (isHookApproval ? "Hook approval requested" : "Approval required");
+  const sourceLabel = isHookApproval ? "Project hook" : "Engine permission";
 
   return (
     <div aria-label={title} className={cn("min-w-0 flex-1 space-y-2.5", className)} role="group">
@@ -64,7 +68,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           </span>
         ) : null}
         <span className="ml-auto shrink-0 rounded-full border border-warning/25 bg-warning/8 px-2 py-0.5 text-[10px] font-medium text-warning">
-          Project hook
+          {sourceLabel}
         </span>
       </div>
       {approval.reason ? (

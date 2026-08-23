@@ -112,7 +112,7 @@ export interface PendingApproval {
   requestKind: "command" | "file-read" | "file-change";
   createdAt: string;
   detail?: string;
-  source?: "hook";
+  source?: "hook" | "engine";
   title?: string;
   description?: string;
   reason?: string;
@@ -428,7 +428,10 @@ export function derivePendingApprovals(
           ? requestKindFromRequestType(payload.requestType)
           : null;
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
-    const source = payload?.approvalSource === "hook" ? "hook" : undefined;
+    const source =
+      payload?.approvalSource === "hook" || payload?.approvalSource === "engine"
+        ? payload.approvalSource
+        : undefined;
     const title =
       payload && typeof payload.approvalTitle === "string" ? payload.approvalTitle : undefined;
     const description =
