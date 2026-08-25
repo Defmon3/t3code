@@ -6,25 +6,17 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 
 const refState = vi.hoisted(() => ({
+  favoriteBranches: [] as ReadonlyArray<string>,
+  isResolved: true,
   local: [] as ReadonlyArray<VcsHistoryRef>,
   remote: [] as ReadonlyArray<VcsHistoryRef>,
   tags: [] as ReadonlyArray<VcsHistoryRef>,
   isComplete: true,
-  nextCursor: null as string | null,
-  validation: new Map<string, ReadonlyArray<VcsHistoryRef>>(),
-  validationError: null as string | null,
-  validationRefresh: vi.fn(),
-  validationRetry: vi.fn(),
+  requests: [] as Array<{
+    readonly target: unknown;
+    readonly options: { readonly namespace: string };
+  }>,
 }));
-const debounceState = vi.hoisted(() => ({ value: "" }));
-const historyRefTargets = vi.hoisted(
-  () =>
-    [] as Array<{
-      readonly namespace: string;
-      readonly query: string | undefined;
-      readonly enabled: boolean;
-    }>,
-);
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -32,6 +24,7 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
+    useDeferredValue: <Value,>(value: Value) => value,
     useEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
     useState: reactHookHarness.useState,
@@ -43,45 +36,38 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 
+vi.mock("../../hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [
+    refState.favoriteBranches,
+    (next: ReadonlyArray<string> | ((current: ReadonlyArray<string>) => ReadonlyArray<string>)) => {
+      refState.favoriteBranches =
+        typeof next === "function" ? next(refState.favoriteBranches) : next;
+    },
+  ],
+}));
+
 vi.mock("../../state/queries", () => ({
-  useDebouncedValue: () => debounceState.value,
-  usePaginatedHistoryRefs: (
-    target: { readonly environmentId: EnvironmentId | null; readonly query?: string },
-    options: { readonly namespace: string },
-  ) => {
-    historyRefTargets.push({
-      namespace: options.namespace,
-      query: target.query,
-      enabled: target.environmentId !== null,
-    });
-    const key = `${options.namespace}:${target.query ?? ""}`;
-    const validationRefs = target.query === undefined ? undefined : refState.validation.get(key);
-    const isValidationQuery = validationRefs !== undefined;
+  useDebouncedValue: <Value,>(value: Value) => value,
+  usePaginatedHistoryRefs: (target: unknown, options: { readonly namespace: string }) => {
+    refState.requests.push({ target, options });
     const refs =
-      validationRefs ??
-      (options.namespace === "local"
+      options.namespace === "local"
         ? refState.local
         : options.namespace === "remote"
           ? refState.remote
-          : refState.tags);
+          : refState.tags;
     return {
-      data: {
-        currentRef: null,
-        nextCursor: isValidationQuery ? null : refState.nextCursor,
-        isComplete: isValidationQuery ? true : refState.isComplete,
-      },
+      data: refState.isResolved
+        ? { currentRef: null, nextCursor: null, isComplete: refState.isComplete }
+        : undefined,
       refs,
-      error: isValidationQuery ? refState.validationError : null,
+      error: null,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
-      refresh: isValidationQuery ? refState.validationRefresh : vi.fn(),
-      retry: isValidationQuery ? refState.validationRetry : vi.fn(),
+      refresh: vi.fn(),
+      retry: vi.fn(),
     };
   },
-}));
-
-vi.mock("../../hooks/useLocalStorage", () => ({
-  useLocalStorage: () => [[], vi.fn()],
 }));
 
 import { GitRefsPane } from "./GitHistoryRefsPane";
@@ -93,29 +79,23 @@ import {
 
 const environmentId = EnvironmentId.make("environment-local");
 
-function ref(name: string, isRemote = false, isTag = false): VcsHistoryRef {
-  return {
-    current: false,
-    isDefault: false,
-    isRemote,
-    ...(isTag ? { isTag: true } : {}),
-    name,
-    worktreePath: null,
-  };
+function ref(name: string, isRemote = false): VcsHistoryRef {
+  return { current: false, isDefault: false, isRemote, name, worktreePath: null };
 }
 
-function renderRefs() {
+function renderRefs(currentEnvironmentId = environmentId, cwd = "C:/workspace", revision = 0) {
   hooks.beginRender();
-  const historyRefs = useGitHistoryRefs(environmentId, "C:/workspace");
+  const historyRefs = useGitHistoryRefs(currentEnvironmentId, cwd, revision);
   const pane = GitRefsPane({
     refFilter: historyRefs.refFilter,
     onRefFilterChange: historyRefs.setRefFilter,
-    selectedRevision: historyRefs.selectedRevision ?? null,
+    selectedRevision: historyRefs.selectedRevision,
     onSelectAll: historyRefs.selectAllRefs,
-    currentRef: historyRefs.currentRef ?? null,
+    currentRef: historyRefs.currentRef,
     onSelectRef: historyRefs.selectRef,
     normalizedRefFilter: historyRefs.normalizedRefFilter,
     localRefTree: historyRefs.localRefTree,
+    favoriteRefs: historyRefs.favoriteRefs,
     remoteRefTree: historyRefs.remoteRefTree,
     tagRefTree: historyRefs.tagRefTree,
     expandedRefKeys: historyRefs.expandedRefKeys,
@@ -145,17 +125,13 @@ function renderRefs() {
 describe("useGitHistoryRefs", () => {
   beforeEach(() => {
     hooks.reset();
+    refState.favoriteBranches = [];
+    refState.isResolved = true;
     refState.local = Array.from({ length: 5_000 }, (_, index) => ref(`feature-${index}`));
     refState.remote = Array.from({ length: 5_000 }, (_, index) => ref(`origin-${index}`, true));
     refState.tags = [];
     refState.isComplete = true;
-    refState.nextCursor = null;
-    refState.validation.clear();
-    refState.validationError = null;
-    refState.validationRefresh.mockReset();
-    refState.validationRetry.mockReset();
-    debounceState.value = "";
-    historyRefTargets.length = 0;
+    refState.requests = [];
   });
 
   it("preserves ref trees and the 10k-row virtual-list model across unchanged rerenders", () => {
@@ -180,175 +156,52 @@ describe("useGitHistoryRefs", () => {
     expect(rendered.capStatus?.props.children).toBe("Showing the first 10,000 matching refs.");
   });
 
-  it("adds and removes a branch favorite under its repository storage key", () => {
-    const key = gitHistoryFavoriteStorageKey(environmentId, "C:/workspace");
-    expect(key).toBe("t3code:git-history-favorites:v1:environment-local:C:/workspace");
-    expect(toggleGitHistoryFavorite([], "feature/ui")).toEqual(["feature/ui"]);
-    expect(toggleGitHistoryFavorite(["feature/ui"], "feature/ui")).toEqual([]);
+  it("scopes favorite storage and toggles branch membership", () => {
+    expect(gitHistoryFavoriteStorageKey(environmentId, "C:/workspace")).toBe(
+      "t3code:git-history-favorites:v1:environment-local:C:/workspace",
+    );
+    expect(toggleGitHistoryFavorite([], "feature/favorite")).toEqual(["feature/favorite"]);
+    expect(toggleGitHistoryFavorite(["feature/favorite"], "feature/favorite")).toEqual([]);
   });
 
-  it("keeps history-ref RPC query keys unchanged until a typed filter settles", () => {
+  it("keeps the selection unresolved until the current ref resolves", () => {
+    refState.isResolved = false;
+
+    expect(renderRefs().historyRefs.selectedRevision).toBeUndefined();
+  });
+
+  it("does not carry a selected revision into a new unresolved scope", () => {
     const initial = renderRefs();
-    initial.historyRefs.setRefFilter("f");
-    renderRefs().historyRefs.setRefFilter("fe");
-    renderRefs().historyRefs.setRefFilter("feature");
-    const rapidInput = renderRefs();
-
-    expect(rapidInput.historyRefs.refFilter).toBe("feature");
-    expect(historyRefTargets.slice(-4)).toEqual([
-      { namespace: "local", query: "", enabled: true },
-      { namespace: "remote", query: undefined, enabled: false },
-      { namespace: "tag", query: undefined, enabled: false },
-      { namespace: "local", query: undefined, enabled: false },
-    ]);
-
-    debounceState.value = "feature";
+    initial.historyRefs.selectRef("feature/selected", "refs/heads/feature/selected");
     renderRefs();
-    expect(historyRefTargets.slice(-4)).toEqual([
-      { namespace: "local", query: "feature", enabled: true },
-      { namespace: "remote", query: "feature", enabled: true },
-      { namespace: "tag", query: "feature", enabled: true },
-      { namespace: "local", query: undefined, enabled: false },
-    ]);
-  });
+    refState.isResolved = false;
 
-  it("keeps a selected remote ref found beyond the paginated main tree", () => {
-    const selectedName = "origin/feature/250";
-    refState.remote = Array.from({ length: 200 }, (_, index) =>
-      ref(`origin/feature/${index}`, true),
-    );
-    refState.isComplete = false;
-    refState.nextCursor = "remote-page-2";
-    refState.validation.set(`remote:${selectedName}`, [ref(selectedName, true)]);
-
-    const initial = renderRefs();
-    initial.historyRefs.selectRef(selectedName, `refs/remotes/${selectedName}`);
-    const selected = renderRefs();
-
-    expect(selected.historyRefs.selectedRevision?.revision).toBe(`refs/remotes/${selectedName}`);
-    expect(historyRefTargets).toContainEqual({
-      namespace: "remote",
-      query: selectedName,
-      enabled: true,
-    });
-  });
-
-  it("revalidates and clears a deep selected ref after manual refresh", () => {
-    const selectedName = "origin/feature/250";
-    const validationKey = `remote:${selectedName}`;
-    refState.remote = Array.from({ length: 200 }, (_, index) =>
-      ref(`origin/feature/${index}`, true),
-    );
-    refState.isComplete = false;
-    refState.nextCursor = "remote-page-2";
-    refState.validation.set(validationKey, [ref(selectedName, true)]);
-
-    const initial = renderRefs();
-    initial.historyRefs.selectRef(selectedName, `refs/remotes/${selectedName}`);
-    const selected = renderRefs();
-    const validationRequestsBeforeRefresh = historyRefTargets.filter(
-      (target) => target.namespace === "remote" && target.query === selectedName && target.enabled,
-    ).length;
-
-    refState.validation.set(validationKey, []);
-    selected.historyRefs.refreshRefs();
-    const refreshed = renderRefs();
-
-    expect(refState.validationRefresh).toHaveBeenCalledOnce();
-    expect(refreshed.historyRefs.selectedRevision).toBeNull();
     expect(
-      historyRefTargets.filter(
-        (target) =>
-          target.namespace === "remote" && target.query === selectedName && target.enabled,
-      ),
-    ).toHaveLength(validationRequestsBeforeRefresh + 1);
+      renderRefs(environmentId, "C:/other-workspace").historyRefs.selectedRevision,
+    ).toBeUndefined();
   });
 
-  it("surfaces and retries an active selected-ref validation error", () => {
-    const selectedName = "origin/feature/250";
-    refState.remote = Array.from({ length: 200 }, (_, index) =>
-      ref(`origin/feature/${index}`, true),
-    );
-    refState.isComplete = false;
-    refState.nextCursor = "remote-page-2";
-    refState.validation.set(`remote:${selectedName}`, [ref(selectedName, true)]);
-
+  it("loads a collapsed selected remote namespace for removal recovery", () => {
     const initial = renderRefs();
-    initial.historyRefs.selectRef(selectedName, `refs/remotes/${selectedName}`);
-    refState.validationError = "temporary selected ref validation failure";
-    const selected = renderRefs();
+    initial.historyRefs.selectRef("origin/main", "refs/remotes/origin/main");
+    refState.requests = [];
 
-    expect(selected.historyRefs.refPaginationError).toBe(
-      "temporary selected ref validation failure",
-    );
-    selected.historyRefs.onRetryRefs();
-    expect(refState.validationRetry).toHaveBeenCalledOnce();
-  });
-
-  it("clears a deleted selected ref with a paginated main tree", () => {
-    const selectedName = "origin/deleted";
-    refState.remote = Array.from({ length: 200 }, (_, index) =>
-      ref(`origin/feature/${index}`, true),
-    );
-    refState.isComplete = false;
-    refState.nextCursor = "remote-page-2";
-    refState.validation.set(`remote:${selectedName}`, []);
-
-    const initial = renderRefs();
-    initial.historyRefs.selectRef(selectedName, `refs/remotes/${selectedName}`);
-    const selected = renderRefs();
-
-    expect(selected.historyRefs.selectedRevision).toBeNull();
-    expect(historyRefTargets).toContainEqual({
-      namespace: "remote",
-      query: selectedName,
-      enabled: true,
-    });
-  });
-
-  it("validates a collapsed selected remote ref and stops loading it after selection clears", () => {
-    refState.remote = [ref("origin/obsolete", true)];
-
-    const initial = renderRefs();
-    initial.historyRefs.selectRef("origin/obsolete", "refs/remotes/origin/obsolete");
-    const selected = renderRefs();
-    expect(selected.historyRefs.selectedRevision?.revision).toBe("refs/remotes/origin/obsolete");
-    expect(historyRefTargets.at(-3)).toEqual({ namespace: "remote", query: "", enabled: true });
-
-    refState.remote = [];
-    const removed = renderRefs();
-    expect(removed.historyRefs.selectedRevision).toBeNull();
-    expect(historyRefTargets.at(-3)).toEqual({ namespace: "remote", query: "", enabled: true });
-
-    removed.historyRefs.selectAllRefs();
     renderRefs();
-    expect(historyRefTargets.at(-3)).toEqual({
-      namespace: "remote",
-      query: undefined,
-      enabled: false,
+
+    expect(refState.requests).toContainEqual({
+      target: { environmentId, cwd: "C:/workspace", query: "" },
+      options: { limit: 200, namespace: "remote", revision: 0 },
     });
   });
 
-  it("validates a collapsed selected tag ref and stops loading it after selection clears", () => {
-    refState.tags = [ref("v1.2.3", false, true)];
-
+  it("filters favorite projection inputs before rendering rows", () => {
+    refState.local = [ref("feature/favorite"), ref("feature/hidden")];
+    refState.favoriteBranches = ["feature/favorite", "feature/hidden"];
     const initial = renderRefs();
-    initial.historyRefs.selectRef("v1.2.3", "refs/tags/v1.2.3");
-    const selected = renderRefs();
-    expect(selected.historyRefs.selectedRevision?.revision).toBe("refs/tags/v1.2.3");
-    expect(historyRefTargets.at(-2)).toEqual({ namespace: "tag", query: "", enabled: true });
+    initial.historyRefs.setRefFilter("favorite");
 
-    refState.tags = [];
-    const removed = renderRefs();
-    expect(removed.historyRefs.selectedRevision).toBeNull();
-    expect(historyRefTargets.at(-2)).toEqual({ namespace: "tag", query: "", enabled: true });
-
-    removed.historyRefs.selectAllRefs();
-    renderRefs();
-    expect(historyRefTargets.at(-2)).toEqual({
-      namespace: "tag",
-      query: undefined,
-      enabled: false,
-    });
+    expect(renderRefs().historyRefs.favoriteRefs.map((ref) => ref.name)).toEqual([
+      "feature/favorite",
+    ]);
   });
 });

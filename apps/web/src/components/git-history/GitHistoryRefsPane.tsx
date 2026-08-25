@@ -25,6 +25,14 @@ type RefPaneRow =
   | { readonly kind: "all"; readonly key: "all" }
   | { readonly kind: "current"; readonly key: "current" }
   | {
+      readonly kind: "ref";
+      readonly key: string;
+      readonly node: Extract<GitRefTreeNode, { readonly kind: "ref" }>;
+      readonly namespace: "heads";
+      readonly depth: number;
+      readonly projectedFavorite: true;
+    }
+  | {
       readonly kind: "section";
       readonly key: string;
       readonly label: string;
@@ -45,6 +53,7 @@ type RefPaneRow =
       readonly node: Extract<GitRefTreeNode, { readonly kind: "ref" }>;
       readonly namespace: RefTreeProps["namespace"];
       readonly depth: number;
+      readonly projectedFavorite?: false;
     }
   | { readonly kind: "empty"; readonly key: "empty" }
   | { readonly kind: "error"; readonly key: "error"; readonly message: string }
@@ -93,6 +102,7 @@ function countRefTreeRefs(nodes: ReadonlyArray<GitRefTreeNode>): number {
 
 export function buildRefPaneRows(props: {
   readonly localRefTree: ReadonlyArray<GitRefTreeNode>;
+  readonly favoriteRefs: ReadonlyArray<VcsHistoryRef>;
   readonly remoteRefTree: ReadonlyArray<GitRefTreeNode>;
   readonly tagRefTree: ReadonlyArray<GitRefTreeNode>;
   readonly expandedRefKeys: ReadonlySet<string>;
@@ -104,6 +114,16 @@ export function buildRefPaneRows(props: {
     { kind: "all", key: "all" },
     { kind: "current", key: "current" },
   ];
+  rows.push(
+    ...props.favoriteRefs.map((ref) => ({
+      kind: "ref" as const,
+      key: `favorite:refs/heads/${ref.name}`,
+      node: { kind: "ref" as const, name: ref.name, ref },
+      namespace: "heads" as const,
+      depth: 0,
+      projectedFavorite: true as const,
+    })),
+  );
   for (const section of [
     { label: "Local", section: "local", nodes: props.localRefTree, namespace: "heads" as const },
     {
@@ -154,10 +174,11 @@ export function GitRefsPane(props: {
   onRefFilterChange: (value: string) => void;
   selectedRevision: { label: string; revision: string } | null;
   onSelectAll: () => void;
-  currentRef: VcsHistoryRef | null;
+  currentRef: VcsHistoryRef | null | undefined;
   onSelectRef: (label: string, revision: string) => void;
   normalizedRefFilter: string;
   localRefTree: ReadonlyArray<GitRefTreeNode>;
+  favoriteRefs: ReadonlyArray<VcsHistoryRef>;
   remoteRefTree: ReadonlyArray<GitRefTreeNode>;
   tagRefTree: ReadonlyArray<GitRefTreeNode>;
   expandedRefKeys: ReadonlySet<string>;
@@ -175,6 +196,7 @@ export function GitRefsPane(props: {
     () =>
       buildRefPaneRows({
         localRefTree: props.localRefTree,
+        favoriteRefs: props.favoriteRefs,
         remoteRefTree: props.remoteRefTree,
         tagRefTree: props.tagRefTree,
         expandedRefKeys: props.expandedRefKeys,
@@ -184,6 +206,7 @@ export function GitRefsPane(props: {
       }),
     [
       props.expandedRefKeys,
+      props.favoriteRefs,
       props.hasMoreRefs,
       props.localRefTree,
       props.normalizedRefFilter,
@@ -263,7 +286,7 @@ export function GitRefsPane(props: {
                 <button
                   type="button"
                   className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-[0.6875rem] text-foreground/90 hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
-                  disabled={props.currentRef === null}
+                  disabled={props.currentRef === null || props.currentRef === undefined}
                   onClick={() =>
                     props.currentRef &&
                     props.onSelectRef(props.currentRef.name, `refs/heads/${props.currentRef.name}`)
@@ -300,7 +323,6 @@ export function GitRefsPane(props: {
                   style={{ paddingLeft: `${row.depth * 14 + 4}px` }}
                   onClick={() => props.onToggleRefKey(row.key)}
                   aria-expanded={row.open}
-                  title={row.path}
                 >
                   {row.open ? (
                     <ChevronDownIcon className="size-3 shrink-0" />
@@ -330,16 +352,15 @@ export function GitRefsPane(props: {
                 .join(". ");
               return (
                 <div
-                  className="group flex h-6 w-full min-w-0 items-center gap-1 rounded px-1 text-[0.6875rem] text-foreground/80"
-                  style={{ paddingLeft: `${row.depth * 14 + 20}px` }}
+                  className="group flex h-6 w-full min-w-0 items-center gap-1 text-[0.6875rem] text-foreground/80"
+                  style={{ paddingLeft: `${row.projectedFavorite ? 4 : row.depth * 14 + 20}px` }}
                 >
                   <button
                     type="button"
                     className={cn(
-                      "flex h-full min-w-0 flex-1 items-center gap-1.5 rounded text-left hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                      "flex min-w-0 flex-1 items-center gap-1.5 rounded text-left hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
                       selected && "bg-accent/70 font-medium text-foreground",
                     )}
-                    title={row.node.ref.name}
                     onClick={() => props.sharedRefTreeProps.onSelect(row.node.ref.name, revision)}
                     aria-pressed={selected}
                     aria-label={
@@ -348,8 +369,7 @@ export function GitRefsPane(props: {
                         : row.node.ref.name
                     }
                   >
-                    {row.namespace === "heads" &&
-                    props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) ? (
+                    {row.node.ref.isDefault ? (
                       <StarIcon className="size-3 shrink-0 fill-amber-400 text-amber-400" />
                     ) : row.namespace === "tags" ? (
                       <TagIcon className="size-3 shrink-0 text-amber-400" />
@@ -359,40 +379,43 @@ export function GitRefsPane(props: {
                       />
                     )}
                     <span className="truncate">{row.node.name}</span>
-                    {aheadCount > 0 || behindCount > 0 ? (
-                      <span className="flex shrink-0 items-center gap-1 text-[0.5625rem]">
-                        {aheadCount > 0 ? (
-                          <span
-                            className="flex items-center text-emerald-400"
-                            title={`${aheadCount} commits ahead of ${upstreamName}`}
-                          >
-                            <ArrowUpIcon className="size-2.5" />
-                            {aheadCount > 99 ? "99+" : aheadCount}
-                          </span>
-                        ) : null}
-                        {behindCount > 0 ? (
-                          <span
-                            className="flex items-center text-sky-400"
-                            title={`${behindCount} commits behind ${upstreamName}`}
-                          >
-                            <ArrowDownIcon className="size-2.5" />
-                            {behindCount > 99 ? "99+" : behindCount}
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : null}
                   </button>
                   {row.namespace === "heads" ? (
                     <button
                       type="button"
-                      className="flex h-full min-w-6 shrink-0 items-center justify-center rounded opacity-0 text-muted-foreground hover:text-amber-400 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                      className={cn(
+                        "shrink-0 rounded text-muted-foreground hover:text-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                        props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name)
+                          ? "text-amber-400"
+                          : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                      )}
                       aria-label={`${props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) ? "Remove" : "Add"} ${row.node.ref.name} ${props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) ? "from" : "to"} favorites`}
-                      onClick={() => {
-                        props.sharedRefTreeProps.onToggleFavorite(row.node.ref.name);
-                      }}
+                      onClick={() => props.sharedRefTreeProps.onToggleFavorite(row.node.ref.name)}
                     >
-                      <StarIcon className="size-3" />
+                      <StarIcon
+                        className={cn(
+                          "size-3",
+                          props.sharedRefTreeProps.favoriteBranches.has(row.node.ref.name) &&
+                            "fill-amber-400 text-amber-400",
+                        )}
+                      />
                     </button>
+                  ) : null}
+                  {aheadCount > 0 || behindCount > 0 ? (
+                    <span className="flex shrink-0 items-center gap-1 text-[0.5625rem]">
+                      {aheadCount > 0 ? (
+                        <span className="flex items-center text-emerald-400">
+                          <ArrowUpIcon className="size-2.5" />
+                          {aheadCount > 99 ? "99+" : aheadCount}
+                        </span>
+                      ) : null}
+                      {behindCount > 0 ? (
+                        <span className="flex items-center text-sky-400">
+                          <ArrowDownIcon className="size-2.5" />
+                          {behindCount > 99 ? "99+" : behindCount}
+                        </span>
+                      ) : null}
+                    </span>
                   ) : null}
                 </div>
               );
@@ -406,9 +429,7 @@ export function GitRefsPane(props: {
             if (row.kind === "error")
               return (
                 <div className="mt-2 flex items-center justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[0.6875rem] text-destructive">
-                  <span className="min-w-0 truncate" title={row.message}>
-                    {row.message}
-                  </span>
+                  <span className="min-w-0 truncate">{row.message}</span>
                   <Button
                     size="xs"
                     variant="ghost"

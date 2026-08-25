@@ -142,11 +142,13 @@ export function usePaginatedBranches(
   options?: {
     readonly limit?: number;
     readonly namespace?: "local" | "remote" | "tag";
+    readonly revision?: number;
   },
 ) {
   const query = target.query?.trim() ?? "";
   const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
   const namespace = options?.namespace ?? "local";
+  const revision = options?.revision ?? 0;
   const [queryGeneration, setQueryGeneration] = useState(0);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const targetKey =
@@ -157,6 +159,7 @@ export function usePaginatedBranches(
           query,
           limit,
           namespace,
+          revision,
           refreshGeneration,
         ])
       : null;
@@ -179,7 +182,7 @@ export function usePaginatedBranches(
                 ...(query.length > 0 ? { prefix: query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit,
-                queryGeneration,
+                queryGeneration: queryGeneration + revision,
                 namespace,
                 ...(refreshGeneration > 0 ? { refresh: true } : {}),
               },
@@ -192,6 +195,7 @@ export function usePaginatedBranches(
       query,
       queryGeneration,
       namespace,
+      revision,
       refreshGeneration,
       target.cwd,
       target.environmentId,
