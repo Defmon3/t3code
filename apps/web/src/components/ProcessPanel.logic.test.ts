@@ -40,6 +40,7 @@ describe("isTestCommand", () => {
     "python -m pytest",
     "python check-all.py --scope web",
     "python run-mutation.py --target parser",
+    "uv run python C:\\tools\\check-is-vitest.py --pid 42",
     "vp test run src/example.test.ts",
     "pnpm test -- --run",
     "npm test",
@@ -58,7 +59,7 @@ describe("isTestCommand", () => {
     expect(isTestCommand("npm contest")).toBe(false);
     expect(isTestCommand("python -m pytester")).toBe(false);
     expect(isTestCommand("dotnet-test")).toBe(false);
-    expect(isTestCommand("python check-secrets.py")).toBe(false);
+    expect(isTestCommand("python server.py")).toBe(false);
     expect(isTestCommand("rg -n vitest src")).toBe(false);
     expect(isTestCommand("echo pnpm test")).toBe(false);
   });
@@ -109,7 +110,11 @@ describe("formatTestCommand", () => {
     },
     {
       argv: ["python.exe", "G:\\tools\\check-is-vitest.py", "--pid", "42"],
-      expected: { label: "check-is-vitest.py", args: ["--pid", "42"] },
+      expected: { label: "G:\\tools\\check-is-vitest.py", args: ["--pid", "42"] },
+    },
+    {
+      argv: ["uv", "run", "python", "C:\\tools\\check-is-vitest.py", "--pid", "42"],
+      expected: { label: "C:\\tools\\check-is-vitest.py", args: ["--pid", "42"] },
     },
     {
       argv: ["cmd.exe", "/c", "cargo", "test", "-p", "app"],
