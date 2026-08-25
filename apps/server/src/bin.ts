@@ -6,6 +6,7 @@ import { Argument, Command } from "effect/unstable/cli";
 import * as CliError from "effect/unstable/cli/CliError";
 
 import * as NetService from "@t3tools/shared/Net";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { SERVER_VERSION } from "./buildVersion.ts";
 import { authCommand } from "./cli/auth.ts";
 import { connectCommand } from "./cli/connect.ts";
@@ -13,18 +14,22 @@ import { pairCommand } from "./cli/pair.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as BoundedChildProcessSpawner from "./cli/boundedChildProcessSpawner.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
+import { isEntrypoint } from "./entrypoint.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
 import { triageCommand } from "./cli/triage.ts";
 
-const CliRuntimeLayer = Layer.mergeAll(
-  process.platform === "win32"
-    ? BoundedChildProcessSpawner.layer().pipe(Layer.provideMerge(NodeServices.layer))
-    : NodeServices.layer,
-  NetService.layer,
+const ProcessServicesLive = Layer.unwrap(
+  Effect.map(HostProcessPlatform, (platform) =>
+    platform === "win32"
+      ? BoundedChildProcessSpawner.layer().pipe(Layer.provideMerge(NodeServices.layer))
+      : NodeServices.layer,
+  ),
 );
+
+const CliRuntimeLayer = Layer.mergeAll(ProcessServicesLive, NetService.layer);
 
 const connectPublicConfigMissingMessage =
   "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
@@ -69,7 +74,13 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
 
 export const cli = makeCli();
 
-if (import.meta.main) {
+if (
+  isEntrypoint({
+    moduleUrl: import.meta.url,
+    entryPath: process.argv[1],
+    runtimeMain: import.meta.main,
+  })
+) {
   Command.run(cli, { version: SERVER_VERSION }).pipe(
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),
