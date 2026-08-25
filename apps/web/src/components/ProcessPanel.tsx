@@ -128,15 +128,15 @@ export function ProcessPanel(input: {
         <div className="py-1">
           {groups.map((group) => (
             <div key={`${group.project.id}:${group.cwd}`}>
-              <div className="flex h-7 items-center gap-2 px-3 text-sm">
+              <div className="flex min-h-7 items-center gap-2 px-3 py-1 text-sm">
                 <ProjectFavicon
                   environmentId={input.environmentId}
                   cwd={group.project.workspaceRoot}
                   faviconPath={group.project.faviconPath}
                 />
                 <span className="min-w-0 truncate font-medium">{group.project.title}</span>
-                <span className="truncate text-muted-foreground text-xs">
-                  {group.worktreeLabel}
+                <span className="min-w-0 break-all font-mono text-muted-foreground text-xs">
+                  {group.cwd}
                 </span>
                 <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
                   CPU {group.cpuPercent.toFixed(1)}% · {formatDuration(group.cpuTimeMs)} CPU

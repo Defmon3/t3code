@@ -273,7 +273,7 @@ describe("ProcessDiagnostics", () => {
                 name: "sh",
                 command: "sh",
                 argv: ["sh"],
-                cwd: "/workspace",
+                cwd: "/outside-registered-root",
                 status: "Running",
                 cpuPercent: 0.5,
                 cpuTimeMs: 30,

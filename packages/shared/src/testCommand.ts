@@ -45,11 +45,18 @@ function verificationScriptDisplay(
   scriptIndex: number,
 ): TestCommandDisplay | null {
   const script = argumentsList[scriptIndex];
-  const scriptName = executableName(script);
-  if (!script || !["check-all.py", "check-is-vitest.py", "run-mutation.py"].includes(scriptName)) {
+  if (!script || !isVerificationScript(script)) {
     return null;
   }
-  return { label: scriptName, args: argumentsList.slice(scriptIndex + 1) };
+  return { label: script, args: argumentsList.slice(scriptIndex + 1) };
+}
+
+function isVerificationScript(script: string): boolean {
+  const filename = executableName(script);
+  return (
+    filename.endsWith(".py") &&
+    /(?:^|[-_.])(check|test|tests|verify|verification|mutation)(?:[-_.]|$)/i.test(filename)
+  );
 }
 
 function isTestScript(argument: string | undefined): boolean {
@@ -121,6 +128,16 @@ function packageTestCommand(argumentsList: readonly string[]): TestCommandDispla
   };
 }
 
+function runWrapperCommand(argumentsList: readonly string[]): TestCommandDisplay | null {
+  const executable = executableName(argumentsList[0]);
+  if (!executableMatches(executable, ["uv", "pipenv", "poetry", "rye"])) return null;
+  const runIndex = argumentsList.findIndex((argument, index) => index > 0 && argument === "run");
+  if (runIndex === -1) return null;
+  const wrappedArguments = argumentsList.slice(runIndex + 1);
+  if (wrappedArguments.length === 0) return null;
+  return testCommandDisplay(wrappedArguments);
+}
+
 function testCommandDisplay(argumentsList: readonly string[]): TestCommandDisplay | null {
   const executable = executableName(argumentsList[0]);
   if (executableMatches(executable, ["vitest"]))
@@ -145,12 +162,8 @@ function testCommandDisplay(argumentsList: readonly string[]): TestCommandDispla
       : null;
   const packageDisplay = packageTestCommand(argumentsList);
   if (packageDisplay) return packageDisplay;
-  if (executableMatches(executable, ["uv"])) {
-    return argumentsList[1]?.toLowerCase() === "run" &&
-      executableMatches(executableName(argumentsList[2]), ["pytest"])
-      ? { label: "Pytest", args: argumentsList.slice(3) }
-      : null;
-  }
+  const wrapperDisplay = runWrapperCommand(argumentsList);
+  if (wrapperDisplay) return wrapperDisplay;
   if (/^python(?:\d+(?:\.\d+)?)?(?:\.exe)?$/i.test(executable)) {
     if (
       argumentsList[1] === "-m" &&

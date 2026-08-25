@@ -472,44 +472,57 @@ impl Collector {
             message,
         })?;
         let primed_pids = self.refresh_discovery_cpu_usage();
-        let mut processes = Vec::new();
-        for (pid, process) in self.discovery_system.processes() {
-            if !discovery_process_has_cpu_sample(pid.as_u32(), &primed_pids) {
-                continue;
-            }
-            let Some(cwd) = process.cwd() else {
-                continue;
-            };
-            if !cwd_is_within_roots(&cwd.to_string_lossy(), &roots) {
-                continue;
-            }
-            if processes.len() == MAX_DISCOVERY_TOTAL_PROCESSES {
-                return Err(DiscoveryError {
-                    code: "discovery-limit-exceeded",
-                    message: format!(
-                        "discoverProcesses found more than {MAX_DISCOVERY_TOTAL_PROCESSES} processes; narrow the requested roots"
-                    ),
-                });
-            }
-            processes.push(discovered_process_sample(pid.as_u32(), process));
+        let rows = self
+            .discovery_system
+            .processes()
+            .iter()
+            .map(|(pid, process)| {
+                (
+                    pid.as_u32(),
+                    process.parent().map(Pid::as_u32).unwrap_or(0),
+                    process
+                        .cwd()
+                        .is_some_and(|cwd| cwd_is_within_roots(&cwd.to_string_lossy(), &roots)),
+                    discovery_process_has_cpu_sample(pid.as_u32(), &primed_pids),
+                )
+            })
+            .collect::<Vec<_>>();
+        let discovered_pids = select_discovery_pids(&rows);
+        if discovered_pids.len() > MAX_DISCOVERY_TOTAL_PROCESSES {
+            return Err(DiscoveryError {
+                code: "discovery-limit-exceeded",
+                message: format!(
+                    "discoverProcesses found more than {MAX_DISCOVERY_TOTAL_PROCESSES} processes; narrow the requested roots"
+                ),
+            });
         }
+        let mut processes = discovered_pids
+            .into_iter()
+            .filter_map(|pid| {
+                self.discovery_system
+                    .process(Pid::from_u32(pid))
+                    .map(|process| discovered_process_sample(pid, process))
+            })
+            .collect::<Vec<_>>();
         sort_discovered_processes(&mut processes);
         Ok(processes)
     }
 
     fn refresh_discovery_cpu_usage(&mut self) -> HashSet<u32> {
-        self.discovery_system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            discovery_cpu_priming_refresh_kind(),
-        );
+        if self.discovery_cpu_baseline_refreshed_at.is_none() {
+            self.discovery_system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                discovery_cpu_priming_refresh_kind(),
+            );
+            self.discovery_cpu_baseline_refreshed_at = Some(Instant::now());
+        }
         let primed_pids = self
             .discovery_system
             .processes()
             .keys()
             .map(|pid| pid.as_u32())
             .collect::<HashSet<_>>();
-        self.discovery_cpu_baseline_refreshed_at = Some(Instant::now());
         if let Some(delay) = remaining_cpu_measurement_delay(
             self.discovery_cpu_baseline_refreshed_at.take(),
             Instant::now(),
@@ -524,24 +537,6 @@ impl Collector {
         self.discovery_cpu_baseline_refreshed_at = Some(Instant::now());
         primed_pids
     }
-}
-
-fn refresh_cpu_measurement_window<T>(
-    baseline_refreshed_at: &mut Option<Instant>,
-    mut prime_cpu: impl FnMut() -> T,
-    mut materialize: impl FnMut(),
-    mut sleep: impl FnMut(Duration),
-) -> T {
-    let primed = prime_cpu();
-    *baseline_refreshed_at = Some(Instant::now());
-    if let Some(delay) =
-        remaining_cpu_measurement_delay(baseline_refreshed_at.take(), Instant::now())
-    {
-        sleep(delay);
-    }
-    materialize();
-    *baseline_refreshed_at = Some(Instant::now());
-    primed
 }
 
 fn discovery_process_has_cpu_sample(pid: u32, primed_pids: &HashSet<u32>) -> bool {
@@ -599,7 +594,13 @@ fn global_process_refresh_kind() -> ProcessRefreshKind {
 }
 
 fn discovery_process_refresh_kind() -> ProcessRefreshKind {
-    global_process_refresh_kind().with_cwd(UpdateKind::Always)
+    ProcessRefreshKind::nothing()
+        .with_memory()
+        .with_cpu()
+        .with_disk_usage()
+        .with_cmd(UpdateKind::OnlyIfNotSet)
+        .with_cwd(UpdateKind::OnlyIfNotSet)
+        .without_tasks()
 }
 
 fn discovery_cpu_priming_refresh_kind() -> ProcessRefreshKind {
@@ -680,6 +681,32 @@ fn matches_external_identity(
     expected_start_time_ms.is_none_or(|expected| {
         actual_start_time_ms == expected - (expected % PROCESS_START_TIME_PRECISION_MS)
     })
+}
+
+fn select_discovery_pids(rows: &[(u32, u32, bool, bool)]) -> HashSet<u32> {
+    let mut children_by_parent = HashMap::<u32, Vec<u32>>::new();
+    let mut primed_pids = HashSet::new();
+    let mut roots = Vec::new();
+    for (pid, ppid, cwd_is_within_root, has_cpu_sample) in rows {
+        children_by_parent.entry(*ppid).or_default().push(*pid);
+        if *has_cpu_sample {
+            primed_pids.insert(*pid);
+            if *cwd_is_within_root {
+                roots.push(*pid);
+            }
+        }
+    }
+
+    let mut selected = HashSet::new();
+    let mut pending = roots;
+    while let Some(pid) = pending.pop() {
+        if !selected.insert(pid) {
+            continue;
+        }
+        pending.extend(children_by_parent.get(&pid).into_iter().flatten().copied());
+    }
+    selected.retain(|pid| primed_pids.contains(pid));
+    selected
 }
 
 fn select_tracked_pids(rows: &[(u32, u32, u64)], roots: &HashSet<u32>) -> HashSet<u32> {
@@ -1326,51 +1353,16 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_a_fresh_cpu_baseline_for_every_discovery() {
-        let mut baseline = None;
-        let mut priming_refreshes = 0;
-        let mut materializing_refreshes = 0;
-        let mut delays = Vec::new();
+    fn retains_sampled_descendants_of_registered_root_seeds() {
+        let selected = select_discovery_pids(&[
+            (10, 1, true, true),
+            (11, 10, false, true),
+            (12, 11, false, true),
+            (13, 12, false, false),
+            (20, 1, false, true),
+        ]);
 
-        for _ in 0..2 {
-            refresh_cpu_measurement_window(
-                &mut baseline,
-                || priming_refreshes += 1,
-                || materializing_refreshes += 1,
-                |delay| delays.push(delay),
-            );
-        }
-
-        assert_eq!(priming_refreshes, 2);
-        assert_eq!(materializing_refreshes, 2);
-        assert_eq!(delays.len(), 2);
-        assert!(
-            delays
-                .iter()
-                .all(|delay| *delay <= MINIMUM_CPU_UPDATE_INTERVAL)
-        );
-        assert!(baseline.is_some());
-    }
-
-    #[test]
-    fn excludes_processes_that_appear_after_discovery_cpu_priming() {
-        let mut baseline = None;
-        let mut materialized_pids = HashSet::from([10]);
-        let primed_pids = refresh_cpu_measurement_window(
-            &mut baseline,
-            || HashSet::from([10]),
-            || {
-                materialized_pids.insert(11);
-            },
-            |_| {},
-        );
-
-        let emitted_pids = materialized_pids
-            .into_iter()
-            .filter(|pid| discovery_process_has_cpu_sample(*pid, &primed_pids))
-            .collect::<HashSet<_>>();
-
-        assert_eq!(emitted_pids, HashSet::from([10]));
+        assert_eq!(selected, HashSet::from([10, 11, 12]));
     }
 
     #[test]
@@ -1592,7 +1584,8 @@ mod tests {
         assert!(global_refresh_kind.cpu());
         assert!(global_refresh_kind.memory());
         assert!(global_refresh_kind.disk_usage());
-        assert_eq!(discovery_refresh_kind.cwd(), UpdateKind::Always);
+        assert_eq!(discovery_refresh_kind.cmd(), UpdateKind::OnlyIfNotSet);
+        assert_eq!(discovery_refresh_kind.cwd(), UpdateKind::OnlyIfNotSet);
         assert!(discovery_refresh_kind.cpu());
         assert!(discovery_refresh_kind.memory());
         assert!(priming_refresh_kind.cpu());
