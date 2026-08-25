@@ -51,11 +51,15 @@ const historyState = vi.hoisted(() => ({
   refreshTags: vi.fn(),
   toastAdd: vi.fn(),
   refs: [] as ReadonlyArray<VcsHistoryRef>,
+  refError: null as string | null,
+  refRetry: vi.fn(),
+  refsResolved: true,
   tags: [] as ReadonlyArray<VcsHistoryRef>,
   status: { aheadCount: 0, behindCount: 0 },
 }));
 
 const fontState = vi.hoisted(() => ({ interfaceSize: 16 }));
+const localStorageState = vi.hoisted(() => ({ favoriteBranches: [] as ReadonlyArray<string> }));
 
 vi.mock("../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: (options?: { readonly onError?: (error: Error) => void }) => ({
@@ -68,6 +72,16 @@ vi.mock("../hooks/useSettings", () => ({
   useClientSettings: <Value,>(
     selector: (settings: { readonly fontSizeInterface: number }) => Value,
   ) => selector({ fontSizeInterface: fontState.interfaceSize }),
+}));
+
+vi.mock("../hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [
+    localStorageState.favoriteBranches,
+    (next: ReadonlyArray<string> | ((current: ReadonlyArray<string>) => ReadonlyArray<string>)) => {
+      localStorageState.favoriteBranches =
+        typeof next === "function" ? next(localStorageState.favoriteBranches) : next;
+    },
+  ],
 }));
 
 vi.mock("./ui/toast", () => ({
@@ -149,20 +163,22 @@ vi.mock("../state/queries", () => ({
   usePaginatedHistoryRefs: (_target: unknown, options?: { readonly namespace?: string }) => {
     const refs = options?.namespace === "tag" ? historyState.tags : historyState.refs;
     return {
-      data: {
-        refs,
-        isRepo: true,
-        hasPrimaryRemote: false,
-        nextCursor: null,
-        currentRef: refs.find((ref) => ref.current) ?? null,
-        isComplete: true,
-      },
+      data: historyState.refsResolved
+        ? {
+            refs,
+            isRepo: true,
+            hasPrimaryRemote: false,
+            nextCursor: null,
+            currentRef: refs.find((ref) => ref.current) ?? null,
+            isComplete: true,
+          }
+        : undefined,
       refs,
-      error: null,
+      error: options?.namespace === "local" ? historyState.refError : null,
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
-      retry: vi.fn(),
+      retry: options?.namespace === "local" ? historyState.refRetry : vi.fn(),
       refresh:
         options?.namespace === "tag"
           ? historyState.refreshTags
@@ -402,6 +418,7 @@ describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
     fontState.interfaceSize = 16;
+    localStorageState.favoriteBranches = [];
     effectQueue.cursor = 0;
     effectQueue.dependencies.length = 0;
     effectQueue.effects.length = 0;
@@ -428,8 +445,42 @@ describe("GitHistoryPanel", () => {
     historyState.refreshTags.mockReset();
     historyState.toastAdd.mockReset();
     historyState.refs = [];
+    historyState.refError = null;
+    historyState.refRetry.mockReset();
+    historyState.refsResolved = true;
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0 };
+  });
+
+  it("waits for the current ref before requesting history", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+    historyState.refsResolved = false;
+
+    renderPanel();
+
+    expect(historyState.getHistory).not.toHaveBeenCalled();
+
+    historyState.refsResolved = true;
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenCalledOnce();
+  });
+
+  it("shows the initial refs error and retries ref enumeration", () => {
+    historyState.refsResolved = false;
+    historyState.refError = "Could not load Git refs.";
+
+    const panel = renderPanel();
+
+    expect(
+      visitElements(panel, (element) => element.props.children === "Could not load Git refs."),
+    ).not.toBeNull();
+    const retry = visitElements(panel, (element) => element.props.children === "Retry");
+    (retry?.props.onClick as (() => void) | undefined)?.();
+    expect(historyState.refRetry).toHaveBeenCalledOnce();
   });
 
   it("restarts the first history page after a typed continuation expiry", () => {
@@ -960,7 +1011,7 @@ describe("GitHistoryPanel", () => {
     expect(
       visitElements(
         uiBranch,
-        (element) => element.props.title === "10 commits ahead of origin/feature/ui",
+        (element) => element.props.className === "flex items-center text-emerald-400",
       ),
     ).not.toBeNull();
     const developmentBranch = renderExpandedRow({
@@ -969,19 +1020,31 @@ describe("GitHistoryPanel", () => {
     expect(
       visitElements(
         developmentBranch,
-        (element) => element.props.title === "3 commits ahead of origin/development",
+        (element) => element.props.className === "flex items-center text-emerald-400",
       ),
     ).not.toBeNull();
-    expect(developmentBranch.props["aria-label"]).toBe(
+    const developmentSelect = visitElements(
+      developmentBranch,
+      (element) =>
+        typeof element.props["aria-label"] === "string" &&
+        element.props["aria-label"].startsWith("development."),
+    );
+    expect(developmentSelect?.props["aria-label"]).toBe(
       "development. 3 commits ahead of upstream origin/development. 2 commits behind upstream origin/development.",
     );
     expect(
       visitElements(
         developmentBranch,
-        (element) => element.props.title === "2 commits behind origin/development",
+        (element) => element.props.className === "flex items-center text-sky-400",
       ),
     ).not.toBeNull();
-    (uiBranch?.props.onClick as (() => void) | undefined)?.();
+    const uiSelect = visitElements(
+      uiBranch,
+      (element) =>
+        typeof element.props["aria-label"] === "string" &&
+        element.props["aria-label"].startsWith("feature/ui."),
+    );
+    (uiSelect?.props.onClick as (() => void) | undefined)?.();
 
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
@@ -1040,10 +1103,11 @@ describe("GitHistoryPanel", () => {
     const renderExpandedRow = expandedList.props.renderItem as (props: {
       readonly item: (typeof expandedRows)[number];
     }) => ReactElement<Record<string, unknown>>;
-    (
-      renderExpandedRow({ item: expandedRows.find((row) => row.key === "refs/tags/v1.2.3")! }).props
-        .onClick as (() => void) | undefined
-    )?.();
+    const tagRow = renderExpandedRow({
+      item: expandedRows.find((row) => row.key === "refs/tags/v1.2.3")!,
+    });
+    const tagSelect = visitElements(tagRow, (element) => element.props["aria-label"] === "v1.2.3");
+    (tagSelect?.props.onClick as (() => void) | undefined)?.();
 
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({

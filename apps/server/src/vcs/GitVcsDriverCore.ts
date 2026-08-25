@@ -3076,7 +3076,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         [
           "for-each-ref",
           "--sort=refname",
-          "--format=%(refname)%09%(creatordate:unix)%09%(symref)%09%(upstream:short)%09%(worktreepath)",
+          "--format=%(refname)%09%(creatordate:unix)%09%(symref)%09%(upstream:short)%09%(upstream:track)%09%(worktreepath)",
           pattern,
         ],
         {
@@ -3088,8 +3088,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       let defaultRemoteRef: string | null = null;
       for (const line of output.stdout.split("\n")) {
         if (line.length === 0) continue;
-        const [fullName, , symbolicTarget = "", upstreamName = "", worktreePath = ""] =
-          line.split("\t");
+        const [
+          fullName,
+          ,
+          symbolicTarget = "",
+          upstreamName = "",
+          upstreamTrack = "",
+          worktreePath = "",
+        ] = line.split("\t");
         if (!fullName) continue;
         if (namespace === "remote" && symbolicTarget.startsWith(refRoot)) {
           defaultRemoteRef = symbolicTarget;
@@ -3107,7 +3113,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             isRemote: namespace === "remote",
             ...(namespace === "tag" ? { isTag: true } : {}),
             worktreePath: worktreePath.length > 0 ? worktreePath : null,
-            ...(namespace === "local" && upstreamName.length > 0 ? { upstreamName } : {}),
+            ...(namespace === "local" && upstreamName.length > 0
+              ? { upstreamName, ...parseRefUpstreamTrack(upstreamTrack) }
+              : {}),
           },
         });
       }

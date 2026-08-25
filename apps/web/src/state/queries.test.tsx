@@ -128,9 +128,9 @@ function page(nextCursor: string | null): PageResult {
   };
 }
 
-function render() {
+function render(options?: { readonly revision?: number }) {
   hooks.beginRender();
-  return usePaginatedHistoryRefs(target);
+  return usePaginatedHistoryRefs(target, options);
 }
 
 describe("usePaginatedHistoryRefs", () => {
@@ -153,6 +153,16 @@ describe("usePaginatedHistoryRefs", () => {
       { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
       { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
     ]);
+  });
+
+  it("uses the external revision in cache identity and request generation", () => {
+    refsState.results.set("4:first", page(null));
+    refsState.results.set("5:first", page(null));
+
+    render({ revision: 4 });
+    render({ revision: 5 });
+
+    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([4, 5]);
   });
 
   it("retries the failed appended page without duplicating its cursor", () => {

@@ -130,9 +130,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const vcsHistoryRevision = useAtomValue(
     vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId }),
   );
-  const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd);
+  const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd, vcsHistoryRevision);
   const { selectedRevision } = historyRefs;
-  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}`;
+  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? (selectedRevision === null ? "all" : "unresolved")}:${vcsHistoryRevision}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
     cursors: ReadonlyArray<string | undefined>;
@@ -140,18 +140,20 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_CURSORS;
   const pageAtoms = useMemo(
     () =>
-      cursors.map((cursor) =>
-        vcsEnvironment.getHistory({
-          environmentId: props.environmentId,
-          input: {
-            cwd: props.cwd,
-            queryGeneration: historyQueryGeneration + vcsHistoryRevision,
-            ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
-            ...(cursor === undefined ? {} : { cursor }),
-            limit: HISTORY_PAGE_SIZE,
-          },
-        }),
-      ),
+      selectedRevision === undefined
+        ? []
+        : cursors.map((cursor) =>
+            vcsEnvironment.getHistory({
+              environmentId: props.environmentId,
+              input: {
+                cwd: props.cwd,
+                queryGeneration: historyQueryGeneration + vcsHistoryRevision,
+                ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
+                ...(cursor === undefined ? {} : { cursor }),
+                limit: HISTORY_PAGE_SIZE,
+              },
+            }),
+          ),
     [
       cursors,
       historyQueryGeneration,
@@ -169,10 +171,14 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     [pageAtoms, targetKey],
   );
   const results = useAtomValue(pagesAtom);
-  const values = results.flatMap((result) => {
-    const value = Option.getOrNull(AsyncResult.value(result));
-    return value === null ? [] : [value];
-  });
+  const values = useMemo(
+    () =>
+      results.flatMap((result) => {
+        const value = Option.getOrNull(AsyncResult.value(result));
+        return value === null ? [] : [value];
+      }),
+    [results],
+  );
   const failed = results.find((result) => result._tag === "Failure");
   const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
   const recoveredSnapshot = useRef<{
@@ -200,7 +206,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     }
   }, [failed, historyQueryGeneration, targetKey, values.length]);
   const isPending = results.some((result) => result.waiting);
-  const isInitialLoad = values.length === 0 && isPending;
+  const refSelectionError = selectedRevision === undefined ? historyRefs.refPaginationError : null;
+  const isInitialLoad =
+    refSelectionError === null &&
+    (selectedRevision === undefined || (values.length === 0 && isPending));
   const history = useMemo(() => {
     const commitsByHash = new Map<string, GitHistoryCommit>();
     for (const value of values) {
@@ -321,6 +330,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const {
     currentRef,
     expandedRefKeys,
+    favoriteBranches,
+    favoriteRefs,
     hasMoreRefs,
     isFetchingMoreRefs,
     isRefSnapshotComplete,
@@ -339,6 +350,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setRefFilter,
     tagRefTree,
     tagRefs,
+    toggleFavorite,
     toggleRefKey,
   } = historyRefs;
   const commitRefKinds = useMemo(() => {
@@ -363,18 +375,21 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     filterActive: normalizedRefFilter.length > 0,
     expanded: expandedRefKeys,
     selectedRevision: selectedRevision?.revision ?? null,
+    favoriteBranches,
     onToggle: toggleRefKey,
     onSelect: selectRef,
+    onToggleFavorite: toggleFavorite,
   } satisfies Omit<RefTreeProps, "nodes" | "namespace" | "section">;
   const refPaneProps = {
     refFilter,
     onRefFilterChange: setRefFilter,
-    selectedRevision,
+    selectedRevision: selectedRevision ?? null,
     onSelectAll: selectAllRefs,
     currentRef,
     onSelectRef: selectRef,
     normalizedRefFilter,
     localRefTree,
+    favoriteRefs,
     remoteRefTree,
     tagRefTree,
     expandedRefKeys,
@@ -545,6 +560,13 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           }
           onRetry={commitDiffQuery.refresh}
         />
+      ) : refSelectionError ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-xs text-destructive">{refSelectionError}</p>
+          <Button size="sm" variant="outline" onClick={historyRefs.onRetryRefs}>
+            Retry
+          </Button>
+        </div>
       ) : isInitialLoad ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
           <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading history…

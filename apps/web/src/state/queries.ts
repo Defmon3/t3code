@@ -245,11 +245,13 @@ export function usePaginatedHistoryRefs(
   options?: {
     readonly limit?: number;
     readonly namespace?: "local" | "remote" | "tag";
+    readonly revision?: number;
   },
 ) {
   const query = target.query?.trim() ?? "";
   const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
   const namespace = options?.namespace ?? "local";
+  const revision = options?.revision ?? 0;
   const [queryGeneration, setQueryGeneration] = useState(0);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const targetKey =
@@ -260,6 +262,7 @@ export function usePaginatedHistoryRefs(
           query,
           limit,
           namespace,
+          revision,
           refreshGeneration,
         ])
       : null;
@@ -282,7 +285,7 @@ export function usePaginatedHistoryRefs(
                 ...(query.length > 0 ? { query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit,
-                queryGeneration,
+                queryGeneration: queryGeneration + revision,
                 namespace,
                 ...(refreshGeneration > 0 ? { refresh: true } : {}),
               },
@@ -295,6 +298,7 @@ export function usePaginatedHistoryRefs(
       query,
       queryGeneration,
       namespace,
+      revision,
       refreshGeneration,
       target.cwd,
       target.environmentId,
