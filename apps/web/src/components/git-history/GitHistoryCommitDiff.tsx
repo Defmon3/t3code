@@ -1,5 +1,5 @@
 import type { GitCommitChangedFile } from "@t3tools/contracts";
-import { FileDiff } from "@pierre/diffs/react";
+import { FileDiff, Virtualizer } from "@pierre/diffs/react";
 import { FileDiffIcon, RefreshCwIcon } from "lucide-react";
 import { useMemo } from "react";
 
@@ -34,6 +34,30 @@ export function CommitDiffView(props: {
       ),
     [props.diff, props.filePath, props.hash],
   );
+  const fileDiffs =
+    renderable?.kind === "files"
+      ? renderable.files.map((fileDiff) => (
+          <div key={resolveFileDiffPath(fileDiff)}>
+            <FileDiff
+              fileDiff={fileDiff}
+              options={{
+                collapsed: false,
+                diffStyle: "unified",
+                lineDiffType: "none",
+                overflow: "scroll",
+                theme: resolveDiffThemeName(resolvedTheme),
+                themeType: resolvedTheme,
+                unsafeCSS: DIFF_SURFACE_THEME_UNSAFE_CSS,
+              }}
+            />
+            {fileDiff.hunks.length === 0 ? (
+              <div className="border-x border-b border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                Binary or metadata-only change; no textual diff is available.
+              </div>
+            ) : null}
+          </div>
+        ))
+      : null;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/60 px-3">
@@ -69,50 +93,40 @@ export function CommitDiffView(props: {
         </label>
         {props.truncated ? <span className="text-[0.625rem] text-amber-400">truncated</span> : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-2">
-        {props.isPending ? (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-            <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading diff…
+      {props.isPending ? (
+        <div className="flex h-full min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
+          <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading diff…
+        </div>
+      ) : props.error ? (
+        <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 text-xs text-destructive">
+          <span>{props.error}</span>
+          <Button size="xs" variant="outline" onClick={props.onRetry}>
+            Retry
+          </Button>
+        </div>
+      ) : renderable?.kind === "files" ? (
+        props.filePath ? (
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            <div className="diff-render-surface space-y-2">{fileDiffs}</div>
           </div>
-        ) : props.error ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-destructive">
-            <span>{props.error}</span>
-            <Button size="xs" variant="outline" onClick={props.onRetry}>
-              Retry
-            </Button>
-          </div>
-        ) : renderable?.kind === "files" ? (
-          <div className="diff-render-surface space-y-2">
-            {renderable.files.map((fileDiff) => (
-              <div key={resolveFileDiffPath(fileDiff)}>
-                <FileDiff
-                  fileDiff={fileDiff}
-                  options={{
-                    collapsed: false,
-                    diffStyle: "unified",
-                    lineDiffType: "none",
-                    overflow: "scroll",
-                    theme: resolveDiffThemeName(resolvedTheme),
-                    themeType: resolvedTheme,
-                    unsafeCSS: DIFF_SURFACE_THEME_UNSAFE_CSS,
-                  }}
-                />
-                {fileDiff.hunks.length === 0 ? (
-                  <div className="border-x border-b border-border/60 px-3 py-2 text-xs text-muted-foreground">
-                    Binary or metadata-only change; no textual diff is available.
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : renderable?.kind === "raw" ? (
-          <pre className="overflow-auto whitespace-pre font-mono text-xs">{renderable.text}</pre>
         ) : (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-            This commit has no textual diff.
-          </div>
-        )}
-      </div>
+          <Virtualizer
+            className="min-h-0 flex-1 overflow-auto"
+            contentClassName="diff-render-surface space-y-2 p-2"
+            config={{ overscrollSize: 600, intersectionObserverMargin: 1200 }}
+          >
+            {fileDiffs}
+          </Virtualizer>
+        )
+      ) : renderable?.kind === "raw" ? (
+        <div className="min-h-0 flex-1 overflow-auto p-2">
+          <pre className="overflow-auto whitespace-pre font-mono text-xs">{renderable.text}</pre>
+        </div>
+      ) : (
+        <div className="flex h-full min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
+          This commit has no textual diff.
+        </div>
+      )}
     </div>
   );
 }

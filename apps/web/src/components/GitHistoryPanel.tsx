@@ -128,7 +128,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const [detailsPaneWidth, setDetailsPaneWidth] = useState(384);
   const [historyQueryGeneration, setHistoryQueryGeneration] = useState(0);
   const vcsHistoryRevision = useAtomValue(
-    vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId }),
+    vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId, cwd: props.cwd }),
   );
   const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd, vcsHistoryRevision);
   const { selectedRevision } = historyRefs;

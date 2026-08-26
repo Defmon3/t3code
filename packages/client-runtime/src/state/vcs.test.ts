@@ -36,6 +36,7 @@ import {
 import {
   invalidateCachedVcsRefs,
   invalidateVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
 } from "./vcsRefInvalidation.ts";
 
@@ -114,10 +115,22 @@ function cacheWithRefs(
 }
 
 describe("cached VCS refs", () => {
-  it("invalidates all ref streams in the mutated environment", () => {
+  it("invalidates history only for the mutated normalized repository target", () => {
     const registry = AtomRegistry.make();
     const environment = {
       environmentId: TARGET.environmentId,
+    };
+    const mutatedRepository = {
+      environmentId: TARGET.environmentId,
+      cwd: "C:/Repositories/Example/",
+    };
+    const sameRepository = {
+      environmentId: TARGET.environmentId,
+      cwd: "c:\\repositories\\example",
+    };
+    const otherRepository = {
+      environmentId: TARGET.environmentId,
+      cwd: "C:\\Repositories\\Other",
     };
     const otherEnvironment = {
       environmentId: EnvironmentId.make("environment-2"),
@@ -125,27 +138,27 @@ describe("cached VCS refs", () => {
 
     expect(registry.get(vcsRefsCacheStateAtom(environment))).toEqual({
       revision: 0,
-      historyRevision: 0,
       persistedCacheReadable: true,
     });
     expect(registry.get(vcsRefsCacheStateAtom(otherEnvironment))).toEqual({
       revision: 0,
-      historyRevision: 0,
       persistedCacheReadable: true,
     });
+    expect(registry.get(vcsHistoryRevisionAtom(sameRepository))).toBe(0);
+    expect(registry.get(vcsHistoryRevisionAtom(otherRepository))).toBe(0);
 
-    invalidateVcsRefs(registry, environment);
+    invalidateVcsRefs(registry, mutatedRepository);
 
     expect(registry.get(vcsRefsCacheStateAtom(environment))).toEqual({
       revision: 1,
-      historyRevision: 1,
       persistedCacheReadable: true,
     });
     expect(registry.get(vcsRefsCacheStateAtom(otherEnvironment))).toEqual({
       revision: 0,
-      historyRevision: 0,
       persistedCacheReadable: true,
     });
+    expect(registry.get(vcsHistoryRevisionAtom(sameRepository))).toBe(1);
+    expect(registry.get(vcsHistoryRevisionAtom(otherRepository))).toBe(0);
     registry.dispose();
   });
 
@@ -262,7 +275,6 @@ describe("cached VCS refs", () => {
         expect(yield* Ref.get(revisionsObservedDuringClear)).toEqual([0]);
         expect(registry.get(vcsRefsCacheStateAtom(TARGET))).toEqual({
           revision: 1,
-          historyRevision: 1,
           persistedCacheReadable: true,
         });
 
@@ -387,7 +399,6 @@ describe("cached VCS refs", () => {
         const state = registry.get(vcsRefsCacheStateAtom(TARGET));
         expect(state).toEqual({
           revision: 1,
-          historyRevision: 1,
           persistedCacheReadable: false,
         });
 
@@ -429,7 +440,6 @@ describe("cached VCS refs", () => {
         const recoveredState = registry.get(vcsRefsCacheStateAtom(TARGET));
         expect(recoveredState).toEqual({
           revision: 1,
-          historyRevision: 1,
           persistedCacheReadable: true,
         });
         expect(yield* Ref.get(clearAttempts)).toBe(2);
