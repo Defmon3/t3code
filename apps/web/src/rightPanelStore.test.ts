@@ -7,6 +7,8 @@ import {
   pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
+  selectMergedActiveRightPanel,
+  selectMergedThreadRightPanelState,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
   updatePullRequestTabStatus,
@@ -17,7 +19,7 @@ const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"))
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
 
 beforeEach(() => {
-  useRightPanelStore.setState({ byThreadKey: {} });
+  useRightPanelStore.setState({ byThreadKey: {}, byEnvironmentId: {} });
 });
 
 describe("rightPanelStore", () => {
@@ -42,6 +44,7 @@ describe("rightPanelStore", () => {
           surfaces: [{ id: "browser:tab-a", kind: "preview", resourceId: "tab-a" }],
         },
       },
+      byEnvironmentId: {},
     });
   });
 
@@ -72,6 +75,7 @@ describe("rightPanelStore", () => {
           ],
         },
       },
+      byEnvironmentId: {},
     });
   });
 
@@ -102,6 +106,7 @@ describe("rightPanelStore", () => {
           ],
         },
       },
+      byEnvironmentId: {},
     });
   });
 
@@ -145,6 +150,7 @@ describe("rightPanelStore", () => {
           ],
         },
       },
+      byEnvironmentId: {},
     });
   });
 
@@ -174,7 +180,7 @@ describe("rightPanelStore", () => {
           "env-1:thread-A": panelState,
         },
       }),
-    ).toEqual({ byThreadKey: { "env-1:thread-A": panelState } });
+    ).toEqual({ byThreadKey: { "env-1:thread-A": panelState }, byEnvironmentId: {} });
   });
 
   it("drops persisted plan surfaces and does not reopen an empty panel", () => {
@@ -209,6 +215,7 @@ describe("rightPanelStore", () => {
           surfaces: [{ id: "diff", kind: "diff" }],
         },
       },
+      byEnvironmentId: {},
     });
   });
 
@@ -252,19 +259,132 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it("persists and reopens the singleton processes surface", () => {
+  it("shares the singleton processes surface across threads in one environment", () => {
     useRightPanelStore.getState().open(refA, "processes");
 
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      isOpen: true,
-      activeSurfaceId: "processes",
-      surfaces: [{ id: "processes", kind: "processes" }],
+    expect(useRightPanelStore.getState().byEnvironmentId).toEqual({
+      "env-1": {
+        isActive: true,
+        isOpen: true,
+        surfaces: [{ id: "processes", kind: "processes" }],
+      },
     });
     expect(
+      selectMergedActiveRightPanel(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refB,
+      ),
+    ).toBe("processes");
+  });
+
+  it("keeps processes separated by environment and deactivates it for a local surface", () => {
+    const remoteRef = scopeThreadRef("env-2" as EnvironmentId, ThreadId.make("thread-C"));
+    useRightPanelStore.getState().open(refA, "processes");
+    useRightPanelStore.getState().open(remoteRef, "processes");
+    useRightPanelStore.getState().open(refA, "agents");
+
+    expect(useRightPanelStore.getState().byEnvironmentId["env-1"]?.isOpen).toBe(false);
+    expect(useRightPanelStore.getState().byEnvironmentId["env-1"]?.isActive).toBe(false);
+    expect(useRightPanelStore.getState().byEnvironmentId["env-2"]?.isOpen).toBe(true);
+    expect(
+      selectMergedThreadRightPanelState(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refA,
+      ).surfaces,
+    ).toEqual([
+      { id: "agents", kind: "agents" },
+      { id: "processes", kind: "processes" },
+    ]);
+  });
+
+  it("migrates v12 thread processes into one environment surface", () => {
+    expect(
       migratePersistedRightPanelState({
-        byThreadKey: useRightPanelStore.getState().byThreadKey,
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "processes",
+            surfaces: [
+              { id: "processes", kind: "processes" },
+              { id: "diff", kind: "diff" },
+            ],
+          },
+          "env-1:thread-B": {
+            isOpen: false,
+            activeSurfaceId: "processes",
+            surfaces: [{ id: "processes", kind: "processes" }],
+          },
+        },
       }),
-    ).toEqual({ byThreadKey: useRightPanelStore.getState().byThreadKey });
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "diff",
+          surfaces: [{ id: "diff", kind: "diff" }],
+        },
+        "env-1:thread-B": { isOpen: false, activeSurfaceId: null, surfaces: [] },
+      },
+      byEnvironmentId: {
+        "env-1": {
+          isActive: true,
+          isOpen: true,
+          surfaces: [{ id: "processes", kind: "processes" }],
+        },
+      },
+    });
+  });
+
+  it("closes the global processes surface through merged close commands", () => {
+    useRightPanelStore.getState().open(refA, "processes");
+    useRightPanelStore.getState().closeSurface(refA, "processes");
+
+    expect(useRightPanelStore.getState().byEnvironmentId).toEqual({});
+  });
+
+  it("preserves hidden Processes selection across threads in its environment", () => {
+    useRightPanelStore.getState().open(refA, "processes");
+    useRightPanelStore.getState().close(refA);
+
+    useRightPanelStore.getState().show(refB);
+
+    expect(
+      selectMergedActiveRightPanel(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refB,
+      ),
+    ).toBe("processes");
+  });
+
+  it("restores a hidden local selection after Processes was deactivated", () => {
+    useRightPanelStore.getState().open(refA, "processes");
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().close(refA);
+
+    useRightPanelStore.getState().show(refA);
+
+    expect(
+      selectMergedActiveRightPanel(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refA,
+      ),
+    ).toBe("agents");
+    expect(useRightPanelStore.getState().byEnvironmentId["env-1"]?.surfaces).toEqual([
+      { id: "processes", kind: "processes" },
+    ]);
+  });
+
+  it("closes global processes with close-to-right from a local surface", () => {
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().open(refA, "processes");
+
+    useRightPanelStore.getState().closeSurfacesToRight(refA, "agents");
+
+    expect(useRightPanelStore.getState().byEnvironmentId).toEqual({});
   });
 
   it("replaces the standalone explorer with peer file surfaces", () => {

@@ -137,8 +137,9 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
-  selectActiveRightPanel,
-  selectActiveRightPanelSurface,
+  selectMergedActiveRightPanel,
+  selectMergedActiveRightPanelSurface,
+  selectMergedThreadRightPanelState,
   selectThreadRightPanelState,
   type RightPanelSurface,
   updatePullRequestTabStatus,
@@ -166,7 +167,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
-import { ProcessPanel } from "./ProcessPanel";
+import { ProcessPanelSurfaceSlot } from "./ProcessPanelSurface";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -1681,14 +1682,14 @@ function ChatViewContent(props: ChatViewProps) {
   }
   const timelineAnchorMessageId = timelineAnchor.messageId;
   const activeRightPanelKind = useRightPanelStore((state) =>
-    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
+    selectMergedActiveRightPanel(state.byThreadKey, state.byEnvironmentId, activeThreadRef),
   );
   const diffOpen = activeRightPanelKind === "diff";
   const rightPanelState = useRightPanelStore((state) =>
-    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
+    selectMergedThreadRightPanelState(state.byThreadKey, state.byEnvironmentId, activeThreadRef),
   );
   const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
+    selectMergedActiveRightPanelSurface(state.byThreadKey, state.byEnvironmentId, activeThreadRef),
   );
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
@@ -3661,8 +3662,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const syncActivePreviewSurface = useCallback(() => {
     if (!activeThreadRef) return;
-    const nextActiveSurface = selectActiveRightPanelSurface(
-      useRightPanelStore.getState().byThreadKey,
+    const state = useRightPanelStore.getState();
+    const nextActiveSurface = selectMergedActiveRightPanelSurface(
+      state.byThreadKey,
+      state.byEnvironmentId,
       activeThreadRef,
     );
     if (nextActiveSurface?.kind === "preview" && nextActiveSurface.resourceId) {
@@ -6648,11 +6651,14 @@ function ChatViewContent(props: ChatViewProps) {
         threadId={activeThreadRef?.threadId ?? null}
       />
     ) : activeRightPanelSurface?.kind === "processes" ? (
-      <ProcessPanel
-        environmentId={activeThread.environmentId}
-        environmentConnectionPhase={activeEnvironmentConnectionPhase}
-        projects={processPanelProjects}
-        threads={processPanelThreads}
+      <ProcessPanelSurfaceSlot
+        input={{
+          environmentId: activeThread.environmentId,
+          environmentConnectionPhase: activeEnvironmentConnectionPhase,
+          projects: processPanelProjects,
+          threads: processPanelThreads,
+        }}
+        visible
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&

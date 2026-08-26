@@ -71,7 +71,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the persisted processes surface.
-const RIGHT_PANEL_STORAGE_VERSION = 12;
+// v13 moves that surface from each thread to its environment.
+const RIGHT_PANEL_STORAGE_VERSION = 13;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -85,8 +86,15 @@ export interface ThreadRightPanelState {
   surfaces: RightPanelSurface[];
 }
 
+export interface EnvironmentRightPanelState {
+  isActive: boolean;
+  isOpen: boolean;
+  surfaces: Extract<RightPanelSurface, { kind: "processes" }>[];
+}
+
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>;
   open: (
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
@@ -127,6 +135,45 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
   isOpen: false,
   activeSurfaceId: null,
   surfaces: [],
+};
+
+const EMPTY_ENVIRONMENT_STATE: EnvironmentRightPanelState = {
+  isActive: false,
+  isOpen: false,
+  surfaces: [],
+};
+const PROCESSES_SURFACE: Extract<RightPanelSurface, { kind: "processes" }> = {
+  id: "processes",
+  kind: "processes",
+};
+
+const environmentIdFromThreadKey = (threadKey: string): string => threadKey.split(":", 1)[0]!;
+
+const deactivateEnvironmentProcesses = (
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  environmentId: string,
+): Record<string, EnvironmentRightPanelState> => {
+  const current = byEnvironmentId[environmentId];
+  if (!current?.isActive && !current?.isOpen) return byEnvironmentId;
+  return { ...byEnvironmentId, [environmentId]: { ...current, isActive: false, isOpen: false } };
+};
+
+const hideEnvironmentProcesses = (
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  environmentId: string,
+): Record<string, EnvironmentRightPanelState> => {
+  const current = byEnvironmentId[environmentId];
+  if (!current?.isOpen) return byEnvironmentId;
+  return { ...byEnvironmentId, [environmentId]: { ...current, isOpen: false } };
+};
+
+const removeEnvironmentProcesses = (
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  environmentId: string,
+): Record<string, EnvironmentRightPanelState> => {
+  if (!(environmentId in byEnvironmentId)) return byEnvironmentId;
+  const { [environmentId]: _removed, ...remaining } = byEnvironmentId;
+  return remaining;
 };
 
 const singletonSurface = (
@@ -252,91 +299,100 @@ function normalizeRevealLine(line: number | undefined): number | null {
 
 export function migratePersistedRightPanelState(persistedState: unknown): {
   byThreadKey: Record<string, ThreadRightPanelState>;
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>;
 } {
   if (!persistedState || typeof persistedState !== "object") {
-    return { byThreadKey: {} };
+    return { byThreadKey: {}, byEnvironmentId: {} };
   }
+  const persistedThreads =
+    "byThreadKey" in persistedState &&
+    persistedState.byThreadKey &&
+    typeof persistedState.byThreadKey === "object"
+      ? (persistedState.byThreadKey as Record<string, ThreadRightPanelState>)
+      : {};
   const byThreadKey =
     "byThreadKey" in persistedState &&
     persistedState.byThreadKey &&
     typeof persistedState.byThreadKey === "object"
       ? Object.fromEntries(
-          Object.entries(persistedState.byThreadKey as Record<string, ThreadRightPanelState>)
+          Object.entries(persistedThreads)
             .filter(([threadKey]) => !isPullRequestsPanelKey(threadKey))
             .map(([threadKey, threadState]) => {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
-                ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
-                    // Dropped surface kind: plans now render inline in the
-                    // transcript (v9).
-                    if ((surface as { kind?: string }).kind === "plan") return [];
-                    if (surface.kind === "file") {
-                      const revealLine =
-                        typeof surface.revealLine === "number" &&
-                        Number.isFinite(surface.revealLine)
-                          ? Math.max(1, Math.trunc(surface.revealLine))
-                          : null;
-                      const revealRequestId =
-                        typeof surface.revealRequestId === "number" &&
-                        Number.isSafeInteger(surface.revealRequestId) &&
-                        surface.revealRequestId >= 0
-                          ? surface.revealRequestId
-                          : 0;
-                      return [{ ...surface, revealLine, revealRequestId }];
-                    }
-                    if (surface.kind === "pull-request") {
+                ? validThreadState.surfaces
+                    .flatMap<RightPanelSurface>((surface) => {
+                      // Dropped surface kind: plans now render inline in the
+                      // transcript (v9).
+                      if ((surface as { kind?: string }).kind === "plan") return [];
+                      if (surface.kind === "file") {
+                        const revealLine =
+                          typeof surface.revealLine === "number" &&
+                          Number.isFinite(surface.revealLine)
+                            ? Math.max(1, Math.trunc(surface.revealLine))
+                            : null;
+                        const revealRequestId =
+                          typeof surface.revealRequestId === "number" &&
+                          Number.isSafeInteger(surface.revealRequestId) &&
+                          surface.revealRequestId >= 0
+                            ? surface.revealRequestId
+                            : 0;
+                        return [{ ...surface, revealLine, revealRequestId }];
+                      }
+                      if (surface.kind === "pull-request") {
+                        if (
+                          typeof surface.projectId !== "string" ||
+                          typeof surface.repository !== "string" ||
+                          typeof surface.number !== "number" ||
+                          !Number.isSafeInteger(surface.number) ||
+                          surface.number < 1
+                        ) {
+                          return [];
+                        }
+                        const { environmentId, ...rest } = surface;
+                        // Anything else stored under that name is not an environment.
+                        return [
+                          pullRequestSurface({
+                            ...rest,
+                            ...(typeof environmentId === "string" ? { environmentId } : {}),
+                          }),
+                        ];
+                      }
+                      if (surface.kind !== "terminal") return [surface];
                       if (
-                        typeof surface.projectId !== "string" ||
-                        typeof surface.repository !== "string" ||
-                        typeof surface.number !== "number" ||
-                        !Number.isSafeInteger(surface.number) ||
-                        surface.number < 1
+                        !("resourceId" in surface) ||
+                        typeof surface.resourceId !== "string" ||
+                        surface.id !== `terminal:${surface.resourceId}`
                       ) {
                         return [];
                       }
-                      const { environmentId, ...rest } = surface;
-                      // Anything else stored under that name is not an environment.
-                      return [
-                        pullRequestSurface({
-                          ...rest,
-                          ...(typeof environmentId === "string" ? { environmentId } : {}),
-                        }),
-                      ];
-                    }
-                    if (surface.kind !== "terminal") return [surface];
-                    if (
-                      !("resourceId" in surface) ||
-                      typeof surface.resourceId !== "string" ||
-                      surface.id !== `terminal:${surface.resourceId}`
-                    ) {
-                      return [];
-                    }
-                    const terminalIds =
-                      "terminalIds" in surface && Array.isArray(surface.terminalIds)
-                        ? [
-                            ...new Set(
-                              surface.terminalIds.filter(
-                                (terminalId): terminalId is string =>
-                                  typeof terminalId === "string",
+                      const terminalIds =
+                        "terminalIds" in surface && Array.isArray(surface.terminalIds)
+                          ? [
+                              ...new Set(
+                                surface.terminalIds.filter(
+                                  (terminalId): terminalId is string =>
+                                    typeof terminalId === "string",
+                                ),
                               ),
-                            ),
-                          ]
-                        : [surface.resourceId];
-                    const activeTerminalId =
-                      "activeTerminalId" in surface &&
-                      typeof surface.activeTerminalId === "string" &&
-                      terminalIds.includes(surface.activeTerminalId)
-                        ? surface.activeTerminalId
-                        : (terminalIds[0] ?? surface.resourceId);
-                    return [
-                      {
-                        ...surface,
-                        terminalIds: terminalIds.length > 0 ? terminalIds : [surface.resourceId],
-                        activeTerminalId,
-                      },
-                    ];
-                  })
+                            ]
+                          : [surface.resourceId];
+                      const activeTerminalId =
+                        "activeTerminalId" in surface &&
+                        typeof surface.activeTerminalId === "string" &&
+                        terminalIds.includes(surface.activeTerminalId)
+                          ? surface.activeTerminalId
+                          : (terminalIds[0] ?? surface.resourceId);
+                      return [
+                        {
+                          ...surface,
+                          terminalIds: terminalIds.length > 0 ? terminalIds : [surface.resourceId],
+                          activeTerminalId,
+                        },
+                      ];
+                    })
+                    .filter((surface) => surface.kind !== "processes")
                 : [];
               const rawActiveSurfaceId = validThreadState?.activeSurfaceId;
               const persistedActiveSurfaceId = surfaces.some(
@@ -362,25 +418,71 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
             }),
         )
       : {};
-  return { byThreadKey };
+  const byEnvironmentId = Object.entries(persistedThreads).reduce<
+    Record<string, EnvironmentRightPanelState>
+  >(
+    (current, [threadKey, threadState]) => {
+      if (
+        !Array.isArray(threadState?.surfaces) ||
+        !threadState.surfaces.some((surface) => surface.kind === "processes")
+      ) {
+        return current;
+      }
+      const environmentId = environmentIdFromThreadKey(threadKey);
+      const previous = current[environmentId] ?? EMPTY_ENVIRONMENT_STATE;
+      current[environmentId] = {
+        isActive: previous.isActive || threadState.activeSurfaceId === "processes",
+        isOpen:
+          previous.isOpen || (threadState.isOpen && threadState.activeSurfaceId === "processes"),
+        surfaces: [PROCESSES_SURFACE],
+      };
+      return current;
+    },
+    "byEnvironmentId" in persistedState &&
+      persistedState.byEnvironmentId &&
+      typeof persistedState.byEnvironmentId === "object"
+      ? (persistedState.byEnvironmentId as Record<string, EnvironmentRightPanelState>)
+      : {},
+  );
+  return { byThreadKey, byEnvironmentId };
 }
 
 export const useRightPanelStore = create<RightPanelStoreState>()(
   persist(
     (set) => ({
       byThreadKey: {},
+      byEnvironmentId: {},
       open: (ref, kind) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            if (kind === "preview") {
-              const existing = current.surfaces.find((surface) => surface.kind === "preview");
-              return upsertSurface(current, existing ?? browserSurface(null));
-            }
-            return upsertSurface(current, singletonSurface(kind));
-          }),
-        })),
+        set((state) => {
+          if (kind === "processes") {
+            return {
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: {
+                  isActive: true,
+                  isOpen: true,
+                  surfaces: [PROCESSES_SURFACE],
+                },
+              },
+            };
+          }
+          return {
+            byEnvironmentId: deactivateEnvironmentProcesses(
+              state.byEnvironmentId,
+              ref.environmentId,
+            ),
+            byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+              if (kind === "preview") {
+                const existing = current.surfaces.find((surface) => surface.kind === "preview");
+                return upsertSurface(current, existing ?? browserSurface(null));
+              }
+              return upsertSurface(current, singletonSurface(kind));
+            }),
+          };
+        }),
       openBrowser: (ref, tabId) =>
         set((state) => ({
+          byEnvironmentId: deactivateEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
             const surface = browserSurface(tabId);
             const withoutPlaceholder = tabId
@@ -391,12 +493,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         })),
       openPullRequest: (ref, target) =>
         set((state) => ({
+          byEnvironmentId: deactivateEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
             return upsertSurface(current, pullRequestSurface(target));
           }),
         })),
       openFile: (ref, relativePath, line) =>
         set((state) => ({
+          byEnvironmentId: deactivateEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
             const withoutStandaloneExplorer = current.surfaces.filter(
               (surface) => surface.kind !== "files",
@@ -424,12 +528,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         })),
       openTerminal: (ref, terminalId) =>
         set((state) => ({
+          byEnvironmentId: deactivateEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             upsertSurface(current, terminalSurface(terminalId)),
           ),
         })),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) => ({
+          byEnvironmentId: deactivateEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
             ...current,
             isOpen: true,
@@ -450,6 +556,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         })),
       activateTerminal: (ref, surfaceId, terminalId) =>
         set((state) => ({
+          byEnvironmentId: deactivateEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
             ...current,
             activeSurfaceId: surfaceId,
@@ -502,62 +609,119 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           }),
         })),
       activateSurface: (ref, surfaceId) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
-            current.surfaces.some((surface) => surface.id === surfaceId)
-              ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
-              : current,
-          ),
-        })),
+        set((state) =>
+          surfaceId === "processes"
+            ? {
+                byEnvironmentId: {
+                  ...state.byEnvironmentId,
+                  [ref.environmentId]: {
+                    isActive: true,
+                    isOpen: true,
+                    surfaces: [PROCESSES_SURFACE],
+                  },
+                },
+              }
+            : {
+                byEnvironmentId: deactivateEnvironmentProcesses(
+                  state.byEnvironmentId,
+                  ref.environmentId,
+                ),
+                byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+                  current.surfaces.some((surface) => surface.id === surfaceId)
+                    ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
+                    : current,
+                ),
+              },
+        ),
       closeSurface: (ref, surfaceId) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
-            if (index < 0) return current;
-            const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
-            if (current.activeSurfaceId !== surfaceId) {
-              return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
-            }
-            const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
-            return {
-              ...current,
-              isOpen: surfaces.length > 0 && current.isOpen,
-              surfaces,
-              activeSurfaceId: fallback?.id ?? null,
-            };
-          }),
-        })),
+        set((state) =>
+          surfaceId === "processes"
+            ? {
+                byEnvironmentId: removeEnvironmentProcesses(
+                  state.byEnvironmentId,
+                  ref.environmentId,
+                ),
+              }
+            : {
+                byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+                  const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+                  if (index < 0) return current;
+                  const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
+                  if (current.activeSurfaceId !== surfaceId) {
+                    return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
+                  }
+                  const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
+                  return {
+                    ...current,
+                    isOpen: surfaces.length > 0 && current.isOpen,
+                    surfaces,
+                    activeSurfaceId: fallback?.id ?? null,
+                  };
+                }),
+              },
+        ),
       closeOtherSurfaces: (ref, surfaceId) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            const surface = current.surfaces.find((entry) => entry.id === surfaceId);
-            if (!surface || current.surfaces.length === 1) return current;
-            return {
-              ...current,
-              isOpen: true,
-              surfaces: [surface],
-              activeSurfaceId: surface.id,
-            };
-          }),
-        })),
+        set((state) =>
+          surfaceId === "processes"
+            ? {
+                byEnvironmentId: {
+                  ...state.byEnvironmentId,
+                  [ref.environmentId]: {
+                    isActive: true,
+                    isOpen: true,
+                    surfaces: [PROCESSES_SURFACE],
+                  },
+                },
+                byThreadKey: updateThread(
+                  state.byThreadKey,
+                  scopedThreadKey(ref),
+                  () => EMPTY_THREAD_STATE,
+                ),
+              }
+            : {
+                byEnvironmentId: removeEnvironmentProcesses(
+                  state.byEnvironmentId,
+                  ref.environmentId,
+                ),
+                byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+                  const surface = current.surfaces.find((entry) => entry.id === surfaceId);
+                  if (!surface || current.surfaces.length === 1) return current;
+                  return {
+                    ...current,
+                    isOpen: true,
+                    surfaces: [surface],
+                    activeSurfaceId: surface.id,
+                  };
+                }),
+              },
+        ),
       closeSurfacesToRight: (ref, surfaceId) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
-            if (index < 0 || index === current.surfaces.length - 1) return current;
-            const surfaces = current.surfaces.slice(0, index + 1);
-            const activeStillExists = surfaces.some(
-              (surface) => surface.id === current.activeSurfaceId,
-            );
-            return {
-              ...current,
-              surfaces,
-              activeSurfaceId: activeStillExists ? current.activeSurfaceId : surfaceId,
-            };
-          }),
-        })),
+        set((state) =>
+          surfaceId === "processes"
+            ? state
+            : {
+                byEnvironmentId: removeEnvironmentProcesses(
+                  state.byEnvironmentId,
+                  ref.environmentId,
+                ),
+                byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+                  const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+                  if (index < 0 || index === current.surfaces.length - 1) return current;
+                  const surfaces = current.surfaces.slice(0, index + 1);
+                  const activeStillExists = surfaces.some(
+                    (surface) => surface.id === current.activeSurfaceId,
+                  );
+                  return {
+                    ...current,
+                    surfaces,
+                    activeSurfaceId: activeStillExists ? current.activeSurfaceId : surfaceId,
+                  };
+                }),
+              },
+        ),
       closeAllSurfaces: (ref) =>
         set((state) => ({
+          byEnvironmentId: removeEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             current.surfaces.length === 0
               ? current
@@ -615,40 +779,95 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           }),
         })),
       show: (ref) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
-            current.isOpen ? current : { ...current, isOpen: true },
-          ),
-        })),
+        set((state) => {
+          const environmentState = state.byEnvironmentId[ref.environmentId];
+          if (environmentState?.isActive) {
+            return {
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: { ...environmentState, isOpen: true },
+              },
+            };
+          }
+          return {
+            byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+              current.isOpen ? current : { ...current, isOpen: true },
+            ),
+          };
+        }),
       close: (ref) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
-            current.isOpen ? { ...current, isOpen: false } : current,
-          ),
-        })),
+        set((state) =>
+          state.byEnvironmentId[ref.environmentId]?.isOpen
+            ? {
+                byEnvironmentId: hideEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
+              }
+            : {
+                byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+                  current.isOpen ? { ...current, isOpen: false } : current,
+                ),
+              },
+        ),
       toggleVisibility: (ref) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
-            ...current,
-            isOpen: !current.isOpen,
-          })),
-        })),
+        set((state) => {
+          const environmentState = state.byEnvironmentId[ref.environmentId];
+          if (environmentState?.isActive && environmentState.isOpen) {
+            return {
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: { ...environmentState, isOpen: false },
+              },
+            };
+          }
+          if (environmentState?.isActive) {
+            return {
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: { ...environmentState, isOpen: true },
+              },
+            };
+          }
+          return {
+            byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
+              ...current,
+              isOpen: !current.isOpen,
+            })),
+          };
+        }),
       toggle: (ref, kind) =>
-        set((state) => ({
-          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            const active = current.surfaces.find(
-              (surface) => surface.id === current.activeSurfaceId,
-            );
-            if (current.isOpen && active?.kind === kind) {
-              return { ...current, isOpen: false };
-            }
-            if (kind === "preview") {
-              const existing = current.surfaces.find((surface) => surface.kind === "preview");
-              return upsertSurface(current, existing ?? browserSurface(null));
-            }
-            return upsertSurface(current, singletonSurface(kind));
-          }),
-        })),
+        set((state) => {
+          if (kind === "processes") {
+            const current = state.byEnvironmentId[ref.environmentId];
+            return {
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: {
+                  isActive: true,
+                  isOpen: !(current?.isActive && current.isOpen),
+                  surfaces: current?.surfaces.length ? current.surfaces : [PROCESSES_SURFACE],
+                },
+              },
+            };
+          }
+          return {
+            byEnvironmentId: deactivateEnvironmentProcesses(
+              state.byEnvironmentId,
+              ref.environmentId,
+            ),
+            byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+              const active = current.surfaces.find(
+                (surface) => surface.id === current.activeSurfaceId,
+              );
+              if (current.isOpen && active?.kind === kind) {
+                return { ...current, isOpen: false };
+              }
+              if (kind === "preview") {
+                const existing = current.surfaces.find((surface) => surface.kind === "preview");
+                return upsertSurface(current, existing ?? browserSurface(null));
+              }
+              return upsertSurface(current, singletonSurface(kind));
+            }),
+          };
+        }),
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
@@ -669,6 +888,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             ([threadKey]) => !isPullRequestsPanelKey(threadKey),
           ),
         ),
+        byEnvironmentId: state.byEnvironmentId,
       }),
       migrate: migratePersistedRightPanelState,
     },
@@ -681,6 +901,42 @@ export function selectThreadRightPanelState(
 ): ThreadRightPanelState {
   if (!ref) return EMPTY_THREAD_STATE;
   return byThreadKey[scopedThreadKey(ref)] ?? EMPTY_THREAD_STATE;
+}
+
+export function selectMergedThreadRightPanelState(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): ThreadRightPanelState {
+  const threadState = selectThreadRightPanelState(byThreadKey, ref);
+  if (!ref) return threadState;
+  const environmentState = byEnvironmentId[ref.environmentId];
+  if (!environmentState || environmentState.surfaces.length === 0) return threadState;
+  return {
+    isOpen: environmentState.isActive ? environmentState.isOpen : threadState.isOpen,
+    activeSurfaceId: environmentState.isActive ? "processes" : threadState.activeSurfaceId,
+    surfaces: [...threadState.surfaces, ...environmentState.surfaces],
+  };
+}
+
+export function selectMergedActiveRightPanel(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): RightPanelKind | null {
+  const state = selectMergedThreadRightPanelState(byThreadKey, byEnvironmentId, ref);
+  if (!state.isOpen) return null;
+  return state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null;
+}
+
+export function selectMergedActiveRightPanelSurface(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): RightPanelSurface | null {
+  const state = selectMergedThreadRightPanelState(byThreadKey, byEnvironmentId, ref);
+  if (!state.isOpen) return null;
+  return state.surfaces.find((surface) => surface.id === state.activeSurfaceId) ?? null;
 }
 
 export function selectActiveRightPanel(
