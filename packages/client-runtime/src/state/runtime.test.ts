@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@t3tools/contracts";
+import { vi } from "vite-plus/test";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -25,10 +26,10 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import type * as RpcSession from "../rpc/session.ts";
 import {
-  environmentRpcKey,
   createAtomCommandScheduler,
   createEnvironmentQueryAtomFamily,
   createRuntimeCommand,
+  environmentRpcKey,
   scheduleAtomCommandEffect,
   executeAtomCommand,
   executeAtomQuery,
@@ -168,6 +169,125 @@ describe("settleAsyncResult", () => {
       expect(Cause.squash(rejected.cause)).toBe(rejectedDefect);
     }
   });
+});
+
+describe("environment query settled refresh", () => {
+  it.effect("pauses retained query refreshes while disconnected and resumes after reconnect", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.sync(() => vi.useFakeTimers());
+        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
+          Effect.sync(() => registry.dispose()),
+        );
+        const environmentId = EnvironmentId.make("settled-refresh-test");
+        const connectionState: SupervisorConnectionState = {
+          ...AVAILABLE_CONNECTION_STATE,
+          desired: true,
+          network: "online",
+          phase: "connected",
+          attempt: 1,
+          generation: 1,
+        };
+        const offlineState: SupervisorConnectionState = { ...connectionState, phase: "offline" };
+        const supervisorState = yield* SubscriptionRef.make(connectionState);
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: new PrimaryConnectionTarget({
+            environmentId,
+            label: "Settled refresh test",
+            httpBaseUrl: "https://environment.example.test",
+            wsBaseUrl: "wss://environment.example.test",
+          }),
+          state: supervisorState,
+          session: yield* SubscriptionRef.make(Option.some(QUERY_RPC_SESSION)),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
+          _environmentId,
+          effect,
+        ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+        const followStream: EnvironmentRegistry.EnvironmentRegistry["Service"]["followStream"] = (
+          _environmentId,
+          stream,
+        ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+        const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+          run,
+          followStream,
+          stateChanges: () => SubscriptionRef.changes(supervisorState),
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+        const runtime = Atom.runtime(
+          Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+        );
+        const firstCompletion = Latch.makeUnsafe();
+        const secondCompletion = Latch.makeUnsafe();
+        const completions = [firstCompletion, secondCompletion];
+        const interrupted: number[] = [];
+        let scanStarts = 0;
+        const queryFamily = createEnvironmentQueryAtomFamily(runtime, {
+          label: "test.settled-refresh",
+          refreshAfterSettledIntervalMs: 2_000,
+          execute: () => {
+            const scan = scanStarts++;
+            return completions[scan]!.await.pipe(
+              Effect.as(`scan-${scan}`),
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  interrupted.push(scan);
+                }),
+              ),
+            );
+          },
+        });
+        const query = queryFamily({ environmentId, input: undefined });
+        const unmount = yield* Effect.sync(() => registry.mount(query));
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(scanStarts).toBe(1);
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        expect(scanStarts).toBe(1);
+        expect(interrupted).toEqual([]);
+
+        firstCompletion.openUnsafe();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(registry.get(query)).toMatchObject({
+          _tag: "Success",
+          value: "scan-0",
+          waiting: false,
+        });
+
+        yield* SubscriptionRef.set(supervisorState, offlineState);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        expect(scanStarts).toBe(1);
+        expect(interrupted).toEqual([]);
+
+        yield* SubscriptionRef.set(supervisorState, connectionState);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_999));
+        expect(scanStarts).toBe(2);
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1));
+        expect(scanStarts).toBe(2);
+        expect(interrupted).toEqual([]);
+
+        secondCompletion.openUnsafe();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(registry.get(query)).toMatchObject({
+          _tag: "Success",
+          value: "scan-1",
+          waiting: false,
+        });
+
+        yield* Effect.sync(unmount);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        expect(scanStarts).toBe(2);
+        expect(interrupted).toEqual([]);
+      }).pipe(Effect.ensuring(Effect.sync(() => vi.useRealTimers()))),
+    ),
+  );
 });
 
 describe("atom command result helpers", () => {
