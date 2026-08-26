@@ -2,10 +2,11 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import type { EnvironmentId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
+import type { ProcessPanelInput } from "./ProcessPanelSurface";
 import { useProcessPanelSurfaceStore } from "./ProcessPanelSurface";
 
 const environmentId = "environment-1" as EnvironmentId;
-const input = {
+const input: ProcessPanelInput = {
   environmentId,
   environmentConnectionPhase: "connected" as EnvironmentConnectionPhase,
   projects: [],
@@ -39,5 +40,41 @@ describe("ProcessPanelSurface", () => {
     useProcessPanelSurfaceStore.getState().release(environmentId, owner);
 
     expect(useProcessPanelSurfaceStore.getState().byEnvironmentId[environmentId]?.owner).toBeNull();
+  });
+
+  it("does not notify equivalent slot updates while publishing changed presentations", () => {
+    const owner = Symbol("owner");
+    const store = useProcessPanelSurfaceStore;
+    store.getState().claim(input, owner);
+
+    const presentations: unknown[] = [];
+    const unsubscribe = store.subscribe((state) => presentations.push(state.byEnvironmentId));
+
+    store.getState().update({ ...input }, owner, false);
+
+    expect(presentations).toEqual([]);
+
+    const projects = [{ id: "project-1", title: "Project", workspaceRoot: "C:/project" }];
+    const threads = [{ projectId: "project-1", worktreePath: "C:/project/worktree" }];
+    store.getState().update(
+      {
+        ...input,
+        environmentConnectionPhase: "connecting",
+        projects,
+        threads,
+      },
+      owner,
+      true,
+    );
+
+    expect(presentations).toHaveLength(1);
+    expect(store.getState().byEnvironmentId[environmentId]).toMatchObject({
+      environmentConnectionPhase: "connecting",
+      projects,
+      threads,
+      visible: true,
+    });
+
+    unsubscribe();
   });
 });
