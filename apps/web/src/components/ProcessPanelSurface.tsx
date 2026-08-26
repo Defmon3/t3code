@@ -48,6 +48,14 @@ export const useProcessPanelSurfaceStore = create<ProcessPanelSurfaceState>()((s
     set((state) => {
       const current = state.byEnvironmentId[input.environmentId];
       if (!current || current.owner !== owner) return state;
+      if (
+        current.environmentConnectionPhase === input.environmentConnectionPhase &&
+        current.projects === input.projects &&
+        current.threads === input.threads &&
+        current.visible === visible
+      ) {
+        return state;
+      }
       return {
         byEnvironmentId: {
           ...state.byEnvironmentId,
