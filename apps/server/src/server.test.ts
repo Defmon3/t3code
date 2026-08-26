@@ -106,6 +106,7 @@ import {
   isThreadDetailEvent,
   processDiscoveryRoots,
   resolveAvailableEditorsForConfig,
+  resolveFileManagerRevealKindForConfig,
 } from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -216,7 +217,6 @@ const makeDefaultOrchestrationReadModel = () => {
         title: "Default Project",
         workspaceRoot: "/tmp/default-project",
         defaultModelSelection,
-        skillShortcuts: [],
         scripts: [],
         createdAt: now,
         updatedAt: now,
@@ -277,55 +277,6 @@ const makeDefaultOrchestrationThreadShell = (
     ...overrides,
   };
 };
-
-it("derives process discovery roots from projects, threads, and independent worktrees", () => {
-  const snapshot = {
-    snapshotSequence: 0,
-    projects: [
-      {
-        id: defaultProjectId,
-        title: "Default Project",
-        workspaceRoot: "/tmp/default-project",
-        defaultModelSelection,
-        scripts: [],
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        id: ProjectId.make("project-second"),
-        title: "Second Project",
-        workspaceRoot: "/tmp/second-project",
-        defaultModelSelection,
-        scripts: [],
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-    ],
-    threads: [
-      makeDefaultOrchestrationThreadShell({ worktreePath: "/tmp/default-project-worktree" }),
-      makeDefaultOrchestrationThreadShell({
-        id: ThreadId.make("thread-second"),
-        projectId: ProjectId.make("project-second"),
-        worktreePath: "/tmp/second-project",
-      }),
-    ],
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-
-  assert.deepEqual(
-    processDiscoveryRoots(snapshot, [
-      { projectId: defaultProjectId, path: "/tmp/default-project-detached-worktree" },
-      { projectId: ProjectId.make("project-second"), path: "/tmp/second-project-independent" },
-    ]),
-    [
-      "/tmp/default-project",
-      "/tmp/second-project",
-      "/tmp/default-project-worktree",
-      "/tmp/default-project-detached-worktree",
-      "/tmp/second-project-independent",
-    ],
-  );
-});
 
 const browserOtlpTracingLayer = Layer.mergeAll(
   FetchHttpClient.layer,
@@ -719,6 +670,7 @@ const buildAppUnderTest = (options?: {
         Layer.mergeAll(
           Layer.mock(ExternalLauncher.ExternalLauncher)({
             resolveAvailableEditors: () => Effect.succeed([]),
+            resolveFileManagerRevealKind: () => Effect.sync((): undefined => undefined),
             ...options?.layers?.externalLauncher,
           }),
           Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
@@ -728,32 +680,15 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({
-          read: () =>
-            Effect.succeed({
-              serverPid: process.pid,
-              readAt: TEST_EPOCH,
-              processCount: 0,
-              totalRssBytes: 0,
-              totalCpuPercent: 0,
-              hostCpuPercent: 0,
-              hostMemoryUsedBytes: 0,
-              hostMemoryTotalBytes: 0,
-              processes: [],
-              error: Option.none(),
-            }),
-          unavailable: (message) =>
-            Effect.succeed({
-              serverPid: process.pid,
-              readAt: TEST_EPOCH,
-              processCount: 0,
-              totalRssBytes: 0,
-              totalCpuPercent: 0,
-              hostCpuPercent: 0,
-              hostMemoryUsedBytes: 0,
-              hostMemoryTotalBytes: 0,
-              processes: [],
-              error: Option.some({ message }),
-            }),
+          read: Effect.succeed({
+            serverPid: process.pid,
+            readAt: TEST_EPOCH,
+            processCount: 0,
+            totalRssBytes: 0,
+            totalCpuPercent: 0,
+            processes: [],
+            error: Option.none(),
+          }),
           signal: (input) =>
             Effect.succeed({
               pid: input.pid,
@@ -4102,7 +4037,35 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
       assert.equal(response.shellResumeCompletionMarker, true);
+      assert.isUndefined(response.shellRevealInFileManager);
+      assert.isUndefined(response.shellRevealInFileManagerKind);
       assert.equal(response.threadResumeCompletionMarker, true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("advertises the usable file manager and its reveal label", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          externalLauncher: {
+            resolveAvailableEditors: () => Effect.succeed(["file-manager"]),
+            resolveFileManagerRevealKind: () => Effect.succeed("file-explorer"),
+          },
+        },
+      });
+
+      const { cookie } = yield* bootstrapBrowserSession();
+      const wsUrl = appendSessionCookieToWsUrl(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        cookie?.split(";")[0] ?? "",
+      );
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
+      );
+
+      assert.deepEqual(response.availableEditors, ["file-manager"]);
+      assert.equal(response.shellRevealInFileManager, true);
+      assert.equal(response.shellRevealInFileManagerKind, "file-explorer");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4120,6 +4083,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const availableEditors = yield* Fiber.join(responseFiber);
       yield* Deferred.await(discoveryInterrupted);
       assert.deepEqual(availableEditors, []);
+    }),
+  );
+
+  it.effect("does not block server config when file manager reveal discovery never resolves", () =>
+    Effect.gen(function* () {
+      const discoveryInterrupted = yield* Deferred.make<void>();
+      const responseFiber = yield* resolveFileManagerRevealKindForConfig(
+        Effect.never.pipe(
+          Effect.onInterrupt(() => Deferred.succeed(discoveryInterrupted, undefined)),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* TestClock.adjust(Duration.seconds(5));
+
+      const revealKind = yield* Fiber.join(responseFiber);
+      yield* Deferred.await(discoveryInterrupted);
+      assert.isUndefined(revealKind);
     }),
   );
 
@@ -4717,6 +4697,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("routes websocket rpc subscribeServerConfig streams snapshot then update", () =>
     Effect.gen(function* () {
+      const path = yield* Path.Path;
       const providers = [
         {
           instanceId: ProviderInstanceId.make("codex"),
@@ -4770,7 +4751,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(first.config.keybindings, []);
         assert.deepEqual(first.config.issues, []);
         assert.deepEqual(first.config.providers, providers);
-        assert.equal(first.config.observability.logsDirectoryPath.endsWith("/logs"), true);
+        assert.equal(path.basename(first.config.observability.logsDirectoryPath), "logs");
         assert.equal(first.config.observability.localTracingEnabled, true);
         assert.equal(first.config.observability.otlpTracesUrl, "http://localhost:4318/v1/traces");
         assert.equal(first.config.observability.otlpTracesEnabled, true);
@@ -5280,7 +5261,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           createdAt: "2026-01-01T00:00:00.000Z",
         }) as const;
 
-      const wsUrl = yield* getWsServerUrl("/ws?clientSurface=mobile&clientAppVersion=1.2.3");
+      const wsUrl = yield* getWsServerUrl(
+        "/ws?clientSurface=mobile&clientAppVersion=1.2.3&clientOs=iOS&clientOsMajorVersion=18&clientDeviceModel=iPhone+15+Pro",
+      );
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
@@ -5313,7 +5296,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "analytics:client.thread.started",
       ]);
       assert.deepEqual(analyticsProperties, [
-        { surface: "mobile", appVersion: "1.2.3" },
+        {
+          surface: "mobile",
+          appVersion: "1.2.3",
+          os: "iOS",
+          osMajorVersion: 18,
+          deviceModel: "iPhone 15 Pro",
+        },
         { surface: "mobile", appVersion: "1.2.3" },
       ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
@@ -5546,8 +5535,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 isRepo: true,
                 hasPrimaryRemote: true,
                 nextCursor: null,
-                currentRef: null,
-                isComplete: true,
+                totalCount: 1,
               }),
             createWorktree: () =>
               Effect.succeed({
@@ -6117,7 +6105,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             title: "Project A",
             workspaceRoot: "/tmp/project-a",
             defaultModelSelection,
-            skillShortcuts: [],
             scripts: [],
             createdAt: now,
             updatedAt: now,

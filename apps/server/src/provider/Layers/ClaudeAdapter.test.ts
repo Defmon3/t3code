@@ -34,7 +34,6 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import type { T3HookRunner } from "../../hooks/T3HookRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
@@ -156,7 +155,6 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
-  readonly hookRunner?: T3HookRunner["Service"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -182,7 +180,6 @@ function makeHarness(config?: {
           nativeEventLogPath: config.nativeEventLogPath,
         }
       : {}),
-    ...(config?.hookRunner ? { hookRunner: config.hookRunner } : {}),
   };
 
   return {
@@ -338,7 +335,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("passes bypass mode and a T3 hook for full-access runtime policy", () => {
+  it.effect("derives bypass permission mode from full-access runtime policy", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -352,8 +349,6 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
-      assert.equal(typeof createInput?.options.canUseTool, "function");
-      assert.equal(typeof createInput?.options.hooks?.PreToolUse?.[0]?.hooks[0], "function");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -393,6 +388,44 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("uses bypass permissions for full-access claude sessions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.permissionMode, "bypassPermissions");
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("passes the configured auto-compaction window to Claude", () => {
+    const harness = makeHarness({ claudeConfig: { autoCompactWindow: "300000" } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.deepEqual(options?.settings, { autoCompactWindow: 300000 });
+      assert.deepEqual(options?.supportedDialogKinds, ["resume_return"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -710,6 +743,39 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.effort, "high");
       const promptText = yield* Effect.promise(() => readFirstPromptText(createInput));
       assert.equal(promptText, "Ultrathink:\nInvestigate the edge cases");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps compact commands intact when ultrathink is selected", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const modelSelection = createModelSelection(
+        ProviderInstanceId.make("claudeAgent"),
+        "claude-sonnet-4-6",
+        [{ id: "effort", value: "ultrathink" }],
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection,
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "/compact",
+        attachments: [],
+        modelSelection,
+      });
+
+      const promptText = yield* Effect.promise(() =>
+        readFirstPromptText(harness.getLastCreateQueryInput()),
+      );
+      assert.equal(promptText, "/compact");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -3537,9 +3603,6 @@ describe("ClaudeAdapterLive", () => {
             },
           ],
           toolUseID: "tool-use-1",
-          title: "Allow shell command?",
-          description: "Claude needs permission to run this command.",
-          decisionReason: "Shell commands require approval in this mode.",
         },
       );
 
@@ -3554,15 +3617,6 @@ describe("ClaudeAdapterLive", () => {
       }
       assert.deepEqual(requested.value.providerRefs, {
         providerItemId: ProviderItemId.make("tool-use-1"),
-      });
-      assert.deepEqual(requested.value.payload.args, {
-        toolName: "Bash",
-        input: { command: "pwd" },
-        toolUseId: "tool-use-1",
-        approvalSource: "engine",
-        approvalTitle: "Allow shell command?",
-        approvalDescription: "Claude needs permission to run this command.",
-        approvalReason: "Shell commands require approval in this mode.",
       });
       const runtimeRequestId = requested.value.requestId;
       assert.equal(typeof runtimeRequestId, "string");
@@ -3593,342 +3647,6 @@ describe("ClaudeAdapterLive", () => {
 
       const permissionResult = yield* Effect.promise(() => permissionPromise);
       assert.equal((permissionResult as PermissionResult).behavior, "allow");
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("auto-allows engine permission asks in full-access mode", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
-
-      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
-      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
-      assert.equal(typeof canUseTool, "function");
-      if (!canUseTool) return;
-
-      const permissionResult = yield* Effect.promise(() =>
-        canUseTool(
-          "Read",
-          { file_path: "C:\\Users\\defmon3\\.claude\\house-rules.md" },
-          {
-            signal: new AbortController().signal,
-            toolUseID: "engine-permission-tool-use-1",
-            title: "Read outside working directory?",
-            decisionReason: "Path is outside allowed working directories.",
-          },
-        ),
-      );
-
-      assert.deepEqual(permissionResult, {
-        behavior: "allow",
-        updatedInput: { file_path: "C:\\Users\\defmon3\\.claude\\house-rules.md" },
-      });
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("runs T3 project hooks before full-access Claude tools", () => {
-    let evaluationCount = 0;
-    const hookRunner = {
-      prepare: (cwd: string) => {
-        assert.equal(cwd, "/tmp/hooked-project");
-        return Effect.succeed({
-          configPath: "/tmp/hooked-project/.t3code/hooks.json",
-          hasPreToolUseHooks: true,
-          hasPreToolUseHooksNow: Effect.succeed(true),
-          evaluatePreToolUse: (input: {
-            readonly provider: string;
-            readonly threadId: string;
-            readonly toolName: string;
-            readonly toolInput: unknown;
-          }) => {
-            evaluationCount += 1;
-            assert.equal(input.provider, "claudeAgent");
-            assert.equal(input.threadId, THREAD_ID);
-            assert.equal(input.toolName, "Bash");
-            assert.deepEqual(input.toolInput, { command: "git push origin main" });
-            return Effect.succeed({
-              decision: "ask" as const,
-              reason: "T3 policy requires confirmation for git push.",
-              title: "Push protected branch?",
-              description: "This command updates a shared remote branch.",
-            });
-          },
-          evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
-        });
-      },
-    } satisfies T3HookRunner["Service"];
-    const harness = makeHarness({ hookRunner });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        cwd: "/tmp/hooked-project",
-        runtimeMode: "full-access",
-      });
-
-      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
-      const createInput = harness.getLastCreateQueryInput();
-      const canUseTool = createInput?.options.canUseTool;
-      const preToolUseHook = createInput?.options.hooks?.PreToolUse?.[0]?.hooks[0];
-      assert.equal(typeof canUseTool, "function");
-      assert.equal(typeof preToolUseHook, "function");
-      if (!canUseTool || !preToolUseHook) {
-        return;
-      }
-
-      const hookResult = yield* Effect.promise(() =>
-        preToolUseHook(
-          {
-            session_id: "sdk-session-hook-1",
-            transcript_path: "/tmp/hooked-project/sdk-session-hook-1.jsonl",
-            cwd: "/tmp/hooked-project",
-            permission_mode: "bypassPermissions",
-            hook_event_name: "PreToolUse",
-            tool_name: "Bash",
-            tool_input: { command: "git push origin main" },
-            tool_use_id: "t3-hook-tool-use-1",
-          },
-          "t3-hook-tool-use-1",
-          { signal: new AbortController().signal },
-        ),
-      );
-      assert.deepEqual(hookResult, {
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "ask",
-          permissionDecisionReason: "T3 policy requires confirmation for git push.",
-        },
-      });
-
-      const permissionPromise = canUseTool(
-        "Bash",
-        { command: "git push origin main" },
-        {
-          signal: new AbortController().signal,
-          toolUseID: "t3-hook-tool-use-1",
-        },
-      );
-
-      const requested = yield* Stream.runHead(adapter.streamEvents);
-      assert.equal(requested._tag, "Some");
-      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
-        return;
-      }
-      assert.deepEqual(requested.value.payload.args, {
-        toolName: "Bash",
-        input: { command: "git push origin main" },
-        toolUseId: "t3-hook-tool-use-1",
-        approvalSource: "hook",
-        approvalTitle: "Push protected branch?",
-        approvalDescription: "This command updates a shared remote branch.",
-        approvalReason: "T3 policy requires confirmation for git push.",
-      });
-
-      yield* adapter.respondToRequest(
-        session.threadId,
-        ApprovalRequestId.make(String(requested.value.requestId)),
-        "acceptForSession",
-      );
-      yield* Stream.runHead(adapter.streamEvents);
-      const permissionResult = yield* Effect.promise(() => permissionPromise);
-      assert.equal((permissionResult as PermissionResult).behavior, "allow");
-
-      const secondPermissionResult = yield* Effect.promise(() =>
-        canUseTool(
-          "Bash",
-          { command: "git push origin main" },
-          {
-            signal: new AbortController().signal,
-            toolUseID: "t3-hook-tool-use-2",
-          },
-        ),
-      );
-      assert.equal((secondPermissionResult as PermissionResult).behavior, "allow");
-      assert.equal(evaluationCount, 1);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("awaits hook approval before completing a root Claude turn", () => {
-    let evaluationCount = 0;
-    const hookRunner = {
-      prepare: () =>
-        Effect.succeed({
-          configPath: "/tmp/claude-stop-hook/.t3code/hooks.json",
-          hasPreToolUseHooks: false,
-          hasPreToolUseHooksNow: Effect.succeed(false),
-          evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
-          evaluateStop: (input: { readonly provider: string; readonly threadId: string }) => {
-            evaluationCount += 1;
-            assert.equal(input.provider, "claudeAgent");
-            assert.equal(input.threadId, THREAD_ID);
-            return Effect.succeed({
-              decision: "ask" as const,
-              title: "Allow Claude to finish?",
-              description: "The project hook requires confirmation before completion.",
-              reason: "T3 policy requires confirmation before Claude finishes.",
-            });
-          },
-        }),
-    } satisfies T3HookRunner["Service"];
-    const harness = makeHarness({ hookRunner });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        cwd: "/tmp/claude-stop-hook",
-        runtimeMode: "full-access",
-      });
-      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "finish this turn",
-        attachments: [],
-      });
-      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
-
-      const requestedFiber = yield* Stream.filter(
-        adapter.streamEvents,
-        (event) => event.type === "request.opened",
-      ).pipe(Stream.runHead, Effect.forkChild);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-stop-hook-accept",
-        uuid: "result-stop-hook-accept",
-      } as unknown as SDKMessage);
-
-      const requested = yield* Fiber.join(requestedFiber);
-      assert.equal(requested._tag, "Some");
-      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
-        return;
-      }
-      assert.equal(String(requested.value.turnId), String(turn.turnId));
-      assert.deepEqual(requested.value.payload, {
-        requestType: "command_execution_approval",
-        detail: "Claude turn completion",
-        args: {
-          approvalSource: "hook",
-          approvalTitle: "Allow Claude to finish?",
-          approvalDescription: "The project hook requires confirmation before completion.",
-          approvalReason: "T3 policy requires confirmation before Claude finishes.",
-        },
-      });
-
-      const completionEventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      yield* adapter.respondToRequest(
-        session.threadId,
-        ApprovalRequestId.make(String(requested.value.requestId)),
-        "accept",
-      );
-
-      const completionEvents = Array.from(yield* Fiber.join(completionEventsFiber));
-      const resolved = completionEvents.find((event) => event.type === "request.resolved");
-      const completed = completionEvents.find((event) => event.type === "turn.completed");
-      assert.equal(resolved?.type, "request.resolved");
-      assert.equal(completed?.type, "turn.completed");
-      if (completed?.type === "turn.completed") {
-        assert.equal(completed.payload.state, "completed");
-      }
-      assert.equal(evaluationCount, 1);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("fails a root Claude turn when stop-hook approval is rejected", () => {
-    const hookRunner = {
-      prepare: () =>
-        Effect.succeed({
-          configPath: "/tmp/claude-stop-hook-reject/.t3code/hooks.json",
-          hasPreToolUseHooks: false,
-          hasPreToolUseHooksNow: Effect.succeed(false),
-          evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
-          evaluateStop: () =>
-            Effect.succeed({
-              decision: "ask" as const,
-              reason: "T3 policy rejected Claude turn completion.",
-            }),
-        }),
-    } satisfies T3HookRunner["Service"];
-    const harness = makeHarness({ hookRunner });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        cwd: "/tmp/claude-stop-hook-reject",
-        runtimeMode: "full-access",
-      });
-      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "finish this turn",
-        attachments: [],
-      });
-      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
-
-      const requestedFiber = yield* Stream.filter(
-        adapter.streamEvents,
-        (event) => event.type === "request.opened",
-      ).pipe(Stream.runHead, Effect.forkChild);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-stop-hook-reject",
-        uuid: "result-stop-hook-reject",
-      } as unknown as SDKMessage);
-      const requested = yield* Fiber.join(requestedFiber);
-      assert.equal(requested._tag, "Some");
-      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
-        return;
-      }
-
-      const completionEventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      yield* adapter.respondToRequest(
-        session.threadId,
-        ApprovalRequestId.make(String(requested.value.requestId)),
-        "decline",
-      );
-
-      const completionEvents = Array.from(yield* Fiber.join(completionEventsFiber));
-      const error = completionEvents.find((event) => event.type === "runtime.error");
-      const completed = completionEvents.find((event) => event.type === "turn.completed");
-      assert.equal(error?.type, "runtime.error");
-      assert.equal(completed?.type, "turn.completed");
-      if (completed?.type === "turn.completed") {
-        assert.equal(completed.payload.state, "failed");
-        assert.equal(completed.payload.errorMessage, "T3 policy rejected Claude turn completion.");
-      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -4734,6 +4452,62 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("routes Claude resume compaction through the shared user-input UI", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        resumeCursor: { resume: "550e8400-e29b-41d4-a716-446655440000" },
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const onUserDialog = harness.getLastCreateQueryInput()?.options.onUserDialog;
+      assert.equal(typeof onUserDialog, "function");
+      if (!onUserDialog) return;
+
+      const dialogPromise = onUserDialog(
+        {
+          dialogKind: "resume_return",
+          payload: { sessionAgeMinutes: 145, estimatedTokens: 275123 },
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(requested._tag, "Some");
+      if (requested._tag !== "Some" || requested.value.type !== "user-input.requested") return;
+      const question = requested.value.payload.questions[0];
+      assert.equal(question?.header, "Resume session");
+      assert.match(question?.question ?? "", /2h 25m/);
+      assert.match(question?.question ?? "", /275,123 tokens/);
+      assert.deepEqual(
+        question?.options.map((option) => option.label),
+        ["Compact and continue", "Keep full history", "Don't ask again"],
+      );
+      if (!question || !requested.value.requestId) return;
+
+      yield* adapter.respondToUserInput(
+        session.threadId,
+        ApprovalRequestId.make(requested.value.requestId),
+        { [question.id]: "Compact and continue" },
+      );
+
+      const resolved = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(resolved._tag, "Some");
+      if (resolved._tag === "Some") assert.equal(resolved.value.type, "user-input.resolved");
+      assert.deepEqual(yield* Effect.promise(() => dialogPromise), {
+        behavior: "completed",
+        result: "compact",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("handles AskUserQuestion via user-input.requested/resolved lifecycle", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -5017,6 +4791,73 @@ describe("ClaudeAdapterLive", () => {
         behavior: "deny",
         message: "User cancelled tool execution.",
       } satisfies PermissionResult);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("denies AskUserQuestion when the signal aborted before the listener registered", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      // Abort before the call so the adapter's listener registration can
+      // never observe the abort event, only the recheck can.
+      const controller = new AbortController();
+      controller.abort();
+      const permissionPromise = canUseTool(
+        "AskUserQuestion",
+        {
+          questions: [
+            {
+              question: "Continue?",
+              header: "Continue",
+              options: [{ label: "Yes", description: "Proceed" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        {
+          signal: controller.signal,
+          toolUseID: "tool-ask-pre-aborted",
+        },
+      );
+
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.deepEqual(permissionResult, {
+        behavior: "deny",
+        message: "User cancelled tool execution.",
+      } satisfies PermissionResult);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        ["user-input.requested", "user-input.resolved"],
+      );
+      const resolvedEvent = runtimeEvents[1];
+      if (resolvedEvent?.type === "user-input.resolved") {
+        assert.deepEqual(resolvedEvent.payload.answers, {});
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
