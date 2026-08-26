@@ -723,14 +723,17 @@ it.effect(
     ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("drops incomplete NUL-separated commit-file records when capped", () =>
+it.effect("caps oversized commit-file output at complete NUL-delimited records", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const output = `${makeGitCommitFilesOutput(1)}A\x00${"x".repeat(512 * 1024)}`;
+      const diffTreeCalls = yield* Ref.make(0);
+      const output = `A\x00first.ts\x00A\x00second.ts\x00A\x00partial-terminal-${"x".repeat(512 * 1024)}`;
       const spawner = ChildProcessSpawner.make((command) =>
         ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
-          ? Effect.succeed(makeSuccessfulHandle(output))
+          ? Ref.updateAndGet(diffTreeCalls, (count) => count + 1).pipe(
+              Effect.as(makeSuccessfulHandle(output)),
+            )
           : delegate.spawn(command),
       );
       const driver = yield* makeGitVcsDriverCore().pipe(
@@ -738,10 +741,24 @@ it.effect("drops incomplete NUL-separated commit-file records when capped", () =
       );
       const cwd = yield* makeTmpDir();
       yield* driver.initRepo({ cwd });
-      const files = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) });
-      assert.deepEqual(files.files, [{ status: "A", path: "file-0.ts" }]);
-      assert.equal(files.capped, true);
-      assert.equal(files.hasMore, false);
+      const hash = "a".repeat(40);
+      const first = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.deepEqual(first.files, [{ status: "A", path: "first.ts" }]);
+      assert.equal(first.capped, true);
+      assert.equal(first.hasMore, true);
+      assert.ok(first.nextCursor);
+
+      const second = yield* driver.listCommitFiles({
+        cwd,
+        hash,
+        cursor: first.nextCursor,
+        limit: 1,
+      });
+      assert.deepEqual(second.files, [{ status: "A", path: "second.ts" }]);
+      assert.equal(second.capped, true);
+      assert.equal(second.hasMore, false);
+      assert.equal(second.nextCursor, null);
+      assert.equal(yield* Ref.get(diffTreeCalls), 1);
     }),
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );

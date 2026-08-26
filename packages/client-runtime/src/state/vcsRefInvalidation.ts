@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Effect from "effect/Effect";
 import * as PartitionedSemaphore from "effect/PartitionedSemaphore";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
@@ -16,20 +17,19 @@ export interface CachedVcsRefsInvalidationTarget extends VcsRefsInvalidationTarg
 
 export interface VcsRefsCacheState {
   readonly revision: number;
-  readonly historyRevision: number;
   readonly persistedCacheReadable: boolean;
 }
 
 const stateByEnvironment = Atom.family((environmentId: EnvironmentId) =>
   Atom.make<VcsRefsCacheState>({
     revision: 0,
-    historyRevision: 0,
     persistedCacheReadable: true,
   }).pipe(Atom.keepAlive, Atom.withLabel(`environment-data:vcs:list-refs-state:${environmentId}`)),
 );
-const historyRevisionByEnvironment = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make((get) => get(stateByEnvironment(environmentId)).historyRevision).pipe(
-    Atom.withLabel(`environment-data:vcs:history-revision:${environmentId}`),
+const historyRevisionByRepository = Atom.family((targetKey: string) =>
+  Atom.make<number>(0).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`environment-data:vcs:history-revision:${targetKey}`),
   ),
 );
 const persistenceLock = PartitionedSemaphore.makeUnsafe<EnvironmentId>({ permits: 1 });
@@ -38,21 +38,27 @@ export function vcsRefsCacheStateAtom(target: VcsRefsInvalidationTarget) {
   return stateByEnvironment(target.environmentId);
 }
 
-export function vcsHistoryRevisionAtom(target: VcsRefsInvalidationTarget): Atom.Atom<number> {
-  return historyRevisionByEnvironment(target.environmentId);
+export function vcsHistoryRevisionAtom(
+  target: CachedVcsRefsInvalidationTarget,
+): Atom.Writable<number> {
+  return historyRevisionByRepository(
+    JSON.stringify([target.environmentId, normalizeProjectPathForComparison(target.cwd)]),
+  );
 }
 
 export function invalidateVcsRefs(
   registry: AtomRegistry.AtomRegistry,
-  target: VcsRefsInvalidationTarget,
+  target: CachedVcsRefsInvalidationTarget,
   persistedCacheReadable?: boolean,
   invalidateHistory = true,
 ): void {
   registry.update(vcsRefsCacheStateAtom(target), (state) => ({
     revision: state.revision + 1,
-    historyRevision: state.historyRevision + (invalidateHistory ? 1 : 0),
     persistedCacheReadable: persistedCacheReadable ?? state.persistedCacheReadable,
   }));
+  if (invalidateHistory) {
+    registry.update(vcsHistoryRevisionAtom(target), (revision) => revision + 1);
+  }
 }
 
 export function withVcsRefsPersistenceLock<A, E, R>(

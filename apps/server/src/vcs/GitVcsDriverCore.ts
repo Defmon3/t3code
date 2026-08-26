@@ -3402,10 +3402,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ],
         {
           maxOutputBytes: GIT_COMMIT_FILES_MAX_OUTPUT_BYTES,
+          appendTruncationMarker: true,
           fallbackErrorDetail: "git diff-tree failed",
         },
       );
-      const parsed = parseGitCommitChangedFiles(changes.stdout);
+      const completeChanges = changes.stdoutTruncated
+        ? changes.stdout.slice(0, changes.stdout.lastIndexOf("\0") + 1)
+        : changes.stdout;
+      const parsed = parseGitCommitChangedFiles(completeChanges);
       snapshot = {
         gitCommonDir: repositoryPaths.gitCommonDir,
         worktreePath,
