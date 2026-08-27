@@ -303,6 +303,7 @@ it.effect("kills a Windows child process tree without blocking scope close", () 
   `;
     const childScript = `
     const { spawn } = require("node:child_process");
+    // @effect-diagnostics-next-line preferSchemaOverJson:off - embeds child source in a Node command.
     const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
       stdio: ["ignore", "pipe", "inherit"],
     });
