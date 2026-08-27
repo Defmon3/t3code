@@ -119,6 +119,9 @@ packageExtensions:
     peerDependenciesMeta:
       vitest:
         optional: true
+  astro@*:
+    dependencies:
+      typescript: ~6.0.3
   vite-plus@*:
     dependencies:
       vite: "catalog:"
