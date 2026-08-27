@@ -104,6 +104,7 @@ import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
+  processDiscoveryWorktrees,
   processDiscoveryRoots,
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
@@ -326,6 +327,83 @@ it("derives process discovery roots from projects, threads, and independent work
     ],
   );
 });
+
+it.effect(
+  "deduplicates registered project worktree discovery while retaining project ownership",
+  () =>
+    Effect.gen(function* () {
+      const snapshot = {
+        snapshotSequence: 0,
+        projects: [
+          {
+            id: defaultProjectId,
+            title: "Default Project",
+            workspaceRoot: "/tmp/default-project",
+            defaultModelSelection,
+            scripts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: ProjectId.make("project-duplicate"),
+            title: "Duplicate Project",
+            workspaceRoot: "/tmp/default-project",
+            defaultModelSelection,
+            scripts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: ProjectId.make("project-failed"),
+            title: "Failed Project",
+            workspaceRoot: "/tmp/failed-project",
+            defaultModelSelection,
+            scripts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: ProjectId.make("project-second"),
+            title: "Second Project",
+            workspaceRoot: "/tmp/second-project",
+            defaultModelSelection,
+            scripts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        threads: [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+      const discoveredRoots: string[] = [];
+      const worktrees = yield* processDiscoveryWorktrees(snapshot, {
+        listWorktreePaths: (cwd) => {
+          discoveredRoots.push(cwd);
+          return cwd === "/tmp/failed-project"
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "list worktrees",
+                  command: "git worktree list",
+                  cwd,
+                  detail: "repository unavailable",
+                }),
+              )
+            : Effect.succeed([`${cwd}/worktree`]);
+        },
+      });
+
+      assert.deepEqual([...discoveredRoots].sort(), [
+        "/tmp/default-project",
+        "/tmp/failed-project",
+        "/tmp/second-project",
+      ]);
+      assert.deepEqual(worktrees, [
+        { projectId: defaultProjectId, path: "/tmp/default-project/worktree" },
+        { projectId: ProjectId.make("project-duplicate"), path: "/tmp/default-project/worktree" },
+        { projectId: ProjectId.make("project-second"), path: "/tmp/second-project/worktree" },
+      ]);
+    }),
+);
 
 const browserOtlpTracingLayer = Layer.mergeAll(
   FetchHttpClient.layer,

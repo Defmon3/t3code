@@ -156,6 +156,8 @@ interface ProcessDiscoveryWorktree {
   readonly path: string;
 }
 
+type ProcessDiscoveryGit = Pick<GitVcsDriver.GitVcsDriver["Service"], "listWorktreePaths">;
+
 export function processDiscoveryRoots(
   snapshot: OrchestrationShellSnapshot,
   worktrees: ReadonlyArray<ProcessDiscoveryWorktree> = [],
@@ -171,16 +173,30 @@ export function processDiscoveryRoots(
   ].slice(0, RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS);
 }
 
-function processDiscoveryWorktrees(
+export function processDiscoveryWorktrees(
   snapshot: OrchestrationShellSnapshot,
-  git: GitVcsDriver.GitVcsDriver["Service"],
+  git: ProcessDiscoveryGit,
 ) {
-  return Effect.forEach(snapshot.projects, (project) =>
-    git.listWorktreePaths(project.workspaceRoot).pipe(
-      Effect.map((paths) => paths.map((path) => ({ projectId: project.id, path }))),
-      Effect.orElseSucceed(() => []),
-    ),
-  ).pipe(Effect.map((worktrees) => worktrees.flat()));
+  const workspaceRoots = [...new Set(snapshot.projects.map((project) => project.workspaceRoot))];
+  return Effect.forEach(
+    workspaceRoots,
+    (workspaceRoot) =>
+      git.listWorktreePaths(workspaceRoot).pipe(
+        Effect.map((paths) => [workspaceRoot, paths] as const),
+        Effect.orElseSucceed(() => [workspaceRoot, []] as const),
+      ),
+    { concurrency: 4 },
+  ).pipe(
+    Effect.map((resolvedWorktrees) => {
+      const pathsByWorkspaceRoot = new Map(resolvedWorktrees);
+      return snapshot.projects.flatMap((project) =>
+        (pathsByWorkspaceRoot.get(project.workspaceRoot) ?? []).map((path) => ({
+          projectId: project.id,
+          path,
+        })),
+      );
+    }),
+  );
 }
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
