@@ -5,14 +5,19 @@ export type ProjectSkillShortcutSnapshot = {
   colors: ProjectSkillShortcutColors;
 };
 
+type ProjectSkillShortcutProjection = {
+  readonly shortcuts: readonly string[];
+  readonly colors: ProjectSkillShortcutColors;
+};
+
 export type ProjectSkillShortcutSyncState = {
   current: ProjectSkillShortcutSnapshot;
   pending: ProjectSkillShortcutSnapshot[];
 };
 
 function snapshotsEqual(
-  left: ProjectSkillShortcutSnapshot,
-  right: ProjectSkillShortcutSnapshot,
+  left: ProjectSkillShortcutProjection,
+  right: ProjectSkillShortcutProjection,
 ): boolean {
   const leftColors = Object.entries(left.colors);
   return (
@@ -23,12 +28,12 @@ function snapshotsEqual(
   );
 }
 
-function snapshot(input: ProjectSkillShortcutSnapshot): ProjectSkillShortcutSnapshot {
+function snapshot(input: ProjectSkillShortcutProjection): ProjectSkillShortcutSnapshot {
   return { shortcuts: [...input.shortcuts], colors: { ...input.colors } };
 }
 
 export function createProjectSkillShortcutSyncState(
-  projection: ProjectSkillShortcutSnapshot,
+  projection: ProjectSkillShortcutProjection,
 ): ProjectSkillShortcutSyncState {
   return { current: snapshot(projection), pending: [] };
 }
@@ -43,7 +48,7 @@ export function applyProjectSkillShortcutLocalChange(
 
 export function reconcileProjectSkillShortcutProjection(
   state: ProjectSkillShortcutSyncState,
-  projection: ProjectSkillShortcutSnapshot,
+  projection: ProjectSkillShortcutProjection,
 ): ProjectSkillShortcutSyncState {
   const acknowledgedIndex = state.pending.findIndex((pending) =>
     snapshotsEqual(pending, projection),
