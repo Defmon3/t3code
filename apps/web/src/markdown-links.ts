@@ -150,7 +150,6 @@ export function normalizeMarkdownFileLinkHrefKey(href: string): string {
   const target = parseFileUrlHref(`file:///${rewrittenHref}`, { decodePath: false });
   return target ? `${target.path}${target.hash}` : rewrittenHref;
 }
-
 interface MarkdownLinkNode {
   type?: string;
   url?: unknown;

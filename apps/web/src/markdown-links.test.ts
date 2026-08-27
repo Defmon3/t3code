@@ -24,7 +24,6 @@ describe("normalizeMarkdownLinkDestination", () => {
     ).toBe("C:/Users/mike/dev-stuff/t3code/apps/web/src/markdown-links.ts");
   });
 });
-
 describe("normalizeMarkdownFileLinkHrefKey", () => {
   it("uses the same key for raw and encoded unicode drive paths", () => {
     const encodedPath = "C:/Users/mike/dev-stuff/%E6%96%87%E6%A1%A3/apps/web/src/markdown-links.ts";
@@ -111,7 +110,6 @@ describe("shouldOpenMarkdownFileLinkInBrowserByDefault", () => {
     expect(shouldOpenMarkdownFileLinkInBrowserByDefault("report.xml")).toBe(false);
   });
 });
-
 describe("rewriteMarkdownFileUriHref", () => {
   it("rewrites file uri hrefs into direct path hrefs", () => {
     expect(rewriteMarkdownFileUriHref("file:///Users/julius/project/src/main.ts#L42")).toBe(

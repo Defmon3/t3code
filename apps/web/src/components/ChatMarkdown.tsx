@@ -91,6 +91,7 @@ import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation
 import {
   extractMarkdownLinkHrefs,
   normalizeMarkdownFileLinkHrefKey,
+  normalizeMarkdownLinkDestination,
   remarkRewriteWindowsFileLinks,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
