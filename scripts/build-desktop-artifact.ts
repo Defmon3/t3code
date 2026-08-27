@@ -1717,7 +1717,7 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   readonly platform: typeof BuildPlatform.Type;
   readonly arch: typeof BuildArch.Type;
   readonly verbose: boolean;
-  readonly prebuild: string | undefined;
+  readonly prebuild?: string | undefined;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
