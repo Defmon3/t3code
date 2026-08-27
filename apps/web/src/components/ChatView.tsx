@@ -141,9 +141,8 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   issueSurfaceId,
-  selectMergedActiveRightPanel,
+  mergeThreadRightPanelState,
   selectMergedActiveRightPanelSurface,
-  selectMergedThreadRightPanelState,
   selectThreadRightPanelState,
   type RightPanelSurface,
   updatePullRequestTabStatus,
@@ -1716,16 +1715,22 @@ function ChatViewContent(props: ChatViewProps) {
     setTimelineAnchor({ threadKey: activeThreadKey, messageId: null });
   }
   const timelineAnchorMessageId = timelineAnchor.messageId;
-  const activeRightPanelKind = useRightPanelStore((state) =>
-    selectMergedActiveRightPanel(state.byThreadKey, state.byEnvironmentId, activeThreadRef),
+  const activeThreadRightPanelState = useRightPanelStore((state) =>
+    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
+  const activeEnvironmentRightPanelState = useRightPanelStore((state) =>
+    activeThreadRef ? state.byEnvironmentId[activeThreadRef.environmentId] : undefined,
+  );
+  const rightPanelState = useMemo(
+    () => mergeThreadRightPanelState(activeThreadRightPanelState, activeEnvironmentRightPanelState),
+    [activeEnvironmentRightPanelState, activeThreadRightPanelState],
+  );
+  const activeRightPanelSurface = rightPanelState.isOpen
+    ? (rightPanelState.surfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId) ??
+      null)
+    : null;
+  const activeRightPanelKind = rightPanelState.isOpen ? activeRightPanelSurface?.kind : null;
   const diffOpen = activeRightPanelKind === "diff";
-  const rightPanelState = useRightPanelStore((state) =>
-    selectMergedThreadRightPanelState(state.byThreadKey, state.byEnvironmentId, activeThreadRef),
-  );
-  const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectMergedActiveRightPanelSurface(state.byThreadKey, state.byEnvironmentId, activeThreadRef),
-  );
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});

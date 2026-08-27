@@ -104,6 +104,7 @@ import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
+  processDiscoveryWorktrees,
   processDiscoveryRoots,
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
@@ -277,6 +278,138 @@ const makeDefaultOrchestrationThreadShell = (
     ...overrides,
   };
 };
+
+it("derives process discovery roots from projects, threads, and independent worktrees", () => {
+  const snapshot = {
+    snapshotSequence: 0,
+    projects: [
+      {
+        id: defaultProjectId,
+        title: "Default Project",
+        workspaceRoot: "/tmp/default-project",
+        defaultModelSelection,
+        scripts: [],
+        skillShortcuts: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: ProjectId.make("project-second"),
+        title: "Second Project",
+        workspaceRoot: "/tmp/second-project",
+        defaultModelSelection,
+        scripts: [],
+        skillShortcuts: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    threads: [
+      makeDefaultOrchestrationThreadShell({ worktreePath: "/tmp/default-project-worktree" }),
+      makeDefaultOrchestrationThreadShell({
+        id: ThreadId.make("thread-second"),
+        projectId: ProjectId.make("project-second"),
+        worktreePath: "/tmp/second-project",
+      }),
+    ],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  assert.deepEqual(
+    processDiscoveryRoots(snapshot, [
+      { projectId: defaultProjectId, path: "/tmp/default-project-detached-worktree" },
+      { projectId: ProjectId.make("project-second"), path: "/tmp/second-project-independent" },
+    ]),
+    [
+      "/tmp/default-project",
+      "/tmp/second-project",
+      "/tmp/default-project-worktree",
+      "/tmp/default-project-detached-worktree",
+      "/tmp/second-project-independent",
+    ],
+  );
+});
+
+it.effect(
+  "deduplicates registered project worktree discovery while retaining project ownership",
+  () =>
+    Effect.gen(function* () {
+      const snapshot = {
+        snapshotSequence: 0,
+        projects: [
+          {
+            id: defaultProjectId,
+            title: "Default Project",
+            workspaceRoot: "/tmp/default-project",
+            defaultModelSelection,
+            scripts: [],
+            skillShortcuts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: ProjectId.make("project-duplicate"),
+            title: "Duplicate Project",
+            workspaceRoot: "/tmp/default-project",
+            defaultModelSelection,
+            scripts: [],
+            skillShortcuts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: ProjectId.make("project-failed"),
+            title: "Failed Project",
+            workspaceRoot: "/tmp/failed-project",
+            defaultModelSelection,
+            scripts: [],
+            skillShortcuts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: ProjectId.make("project-second"),
+            title: "Second Project",
+            workspaceRoot: "/tmp/second-project",
+            defaultModelSelection,
+            scripts: [],
+            skillShortcuts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        threads: [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+      const discoveredRoots: string[] = [];
+      const worktrees = yield* processDiscoveryWorktrees(snapshot, {
+        listWorktreePaths: (cwd) => {
+          discoveredRoots.push(cwd);
+          return cwd === "/tmp/failed-project"
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "list worktrees",
+                  command: "git worktree list",
+                  cwd,
+                  detail: "repository unavailable",
+                }),
+              )
+            : Effect.succeed([`${cwd}/worktree`]);
+        },
+      });
+
+      assert.deepEqual([...discoveredRoots].sort(), [
+        "/tmp/default-project",
+        "/tmp/failed-project",
+        "/tmp/second-project",
+      ]);
+      assert.deepEqual(worktrees, [
+        { projectId: defaultProjectId, path: "/tmp/default-project/worktree" },
+        { projectId: ProjectId.make("project-duplicate"), path: "/tmp/default-project/worktree" },
+        { projectId: ProjectId.make("project-second"), path: "/tmp/second-project/worktree" },
+      ]);
+    }),
+);
 
 const browserOtlpTracingLayer = Layer.mergeAll(
   FetchHttpClient.layer,
@@ -680,15 +813,32 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({
-          read: Effect.succeed({
-            serverPid: process.pid,
-            readAt: TEST_EPOCH,
-            processCount: 0,
-            totalRssBytes: 0,
-            totalCpuPercent: 0,
-            processes: [],
-            error: Option.none(),
-          }),
+          read: () =>
+            Effect.succeed({
+              serverPid: process.pid,
+              readAt: TEST_EPOCH,
+              processCount: 0,
+              totalRssBytes: 0,
+              totalCpuPercent: 0,
+              hostCpuPercent: 0,
+              hostMemoryUsedBytes: 0,
+              hostMemoryTotalBytes: 0,
+              processes: [],
+              error: Option.none(),
+            }),
+          unavailable: (message) =>
+            Effect.succeed({
+              serverPid: process.pid,
+              readAt: TEST_EPOCH,
+              processCount: 0,
+              totalRssBytes: 0,
+              totalCpuPercent: 0,
+              hostCpuPercent: 0,
+              hostMemoryUsedBytes: 0,
+              hostMemoryTotalBytes: 0,
+              processes: [],
+              error: Option.some({ message }),
+            }),
           signal: (input) =>
             Effect.succeed({
               pid: input.pid,
@@ -5535,7 +5685,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 isRepo: true,
                 hasPrimaryRemote: true,
                 nextCursor: null,
-                totalCount: 1,
+                currentRef: null,
+                isComplete: true,
               }),
             createWorktree: () =>
               Effect.succeed({
