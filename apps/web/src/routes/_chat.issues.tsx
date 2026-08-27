@@ -64,6 +64,8 @@ import {
   WorkspaceBreadcrumbItem,
   WorkspaceBreadcrumbSeparator,
 } from "../components/WorkspaceBreadcrumb";
+import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
+import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
@@ -84,9 +86,9 @@ import { usePrimaryEnvironment } from "../state/environments";
 import { issueEnvironment } from "../state/issues";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 export interface IssuesSearch {
   readonly involvement: IssueInvolvement;
@@ -1181,6 +1183,7 @@ function IssuesRouteView() {
         New issue
       </Button>
     ) : null,
+    titlebarControls: issuesSupported && !rightPanelState.isOpen ? panelToggleControls : null,
     rightPanelControl: !issuesSupported || rightPanelState.isOpen ? null : panelToggleControls,
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
@@ -1249,7 +1252,6 @@ function IssuesRouteView() {
             onAddBrowser={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
-            onAddGitHistory={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
@@ -1257,7 +1259,6 @@ function IssuesRouteView() {
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
-            gitHistoryAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}
@@ -1299,7 +1300,6 @@ function IssuesRouteView() {
                     selectedProjectId: target.projectId as ProjectId,
                   });
                 }}
-                chromeVariant="collapse"
               />
             ) : (
               <IssueDetailPanel
@@ -1335,7 +1335,6 @@ function IssuesRouteView() {
                   assignedQuery.refresh();
                 }}
                 onStateChange={handleIssueTabStatusChange}
-                chromeVariant="collapse"
               />
             )}
           </RightPanelTabs>
@@ -1507,6 +1506,7 @@ function IssuesColumn({
   searchInput,
   filtersMenu,
   newIssueControl,
+  titlebarControls,
   rightPanelControl,
   rightPanelOpen,
   listBody,
@@ -1524,6 +1524,7 @@ function IssuesColumn({
   searchInput: ReactNode;
   filtersMenu: ReactNode;
   newIssueControl: ReactNode;
+  titlebarControls: ReactNode;
   rightPanelControl: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
@@ -1587,18 +1588,12 @@ function IssuesColumn({
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header
-        className={cn(
-          "workspace-topbar drag-region gap-1.5 px-3 sm:px-5",
-          // A closed right panel leaves this column full-width, so its header runs
-          // underneath the native window controls on Windows; reserve the inset the
-          // way Settings and the chat view do. While the panel is open the column
-          // ends at the panel's left edge and the absolute controls strip (already
-          // WCO-aware) owns the top-right corner.
-          !rightPanelOpen && "wco:pr-[var(--workspace-native-controls-inset)]",
-          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-        )}
+      <WorkspacePageHeader
+        electron={isElectron}
+        reserveNativeControls={!rightPanelOpen}
+        className="relative bg-background"
       >
+        {titlebarControls}
         {condensed ? (
           <WorkspaceBreadcrumb ariaLabel="Issue scope">
             {/* The page name remains the foreground anchor in both states; the live filters are
@@ -1656,7 +1651,7 @@ function IssuesColumn({
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
         {rightPanelControl}
-      </header>
+      </WorkspacePageHeader>
 
       <div
         ref={scrollRef}
@@ -1665,7 +1660,7 @@ function IssuesColumn({
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only
             content actually passing under the chrome fades. */}
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-6 pb-12">
+        <WorkspacePageContainer className="gap-4">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}
@@ -1676,7 +1671,7 @@ function IssuesColumn({
           </div>
 
           {listBody}
-        </div>
+        </WorkspacePageContainer>
       </div>
     </div>
   );

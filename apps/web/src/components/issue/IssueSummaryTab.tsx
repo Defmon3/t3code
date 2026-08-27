@@ -20,7 +20,7 @@ import { issueEnvironment } from "~/state/issues";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
+import { PullRequestMarkdownEditor as SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
@@ -441,6 +441,7 @@ export function IssueSummaryTab({
                         className="mt-2"
                         value={comment.body}
                         cwd={detail.workspaceRoot}
+                        environmentId={environmentId}
                         label="Edit comment"
                         saving={commentSaving}
                         onSave={(body) => void saveComment(comment.id, body)}

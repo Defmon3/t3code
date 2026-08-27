@@ -11,7 +11,6 @@ const PROJECT: OrchestrationProjectShell = {
   title: "web",
   workspaceRoot: "/work/web",
   defaultModelSelection: null,
-  skillShortcuts: [],
   scripts: [],
   createdAt: "2026-07-01T00:00:00Z",
   updatedAt: "2026-07-01T00:00:00Z",

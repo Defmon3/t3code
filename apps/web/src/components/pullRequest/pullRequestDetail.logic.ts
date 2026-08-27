@@ -11,6 +11,7 @@ import type {
   PullRequestReviewThread,
   PullRequestState,
   PullRequestUpdateMethod,
+  VcsRef,
 } from "@t3tools/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
@@ -75,15 +76,11 @@ export function pullRequestHandoffLabels(inThisThread: boolean) {
         fixFinding: "Fix in this thread",
         fixCheck: "Fix in this thread",
         fixFindings: "Fix findings in this thread",
-        resolve: "Resolve in this thread",
-        resolveConflicts: "Resolve conflicts in this thread",
       }
     : {
         fixFinding: "Fix in a thread",
         fixCheck: "Fix",
         fixFindings: "Fix findings in a thread",
-        resolve: "Resolve in a new thread",
-        resolveConflicts: "Resolve conflicts in a thread",
       };
 }
 
@@ -101,6 +98,20 @@ export function pullRequestActionMenuHasGroup(
   showsMergeMethods: boolean,
 ): boolean {
   return showsDraftToggle || showsAutoMerge || showsMergeMethods;
+}
+
+export function isStackedPullRequestBase(
+  baseBranch: string,
+  refs: ReadonlyArray<Pick<VcsRef, "name" | "isDefault" | "isRemote" | "remoteName">>,
+): boolean {
+  const defaultRef = refs.find((refName) => refName.isDefault);
+  if (!defaultRef) return false;
+  if (defaultRef.isRemote !== true) return defaultRef.name !== baseBranch;
+  const remotePrefix = `${defaultRef.remoteName ?? defaultRef.name.split("/")[0]}/`;
+  const defaultBranch = defaultRef.name.startsWith(remotePrefix)
+    ? defaultRef.name.slice(remotePrefix.length)
+    : defaultRef.name;
+  return defaultBranch !== baseBranch;
 }
 
 /** Plain-language state, shown beside the author. Conflicts are a merge signal, not a state. */
@@ -800,44 +811,6 @@ export function buildAddSelectionToAgentHandoff(input: {
     prompt: bounded(input.request),
     reviewComments: [pullRequestContextComment(input, []), { ...input.comment, text: "" }],
   };
-}
-
-/**
- * The internal wrapper every failed operation arrives in: which operation ran, and which tool
- * said no. A reader has no use for either.
- */
-const OPERATION_PREFIX = /^Pull request operation \w+ failed:\s*/iu;
-
-/**
- * Sentences that report only that a tool exited: true, and no help at all. Anything else the
- * host says is worth more than what this page could invent, so only these are replaced.
- */
-const TOOL_NOISE = [
-  /^(github|gitlab|bitbucket|azure devops)?\s*(cli|api)?\s*(command\s*)?failed\.?$/iu,
-  /^exited? with (code|status) \d+\.?$/iu,
-  /^unknown error\.?$/iu,
-];
-
-/** How much of a host's own message a toast can carry before it stops being read. */
-const FAILURE_DETAIL_MAX_LENGTH = 320;
-
-/**
- * What to put under a failed action. The host's own sentence when it said something — it knows
- * why, and this page does not — and otherwise what to go and check, because "the command failed"
- * leaves the reader pressing the same button again.
- */
-export function readableFailure(failure: unknown, hint: string): string {
-  const raw =
-    failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "";
-  const detail = raw.replace(OPERATION_PREFIX, "").trim();
-  if (detail.length === 0 || TOOL_NOISE.some((pattern) => pattern.test(detail))) return hint;
-  const bounded =
-    detail.length <= FAILURE_DETAIL_MAX_LENGTH
-      ? detail
-      : `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}…`;
-  // The host's words alone: the hint is a guess about why, and a guess printed under a reason
-  // that contradicts it is worse than no guess at all.
-  return bounded;
 }
 
 /**
