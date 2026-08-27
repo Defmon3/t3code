@@ -69,7 +69,7 @@ overrides:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2
   yaml: ^2.9.0
 
-packageExtensionsChecksum: sha256-fRpEKIgBVytUErC7XIVOA+ZASZr7+ld5r/O6ymSnYDg=
+packageExtensionsChecksum: sha256-aMBU7rYAkDJo1dM6/GlD8LF2RqH/MM/JLIY5+SwYpyE=
 
 patchedDependencies:
   '@clerk/expo@4.2.0': 72e426f44fc1cde16fc2cbba3d1e96cdca7c6d957faa73d0fe6b43948608a6c1
