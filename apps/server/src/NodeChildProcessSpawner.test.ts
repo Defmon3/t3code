@@ -1,4 +1,4 @@
-import * as NodeChildProcess from "node:child_process";
+import type * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeModule from "node:module";
 import * as NodeServices from "@effect/platform-node/NodeServices";
