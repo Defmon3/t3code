@@ -89,7 +89,7 @@ function renderRefs(currentEnvironmentId = environmentId, cwd = "C:/workspace", 
   const pane = GitRefsPane({
     refFilter: historyRefs.refFilter,
     onRefFilterChange: historyRefs.setRefFilter,
-    selectedRevision: historyRefs.selectedRevision,
+    selectedRevision: historyRefs.selectedRevision ?? null,
     onSelectAll: historyRefs.selectAllRefs,
     currentRef: historyRefs.currentRef,
     onSelectRef: historyRefs.selectRef,
