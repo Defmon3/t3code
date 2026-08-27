@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - test mutates the Node built-in export.
 import type * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeModule from "node:module";
