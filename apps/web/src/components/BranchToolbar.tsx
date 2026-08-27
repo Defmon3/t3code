@@ -227,11 +227,13 @@ const COMPACT_EXPAND_HYSTERESIS_PX = 16;
 const COMPOSER_CONTEXT_MOTION_DURATION_MS = 180;
 const COMPOSER_CONTEXT_MOTION_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 const COMPOSER_CONTEXT_CONTROL_SELECTOR = "[data-composer-context-control]";
+const COMPOSER_CONTEXT_CONTENT_SELECTOR = "[data-composer-label], [data-composer-context-control]";
 
 function useLabelsOverflow(element: HTMLDivElement | null): boolean {
   const [overflows, setOverflows] = useState(false);
   const pendingControlRectsRef = useRef<Map<HTMLElement, DOMRect> | null>(null);
   const controlAnimationsRef = useRef(new Map<HTMLElement, Animation>());
+  const contentSignatureRef = useRef<string | null>(null);
   // A render-synced mirror instead of useEffectEvent: the compiler memoizes
   // the event callback, which left observers reading the first render's null
   // element forever.
@@ -352,10 +354,14 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
     [],
   );
 
-  // Label widths can change without the strip box moving (font family or
-  // size preferences), so re-measure on every render as well as on resize
-  // and font loads.
   useEffect(() => {
+    if (!element) return;
+    const signature = Array.from(
+      element.querySelectorAll<HTMLElement>(COMPOSER_CONTEXT_CONTENT_SELECTOR),
+      (item) => item.outerHTML,
+    ).join("\u0000");
+    if (contentSignatureRef.current === signature) return;
+    contentSignatureRef.current = signature;
     measure();
   });
 
