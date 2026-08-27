@@ -106,7 +106,8 @@ describe("NodeChildProcessSpawner", () => {
           if (typeof args[0] !== "string" || !args[0].startsWith("taskkill "))
             return originalExec(...args);
           taskkillOptions.push(args[1] as NodeChildProcess.ExecOptions);
-          const callback = args[2] as NodeChildProcess.ExecCallback;
+          const callback = args[2];
+          if (callback === undefined) throw new Error("Expected taskkill to provide a callback");
           queueMicrotask(() => {
             callback(null, "", "");
             exitChild(0);
