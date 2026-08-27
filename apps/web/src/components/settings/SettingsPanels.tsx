@@ -222,12 +222,16 @@ function AboutVersionTitle() {
       <span>Version</span>
       <code className="text-[11px] font-medium text-muted-foreground">{APP_VERSION}</code>
       {APP_COMMIT_HASH ? (
-        <code
-          className="text-[11px] font-medium text-muted-foreground"
-          title={`Commit ${APP_COMMIT_HASH}`}
-        >
-          {APP_COMMIT_HASH.slice(0, 12)}
-        </code>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <code className="text-[11px] font-medium text-muted-foreground">
+                {APP_COMMIT_HASH.slice(0, 12)}
+              </code>
+            }
+          />
+          <TooltipPopup>Commit {APP_COMMIT_HASH}</TooltipPopup>
+        </Tooltip>
       ) : null}
       {APP_BUILD_TIME ? (
         <time className="text-[11px] font-medium text-muted-foreground" dateTime={APP_BUILD_TIME}>
