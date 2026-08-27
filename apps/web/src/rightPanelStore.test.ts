@@ -3,6 +3,7 @@ import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  mergeThreadRightPanelState,
   migratePersistedRightPanelState,
   pullRequestSurfaceId,
   selectActiveRightPanel,
@@ -276,6 +277,25 @@ describe("rightPanelStore", () => {
         refB,
       ),
     ).toBe("processes");
+  });
+
+  it("keeps the ChatView right-panel store slices stable for an old thread with persisted Processes", () => {
+    useRightPanelStore.getState().open(refA, "processes");
+    useRightPanelStore.getState().open(refA, "agents");
+    const storeState = useRightPanelStore.getState();
+
+    const firstThreadState = selectThreadRightPanelState(storeState.byThreadKey, refB);
+    const firstEnvironmentState = storeState.byEnvironmentId[refB.environmentId];
+    const secondThreadState = selectThreadRightPanelState(storeState.byThreadKey, refB);
+    const secondEnvironmentState = storeState.byEnvironmentId[refB.environmentId];
+
+    expect(secondThreadState).toBe(firstThreadState);
+    expect(secondEnvironmentState).toBe(firstEnvironmentState);
+    expect(mergeThreadRightPanelState(firstThreadState, firstEnvironmentState)).toEqual({
+      isOpen: false,
+      activeSurfaceId: null,
+      surfaces: [{ id: "processes", kind: "processes" }],
+    });
   });
 
   it("keeps processes separated by environment and deactivates it for a local surface", () => {
