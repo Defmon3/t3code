@@ -8,6 +8,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import { formatCommitDate } from "./GitHistoryCommitList";
 
@@ -48,27 +49,37 @@ function CommitFilesTree(props: {
       drawDistance={192}
       className="h-full"
       renderItem={({ item: file }) => (
-        <button
-          type="button"
-          key={file.path}
-          className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          onClick={() => props.onShowDiff(file.path)}
-          title={`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}
-          aria-label={`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}
-        >
-          <span
-            className={cn("w-3 shrink-0 font-mono font-semibold", FILE_STATUS_COLORS[file.status])}
+        <Tooltip key={file.path}>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-[0.6875rem] hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                onClick={() => props.onShowDiff(file.path)}
+                aria-label={`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}
+              />
+            }
           >
-            {file.status}
-          </span>
-          <PierreEntryIcon
-            pathValue={file.path}
-            kind="file"
-            theme={resolvedTheme}
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
-          <span className="truncate">{file.path}</span>
-        </button>
+            <span
+              className={cn(
+                "w-3 shrink-0 font-mono font-semibold",
+                FILE_STATUS_COLORS[file.status],
+              )}
+            >
+              {file.status}
+            </span>
+            <PierreEntryIcon
+              pathValue={file.path}
+              kind="file"
+              theme={resolvedTheme}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+            <span className="truncate">{file.path}</span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {FILE_STATUS_LABELS[file.status]} {file.path}; show diff
+          </TooltipPopup>
+        </Tooltip>
       )}
     />
   );
@@ -153,19 +164,27 @@ export function CommitDetailsPane(props: {
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
           <span>{details.authorName}</span>
           <span>{formatCommitDate(details.authoredAt)}</span>
-          <button
-            type="button"
-            className="font-mono text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            onClick={() => copyToClipboard(details.hash, undefined)}
-            aria-label={`Copy commit hash ${details.hash}`}
-            title={isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
-          >
-            {isCopied ? (
-              <CheckIcon className="inline size-3 text-success-foreground" />
-            ) : (
-              details.hash.slice(0, 8)
-            )}
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="font-mono text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  onClick={() => copyToClipboard(details.hash, undefined)}
+                  aria-label={`Copy commit hash ${details.hash}`}
+                />
+              }
+            >
+              {isCopied ? (
+                <CheckIcon className="inline size-3 text-success-foreground" />
+              ) : (
+                details.hash.slice(0, 8)
+              )}
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
+            </TooltipPopup>
+          </Tooltip>
         </div>
         {details.refs.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-2">
@@ -215,15 +234,23 @@ export function CommitDetailsPane(props: {
         <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-muted-foreground">
           <dt>Commit</dt>
           <dd className="truncate font-mono text-foreground">
-            <button
-              type="button"
-              className="max-w-full truncate text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              onClick={() => copyToClipboard(details.hash, undefined)}
-              aria-label={`Copy commit hash ${details.hash}`}
-              title={isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
-            >
-              {details.hash}
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="max-w-full truncate text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                    onClick={() => copyToClipboard(details.hash, undefined)}
+                    aria-label={`Copy commit hash ${details.hash}`}
+                  />
+                }
+              >
+                {details.hash}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
+              </TooltipPopup>
+            </Tooltip>
           </dd>
           <dt>Email</dt>
           <dd className="truncate text-foreground">{details.authorEmail}</dd>
