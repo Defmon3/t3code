@@ -107,9 +107,10 @@ import {
   type EnvironmentQueryTarget,
 } from "../state/pullRequests";
 import { useAtomCommand } from "../state/use-atom-command";
+import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;

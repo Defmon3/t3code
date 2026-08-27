@@ -113,7 +113,6 @@ function renderTabs(
       onAddGitHistory={() => undefined}
       onAddIssue={() => undefined}
       onAddDiff={() => undefined}
-      onAddGitHistory={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
       onAddProcesses={() => undefined}
@@ -124,7 +123,6 @@ function renderTabs(
       gitHistoryAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
-      gitHistoryAvailable={false}
       issueAvailable={false}
       agentsAvailable={false}
       processesAvailable={false}
