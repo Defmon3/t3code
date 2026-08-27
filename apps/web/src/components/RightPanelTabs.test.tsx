@@ -107,12 +107,14 @@ function renderTabs(
       onAddTerminal={() => undefined}
       onAddPullRequest={() => undefined}
       onAddDiff={() => undefined}
+      onAddGitHistory={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
       liveAgentCount={0}
       browserAvailable
       terminalAvailable={false}
       diffAvailable={false}
+      gitHistoryAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
       agentsAvailable={false}
