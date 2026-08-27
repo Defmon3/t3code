@@ -15,6 +15,7 @@ import {
   type GitHistoryGraphRow,
 } from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
@@ -85,22 +86,27 @@ function CommitRefDecoration(props: {
         : kind === "tag"
           ? TagIcon
           : GitBranchIcon;
+  const tooltip = `${kind === "head" ? "HEAD" : kind === "remote" ? "Remote branch" : kind === "tag" ? "Tag" : "Local branch"}: ${label}`;
   return (
-    <span
-      className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground"
-      title={`${kind === "head" ? "HEAD" : kind === "remote" ? "Remote branch" : kind === "tag" ? "Tag" : "Local branch"}: ${label}`}
-    >
-      <Icon
-        className={cn(
-          "size-3 shrink-0",
-          kind === "head" && "text-sky-400",
-          kind === "local" && "text-violet-400",
-          kind === "remote" && "text-cyan-400",
-          kind === "tag" && "text-amber-400",
-        )}
-      />
-      <span className="truncate">{label}</span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground" />
+        }
+      >
+        <Icon
+          className={cn(
+            "size-3 shrink-0",
+            kind === "head" && "text-sky-400",
+            kind === "local" && "text-violet-400",
+            kind === "remote" && "text-cyan-400",
+            kind === "tag" && "text-amber-400",
+          )}
+        />
+        <span className="truncate">{label}</span>
+      </TooltipTrigger>
+      <TooltipPopup side="top">{tooltip}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -143,16 +149,21 @@ function CommitSubject({ subject, issueUrlPrefix }: { subject: string; issueUrlP
     if (!/^#[0-9]+$/.test(part)) return part;
     const className = "font-semibold text-violet-400 hover:text-violet-300 hover:underline";
     return issueUrlPrefix ? (
-      <a
-        key={`${part}:${index}`}
-        className={`${className} pointer-events-auto`}
-        href={`${issueUrlPrefix}${part.slice(1)}`}
-        target="_blank"
-        rel="noreferrer"
-        title={`Open ${part} on GitHub`}
-      >
-        {part}
-      </a>
+      <Tooltip key={`${part}:${index}`}>
+        <TooltipTrigger
+          render={
+            <a
+              className={`${className} pointer-events-auto`}
+              href={`${issueUrlPrefix}${part.slice(1)}`}
+              target="_blank"
+              rel="noreferrer"
+            />
+          }
+        >
+          {part}
+        </TooltipTrigger>
+        <TooltipPopup side="top">Open {part} on GitHub</TooltipPopup>
+      </Tooltip>
     ) : (
       <span key={`${part}:${index}`} className={className}>
         {part}
@@ -293,71 +304,95 @@ export function CommitRow(props: {
         />
         <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem] items-center gap-x-3 border-b border-border/45 pr-3 text-xs @max-[720px]:grid-cols-[minmax(10rem,1fr)]">
           <div className="min-w-0">
-            <span
-              className={cn(
-                "block truncate font-medium",
-                isMergeCommit ? "text-muted-foreground" : "text-foreground",
-              )}
-              title={commit.subject}
-            >
-              {commit.subject ? (
-                <CommitSubject
-                  subject={commit.subject}
-                  {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
-                />
-              ) : (
-                "(no subject)"
-              )}
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    className={cn(
+                      "block truncate font-medium",
+                      isMergeCommit ? "text-muted-foreground" : "text-foreground",
+                    )}
+                  />
+                }
+              >
+                {commit.subject ? (
+                  <CommitSubject
+                    subject={commit.subject}
+                    {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
+                  />
+                ) : (
+                  "(no subject)"
+                )}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{commit.subject}</TooltipPopup>
+            </Tooltip>
           </div>
           <div className="flex min-w-0 justify-end gap-2 overflow-hidden @max-[720px]:hidden">
             {pullRequestNumber ? (
-              <span
-                className="flex shrink-0 items-center gap-1 text-[0.625rem] text-violet-400"
-                title={`Pull request #${pullRequestNumber}`}
-              >
-                <GitPullRequestIcon className="size-3" />#{pullRequestNumber}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="flex shrink-0 items-center gap-1 text-[0.625rem] text-violet-400" />
+                  }
+                >
+                  <GitPullRequestIcon className="size-3" />#{pullRequestNumber}
+                </TooltipTrigger>
+                <TooltipPopup side="top">Pull request #{pullRequestNumber}</TooltipPopup>
+              </Tooltip>
             ) : null}
             {commit.refs.slice(0, 3).map((ref) => (
               <CommitRefDecoration key={ref} refName={ref} refKinds={props.refKinds} />
             ))}
             {commit.refs.length > 3 ? (
-              <span
-                className="shrink-0 text-[0.625rem] text-muted-foreground"
-                title={commit.refs.slice(3).join("\n")}
-              >
-                +{commit.refs.length - 3}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span className="shrink-0 text-[0.625rem] text-muted-foreground" />}
+                >
+                  +{commit.refs.length - 3}
+                </TooltipTrigger>
+                <TooltipPopup side="top" className="whitespace-pre-line">
+                  {commit.refs.slice(3).join("\n")}
+                </TooltipPopup>
+              </Tooltip>
             ) : null}
           </div>
-          <span
-            className="truncate text-muted-foreground @max-[720px]:hidden"
-            title={commit.authorName}
-          >
-            {commit.authorName}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="truncate text-muted-foreground @max-[720px]:hidden" />}
+            >
+              {commit.authorName}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{commit.authorName}</TooltipPopup>
+          </Tooltip>
           <span className="truncate text-muted-foreground @max-[720px]:hidden">
             {formatCommitDate(commit.authoredAt)}
           </span>
         </div>
       </div>
-      <button
-        type="button"
-        className="relative z-20 flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[0.625rem] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
-        onClick={() => copyToClipboard(commit.hash, undefined)}
-        aria-label={`Copy commit hash ${commit.hash}`}
-        title={isCopied ? "Commit hash copied" : `Copy full commit hash ${commit.hash}`}
-      >
-        {isCopied ? (
-          <>
-            <CheckIcon className="size-3 text-success-foreground" />
-            Copied
-          </>
-        ) : (
-          commit.hash.slice(0, 8)
-        )}
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              className="relative z-20 flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-[0.625rem] text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
+              onClick={() => copyToClipboard(commit.hash, undefined)}
+              aria-label={`Copy commit hash ${commit.hash}`}
+            />
+          }
+        >
+          {isCopied ? (
+            <>
+              <CheckIcon className="size-3 text-success-foreground" />
+              Copied
+            </>
+          ) : (
+            commit.hash.slice(0, 8)
+          )}
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {isCopied ? "Commit hash copied" : `Copy full commit hash ${commit.hash}`}
+        </TooltipPopup>
+      </Tooltip>
       <span className="sr-only" aria-live="polite">
         {isCopied ? `Copied commit hash ${commit.hash}` : ""}
       </span>
