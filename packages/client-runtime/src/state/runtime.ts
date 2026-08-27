@@ -582,7 +582,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
           ? queryAtom
           : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
     return refreshedQueryAtom.pipe(
-      Atom.setIdleTTL(idleTtlMs),
+      Atom.setIdleTTL(options.refreshAfterSettledIntervalMs === undefined ? idleTtlMs : 0),
       Atom.withLabel(`${options.label}:${key}`),
     );
   });
@@ -607,7 +607,22 @@ export function withSettledRefresh<A, E>(
         refreshDelayAtom = undefined;
         return result;
       }
-      refreshDelayAtom ??= Atom.make(Effect.sleep(refreshIntervalMs));
+      if (refreshDelayAtom === undefined) {
+        let delayAtom: Atom.Atom<AsyncResult.AsyncResult<void, never>> | undefined;
+        delayAtom = Atom.make(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                if (refreshDelayAtom === delayAtom) {
+                  refreshDelayAtom = undefined;
+                }
+              }),
+            );
+            yield* Effect.sleep(refreshIntervalMs);
+          }),
+        ).pipe(Atom.setIdleTTL(0));
+        refreshDelayAtom = delayAtom;
+      }
       if (AsyncResult.isSuccess(get(refreshDelayAtom))) {
         refreshDelayAtom = undefined;
         get.refresh(source);

@@ -222,7 +222,8 @@ describe("environment query settled refresh", () => {
         );
         const firstCompletion = Latch.makeUnsafe();
         const secondCompletion = Latch.makeUnsafe();
-        const completions = [firstCompletion, secondCompletion];
+        const thirdCompletion = Latch.makeUnsafe();
+        const completions = [firstCompletion, secondCompletion, thirdCompletion];
         const interrupted: number[] = [];
         let scanStarts = 0;
         const queryFamily = createEnvironmentQueryAtomFamily(runtime, {
@@ -285,6 +286,24 @@ describe("environment query settled refresh", () => {
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
         expect(scanStarts).toBe(2);
         expect(interrupted).toEqual([]);
+
+        const remount = yield* Effect.sync(() => registry.mount(query));
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(registry.get(query)).toMatchObject({
+          _tag: "Success",
+          value: "scan-1",
+          waiting: false,
+        });
+        expect(scanStarts).toBe(2);
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_999));
+        expect(scanStarts).toBe(2);
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1));
+        expect(scanStarts).toBe(3);
+        expect(interrupted).toEqual([]);
+
+        yield* Effect.sync(remount);
       }).pipe(Effect.ensuring(Effect.sync(() => vi.useRealTimers()))),
     ),
   );
