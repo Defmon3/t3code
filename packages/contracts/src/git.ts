@@ -81,7 +81,6 @@ export const VcsRef = Schema.Struct({
   isRemote: Schema.optional(Schema.Boolean),
   isTag: Schema.optional(Schema.Boolean),
   remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
-  upstreamName: Schema.optional(TrimmedNonEmptyStringSchema),
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
@@ -286,7 +285,6 @@ const VcsStatusRemoteShape = {
   hasUpstream: Schema.Boolean,
   aheadCount: NonNegativeInt,
   behindCount: NonNegativeInt,
-  branchCommitCount: Schema.optional(NonNegativeInt),
   aheadOfDefaultCount: Schema.optional(NonNegativeInt),
   pr: Schema.NullOr(VcsStatusChangeRequest),
 };
@@ -531,6 +529,7 @@ export const GitManagerServiceError = Schema.Union([
   GitManagerError,
   GitPullRequestMaterializationError,
   GitCommandError,
+  VcsSnapshotExpiredError,
   SourceControlProviderError,
   TextGenerationError,
 ]);

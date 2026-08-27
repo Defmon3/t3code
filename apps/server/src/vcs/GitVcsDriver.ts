@@ -55,6 +55,7 @@ export interface ExecuteGitInput {
   readonly timeoutMs?: number | null;
   readonly maxOutputBytes?: number;
   readonly appendTruncationMarker?: boolean;
+  readonly stdoutRecordSeparator?: string;
   readonly progress?: ExecuteGitProgress;
 }
 
@@ -78,7 +79,6 @@ export interface GitStatusDetails {
   hasUpstream: boolean;
   aheadCount: number;
   behindCount: number;
-  branchCommitCount?: number;
   aheadOfDefaultCount: number;
 }
 
@@ -91,7 +91,6 @@ export interface GitRemoteStatusDetails {
   hasUpstream: boolean;
   aheadCount: number;
   behindCount: number;
-  branchCommitCount?: number;
   aheadOfDefaultCount: number;
 }
 

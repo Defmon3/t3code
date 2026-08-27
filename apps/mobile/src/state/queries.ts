@@ -128,7 +128,7 @@ export function useBranches(input: {
           environmentId: input.environmentId,
           input: {
             cwd: input.cwd,
-            ...(query.length > 0 ? { query } : {}),
+            ...(query.length > 0 ? { prefix: query } : {}),
             limit: VCS_REF_LIST_LIMIT,
           },
         })

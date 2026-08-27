@@ -7,7 +7,10 @@ import {
   GitRunStackedActionResult,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
+  VcsGetCommitDetailsInput,
   VcsListHistoryRefsInput,
+  VcsListRefsInput,
+  VcsListRefsResult,
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
@@ -17,7 +20,70 @@ const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+const decodeListRefsInput = Schema.decodeUnknownSync(VcsListRefsInput);
+const decodeListRefsResult = Schema.decodeUnknownSync(VcsListRefsResult);
 const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsInput);
+const decodeCommitDetailsInput = Schema.decodeUnknownSync(VcsGetCommitDetailsInput);
+
+describe("VCS ref contracts", () => {
+  it("uses an opaque cursor and snapshot result shape for vcs.listRefs", () => {
+    expect(
+      decodeListRefsInput({ cwd: "/repo", cursor: "opaque-cursor", prefix: "release" }),
+    ).toEqual({
+      cwd: "/repo",
+      cursor: "opaque-cursor",
+      prefix: "release",
+    });
+    const result = decodeListRefsResult({
+      refs: [
+        {
+          name: "v1.0.0",
+          current: false,
+          isDefault: false,
+          isTag: true,
+          worktreePath: null,
+          aheadCount: 2,
+          behindCount: 3,
+        },
+        {
+          name: "main",
+          current: true,
+          isDefault: true,
+          worktreePath: null,
+        },
+      ],
+      isRepo: true,
+      hasPrimaryRemote: false,
+      nextCursor: "next-cursor",
+      currentRef: null,
+      isComplete: true,
+    });
+    expect(result.nextCursor).toBe("next-cursor");
+    expect(result.refs[0]).toMatchObject({ isTag: true, aheadCount: 2, behindCount: 3 });
+    expect(result.refs[1]?.isTag).toBeUndefined();
+    expect(result.refs[1]?.aheadCount).toBeUndefined();
+    expect(result.refs[1]?.behindCount).toBeUndefined();
+    expect(() => decodeListRefsInput({ cwd: "/repo", cursor: 20 })).toThrow();
+    expect(() =>
+      decodeListRefsResult({
+        refs: [
+          {
+            name: "main",
+            current: true,
+            isDefault: true,
+            worktreePath: null,
+            aheadCount: -1,
+          },
+        ],
+        isRepo: true,
+        hasPrimaryRemote: true,
+        nextCursor: null,
+        currentRef: null,
+        isComplete: true,
+      }),
+    ).toThrow();
+  });
+});
 
 describe("VCS history ref contracts", () => {
   it("accepts the opaque cursor and text query used by Git History", () => {
@@ -28,7 +94,19 @@ describe("VCS history ref contracts", () => {
         query: "Release",
         namespace: "tag",
       }),
-    ).toEqual({ cwd: "/repo", cursor: "opaque-cursor", query: "Release", namespace: "tag" });
+    ).toEqual({
+      cwd: "/repo",
+      cursor: "opaque-cursor",
+      query: "Release",
+      namespace: "tag",
+    });
+  });
+});
+
+describe("Git commit hashes", () => {
+  it("accepts SHA-1 and SHA-256 object hashes", () => {
+    expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "a".repeat(40) }).hash).toHaveLength(40);
+    expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "b".repeat(64) }).hash).toHaveLength(64);
   });
 });
 
