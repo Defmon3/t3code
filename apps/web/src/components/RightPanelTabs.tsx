@@ -75,14 +75,14 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
-  onAddProcesses: () => void;
+  onAddProcesses?: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
-  processesAvailable: boolean;
+  processesAvailable?: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
@@ -106,6 +106,8 @@ const SURFACE_DISABLED_REASONS = {
   agents: "Agents are only available from a thread.",
   processes: "Processes are only available from a connected environment.",
 } as const;
+
+const ignoreProcessSurfaceRequest = () => undefined;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
 const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
@@ -619,6 +621,8 @@ function SurfaceIcon({
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
+  const onAddProcesses = props.onAddProcesses ?? ignoreProcessSurfaceRequest;
+  const processesAvailable = props.processesAvailable ?? false;
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
@@ -676,9 +680,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       label: "Processes",
       icon: Activity,
       shortcut: "R",
-      available: props.processesAvailable,
+      available: processesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.processes,
-      onClick: props.onAddProcesses,
+      onClick: onAddProcesses,
     },
   ] as const;
 
@@ -967,14 +971,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
-            onAddProcesses={props.onAddProcesses}
+            onAddProcesses={onAddProcesses}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
-            processesAvailable={props.processesAvailable}
+            processesAvailable={processesAvailable}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (
