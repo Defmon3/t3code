@@ -5,7 +5,14 @@ const testState = vi.hoisted(() => ({
   compact: false,
   cursor: 0,
   element: null as unknown,
+  effectCleanups: [] as (() => void)[],
+  effectDependencies: [] as (readonly unknown[] | undefined)[],
+  fontLoadingDone: null as (() => void) | null,
   measurements: 0,
+  mutationObserverCallback: null as MutationCallback | null,
+  mutationObserverDisconnects: 0,
+  resizeObserverCallback: null as ResizeObserverCallback | null,
+  resizeObserverDisconnects: 0,
   slots: [] as unknown[],
   stateUpdates: 0,
 }));
@@ -14,16 +21,48 @@ vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
     ...actual,
-    useCallback: <T,>(callback: T) => {
-      testState.cursor += 1;
-      return callback;
+    useCallback: <T,>(callback: T, dependencies: readonly unknown[]) => {
+      const index = testState.cursor++;
+      const previousDependencies = testState.effectDependencies[index];
+      const changed =
+        previousDependencies === undefined ||
+        dependencies.length !== previousDependencies.length ||
+        dependencies.some(
+          (dependency, dependencyIndex) => dependency !== previousDependencies[dependencyIndex],
+        );
+      if (changed) {
+        testState.effectDependencies[index] = dependencies;
+        testState.slots[index] = callback;
+      }
+      return testState.slots[index] as T;
     },
-    useEffect: (effect: () => void | (() => void)) => {
-      testState.cursor += 1;
-      effect();
+    useEffect: (effect: () => void | (() => void), dependencies?: readonly unknown[]) => {
+      const index = testState.cursor++;
+      const previousDependencies = testState.effectDependencies[index];
+      const changed =
+        dependencies === undefined ||
+        previousDependencies === undefined ||
+        dependencies.length !== previousDependencies.length ||
+        dependencies.some(
+          (dependency, dependencyIndex) => dependency !== previousDependencies[dependencyIndex],
+        );
+      if (!changed) return;
+      testState.effectDependencies[index] = dependencies;
+      const cleanup = effect();
+      if (cleanup) testState.effectCleanups.push(cleanup);
     },
-    useLayoutEffect: (effect: () => void | (() => void)) => {
-      testState.cursor += 1;
+    useLayoutEffect: (effect: () => void | (() => void), dependencies?: readonly unknown[]) => {
+      const index = testState.cursor++;
+      const previousDependencies = testState.effectDependencies[index];
+      const changed =
+        dependencies === undefined ||
+        previousDependencies === undefined ||
+        dependencies.length !== previousDependencies.length ||
+        dependencies.some(
+          (dependency, dependencyIndex) => dependency !== previousDependencies[dependencyIndex],
+        );
+      if (!changed) return;
+      testState.effectDependencies[index] = dependencies;
       effect();
     },
     useMemo: <T,>(factory: () => T) => {
@@ -106,7 +145,6 @@ class TestElement {
   countMeasurements = false;
   children: TestElement[] = [];
   isConnected = false;
-  outerHTML = "<span />";
 
   get clientWidth() {
     if (this.countMeasurements) testState.measurements += 1;
@@ -168,18 +206,48 @@ describe("BranchToolbar", () => {
   beforeEach(() => {
     testState.compact = false;
     testState.element = strip;
+    testState.effectCleanups = [];
+    testState.effectDependencies = [];
+    testState.fontLoadingDone = null;
     testState.measurements = 0;
+    testState.mutationObserverCallback = null;
+    testState.mutationObserverDisconnects = 0;
+    testState.resizeObserverCallback = null;
+    testState.resizeObserverDisconnects = 0;
     testState.slots = [];
     testState.stateUpdates = 0;
-    label.outerHTML = "<span>main</span>";
-    control.outerHTML = "<button>branch</button>";
     Object.assign(globalThis, {
       HTMLElement: TestElement,
       ResizeObserver: class {
-        disconnect() {}
+        constructor(callback: ResizeObserverCallback) {
+          testState.resizeObserverCallback = callback;
+        }
+
+        disconnect() {
+          testState.resizeObserverDisconnects += 1;
+        }
+
         observe() {}
       },
-      document: { fonts: { addEventListener: vi.fn(), removeEventListener: vi.fn() } },
+      MutationObserver: class {
+        constructor(callback: MutationCallback) {
+          testState.mutationObserverCallback = callback;
+        }
+
+        disconnect() {
+          testState.mutationObserverDisconnects += 1;
+        }
+
+        observe() {}
+      },
+      document: {
+        fonts: {
+          addEventListener: (_event: string, callback: () => void) => {
+            testState.fontLoadingDone = callback;
+          },
+          removeEventListener: vi.fn(),
+        },
+      },
       getComputedStyle: () => ({ columnGap: "0", position: "static" }),
       window: { matchMedia: () => ({ matches: true }) },
     });
@@ -193,11 +261,23 @@ describe("BranchToolbar", () => {
     expect(testState.stateUpdates).toBe(1);
   });
 
-  it("remeasures when label or control content changes", () => {
-    render();
-    label.outerHTML = "<span>feature/longer-name</span>";
+  it("remeasures for observed resize, font loading, and content changes", () => {
     render();
 
-    expect(testState.measurements).toBe(2);
+    testState.resizeObserverCallback?.([], {} as ResizeObserver);
+    testState.fontLoadingDone?.();
+    testState.mutationObserverCallback?.([], {} as MutationObserver);
+
+    expect(testState.measurements).toBe(4);
+  });
+
+  it("disconnects observers when the toolbar unmounts", () => {
+    render();
+    for (const cleanup of testState.effectCleanups) {
+      cleanup();
+    }
+
+    expect(testState.resizeObserverDisconnects).toBe(1);
+    expect(testState.mutationObserverDisconnects).toBe(1);
   });
 });
