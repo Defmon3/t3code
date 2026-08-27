@@ -41,6 +41,7 @@ describe("VCS ref contracts", () => {
           current: false,
           isDefault: false,
           isTag: true,
+          upstreamName: "origin/main",
           worktreePath: null,
           aheadCount: 2,
           behindCount: 3,
@@ -59,8 +60,14 @@ describe("VCS ref contracts", () => {
       isComplete: true,
     });
     expect(result.nextCursor).toBe("next-cursor");
-    expect(result.refs[0]).toMatchObject({ isTag: true, aheadCount: 2, behindCount: 3 });
+    expect(result.refs[0]).toMatchObject({
+      isTag: true,
+      upstreamName: "origin/main",
+      aheadCount: 2,
+      behindCount: 3,
+    });
     expect(result.refs[1]?.isTag).toBeUndefined();
+    expect(result.refs[1]?.upstreamName).toBeUndefined();
     expect(result.refs[1]?.aheadCount).toBeUndefined();
     expect(result.refs[1]?.behindCount).toBeUndefined();
     expect(() => decodeListRefsInput({ cwd: "/repo", cursor: 20 })).toThrow();
