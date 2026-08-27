@@ -131,6 +131,9 @@ packageExtensions:
   astro@*:
     dependencies:
       typescript: ~6.0.3
+  "@voidzero-dev/vite-plus-core@*":
+    dependencies:
+      typescript: ~6.0.3
   vite-plus@*:
     dependencies:
       vite: "catalog:"
