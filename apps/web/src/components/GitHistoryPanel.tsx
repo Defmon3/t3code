@@ -146,7 +146,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           cacheKey: `${vcsHistoryRevision}:${historyQueryGeneration}`,
           input: {
             cwd: props.cwd,
-            ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
+            ...(selectedRevision === null || selectedRevision === undefined
+              ? {}
+              : { revision: selectedRevision.revision }),
             ...(cursor === undefined ? {} : { cursor }),
             limit: HISTORY_PAGE_SIZE,
           },

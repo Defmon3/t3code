@@ -288,7 +288,7 @@ it.effect("returns paginated commit history with author, parent, and decoration 
     assert.equal(firstPage.isRepo, true);
     assert.equal(firstPage.commits.length, 1);
     assert.equal(firstPage.hasMore, true);
-    assert.equal(firstPage.nextCursor, 1);
+    assert.ok(firstPage.nextCursor);
     assert.equal(firstPage.commits[0]?.subject, "second commit");
     assert.equal(firstPage.commits[0]?.authorName, "Ada Lovelace");
     assert.equal(firstPage.commits[0]?.authorEmail, "ada@example.com");
@@ -302,7 +302,7 @@ it.effect("returns paginated commit history with author, parent, and decoration 
     assert.match(fullPage.commits[1]?.hash ?? "", /^[0-9a-f]{40}$/);
     assert.equal(fullPage.commits[0]?.parentHashes[0], fullPage.commits[1]?.hash);
 
-    const secondPage = yield* driver.getHistory({ cwd, cursor: 1, limit: 1 });
+    const secondPage = yield* driver.getHistory({ cwd, cursor: firstPage.nextCursor, limit: 1 });
     assert.equal(secondPage.commits.length, 1);
     assert.equal(secondPage.hasMore, false);
     assert.equal(secondPage.nextCursor, null);
@@ -342,7 +342,8 @@ it.effect("returns full commit details and root commit changed files", () =>
     assert.equal(details.commit?.authorEmail, "test@test.com");
     assert.equal(details.commit?.parentHashes.length, 1);
     assert.include(details.commit?.refs ?? [], "tag: v2");
-    assert.deepEqual(details.commit?.changedFiles, [{ status: "A", path: "SECOND.md" }]);
+    const files = yield* driver.listCommitFiles({ cwd, hash });
+    assert.deepEqual(files.files, [{ status: "A", path: "SECOND.md" }]);
 
     const diff = yield* driver.getCommitDiff({ cwd, hash });
     assert.equal(diff.isRepo, true);
@@ -355,8 +356,8 @@ it.effect("returns full commit details and root commit changed files", () =>
 
     const initialHash = details.commit?.parentHashes[0];
     assert.ok(initialHash);
-    const initial = yield* driver.getCommitDetails({ cwd, hash: initialHash });
-    assert.deepEqual(initial.commit?.changedFiles, [{ status: "A", path: "README.md" }]);
+    const initialFiles = yield* driver.listCommitFiles({ cwd, hash: initialHash });
+    assert.deepEqual(initialFiles.files, [{ status: "A", path: "README.md" }]);
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -473,7 +474,7 @@ it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
           driver.listRefs({
             cwd,
             refresh: true,
-            query: `missing-${index}`,
+            prefix: `missing-${index}`,
             limit: 100,
           }),
         ),
@@ -482,7 +483,7 @@ it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
       yield* TestClock.adjust("2 seconds");
       yield* Fiber.join(initialRequest);
       yield* Fiber.join(laterRequests);
-      yield* driver.listRefs({ cwd, cursor: 1, limit: 100 });
+      yield* driver.listRefs({ cwd, limit: 100 });
 
       const firstSnapshotCommands = yield* Ref.get(spawnedArgs);
       const snapshotRefScans = firstSnapshotCommands.filter(
@@ -974,13 +975,12 @@ it.effect("returns full commit details and root commit changed files", () =>
 
     const initialHash = details.commit?.parentHashes[0];
     assert.ok(initialHash);
-    const initial = yield* driver.getCommitDetails({ cwd, hash: initialHash });
     const initialFiles = yield* driver.listCommitFiles({ cwd, hash: initialHash });
     assert.deepEqual(initialFiles.files, [{ status: "A", path: "README.md" }]);
   }).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("pages commit files once, rejects replay, and cleans up after the final page", () =>
+it.effect("replays commit-file cursors until their snapshot expires", () =>
   Effect.gen(function* () {
     const cwd = yield* makeTmpDir();
     yield* initRepoWithCommit(cwd);
@@ -997,10 +997,8 @@ it.effect("pages commit files once, rejects replay, and cleans up after the fina
     const second = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
     assert.equal(second.hasMore, false);
     assert.equal(second.nextCursor, null);
-    const replay = yield* driver
-      .listCommitFiles({ cwd, hash, cursor: first.nextCursor })
-      .pipe(Effect.flip);
-    assert.equal(replay._tag, "VcsSnapshotExpiredError");
+    const replay = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor });
+    assert.deepEqual(replay, second);
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -2073,7 +2071,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(status.hasUpstream, false);
         assert.equal(status.aheadCount, 1);
         assert.equal(status.behindCount, 0);
-        assert.equal(status.branchCommitCount, 1);
         assert.equal(status.aheadOfDefaultCount, 1);
       }),
     );
@@ -2142,10 +2139,10 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           false,
         );
 
-        const complete = yield* driver.listRefs({ cwd, includeMatchingRemoteRefs: true });
+        const complete = yield* driver.listRefs({ cwd, namespace: "remote" });
         assert.equal(
           complete.refs.some((ref) => ref.name === initialBranch),
-          true,
+          false,
         );
         assert.equal(
           complete.refs.some((ref) => ref.name === `origin/${initialBranch}`),
@@ -2157,18 +2154,15 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["commit", "-m", "ahead"]);
         const refreshed = yield* driver.listRefs({
           cwd,
-          includeMatchingRemoteRefs: true,
+          namespace: "local",
           refresh: true,
         });
         const localBranch = refreshed.refs.find((ref) => ref.name === initialBranch);
-        assert.equal(localBranch?.aheadCount, 1);
-        assert.equal(localBranch?.behindCount, undefined);
-        assert.equal(localBranch?.upstreamName, `origin/${initialBranch}`);
+        assert.equal(localBranch?.current, true);
 
         const remoteOnly = yield* driver.listRefs({
           cwd,
-          includeMatchingRemoteRefs: true,
-          refKind: "remote",
+          namespace: "remote",
           limit: 1,
         });
         assert.equal(remoteOnly.refs.length, 1);
@@ -2194,33 +2188,32 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           branches.refs.some((ref) => ref.name === "releases/v1.2.3"),
           false,
         );
-        assert.equal(branches.totalCount, 1);
+        assert.equal(branches.isComplete, true);
 
-        const firstTagPage = yield* driver.listRefs({ cwd, refKind: "tag", limit: 1 });
+        const firstTagPage = yield* driver.listRefs({ cwd, namespace: "tag", limit: 1 });
         assert.equal(firstTagPage.refs.length, 1);
-        assert.equal(firstTagPage.totalCount, 2);
-        assert.equal(firstTagPage.nextCursor, 1);
+        assert.equal(firstTagPage.isComplete, true);
+        assert.ok(firstTagPage.nextCursor);
         const tag = firstTagPage.refs[0];
-        assert.equal(tag?.name, "releases/v1.2.4");
-        assert.equal(tag?.isTag, true);
+        assert.equal(tag?.name, "releases/v1.2.3");
         assert.equal(tag?.isRemote, false);
 
         const secondTagPage = yield* driver.listRefs({
           cwd,
-          refKind: "tag",
+          namespace: "tag",
           cursor: firstTagPage.nextCursor ?? undefined,
           limit: 1,
         });
         assert.deepEqual(
           secondTagPage.refs.map((ref) => ref.name),
-          ["releases/v1.2.3"],
+          ["releases/v1.2.4"],
         );
         assert.equal(secondTagPage.nextCursor, null);
 
         const filteredTags = yield* driver.listRefs({
           cwd,
-          refKind: "tag",
-          query: "1.2.4",
+          namespace: "tag",
+          prefix: "releases/v1.2.4",
           limit: 1,
         });
         assert.deepEqual(
@@ -2228,6 +2221,29 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           ["releases/v1.2.4"],
         );
         assert.equal(filteredTags.nextCursor, null);
+      }),
+    );
+
+    it.effect("keeps listRefs pages in an opaque snapshot", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["branch", "feature/a"]);
+        yield* git(cwd, ["branch", "feature/b"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const first = yield* driver.listRefs({ cwd, limit: 1 });
+        assert.ok(first.nextCursor);
+        yield* git(cwd, ["branch", "feature/after-snapshot"]);
+        const second = yield* driver.listRefs({ cwd, cursor: first.nextCursor, limit: 10 });
+        assert.equal(
+          second.refs.some((ref) => ref.name === "feature/after-snapshot"),
+          false,
+        );
+        const expired = yield* driver
+          .listRefs({ cwd, cursor: "unknown-list-refs-snapshot" })
+          .pipe(Effect.flip);
+        assert.equal(expired._tag, "VcsSnapshotExpiredError");
       }),
     );
 

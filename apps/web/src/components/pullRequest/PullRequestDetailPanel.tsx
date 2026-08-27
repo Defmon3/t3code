@@ -512,8 +512,6 @@ export function PullRequestDetailPanel({
           environmentId,
           input: {
             cwd: detail.workspaceRoot,
-            includeMatchingRemoteRefs: true,
-            // listRefs keeps the current ref first and a known default second.
             limit: 2,
           },
         }),

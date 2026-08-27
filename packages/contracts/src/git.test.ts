@@ -26,24 +26,27 @@ const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsIn
 const decodeCommitDetailsInput = Schema.decodeUnknownSync(VcsGetCommitDetailsInput);
 
 describe("VCS ref contracts", () => {
-  it("preserves the numeric cursor and result shape of vcs.listRefs", () => {
-    expect(decodeListRefsInput({ cwd: "/repo", cursor: 20, query: "release" })).toEqual({
+  it("uses an opaque cursor and snapshot result shape for vcs.listRefs", () => {
+    expect(
+      decodeListRefsInput({ cwd: "/repo", cursor: "opaque-cursor", prefix: "release" }),
+    ).toEqual({
       cwd: "/repo",
-      cursor: 20,
-      query: "release",
+      cursor: "opaque-cursor",
+      prefix: "release",
     });
     expect(
       decodeListRefsResult({
         refs: [],
         isRepo: true,
         hasPrimaryRemote: false,
-        nextCursor: 20,
-        totalCount: 25,
-      }).totalCount,
-    ).toBe(25);
+        nextCursor: "next-cursor",
+        currentRef: null,
+        isComplete: true,
+      }).nextCursor,
+    ).toBe("next-cursor");
   });
 
-  it("uses an opaque cursor only for vcs.listHistoryRefs", () => {
+  it("uses an opaque cursor for vcs.listHistoryRefs", () => {
     expect(
       decodeListHistoryRefsInput({
         cwd: "/repo",
@@ -57,7 +60,7 @@ describe("VCS ref contracts", () => {
       query: "Release",
       namespace: "tag",
     });
-    expect(() => decodeListRefsInput({ cwd: "/repo", cursor: "opaque-cursor" })).toThrow();
+    expect(() => decodeListRefsInput({ cwd: "/repo", cursor: 20 })).toThrow();
   });
 });
 

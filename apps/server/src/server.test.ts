@@ -4208,6 +4208,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                     flags: 1,
                   },
                 ],
+                currentRef: {
+                  name: "main",
+                  current: true,
+                  isDefault: true,
+                  worktreePath: null,
+                },
               },
             ],
           },
@@ -5531,10 +5537,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                     worktreePath: null,
                   },
                 ],
+                currentRef: {
+                  name: "main",
+                  current: true,
+                  isDefault: true,
+                  worktreePath: null,
+                },
                 isRepo: true,
                 hasPrimaryRemote: true,
                 nextCursor: null,
-                totalCount: 1,
+                isComplete: true,
               }),
             createWorktree: () =>
               Effect.succeed({

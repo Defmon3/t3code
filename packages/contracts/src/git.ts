@@ -140,11 +140,11 @@ export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
 export const VcsListRefsInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
-  cursor: Schema.optional(NonNegativeInt),
-  includeMatchingRemoteRefs: Schema.optional(Schema.Boolean),
-  refKind: Schema.optional(Schema.Literals(["all", "local", "remote"])),
+  prefix: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  namespace: Schema.optional(Schema.Literals(["local", "remote", "tag"])),
   refresh: Schema.optional(Schema.Boolean),
+  queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
   ),
@@ -324,10 +324,11 @@ export type VcsStatusStreamEvent = typeof VcsStatusStreamEvent.Type;
 
 export const VcsListRefsResult = Schema.Struct({
   refs: Schema.Array(VcsRef),
+  currentRef: Schema.NullOr(VcsRef),
   isRepo: Schema.Boolean,
   hasPrimaryRemote: Schema.Boolean,
-  nextCursor: NonNegativeInt.pipe(Schema.NullOr),
-  totalCount: NonNegativeInt,
+  nextCursor: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  isComplete: Schema.Boolean,
 });
 export type VcsListRefsResult = typeof VcsListRefsResult.Type;
 
@@ -535,6 +536,7 @@ export const GitManagerServiceError = Schema.Union([
   GitManagerError,
   GitPullRequestMaterializationError,
   GitCommandError,
+  VcsSnapshotExpiredError,
   SourceControlProviderError,
   TextGenerationError,
 ]);

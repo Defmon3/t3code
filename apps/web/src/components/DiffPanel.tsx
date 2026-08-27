@@ -341,9 +341,8 @@ export default function DiffPanel({
           environmentId: activeThread.environmentId,
           input: {
             cwd: branchDiffPreview.data.cwd,
-            includeMatchingRemoteRefs: true,
-            refKind: "local",
-            ...(baseRefQuery.trim().length > 0 ? { query: baseRefQuery.trim() } : {}),
+            namespace: "local",
+            ...(baseRefQuery.trim().length > 0 ? { prefix: baseRefQuery.trim() } : {}),
             limit: 100,
           },
         })
@@ -358,9 +357,8 @@ export default function DiffPanel({
           environmentId: activeThread.environmentId,
           input: {
             cwd: branchDiffPreview.data.cwd,
-            includeMatchingRemoteRefs: true,
-            refKind: "remote",
-            ...(baseRefQuery.trim().length > 0 ? { query: baseRefQuery.trim() } : {}),
+            namespace: "remote",
+            ...(baseRefQuery.trim().length > 0 ? { prefix: baseRefQuery.trim() } : {}),
             limit: 100,
           },
         })

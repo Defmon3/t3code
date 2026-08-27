@@ -85,7 +85,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     () => filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter),
     [normalizedRefFilter, tagRefs],
   );
-  const currentRef = refs.data?.currentRef;
+  const currentRef = refs.data?.currentRef ?? null;
   const defaultSelectedRevision = useMemo(
     () =>
       currentRef === undefined
@@ -207,7 +207,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     remoteRefs,
     selectAllRefs,
     selectRef,
-    selectedRevision,
+    selectedRevision: selectedRevision ?? null,
     setRefFilter,
     tagRefTree,
     tagRefs,

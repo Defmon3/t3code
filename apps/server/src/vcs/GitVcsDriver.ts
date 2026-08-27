@@ -55,6 +55,7 @@ export interface ExecuteGitInput {
   readonly timeoutMs?: number | null;
   readonly maxOutputBytes?: number;
   readonly appendTruncationMarker?: boolean;
+  readonly stdoutRecordSeparator?: string;
   readonly progress?: ExecuteGitProgress;
 }
 
@@ -279,7 +280,7 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<string | null, GitCommandError>;
     readonly listRefs: (
       input: VcsListRefsInput,
-    ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    ) => Effect.Effect<VcsListRefsResult, GitCommandError | VcsSnapshotExpiredError>;
     readonly listHistoryRefs: (
       input: VcsListHistoryRefsInput,
     ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;

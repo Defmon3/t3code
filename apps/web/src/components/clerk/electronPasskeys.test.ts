@@ -35,12 +35,9 @@ describe("Electron passkeys", () => {
 
   it("does not send an autofill request to the native bridge", async () => {
     const get = stubNativePasskeys();
-    const passkeys = createPasskeys();
+    const passkeys = createPasskeys({ mode: "renderer" });
 
-    const result = await passkeys.get({
-      publicKeyOptions,
-      conditionalUI: true,
-    });
+    const result = await passkeys.get({ publicKeyOptions });
 
     expect(get).not.toHaveBeenCalled();
     expect(result.error).toMatchObject({ code: "passkey_operation_aborted" });
@@ -48,12 +45,9 @@ describe("Electron passkeys", () => {
 
   it("sends an explicit passkey request to the native bridge", async () => {
     const get = stubNativePasskeys();
-    const passkeys = createPasskeys();
+    const passkeys = createPasskeys({ mode: "native" });
 
-    await passkeys.get({
-      publicKeyOptions,
-      conditionalUI: false,
-    });
+    await passkeys.get({ publicKeyOptions });
 
     expect(get).toHaveBeenCalledOnce();
   });

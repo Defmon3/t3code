@@ -128,7 +128,7 @@ export function useBranches(input: {
           environmentId: input.environmentId,
           input: {
             cwd: input.cwd,
-            ...(query.length > 0 ? { query } : {}),
+            ...(query.length > 0 ? { prefix: query } : {}),
             limit: VCS_REF_LIST_LIMIT,
           },
         })
@@ -144,7 +144,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
-    readonly cursors: ReadonlyArray<number | undefined>;
+    readonly cursors: ReadonlyArray<string | undefined>;
   }>({
     targetKey,
     cursors: INITIAL_BRANCH_CURSORS,
@@ -158,7 +158,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
               environmentId: target.environmentId!,
               input: {
                 cwd: target.cwd!,
-                ...(query.length > 0 ? { query } : {}),
+                ...(query.length > 0 ? { prefix: query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit: VCS_REF_LIST_LIMIT,
               },
@@ -192,10 +192,11 @@ export function usePaginatedBranches(target: VcsRefTarget) {
       ? null
       : {
           refs: [...refs.values()],
+          currentRef: first.currentRef,
           isRepo: first.isRepo,
           hasPrimaryRemote: first.hasPrimaryRemote,
           nextCursor: last.nextCursor,
-          totalCount: Math.max(...values.map((value) => value.totalCount)),
+          isComplete: last.isComplete,
         };
   const lastResult = results.at(-1);
   const isFetchingNextPage =
