@@ -130,6 +130,29 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   );
 }
 
+// A full refresh loads all thread history, so skip events that cannot change the summary.
+function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
+  if (event.type === "thread.message-sent") {
+    return event.payload.role === "user";
+  }
+
+  if (event.type !== "thread.activity-appended") {
+    return true;
+  }
+
+  switch (event.payload.activity.kind) {
+    case "approval.requested":
+    case "approval.resolved":
+    case "provider.approval.respond.failed":
+    case "user-input.requested":
+    case "user-input.resolved":
+    case "provider.user-input.respond.failed":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,
 ): number {
@@ -619,12 +642,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            linkedPullRequest: null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
             settledOverride: null,
             settledAt: null,
+            unsettledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
             pinnedAt: null,
@@ -682,6 +707,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             settledOverride: "settled",
             settledAt: event.payload.settledAt,
+            unsettledAt: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -698,6 +724,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             settledOverride: event.payload.reason === "user" ? "active" : null,
             settledAt: null,
+            // Re-entry stamp for active-list ordering. A thread already pinned
+            // active keeps its stamp: the activity reset that clears the pin
+            // is not a re-entry and must not reorder the list.
+            unsettledAt:
+              existingRow.value.settledOverride === "active"
+                ? existingRow.value.unsettledAt
+                : event.payload.updatedAt,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -807,6 +840,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
               : {}),
+            ...(event.payload.linkedPullRequest !== undefined
+              ? { linkedPullRequest: event.payload.linkedPullRequest }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -873,7 +909,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          if (shouldRefreshThreadShellSummary(event)) {
+            yield* refreshThreadShellSummary(event.payload.threadId);
+          }
           return;
         }
 
@@ -1515,6 +1553,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             const resolvedDecision =
               resolvedDecisionRaw === "accept" ||
               resolvedDecisionRaw === "acceptForSession" ||
+              resolvedDecisionRaw === "acceptAlways" ||
               resolvedDecisionRaw === "decline" ||
               resolvedDecisionRaw === "cancel"
                 ? resolvedDecisionRaw
@@ -1696,6 +1735,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             Stream.runForEach(
               eventStore.readFromSequence(
                 Option.isSome(stateRow) ? stateRow.value.lastAppliedSequence : 0,
+                Number.MAX_SAFE_INTEGER,
               ),
               (event) => runProjectorForEvent(projector, event),
             ),

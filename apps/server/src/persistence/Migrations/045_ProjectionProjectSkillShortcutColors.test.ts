@@ -8,12 +8,12 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("042_ProjectionProjectSkillShortcutColors", (it) => {
+layer("045_ProjectionProjectSkillShortcutColors", (it) => {
   it.effect("adds and backfills skill shortcut colors with an empty object", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 41 });
+      yield* runMigrations({ toMigrationInclusive: 44 });
       yield* sql`
         INSERT INTO projection_projects (
           project_id, title, workspace_root, default_model_selection_json,
@@ -23,7 +23,7 @@ layer("042_ProjectionProjectSkillShortcutColors", (it) => {
           '["review"]', '[]', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL
         )
       `;
-      yield* runMigrations({ toMigrationInclusive: 42 });
+      yield* runMigrations({ toMigrationInclusive: 45 });
 
       const rows = yield* sql<{ readonly skillShortcutColors: string }>`
         SELECT skill_shortcut_colors_json AS "skillShortcutColors"

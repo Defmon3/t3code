@@ -7,6 +7,13 @@ import {
 } from "./ProjectSkillShortcutBar.logic";
 
 describe("project skill shortcut projection sync", () => {
+  it("accepts readonly projections", () => {
+    const shortcuts = ["$review"] as const;
+    const state = createProjectSkillShortcutSyncState({ shortcuts, colors: {} });
+
+    expect(state.current.shortcuts).toEqual(["$review"]);
+  });
+
   it("keeps consecutive local replacements while stale acknowledgements arrive", () => {
     const labels = [
       "house-rules",
