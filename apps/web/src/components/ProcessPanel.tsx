@@ -25,9 +25,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function CopyWorkingDirectoryButton({ cwd }: { readonly cwd: string }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "working directory" });
-  const label = isCopied ? "Copied working directory" : "Copy working directory";
+function CopyValueButton({ target, value }: { readonly target: string; readonly value: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target });
+  const label = isCopied ? `Copied ${target}` : `Copy ${target}`;
 
   return (
     <Tooltip>
@@ -36,7 +36,7 @@ function CopyWorkingDirectoryButton({ cwd }: { readonly cwd: string }) {
           <Button
             aria-label={label}
             className="opacity-60 hover:opacity-100 focus-visible:opacity-100"
-            onClick={() => copyToClipboard(cwd)}
+            onClick={() => copyToClipboard(value)}
             size="icon-micro"
             title={label}
             type="button"
@@ -144,7 +144,7 @@ export function ProcessPanel(input: {
                 <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
                   CPU {group.cpuPercent.toFixed(1)}% · {formatDuration(group.cpuTimeMs)} CPU
                 </span>
-                <CopyWorkingDirectoryButton cwd={group.cwd} />
+                <CopyValueButton target="working directory" value={group.cwd} />
               </div>
               <div className="border-border/60 border-t">
                 {group.processes.map((process, index) => {
@@ -161,11 +161,18 @@ export function ProcessPanel(input: {
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-baseline gap-2">
                           <span className="shrink-0 font-medium text-foreground">{test.label}</span>
+                          <span className="shrink-0 font-mono text-muted-foreground">
+                            PID {process.pid}
+                          </span>
                           {test.args.length > 0 ? (
                             <span className="min-w-0 text-muted-foreground">
                               {test.args.join(" ")}
                             </span>
                           ) : null}
+                          <CopyValueButton
+                            target={`PID ${process.pid}`}
+                            value={String(process.pid)}
+                          />
                         </div>
                         <div className="mt-0.5 text-muted-foreground">
                           {process.cpuPercent.toFixed(1)}% CPU · {formatBytes(process.rssBytes)} RSS
