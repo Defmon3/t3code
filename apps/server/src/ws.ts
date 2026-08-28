@@ -51,6 +51,7 @@ import {
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  type ServerProcessDiagnosticsResult,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -116,6 +117,11 @@ import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import {
+  makeProcessDiscoveryCollector,
+  processDiscoveryRoots as collectProcessDiscoveryRoots,
+  type ProcessDiscoveryWorktree,
+} from "./diagnostics/ProcessDiscoveryCollector.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -151,26 +157,13 @@ const resolveDiscoveryForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(onTimeout)),
   );
 
-interface ProcessDiscoveryWorktree {
-  readonly projectId: ProjectId;
-  readonly path: string;
-}
-
 type ProcessDiscoveryGit = Pick<GitVcsDriver.GitVcsDriver["Service"], "listWorktreePaths">;
 
 export function processDiscoveryRoots(
   snapshot: OrchestrationShellSnapshot,
   worktrees: ReadonlyArray<ProcessDiscoveryWorktree> = [],
 ): ReadonlyArray<string> {
-  return [
-    ...new Set([
-      ...snapshot.projects.map((project) => project.workspaceRoot),
-      ...snapshot.threads.flatMap((thread) =>
-        thread.worktreePath === null ? [] : [thread.worktreePath],
-      ),
-      ...worktrees.map((worktree) => worktree.path),
-    ]),
-  ].slice(0, RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS);
+  return collectProcessDiscoveryRoots(snapshot, worktrees, RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS);
 }
 
 export function processDiscoveryWorktrees(
@@ -470,16 +463,24 @@ function readMobileDeviceAnalyticsProps(request: HttpServerRequest.HttpServerReq
   };
 }
 
-const makeWsRpcLayer = (
+const makeWsRpcLayer = <E, R>(
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  processDiscoveryCollector: {
+    readonly read: () => Effect.Effect<
+      ServerProcessDiagnosticsResult & {
+        readonly registeredProjectWorktrees: ReadonlyArray<ProcessDiscoveryWorktree>;
+      },
+      E,
+      R
+    >;
+  },
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
-      const git = yield* GitVcsDriver.GitVcsDriver;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const analytics = yield* AnalyticsService.AnalyticsService;
@@ -1754,15 +1755,7 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverGetProcessDiagnostics,
             input.scope === "registered-project-tests"
-              ? Effect.gen(function* () {
-                  const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-                  const worktrees = yield* processDiscoveryWorktrees(snapshot, git);
-                  const roots = processDiscoveryRoots(snapshot, worktrees);
-                  const diagnostics = yield* processDiagnostics.read(
-                    roots.length === 0 ? {} : { roots },
-                  );
-                  return { ...diagnostics, registeredProjectWorktrees: worktrees };
-                }).pipe(
+              ? processDiscoveryCollector.read().pipe(
                   Effect.tapError((cause) =>
                     Effect.logError("process discovery root load failed", { cause }),
                   ),
@@ -2536,6 +2529,24 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
+    const processDiscoveryCollector = yield* makeProcessDiscoveryCollector({
+      loadTopology: () =>
+        projectionSnapshotQuery.getShellSnapshot().pipe(
+          Effect.map((snapshot) => ({
+            knownRoots: processDiscoveryRoots(snapshot),
+          })),
+        ),
+      loadWorktrees: () =>
+        Effect.gen(function* () {
+          const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+          return { worktrees: yield* processDiscoveryWorktrees(snapshot, git) };
+        }),
+      maxRoots: RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
+      processDiagnostics,
+    });
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2562,7 +2573,12 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
+            makeWsRpcLayer(
+              session,
+              clientOrigin,
+              previewAutomationBroker,
+              processDiscoveryCollector,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
