@@ -374,6 +374,7 @@ export function PullRequestDetailPanel({
   onStateChange,
   onOpenLinkedIssue,
   context = "page",
+  chromeVariant = "full",
   composerDraftTarget,
 }: {
   environmentId: EnvironmentId;
@@ -410,6 +411,8 @@ export function PullRequestDetailPanel({
    * again is at best a no-op and at worst git refusing a branch two checkouts.
    */
   context?: "page" | "thread";
+  /** Whether scrolling may collapse the pull request metadata chrome. */
+  chromeVariant?: "full" | "collapse";
   /**
    * The open thread's composer. Beside the thread whose own pull request this is, hand-offs
    * land here instead of opening a new thread — the branch is already under the reader's feet.
@@ -439,7 +442,7 @@ export function PullRequestDetailPanel({
   useEffect(() => {
     setChromeCondensed(chromeStateByTab.current[tab] ?? false);
   }, [tab]);
-  const condensed = chromeCondensed;
+  const condensed = chromeVariant === "collapse" && chromeCondensed;
   const scrollerRef = useRef<HTMLElement | null>(null);
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
@@ -511,9 +514,9 @@ export function PullRequestDetailPanel({
           environmentId,
           input: {
             cwd: detail.workspaceRoot,
-            includeMatchingRemoteRefs: true,
-            // listRefs keeps the current ref first and a known default second.
-            limit: 2,
+            namespace: "remote",
+            // The default branch is represented by the remote HEAD target.
+            limit: 200,
           },
         }),
   );
@@ -1926,6 +1929,7 @@ export function PullRequestDetailPanel({
       <div
         className="relative min-h-0 flex-1 overflow-hidden"
         onScrollCapture={(event) => {
+          if (chromeVariant !== "collapse") return;
           const scroller = event.target as HTMLElement;
           // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code
           // block running wide, the capped list of stranded conversations — is the reader
