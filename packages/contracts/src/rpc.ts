@@ -111,6 +111,21 @@ import {
   IssueUpdateInput,
 } from "./issue.ts";
 import {
+  IssueTrackingError,
+  LinearConnectInput,
+  LinearConnection,
+  LinearDisconnectInput,
+  LinearSetProjectBindingInput,
+} from "./issueTracking.ts";
+import {
+  WorkItemMatchError,
+  WorkItemMatchInput,
+  WorkItemMatchResult,
+  WorkItemTaskError,
+  WorkItemTaskInput,
+  WorkItemTaskResult,
+} from "./workItem.ts";
+import {
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -373,6 +388,14 @@ export const WS_METHODS = {
   issuesAssigneeCandidates: "issues.assigneeCandidates",
   issuesTemplates: "issues.templates",
   issuesInvalidate: "issues.invalidate",
+
+  // Issue tracking connection methods
+  linearConnectionStatus: "linear.connectionStatus",
+  linearConnect: "linear.connect",
+  linearDisconnect: "linear.disconnect",
+  linearSetProjectBinding: "linear.setProjectBinding",
+  workItemsGenerateTask: "workItems.generateTask",
+  workItemsFindMatches: "workItems.findMatches",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -783,6 +806,41 @@ export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
   payload: IssueInvalidateInput,
   success: Schema.Void,
   error: IssueRpcError,
+});
+
+export const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
+  success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
+  payload: LinearConnectInput,
+  success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
+  payload: LinearDisconnectInput,
+  success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+export const WsLinearSetProjectBindingRpc = Rpc.make(WS_METHODS.linearSetProjectBinding, {
+  payload: LinearSetProjectBindingInput,
+  success: Schema.Void,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+export const WsWorkItemsGenerateTaskRpc = Rpc.make(WS_METHODS.workItemsGenerateTask, {
+  payload: WorkItemTaskInput,
+  success: WorkItemTaskResult,
+  error: Schema.Union([WorkItemTaskError, EnvironmentAuthorizationError]),
+});
+
+export const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
+  payload: WorkItemMatchInput,
+  success: WorkItemMatchResult,
+  error: Schema.Union([WorkItemMatchError, EnvironmentAuthorizationError]),
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -1277,6 +1335,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesAssigneeCandidatesRpc,
   WsIssuesTemplatesRpc,
   WsIssuesInvalidateRpc,
+  WsLinearConnectionStatusRpc,
+  WsLinearConnectRpc,
+  WsLinearDisconnectRpc,
+  WsLinearSetProjectBindingRpc,
+  WsWorkItemsGenerateTaskRpc,
+  WsWorkItemsFindMatchesRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

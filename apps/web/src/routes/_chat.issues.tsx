@@ -2,37 +2,34 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
-  IssueProviderKind,
   IssueInvolvement,
   IssueListOrder,
   IssueListSort,
   IssueListEntry,
   IssueListResult,
   IssueListState,
+  LinearConnection,
+  LinearProjectBinding,
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   AtSignIcon,
-  ChevronDownIcon,
   CircleCheckIcon,
   CircleDotIcon,
   LayersIcon,
   LoaderIcon,
   PenLineIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  SearchIcon,
   UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
+  filterIssueQueryResults,
   filterIssuesByInvolvement,
   groupIssuesByInvolvement,
   issueEntryKey,
-  matchesIssueQuery,
   narrowIssuesToFilters,
   partitionIssuesWithPriority,
   rankIssueMatches,
@@ -42,15 +39,27 @@ import {
 } from "../components/issue/issueList.logic";
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
+import { LinearConnectionDialog } from "../components/issue/LinearConnectionDialog";
+import { LinearIcon } from "../components/Icons";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
-import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
-import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
 import {
-  ListSearchInput,
-  type ListFilterHost,
-  type ListFilterOption,
-} from "../components/sourceControl/ListFilterMenu";
+  CompactFilterMenu as SharedCompactFilterMenu,
+  ExpandableSearch,
+  ListRefreshControl,
+  useListSearchShortcut,
+} from "../components/sourceControl/ListTitlebarControls";
+import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
+import {
+  IssueFiltersMenu,
+  renderIssueProviderMenuRadioGroup,
+  IssueSortMenu,
+} from "../components/issue/IssueListFilters";
+import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
+import {
+  WorkItemSelectButton,
+  WorkItemSelectionBarHost,
+} from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
@@ -64,29 +73,39 @@ import {
   WorkspaceBreadcrumbItem,
   WorkspaceBreadcrumbSeparator,
 } from "../components/WorkspaceBreadcrumb";
+import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
+import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { isElectron } from "../env";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
+import { MenuItem, MenuSeparator } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
+import { usePrimarySettings } from "../hooks/useSettings";
 import {
-  issueSurfaceId,
   pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
+  updateIssueTabStatus,
   useRightPanelStore,
   type RightPanelSurface,
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
+import {
+  findProjectForLink,
+  openLinkInBrowser,
+  repositoryForProjectLink,
+} from "../lib/openIssueLink";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
 import { issueEnvironment } from "../state/issues";
+import { issueTrackingEnvironment } from "../state/issueTracking";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
-import { cn } from "~/lib/utils";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { toastManager } from "../components/ui/toast";
+import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
 export interface IssuesSearch {
   readonly involvement: IssueInvolvement;
@@ -101,6 +120,7 @@ export interface IssuesSearch {
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
+  readonly selectedProvider?: string;
   /**
    * One label name every row must wear. Narrowed here rather than on the hosts: a label is a
    * word the rows already carry, and asking four hosts about it would cost a round trip to
@@ -110,6 +130,104 @@ export interface IssuesSearch {
   readonly q?: string;
   readonly sort?: IssueListSort;
   readonly order?: IssueListOrder;
+}
+
+export function issueSelectionSearchPatch(target: {
+  readonly projectId: ProjectId;
+  readonly repository: string;
+  readonly number: number;
+  readonly provider?: string;
+}) {
+  return {
+    repository: target.repository,
+    number: target.number,
+    selectedProjectId: target.projectId,
+    selectedProvider: target.provider,
+  };
+}
+
+export function isIssueEntryOpen(
+  selected: {
+    readonly projectId: ProjectId;
+    readonly repository: string;
+    readonly provider?: string;
+    readonly number: number;
+  } | null,
+  entry: Pick<IssueListEntry, "projectId" | "repository" | "provider" | "number">,
+) {
+  return (
+    selected?.repository === entry.repository &&
+    selected.projectId === entry.projectId &&
+    (selected.provider === undefined || selected.provider === entry.provider) &&
+    selected.number === entry.number
+  );
+}
+
+export function mergeIssueProviderSummaries(
+  previous: IssueListResult["providers"],
+  next: IssueListResult["providers"],
+  filteredHost: string | undefined,
+): IssueListResult["providers"] {
+  return filteredHost === undefined
+    ? next
+    : [...previous.filter((provider) => provider.host !== filteredHost), ...next];
+}
+
+export function stabilizeLinearProviderSummary(
+  providers: IssueListResult["providers"],
+  projectIds: ReadonlyArray<ProjectId>,
+  projectBindings: Readonly<Record<ProjectId, LinearProjectBinding | null>>,
+  hasLinearSource = false,
+  projectTeams: Readonly<Record<string, string>> = {},
+): IssueListResult["providers"] {
+  const projectCount = projectIds.filter(
+    (projectId) =>
+      projectBindings[projectId] != null ||
+      (projectBindings[projectId] === undefined && projectTeams[projectId] !== undefined),
+  ).length;
+  if (projectCount === 0)
+    return hasLinearSource ? providers : providers.filter((provider) => provider.kind !== "linear");
+  const linear = providers.find((provider) => provider.kind === "linear");
+  const connected = {
+    kind: "linear" as const,
+    host: "linear.app",
+    configured: true,
+    searchesOnHost: false,
+    projectCount,
+    detail: null,
+  };
+  return linear === undefined
+    ? [...providers, connected]
+    : providers.map((provider) => (provider === linear ? { ...linear, ...connected } : provider));
+}
+
+export function hasLinearManagementState(
+  connection: Pick<LinearConnection, "status" | "hasStoredToken"> | null | undefined,
+  settings: {
+    readonly projectBindings: Readonly<Record<string, LinearProjectBinding | null>>;
+    readonly projectTeams: Readonly<Record<string, string>>;
+  },
+  projectIds?: ReadonlyArray<ProjectId>,
+) {
+  const isCurrentProject = (projectId: string) =>
+    projectIds === undefined || projectIds.includes(projectId as ProjectId);
+  return (
+    connection?.status === "authenticated" ||
+    connection?.hasStoredToken === true ||
+    Object.entries(settings.projectBindings).some(
+      ([projectId, binding]) => isCurrentProject(projectId) && binding != null,
+    ) ||
+    Object.keys(settings.projectTeams).some(
+      (projectId) =>
+        isCurrentProject(projectId) &&
+        settings.projectBindings[projectId as ProjectId] === undefined,
+    )
+  );
+}
+
+interface CompactFilterAction {
+  readonly connected: boolean;
+  readonly onClick: () => void;
 }
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
@@ -190,6 +308,9 @@ export const Route = createFileRoute("/_chat/issues")({
       ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
         ? { selectedProjectId: raw.selectedProjectId as ProjectId }
         : {}),
+      ...(typeof raw.selectedProvider === "string" && raw.selectedProvider
+        ? { selectedProvider: raw.selectedProvider.slice(0, 100) }
+        : {}),
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
       ...(sort === undefined ? {} : { sort }),
       ...(raw.order === "asc" || raw.order === "desc" ? { order: raw.order } : {}),
@@ -210,6 +331,17 @@ function IssuesRouteView() {
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const issueEnvironmentId = issuesSupported ? environmentId : null;
+  const linearSettings = usePrimarySettings((settings) => settings.issueTracking.linear);
+  const linearConnection = useEnvironmentQuery(
+    issueEnvironmentId === null
+      ? null
+      : issueTrackingEnvironment.linearStatus({
+          environmentId: issueEnvironmentId,
+          input: undefined,
+        }),
+  );
+  const selectedWorkItems = useWorkItemSelection((state) => state.items);
+  const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
   const allProjects = useProjects();
   // Whether the workspace has said what it holds yet. Until it has, an empty project list is
   // "not loaded" rather than "none", and telling a reader to add a project they already have is
@@ -220,6 +352,23 @@ function IssuesRouteView() {
   const projects = useMemo(
     () => allProjects.filter((project) => project.environmentId === environmentId),
     [allProjects, environmentId],
+  );
+  const currentProjectIds = projects.map((project) => project.id);
+  const linearProjectCount = currentProjectIds.filter(
+    (projectId) =>
+      linearSettings.projectBindings[projectId] != null ||
+      (linearSettings.projectBindings[projectId] === undefined &&
+        linearSettings.projectTeams[projectId] !== undefined),
+  ).length;
+  const linearManaged = hasLinearManagementState(
+    linearConnection.data,
+    linearSettings,
+    currentProjectIds,
+  );
+  const hasCurrentLinearSource = hasLinearManagementState(
+    undefined,
+    linearSettings,
+    currentProjectIds,
   );
   const scopedProjects = useMemo(
     () =>
@@ -257,14 +406,14 @@ function IssuesRouteView() {
       : null;
   const activeIssueSurface = activeSurface?.kind === "issue" ? activeSurface : null;
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
-    const id = issueSurfaceId(status);
-    setIssueTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
+  const activeIssueSurfaceId = activeIssueSurface?.id;
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      if (activeIssueSurfaceId === undefined) return;
+      setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
+    },
+    [activeIssueSurfaceId],
+  );
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -294,6 +443,7 @@ function IssuesRouteView() {
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
             ...(next.q ? { q: next.q } : {}),
             ...(next.sort ? { sort: next.sort } : {}),
             ...(next.order ? { order: next.order } : {}),
@@ -310,6 +460,7 @@ function IssuesRouteView() {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
+    selectedProvider: undefined,
   };
   const updateListScope = (patch: {
     [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
@@ -453,7 +604,7 @@ function IssuesRouteView() {
   // from the first moment rather than the second: a button that stays live through the slow half
   // of its own work is a button that gets pressed again, and buys the whole cascade twice.
   const [invalidating, setInvalidating] = useState(false);
-  const refreshFromHost = async () => {
+  const invalidateHost = async () => {
     setInvalidating(true);
     try {
       if (issueEnvironmentId !== null) {
@@ -462,6 +613,9 @@ function IssuesRouteView() {
     } finally {
       setInvalidating(false);
     }
+  };
+  const refreshFromHost = async () => {
+    await invalidateHost();
     refreshList();
     baselineQuery.refresh();
     authoredQuery.refresh();
@@ -718,10 +872,7 @@ function IssuesRouteView() {
           );
     if (typedQuery.length === 0) return labelled;
     const answeredLocally = querySettled && !showingCarried;
-    return labelled.filter(
-      (entry) =>
-        (answeredLocally && searchingHosts.has(entry.host)) || matchesIssueQuery(entry, typedQuery),
-    );
+    return filterIssueQueryResults(labelled, typedQuery, answeredLocally, searchingHosts);
   }, [
     filterKey,
     listData,
@@ -874,13 +1025,23 @@ function IssuesRouteView() {
   // whose identity the inference above cannot match, and refusing to open it because of the
   // weaker signal would ignore the stronger one the URL spelled out.
   const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
-  const linkedSelection = useMemo(
-    () =>
-      search.repository && search.number && selectedProjectId
-        ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
-        : null,
-    [search.number, search.repository, selectedProjectId],
-  );
+  const linkedSelection = useMemo(() => {
+    if (!search.repository || !search.number || !selectedProjectId) return null;
+    const provider =
+      search.selectedProvider ??
+      entries.find(
+        (entry) =>
+          entry.projectId === selectedProjectId &&
+          entry.repository === search.repository &&
+          entry.number === search.number,
+      )?.provider;
+    return {
+      repository: search.repository,
+      number: search.number,
+      projectId: selectedProjectId,
+      ...(provider === undefined ? {} : { provider }),
+    };
+  }, [entries, search.number, search.repository, search.selectedProvider, selectedProjectId]);
   useEffect(() => {
     if (!issuesSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openIssue(rightPanelRef, linkedSelection);
@@ -892,6 +1053,9 @@ function IssuesRouteView() {
           repository: activeIssueSurface.repository,
           number: activeIssueSurface.number,
           projectId: activeIssueSurface.projectId as ProjectId,
+          ...(activeIssueSurface.provider === undefined
+            ? {}
+            : { provider: activeIssueSurface.provider }),
         }
       : null;
 
@@ -900,11 +1064,10 @@ function IssuesRouteView() {
   const selectSurfaceInUrl = (surface: RightPanelSurface | null) =>
     updateSearch(
       surface?.kind === "issue"
-        ? {
-            repository: surface.repository,
-            number: surface.number,
-            selectedProjectId: surface.projectId as ProjectId,
-          }
+        ? issueSelectionSearchPatch({
+            ...surface,
+            projectId: surface.projectId as ProjectId,
+          })
         : clearedSelection,
     );
 
@@ -928,25 +1091,18 @@ function IssuesRouteView() {
     // host summaries of the question they answered, and coming back from one host to all of them
     // would take the switcher's other hosts out of it on the strength of the narrowed answer.
     if (answered === null) return;
-    // An unfiltered response is the full set of hosts. A filtered one only seeds the switcher
-    // when there is nothing to seed it with, which is a link that arrived already scoped.
-    setHosts((previous) =>
-      search.host === undefined || previous.length === 0 ? answered.providers : previous,
-    );
+    // An unfiltered response is the full set. A filtered response replaces only its host, so
+    // connection changes become visible without dropping every other provider from the menu.
+    setHosts((previous) => mergeIssueProviderSummaries(previous, answered.providers, search.host));
   }, [answered, search.host]);
-  const showProvider = hosts.length > 1;
-  // The workspace's own projects already name their hosts, so the row's shape is known before
-  // the list is. Only its shape: which hosts can actually be read still comes from the server.
-  const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, ListFilterHost<IssueProviderKind>>();
-    for (const project of projects) {
-      const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
-      if (kind === undefined) continue;
-      const host = sourceControlHostOf(project.repositoryIdentity, kind);
-      if (!byHost.has(host)) byHost.set(host, { host, kind });
-    }
-    return [...byHost.values()];
-  }, [projects]);
+  const activeHosts = stabilizeLinearProviderSummary(
+    hosts,
+    currentProjectIds,
+    linearSettings.projectBindings,
+    hasCurrentLinearSource,
+    linearSettings.projectTeams,
+  ).filter((entry) => entry.configured);
+  const showProvider = activeHosts.length > 1;
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
   const unavailableProjects = useMemo(
@@ -963,12 +1119,35 @@ function IssuesRouteView() {
         repository: entry.repository,
         number: entry.number,
         selectedProjectId: entry.projectId,
+        selectedProvider: entry.provider,
       });
     },
     [rightPanelRef, updateSearch],
   );
 
+  const toggleIssueSelection = useCallback(
+    (entry: IssueListEntry) => {
+      if (issueEnvironmentId === null) return;
+      const error = toggleWorkItem({
+        kind: "issue",
+        provider: entry.provider,
+        environmentId: issueEnvironmentId,
+        projectId: entry.projectId,
+        repository: entry.repository,
+        number: entry.number,
+        title: entry.title,
+        url: entry.url,
+      });
+      if (error === "project")
+        toastManager.add({ type: "warning", title: "Select items from one project" });
+      if (error === "limit")
+        toastManager.add({ type: "warning", title: "You can select up to 20 items" });
+    },
+    [issueEnvironmentId, toggleWorkItem],
+  );
+
   const [creating, setCreating] = useState(false);
+  const [linearDialogOpen, setLinearDialogOpen] = useState(false);
   const searchInput = (
     <ListSearchInput
       label="Search issues"
@@ -983,16 +1162,20 @@ function IssuesRouteView() {
       terminalAvailable={false}
       terminalOpen={false}
       terminalShortcutLabel={null}
-      rightPanelAvailable={rightPanelState.surfaces.length > 0}
+      rightPanelAvailable={selectedRightPanelSurface !== null}
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={null}
+      rightPanelUnavailableLabel="Select an issue first"
       liveAgentCount={0}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
   );
   const openPanelControls = (
-    <div className="workspace-titlebar-controls right-2 z-50 gap-1 [-webkit-app-region:no-drag] wco:right-[var(--workspace-controls-right)]">
+    <div
+      className="absolute top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
+      data-workspace-titlebar-controls
+    >
       {panelToggleControls}
     </div>
   );
@@ -1045,19 +1228,33 @@ function IssuesRouteView() {
                   {group.label}
                 </h2>
               ) : null}
-              {group.entries.map((entry) => (
-                <IssueRow
-                  key={issueEntryKey(entry)}
-                  entry={entry}
-                  showProjectTitle
-                  showProvider={showProvider}
-                  reactionSort={sort}
-                  selected={
-                    selected?.repository === entry.repository && selected.number === entry.number
-                  }
-                  onSelect={selectEntry}
-                />
-              ))}
+              {group.entries.map((entry) => {
+                const selectionChecked =
+                  issueEnvironmentId !== null &&
+                  isWorkItemSelected(selectedWorkItems, {
+                    kind: "issue",
+                    provider: entry.provider,
+                    environmentId: issueEnvironmentId,
+                    projectId: entry.projectId,
+                    repository: entry.repository,
+                    number: entry.number,
+                    title: entry.title,
+                    url: entry.url,
+                  });
+                return (
+                  <IssueRow
+                    key={issueEntryKey(entry)}
+                    entry={entry}
+                    showProjectTitle
+                    showProvider={showProvider}
+                    reactionSort={sort}
+                    selectionChecked={selectionChecked}
+                    selected={isIssueEntryOpen(selected, entry)}
+                    onSelect={selectEntry}
+                    onToggleSelection={toggleIssueSelection}
+                  />
+                );
+              })}
             </div>
           ))}
         </div>
@@ -1086,32 +1283,26 @@ function IssuesRouteView() {
   // The same names and glyphs the host pills wear, so the compact menu and the pills read as
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
-  const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuEntries = hostEntries.filter(
-    (entry, index) => hostEntries.findIndex((other) => other.host === entry.host) === index,
+  const hostMenuEntries = activeHosts.filter(
+    (entry, index) => activeHosts.findIndex((other) => other.host === entry.host) === index,
   );
   const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
-    { value: "", label: "All hosts", Icon: LayersIcon },
+    { value: "", label: "All providers", Icon: LayersIcon },
     ...hostMenuEntries.map((entry) => {
       const presentation = getIssueProviderPresentation(entry.kind);
-      const sharesKind = hostEntries.some((host) => host !== entry && host.kind === entry.kind);
-      const sharesHost = hostEntries.some((host) => host !== entry && host.host === entry.host);
-      // `expectedHosts` stands in before the server has answered, and nothing is known to be
-      // unreadable yet; once the summaries arrive they carry whether each one could be read.
-      const summaries = hosts.filter((host) => host.host === entry.host);
-      const unavailable = summaries.length > 0 && summaries.every((summary) => !summary.configured);
+      const sharesKind = activeHosts.some((host) => host !== entry && host.kind === entry.kind);
+      const sharesHost = activeHosts.some((host) => host !== entry && host.host === entry.host);
       return {
         value: entry.host,
         label: sharesKind || sharesHost ? entry.host : presentation.providerName,
         Icon: presentation.Icon,
-        ...(!unavailable
-          ? {}
-          : { unavailable: summaries[0]?.detail ?? "This host could not be read." }),
       };
     }),
   ];
   const availableSortingHosts =
-    scopedProjectId === undefined ? hostEntries : (answered?.providers ?? []);
+    scopedProjectId === undefined
+      ? activeHosts
+      : (answered?.providers.filter((entry) => entry.configured) ?? []);
   const sortingHosts = search.host
     ? availableSortingHosts.filter((entry) => entry.host === search.host)
     : availableSortingHosts;
@@ -1130,6 +1321,8 @@ function IssuesRouteView() {
           host: search.host,
           hostOptions: hostMenuOptions,
           onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
+          onManageLinear: () => setLinearDialogOpen(true),
+          linearManaged,
         }}
         projectFilter={{
           environmentId,
@@ -1157,6 +1350,7 @@ function IssuesRouteView() {
           }
         />
       ) : null}
+      <WorkItemSelectButton />
     </div>
   );
   const columnProps = {
@@ -1167,20 +1361,16 @@ function IssuesRouteView() {
     state: search.state,
     host: search.host,
     hostMenuOptions,
+    hostMenuAction: {
+      connected: linearManaged,
+      onClick: () => setLinearDialogOpen(true),
+    },
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
     onState: (state: IssueListState) => updateListScope({ state }),
     onHost: (host: string | undefined) =>
       updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
-    // Filing an issue needs a repository to file it against, so the button waits for the
-    // environment to say it can read any.
-    newIssueControl: issuesSupported ? (
-      <Button size="xs" variant="outline" onClick={() => setCreating(true)}>
-        <PlusIcon aria-hidden className="size-3.5" />
-        New issue
-      </Button>
-    ) : null,
     rightPanelControl: !issuesSupported || rightPanelState.isOpen ? null : panelToggleControls,
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
@@ -1224,7 +1414,9 @@ function IssuesRouteView() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
         {issuesSupported && rightPanelState.isOpen ? openPanelControls : null}
-        <IssuesColumn {...columnProps} />
+        <WorkItemSelectionBarHost>
+          <IssuesColumn {...columnProps} />
+        </WorkItemSelectionBarHost>
 
         {rightPanelState.isOpen && activeSurface && issueEnvironmentId !== null ? (
           <RightPanelTabs
@@ -1286,10 +1478,15 @@ function IssuesRouteView() {
                 }}
                 onStateChange={handlePullRequestTabStatusChange}
                 onOpenLinkedIssue={(link) => {
-                  if (rightPanelRef === null) return;
+                  const project = findProjectForLink(projects, link);
+                  if (rightPanelRef === null || project === undefined) {
+                    openLinkInBrowser(link.url);
+                    return;
+                  }
                   const target = {
-                    projectId: activeSurface.projectId,
-                    repository: link.repository,
+                    projectId: project.id,
+                    provider: link.provider,
+                    repository: repositoryForProjectLink(project, link.repository),
                     number: link.number,
                   };
                   useRightPanelStore.getState().openIssue(rightPanelRef, target);
@@ -1297,9 +1494,9 @@ function IssuesRouteView() {
                     repository: target.repository,
                     number: target.number,
                     selectedProjectId: target.projectId as ProjectId,
+                    selectedProvider: target.provider,
                   });
                 }}
-                chromeVariant="collapse"
               />
             ) : (
               <IssueDetailPanel
@@ -1307,6 +1504,9 @@ function IssuesRouteView() {
                 environmentId={issueEnvironmentId}
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
+                  ...(activeSurface.provider === undefined
+                    ? {}
+                    : { provider: activeSurface.provider }),
                   repository: activeSurface.repository,
                   number: activeSurface.number,
                 }}
@@ -1318,10 +1518,14 @@ function IssuesRouteView() {
                 // this page's own panel: leaving for the pull requests page would take the issue
                 // it answers off the screen.
                 onOpenLinkedPullRequest={(link) => {
-                  if (rightPanelRef === null) return;
+                  const project = findProjectForLink(projects, link);
+                  if (rightPanelRef === null || project === undefined) {
+                    openLinkInBrowser(link.url);
+                    return;
+                  }
                   useRightPanelStore.getState().openPullRequest(rightPanelRef, {
-                    projectId: activeSurface.projectId,
-                    repository: link.repository,
+                    projectId: project.id,
+                    repository: repositoryForProjectLink(project, link.repository),
                     number: link.number,
                   });
                   selectSurfaceInUrl(null);
@@ -1343,29 +1547,49 @@ function IssuesRouteView() {
       </div>
 
       {issueEnvironmentId === null ? null : (
-        <IssueCreateDialog
-          open={creating}
-          onOpenChange={setCreating}
-          environmentId={issueEnvironmentId}
-          projects={scopedProjects}
-          projectId={scopedProjectId}
-          // Filed and then read: the new issue opens in the panel, and the list it was filed
-          // from is a row out of date until the hosts are asked again.
-          onCreated={(created) => {
-            if (rightPanelRef !== null) {
-              useRightPanelStore.getState().openIssue(rightPanelRef, created);
-            }
-            updateSearch({
-              repository: created.repository,
-              number: created.number,
-              selectedProjectId: created.projectId,
-            });
-            refreshList();
-            baselineQuery.refresh();
-            authoredQuery.refresh();
-            assignedQuery.refresh();
-          }}
-        />
+        <>
+          <IssueCreateDialog
+            open={creating}
+            onOpenChange={setCreating}
+            environmentId={issueEnvironmentId}
+            projects={scopedProjects}
+            projectId={scopedProjectId}
+            // Filed and then read: the new issue opens in the panel, and the list it was filed
+            // from is a row out of date until the hosts are asked again.
+            onCreated={(created) => {
+              if (rightPanelRef !== null) {
+                useRightPanelStore.getState().openIssue(rightPanelRef, created);
+              }
+              updateSearch(issueSelectionSearchPatch(created));
+              refreshList();
+              baselineQuery.refresh();
+              authoredQuery.refresh();
+              assignedQuery.refresh();
+            }}
+          />
+          <LinearConnectionDialog
+            open={linearDialogOpen}
+            onOpenChange={setLinearDialogOpen}
+            onProviderChanged={(change) => {
+              if (change === "unavailable") {
+                setHosts((current) => current.filter((entry) => entry.kind !== "linear"));
+              }
+              const shouldSelectLinear = change === "available" && linearProjectCount === 0;
+              const shouldClearLinear = change === "unavailable" && search.host === "linear.app";
+              if (shouldSelectLinear || shouldClearLinear) {
+                void invalidateHost().then(() =>
+                  updateListScope({
+                    host: shouldSelectLinear ? "linear.app" : undefined,
+                    sort: undefined,
+                    order: undefined,
+                  }),
+                );
+                return;
+              }
+              void refreshFromHost();
+            }}
+          />
+        </>
       )}
     </SidebarInset>
   );
@@ -1375,114 +1599,39 @@ function IssuesRouteView() {
  * A compact stand-in for one pill group: the trigger wears the current choice, the choices
  * live in a menu. Same options, same handler — only the footprint changes.
  */
-function CompactFilterMenu<Value extends string>({
+export function CompactFilterMenu<Value extends string>({
   label,
   value,
   options,
   onChange,
+  action,
 }: {
   label: string;
   value: Value;
   options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
+  action?: CompactFilterAction | undefined;
 }) {
-  const current = options.find((option) => option.value === value) ?? options[0]!;
+  const inlineLinearSettings =
+    action?.connected === true && options.some((option) => option.value === "linear.app");
   return (
-    <Menu>
-      <MenuTrigger
-        aria-label={label}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        {current.label}
-        <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground/70" />
-      </MenuTrigger>
-      <MenuPopup align="start" side="bottom" className="min-w-40">
-        <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
-          {options.map((option) => (
-            <MenuRadioItem
-              key={option.value}
-              value={option.value}
-              // A host the server has already said it cannot read is not a choice here either.
-              // The pills disable it; a menu that offers it would answer the press by replacing
-              // a working list with the same failure the pill row exists to explain.
-              disabled={option.unavailable !== undefined}
-              title={option.unavailable}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <option.Icon aria-hidden className="size-3.5" />
-                {option.label}
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuPopup>
-    </Menu>
-  );
-}
-
-/**
- * The search, folded to an icon until asked for. Opening moves focus into the input — the
- * whole point of pressing it is to type. It stays open while it holds a query, so an active
- * search is never invisible; empty and blurred, it folds back.
- */
-function ExpandableSearch({
-  searchInput,
-  searchValue,
-  open,
-  onOpenChange,
-  focusToken,
-  onFocusWithin,
-}: {
-  searchInput: ReactNode;
-  searchValue: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Bumped to pull focus into the input while it is already showing — the Mod+F path. */
-  focusToken: number;
-  /**
-   * Focus entering and leaving the expanded input. An unmount fires no blur, which is the
-   * point: whoever unmounted this can still see the reader was mid-typing and move the
-   * focus somewhere that continues the sentence.
-   */
-  onFocusWithin?: (focused: boolean) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    containerRef.current?.querySelector("input")?.focus();
-  }, [open]);
-  const appliedFocusToken = useRef(focusToken);
-  useEffect(() => {
-    if (appliedFocusToken.current === focusToken) return;
-    appliedFocusToken.current = focusToken;
-    const input = containerRef.current?.querySelector("input");
-    input?.focus();
-    input?.select();
-  }, [focusToken]);
-  if (open || searchValue.length > 0) {
-    return (
-      <div
-        ref={containerRef}
-        className="w-56 shrink-0"
-        onFocus={() => onFocusWithin?.(true)}
-        onBlur={() => {
-          onFocusWithin?.(false);
-          if (searchValue.length === 0) onOpenChange(false);
-        }}
-      >
-        {searchInput}
-      </div>
-    );
-  }
-  return (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      aria-label="Search issues"
-      onClick={() => onOpenChange(true)}
-    >
-      <SearchIcon className="size-4" />
-    </Button>
+    <SharedCompactFilterMenu label={label} value={value} options={options} onChange={onChange}>
+      {renderIssueProviderMenuRadioGroup({
+        value,
+        options,
+        onChange: (next) => onChange(next as Value),
+        ...(inlineLinearSettings ? { onManageLinear: action.onClick } : {}),
+      })}
+      {action && !inlineLinearSettings ? (
+        <>
+          <MenuSeparator />
+          <MenuItem onClick={action.onClick}>
+            <LinearIcon aria-hidden className="size-3.5" />
+            {action.connected ? "Linear settings…" : "Connect Linear…"}
+          </MenuItem>
+        </>
+      ) : null}
+    </SharedCompactFilterMenu>
   );
 }
 
@@ -1493,7 +1642,7 @@ function ExpandableSearch({
  * the topbar returns to the plain title. The topbar is the window drag region throughout; its
  * interactive children opt out through the `.drag-region` descendant rules.
  */
-function IssuesColumn({
+export function IssuesColumn({
   refreshing,
   onRefresh,
   searchValue,
@@ -1501,12 +1650,12 @@ function IssuesColumn({
   state,
   host,
   hostMenuOptions,
+  hostMenuAction,
   onInvolvement,
   onState,
   onHost,
   searchInput,
   filtersMenu,
-  newIssueControl,
   rightPanelControl,
   rightPanelOpen,
   listBody,
@@ -1518,12 +1667,12 @@ function IssuesColumn({
   state: IssueListState;
   host: string | undefined;
   hostMenuOptions: ReadonlyArray<ListFilterOption<string>>;
+  hostMenuAction: CompactFilterAction | undefined;
   onInvolvement: (involvement: IssueInvolvement) => void;
   onState: (state: IssueListState) => void;
   onHost: (host: string | undefined) => void;
   searchInput: ReactNode;
   filtersMenu: ReactNode;
-  newIssueControl: ReactNode;
   rightPanelControl: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
@@ -1549,27 +1698,12 @@ function IssuesColumn({
   const inFlowSearchRef = useRef<HTMLDivElement | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFocusToken, setSearchFocusToken] = useState(0);
-  // Mod+F belongs to this page's own search: the desktop shell binds no find-in-page, so the
-  // shortcut would otherwise do nothing. Condensed, it unfolds the topbar search; at the top,
-  // it focuses the in-flow bar and selects the query the way a find field would.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
-      if (event.altKey || event.shiftKey) return;
-      event.preventDefault();
-      if (condensed) {
-        setSearchOpen(true);
-        setSearchFocusToken((token) => token + 1);
-        return;
-      }
-      const input = inFlowSearchRef.current?.querySelector("input");
-      input?.focus();
-      input?.select();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed]);
+  useListSearchShortcut({
+    condensed,
+    inFlowSearchRef,
+    setSearchOpen,
+    setSearchFocusToken,
+  });
   useEffect(() => {
     if (condensed) return;
     // The fold-out is gone from the chrome; forgetting it open keeps the next condensing
@@ -1587,18 +1721,7 @@ function IssuesColumn({
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header
-        className={cn(
-          "workspace-topbar drag-region gap-1.5 px-3 sm:px-5",
-          // A closed right panel leaves this column full-width, so its header runs
-          // underneath the native window controls on Windows; reserve the inset the
-          // way Settings and the chat view do. While the panel is open the column
-          // ends at the panel's left edge and the absolute controls strip (already
-          // WCO-aware) owns the top-right corner.
-          !rightPanelOpen && "wco:pr-[var(--workspace-native-controls-inset)]",
-          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-        )}
-      >
+      <WorkspacePageHeader electron={isElectron} reserveNativeControls={!rightPanelOpen}>
         {condensed ? (
           <WorkspaceBreadcrumb ariaLabel="Issue scope">
             {/* The page name remains the foreground anchor in both states; the live filters are
@@ -1621,12 +1744,13 @@ function IssuesColumn({
                 options={INVOLVEMENT_TABS}
                 onChange={onInvolvement}
               />
-              {hostMenuOptions.length > 2 ? (
+              {hostMenuOptions.length > 2 || hostMenuAction !== undefined ? (
                 <CompactFilterMenu
-                  label="Filter by host"
+                  label="Filter by provider"
                   value={host ?? ""}
                   options={hostMenuOptions}
                   onChange={(next) => onHost(next === "" ? undefined : next)}
+                  action={hostMenuAction}
                 />
               ) : null}
             </WorkspaceBreadcrumbItem>
@@ -1640,23 +1764,28 @@ function IssuesColumn({
         )}
         <div className="min-w-0 flex-1" />
         {condensed ? (
-          <ExpandableSearch
-            searchInput={searchInput}
-            searchValue={searchValue}
-            open={searchOpen}
-            onOpenChange={setSearchOpen}
-            focusToken={searchFocusToken}
-            onFocusWithin={(focused) => {
-              topbarSearchFocusedRef.current = focused;
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <ExpandableSearch
+              label="Search issues"
+              searchInput={searchInput}
+              searchValue={searchValue}
+              open={searchOpen}
+              onOpenChange={setSearchOpen}
+              focusToken={searchFocusToken}
+              onFocusWithin={(focused) => {
+                topbarSearchFocusedRef.current = focused;
+              }}
+            />
+            <ListRefreshControl
+              compact
+              label="Refresh issues"
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
+          </div>
         ) : null}
-        {newIssueControl}
-        <Button size="icon-sm" variant="ghost" aria-label="Refresh issues" onClick={onRefresh}>
-          <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
-        </Button>
         {rightPanelControl}
-      </header>
+      </WorkspacePageHeader>
 
       <div
         ref={scrollRef}
@@ -1665,18 +1794,25 @@ function IssuesColumn({
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only
             content actually passing under the chrome fades. */}
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-6 pb-12">
+        <WorkspacePageContainer className="gap-4">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}
               {filtersMenu}
+              {!condensed ? (
+                <ListRefreshControl
+                  label="Refresh issues"
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                />
+              ) : null}
             </div>
             {/* Scrolled past this marker, the controls are gone and the title takes over. */}
             <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />
           </div>
 
           {listBody}
-        </div>
+        </WorkspacePageContainer>
       </div>
     </div>
   );

@@ -5,19 +5,18 @@ import type {
   PullRequestComment,
   PullRequestDetailView,
   PullRequestRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
   HammerIcon,
-  LinkIcon,
   MessageSquareIcon,
   PencilIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -43,7 +42,7 @@ import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { CommentComposer } from "../sourceControl/CommentComposer";
-import { SummaryMetaRow } from "../sourceControl/SummaryMetaRow";
+import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import {
   LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
@@ -61,7 +60,11 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
-import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
+import {
+  useWorkItemMatches,
+  WorkItemMatchButton,
+  WorkItemMatchRows,
+} from "../workItems/WorkItemMatches";
 
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
@@ -221,79 +224,6 @@ function CollapsedComment({
   );
 }
 
-function Section({
-  title,
-  count,
-  defaultOpen = true,
-  actions,
-  children,
-}: {
-  title: string;
-  count?: number;
-  defaultOpen?: boolean;
-  /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
-      a button cannot hold a button — and only while open, since they act on what is shown. */
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const headingRef = useRef<HTMLDivElement>(null);
-  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      const heading = headingRef.current;
-      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
-      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
-      if (heading && section && scroller) {
-        const target = sectionCollapseAnchorScrollTop({
-          scrollTop: scroller.scrollTop,
-          viewportTop: scroller.getBoundingClientRect().top,
-          sectionTop: section.getBoundingClientRect().top,
-          headingTop: heading.getBoundingClientRect().top,
-        });
-        // Synchronous with the press: React commits the collapsed height before the browser
-        // paints, so the reader sees the heading they pressed stay put rather than a jump first.
-        if (target !== null) scroller.scrollTop = target;
-      }
-    }
-    setOpen(nextOpen);
-  };
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpenWithScrollAnchor}
-      data-pull-request-summary-section
-    >
-      {/* The heading rides the top of the scroll box the way a diff's file header does, so a
-          section can be collapsed from wherever its body has been read to rather than only from
-          where it started. Opaque, because the rows it covers scroll beneath it. */}
-      <div
-        ref={headingRef}
-        className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
-      >
-        {/* Title first, chevron riding to its right, count last: the row reads as a heading
-            with an affordance rather than a tree node. */}
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
-          <span>{title}</span>
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "size-3.5 text-muted-foreground transition-transform",
-              open && "rotate-90",
-            )}
-          />
-          {count === undefined ? null : (
-            <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-          )}
-        </CollapsibleTrigger>
-        {open ? actions : null}
-      </div>
-      <CollapsiblePanel>
-        <div className="px-4 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
-
 /**
  * What a first render of the conversation carries. A pull request with two hundred comments is
  * two hundred markdown documents, and the ones worth arriving for are the recent ones.
@@ -325,22 +255,36 @@ export function PullRequestSummaryTab({
   fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   /**
-   * Hands the question of which issues this change is about to an agent. Supplied by whoever
+   * Hands one selected issue to an agent for linking. Supplied by whoever
    * mounted the panel, because only they can open a thread for it; without one the section
    * offers nothing, which is never a dead control.
    */
-  onLinkIssues?: () => void;
+  onLinkIssues?: (match: WorkItemMatch) => void;
   /**
    * Opens one of the issues this pull request references. Supplied by whoever mounted the panel,
    * because only they know which thread's panel a peer tab belongs beside; without one the row
    * opens the issue on its host instead, which is never a dead control.
    */
-  onOpenLinkedIssue?: (link: IssueLink) => void;
+  onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   onRefresh: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
   // rather than wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
+  const aiMatches = useWorkItemMatches({
+    environmentId,
+    projectId: reference.projectId,
+    source: {
+      kind: "pull-request",
+      provider: detail.provider,
+      repository: reference.repository,
+      number: reference.number,
+    },
+    version: detail.updatedAt,
+  });
+  const openAiMatch = (match: { readonly url: string }) => {
+    void readLocalApi()?.shell.openExternal(match.url);
+  };
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // Windowed by recency regardless of display order: expanding always reaches further back in
   // time, whether the newest comment currently reads first or last.
@@ -458,7 +402,7 @@ export function PullRequestSummaryTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
+    <div className="h-full overflow-y-auto" data-summary-scroll>
       <section className="px-4 py-3">
         <div>
           <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
@@ -585,7 +529,7 @@ export function PullRequestSummaryTab({
         </div>
       </section>
 
-      <Section title="Description">
+      <SummarySection title="Description">
         <div className="group">
           {bodyScope === detail.url ? (
             <PullRequestMarkdownEditor
@@ -630,71 +574,99 @@ export function PullRequestSummaryTab({
             onRefresh={onRefresh}
           />
         </div>
-      </Section>
+      </SummarySection>
 
-      {/* Absent under a host that never answers this question, rather than empty: an empty
-          section would say this change closes nothing, which such a host cannot know. */}
-      {detail.linkedIssues === undefined ? null : (
-        <Section
-          title="Linked issues"
-          count={detail.linkedIssues.length}
-          // Offered whether or not anything is listed: a change that already closes one issue can
-          // still be about another nobody thought to mention.
-          actions={
-            onLinkIssues ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
-                disabled={pendingFinding !== null && pendingFinding !== undefined}
-                onClick={onLinkIssues}
+      <SummarySection
+        title="Related issues"
+        {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
+        actions={
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "related"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.related !== undefined}
+            onClick={() => void aiMatches.find("related")}
+          />
+        }
+      >
+        {detail.linkedIssues === undefined ? (
+          <p className="text-xs text-muted-foreground">This host does not report issue links.</p>
+        ) : detail.linkedIssues.length === 0 ? (
+          <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
+        ) : (
+          <div className="space-y-0.5">
+            {detail.linkedIssues.map((link) => (
+              <button
+                key={`${link.repository}#${link.number}`}
+                type="button"
+                // Beside the change rather than instead of it: reading what a change is for is
+                // reading the two together.
+                onClick={() =>
+                  onOpenLinkedIssue === undefined
+                    ? void readLocalApi()?.shell.openExternal(link.url)
+                    : onOpenLinkedIssue({ ...link, provider: detail.provider })
+                }
+                className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
               >
-                <LinkIcon aria-hidden className="size-3" />
-                {pendingFinding === LINK_ISSUES_HANDOFF_KIND ? "Preparing..." : "Link with agent"}
-              </Button>
-            ) : null
-          }
-        >
-          {detail.linkedIssues.length === 0 ? (
-            <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
-          ) : (
-            <div className="space-y-0.5">
-              {detail.linkedIssues.map((link) => (
-                <button
-                  key={`${link.repository}#${link.number}`}
-                  type="button"
-                  // Beside the change rather than instead of it: reading what a change is for is
-                  // reading the two together.
-                  onClick={() =>
-                    onOpenLinkedIssue === undefined
-                      ? void readLocalApi()?.shell.openExternal(link.url)
-                      : onOpenLinkedIssue(link)
-                  }
-                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
-                >
-                  <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
-                  <span className="min-w-0 flex-1 truncate">{link.title}</span>
-                  {link.closesIssue ? (
-                    <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
-                      closed by this
-                    </span>
-                  ) : null}
-                  <span className="shrink-0 text-muted-foreground tabular-nums">
-                    #{link.number}
+                <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
+                <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                {link.closesIssue ? (
+                  <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                    closed by this
                   </span>
-                </button>
-              ))}
-              {detail.linkedIssuesTruncated === true ? (
-                <p className="px-2 pt-1 text-xs text-muted-foreground">
-                  More linked issues exist on the host.
-                </p>
-              ) : null}
-            </div>
-          )}
-        </Section>
-      )}
+                ) : null}
+                <span className="shrink-0 text-muted-foreground tabular-nums">#{link.number}</span>
+              </button>
+            ))}
+            {detail.linkedIssuesTruncated === true ? (
+              <p className="px-2 pt-1 text-xs text-muted-foreground">
+                More linked issues exist on the host.
+              </p>
+            ) : null}
+          </div>
+        )}
+        {aiMatches.related === undefined ? null : (
+          <div className="mt-2">
+            <WorkItemMatchRows
+              matches={aiMatches.related}
+              emptyText="No likely related issues found."
+              onOpen={openAiMatch}
+              {...(detail.linkedIssues !== undefined && onLinkIssues
+                ? {
+                    onLink: onLinkIssues,
+                    linking: pendingFinding === LINK_ISSUES_HANDOFF_KIND,
+                  }
+                : {})}
+            />
+          </div>
+        )}
+      </SummarySection>
 
-      <Section title="Checks" count={detail.checks.length}>
+      <SummarySection
+        title="Possible duplicate pull requests"
+        {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
+        actions={
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "duplicate"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.duplicate !== undefined}
+            onClick={() => void aiMatches.find("duplicate")}
+          />
+        }
+      >
+        {aiMatches.duplicate === undefined ? (
+          <p className="text-xs text-muted-foreground">
+            Find pull requests that make the same change.
+          </p>
+        ) : (
+          <WorkItemMatchRows
+            matches={aiMatches.duplicate}
+            emptyText="No likely duplicate pull requests found."
+            onOpen={openAiMatch}
+          />
+        )}
+      </SummarySection>
+
+      <SummarySection title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
@@ -745,9 +717,9 @@ export function PullRequestSummaryTab({
             })}
           </div>
         )}
-      </Section>
+      </SummarySection>
 
-      <Section
+      <SummarySection
         title="Comments"
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
         actions={
@@ -932,7 +904,7 @@ export function PullRequestSummaryTab({
             onCommented={onRefresh}
           />
         ) : null}
-      </Section>
+      </SummarySection>
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_IS_CUSTOM_BUILD, APP_VERSION } from "../../branding";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { resolveActiveThreadRouteRef, resolveThreadRouteTarget } from "../../threadRoutes";
 import {
@@ -203,14 +203,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     () => resolveActiveThreadRouteRef(routeTarget, routeDraftThread),
     [routeDraftThread, routeTarget],
   );
+  const primaryEnvironment = usePrimaryEnvironment();
   // The pages read every connected server, so one of them offering a surface is enough for
   // its link to lead somewhere.
   const pullRequestsSupported = environments.some(
     (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
   );
-  const issuesSupported = environments.some(
-    (environment) => environment.serverConfig?.environment.capabilities.issues === true,
-  );
+  const issuesSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.issues === true;
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);

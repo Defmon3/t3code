@@ -6,19 +6,23 @@ import type {
   IssueListState,
   ProjectId,
 } from "@t3tools/contracts";
-import { ArrowDownUpIcon, TagIcon, TagsIcon } from "lucide-react";
+import { ArrowDownUpIcon, SettingsIcon, TagIcon, TagsIcon } from "lucide-react";
+
+import { cn } from "~/lib/utils";
 
 import {
   ALL_HOSTS_VALUE,
-  LIST_MENU_TRIGGER_CLASS_NAME,
   ListFilterMenu,
   ListFilterRadioGroup,
   ListProjectFilterGroup,
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
+import { LinearIcon } from "../Icons";
+import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -28,10 +32,79 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { issueListOrderLabels } from "./issueList.logic";
 
 /** A label name is never empty, so the same trick the hosts use names "every label". */
 const ALL_LABELS_VALUE = "";
+
+export function renderIssueProviderMenuRadioGroup({
+  label,
+  value,
+  options,
+  onChange,
+  onManageLinear,
+}: {
+  label?: string;
+  value: string;
+  options: ReadonlyArray<ListFilterOption<string>>;
+  onChange: (value: string) => void;
+  onManageLinear?: () => void;
+}) {
+  return (
+    <MenuRadioGroup value={value} onValueChange={onChange}>
+      {label ? <MenuGroupLabel>{label}</MenuGroupLabel> : null}
+      {options.map((option) => {
+        const item = (
+          <MenuRadioItem
+            key={option.value}
+            value={option.value}
+            className={cn(
+              option.value === "linear.app" && onManageLinear && "min-w-0 flex-1",
+              option.unavailable && "data-disabled:pointer-events-auto",
+            )}
+            disabled={option.unavailable !== undefined}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <option.Icon aria-hidden className="size-3.5" />
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            </span>
+          </MenuRadioItem>
+        );
+        const radioItem = option.unavailable ? (
+          <Tooltip key={option.value}>
+            <TooltipTrigger render={item} />
+            <TooltipPopup side="top" className="max-w-80">
+              {option.unavailable}
+            </TooltipPopup>
+          </Tooltip>
+        ) : (
+          item
+        );
+        if (option.value !== "linear.app" || !onManageLinear) return radioItem;
+        return (
+          <div key={option.value} className="flex items-center gap-1">
+            {radioItem}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuItem
+                    aria-label="Linear settings"
+                    className="size-7 shrink-0 justify-center p-0"
+                    onClick={onManageLinear}
+                  />
+                }
+              >
+                <SettingsIcon aria-hidden />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Linear settings</TooltipPopup>
+            </Tooltip>
+          </div>
+        );
+      })}
+    </MenuRadioGroup>
+  );
+}
 
 const REACTION_SORTS = [
   ["reactions", "Total reactions", ""],
@@ -62,19 +135,31 @@ export function IssueSortMenu({
   const [ascendingLabel, descendingLabel] = issueListOrderLabels(sort);
   return (
     <Menu>
-      <MenuTrigger
-        className={LIST_MENU_TRIGGER_CLASS_NAME}
-        aria-label="Sort issues"
-        title="Sort issues"
-      >
-        <ArrowDownUpIcon className="size-4" />
-        {sort !== "updated" || order !== "desc" ? (
-          <span
-            aria-hidden
-            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
-          />
-        ) : null}
-      </MenuTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={
+                <Button
+                  className="relative"
+                  size="icon"
+                  variant="outline"
+                  aria-label="Sort issues"
+                />
+              }
+            />
+          }
+        >
+          <ArrowDownUpIcon className="size-4" />
+          {sort !== "updated" || order !== "desc" ? (
+            <span
+              aria-hidden
+              className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
+            />
+          ) : null}
+        </TooltipTrigger>
+        <TooltipPopup side="top">Sort issues</TooltipPopup>
+      </Tooltip>
       <MenuPopup align="end" side="bottom" className="min-w-48">
         <MenuRadioGroup value={sort} onValueChange={chooseSort}>
           <MenuGroupLabel>Sort by</MenuGroupLabel>
@@ -98,17 +183,21 @@ export function IssueSortMenu({
             </MenuRadioGroup>
           </MenuSubPopup>
         </MenuSub>
-        <MenuSeparator />
-        <MenuRadioGroup
-          value={order}
-          onValueChange={(value) => {
-            if (value !== order) onOrder(value as IssueListOrder);
-          }}
-        >
-          <MenuGroupLabel>Order</MenuGroupLabel>
-          <MenuRadioItem value="asc">{ascendingLabel}</MenuRadioItem>
-          <MenuRadioItem value="desc">{descendingLabel}</MenuRadioItem>
-        </MenuRadioGroup>
+        {sort !== "best-match" ? (
+          <>
+            <MenuSeparator />
+            <MenuRadioGroup
+              value={order}
+              onValueChange={(value) => {
+                if (value !== order) onOrder(value as IssueListOrder);
+              }}
+            >
+              <MenuGroupLabel>Order</MenuGroupLabel>
+              <MenuRadioItem value="asc">{ascendingLabel}</MenuRadioItem>
+              <MenuRadioItem value="desc">{descendingLabel}</MenuRadioItem>
+            </MenuRadioGroup>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
@@ -145,6 +234,8 @@ export function IssueFiltersMenu({
      */
     readonly hostOptions: ReadonlyArray<ListFilterOption<string>>;
     readonly onHost: (host: string | undefined) => void;
+    readonly onManageLinear?: () => void;
+    readonly linearManaged?: boolean;
   };
   /** Absent for the same reason `hostFilter` is: one project is not a choice. */
   projectFilter?: {
@@ -167,6 +258,9 @@ export function IssueFiltersMenu({
   labels: ReadonlyArray<string>;
   onLabel: (label: string | undefined) => void;
 }) {
+  const providerOptions = hostFilter?.hostOptions.filter((option) => !option.unavailable) ?? [];
+  const linearOption = providerOptions.find((option) => option.value === "linear.app");
+  const linearManaged = hostFilter?.linearManaged ?? linearOption !== undefined;
   const filtered =
     state !== "open" ||
     involvement !== "all" ||
@@ -183,15 +277,36 @@ export function IssueFiltersMenu({
         options={involvementOptions}
         onChange={onInvolvement}
       />
-      {hostFilter !== undefined && hostFilter.hostOptions.length > 2 ? (
+      {hostFilter !== undefined &&
+      (providerOptions.length > 2 || hostFilter.onManageLinear !== undefined) ? (
         <>
           <MenuSeparator />
-          <ListFilterRadioGroup
-            label="Host"
-            value={hostFilter.host ?? ALL_HOSTS_VALUE}
-            options={hostFilter.hostOptions}
-            onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
-          />
+          {linearOption && hostFilter.onManageLinear ? (
+            renderIssueProviderMenuRadioGroup({
+              label: "Provider",
+              value: hostFilter.host ?? ALL_HOSTS_VALUE,
+              options: providerOptions,
+              onChange: (next) => {
+                if (next !== (hostFilter.host ?? ALL_HOSTS_VALUE)) {
+                  hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next);
+                }
+              },
+              onManageLinear: hostFilter.onManageLinear,
+            })
+          ) : (
+            <ListFilterRadioGroup
+              label="Provider"
+              value={hostFilter.host ?? ALL_HOSTS_VALUE}
+              options={providerOptions}
+              onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
+            />
+          )}
+          {hostFilter.onManageLinear !== undefined && linearOption === undefined ? (
+            <MenuItem onClick={hostFilter.onManageLinear}>
+              <LinearIcon aria-hidden className="size-3.5" />
+              {linearManaged ? "Linear settings…" : "Connect Linear…"}
+            </MenuItem>
+          ) : null}
         </>
       ) : null}
       {projectFilter === undefined ? null : (

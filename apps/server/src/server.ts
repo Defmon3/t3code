@@ -26,6 +26,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as IssueProviderRegistry from "./issue/IssueProviderRegistry.ts";
 import * as IssueService from "./issue/IssueService.ts";
+import * as LinearApi from "./issue/LinearApi.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
@@ -154,6 +155,7 @@ const ServerSettingsLayerLive = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
   Layer.provideMerge(SqlitePersistenceLayerLive),
 );
+const LinearApiLive = LinearApi.layer.pipe(Layer.provide(ServerSecretStore.layer));
 
 const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
@@ -467,6 +469,7 @@ const IssueServiceLive = IssueService.layer.pipe(
   Layer.provide(IssueProviderRegistry.layer),
   Layer.provide(SourceControlProviderRegistryLayerLive),
   Layer.provide(VcsProcess.layer),
+  Layer.provide(SourceControlRateLimit.layer),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
@@ -496,6 +499,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // One server-lifetime instance, so every client shares its caches and a mutation one of them
   // makes is invalidated for all of them.
   Layer.provide(IssueServiceLive),
+  Layer.provide(LinearApiLive),
   // GitHub applies one GraphQL quota to both features, so both registries share one budget.
   Layer.provide(GitHubGraphQlBudget.layer),
   Layer.provide(PreviewAutomationBroker.layer),

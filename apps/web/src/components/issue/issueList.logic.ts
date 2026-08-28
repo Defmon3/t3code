@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { IssueListEntry, IssueListResult, issueSourceKey } from "@t3tools/contracts";
+import {
+  IssueListEntry,
+  IssueListResult,
+  issueProjectSourceKey,
+  issueSourceKey,
+} from "@t3tools/contracts";
 import type { IssueInvolvement, IssueListSort, IssueListState } from "@t3tools/contracts";
 
 import { normalizeLogin } from "../sourceControl/listHelpers";
@@ -36,7 +41,11 @@ const GROUP_LABELS: Record<IssueGroupKey, string> = {
 };
 
 function issueViewer(entry: IssueListEntry, viewers: IssueViewers): string | null {
-  return normalizeLogin(viewers[issueSourceKey(entry.provider, entry.host)] ?? viewers[entry.host]);
+  return normalizeLogin(
+    viewers[issueProjectSourceKey(entry.provider, entry.host, entry.projectId)] ??
+      viewers[issueSourceKey(entry.provider, entry.host)] ??
+      viewers[entry.host],
+  );
 }
 
 function isAssignedToViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
@@ -60,6 +69,19 @@ export function matchesIssueQuery(entry: IssueListEntry, query: string): boolean
   return `#${entry.number} ${entry.title} ${entry.repository} ${entry.author?.login ?? ""} ${assignees} ${labels}`
     .toLowerCase()
     .includes(normalizedQuery);
+}
+
+export function filterIssueQueryResults(
+  entries: ReadonlyArray<IssueListEntry>,
+  query: string,
+  hostAnswerReady: boolean,
+  searchingHosts: ReadonlySet<string>,
+): ReadonlyArray<IssueListEntry> {
+  if (query.trim().length === 0) return entries;
+  return entries.filter(
+    (entry) =>
+      (hostAnswerReady && searchingHosts.has(entry.host)) || matchesIssueQuery(entry, query),
+  );
 }
 
 /**
@@ -141,9 +163,15 @@ export function groupIssuesByInvolvement(
     .map((key) => ({ key, label: GROUP_LABELS[key], entries: buckets[key] }));
 }
 
-/** Repository plus number is unique on one host, so the host makes the key unique overall. */
+/** A provider project owns a repository's issue numbers. */
 export function issueEntryKey(entry: IssueListEntry): string {
-  return `${entry.host}:${entry.repository}#${entry.number}`;
+  return JSON.stringify([
+    entry.provider,
+    entry.host,
+    entry.projectId,
+    entry.repository,
+    entry.number,
+  ]);
 }
 
 /**

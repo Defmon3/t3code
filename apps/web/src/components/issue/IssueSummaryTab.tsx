@@ -4,15 +4,9 @@ import type {
   IssueDetailView,
   IssueLinkedPullRequest,
   IssueRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
-import {
-  LinkIcon,
-  MessageSquareIcon,
-  MilestoneIcon,
-  PencilIcon,
-  TagIcon,
-  UsersIcon,
-} from "lucide-react";
+import { MessageSquareIcon, MilestoneIcon, PencilIcon, TagIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -36,6 +30,7 @@ import { IssueAssigneePicker } from "./IssueAssigneePicker";
 import {
   canEditIssueComment,
   issueCommentEditId,
+  nextIssueCommentCount,
   type IssueCommentEditScope,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
 } from "./issueDetail.logic";
@@ -43,6 +38,11 @@ import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
 import { IssueReactionBar } from "./IssueReactions";
+import {
+  useWorkItemMatches,
+  WorkItemMatchButton,
+  WorkItemMatchRows,
+} from "../workItems/WorkItemMatches";
 
 /**
  * Rewriting the issue where it is read, rather than in a dialog over the top of it: what the
@@ -155,6 +155,7 @@ export function IssueSummaryTab({
   pendingHandoff,
   onLinkPullRequests,
   onOpenLinkedPullRequest,
+  onOpenAiMatch,
   onLoadMoreComments,
   loadingMoreComments,
   onRefresh,
@@ -176,12 +177,13 @@ export function IssueSummaryTab({
   /** The hand-off currently preparing, if any, so only the control that started it says so. */
   pendingHandoff?: string | null;
   /**
-   * Hands the question of which change requests address this issue to an agent. Supplied by
+   * Hands one selected change request to an agent for linking. Supplied by
    * whoever mounted the panel, because only they can open a thread for it; without one the
    * section offers nothing, which is never a dead control.
    */
-  onLinkPullRequests?: () => void;
+  onLinkPullRequests?: (match: WorkItemMatch) => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
+  onOpenAiMatch: (match: WorkItemMatch) => void;
   onRefresh: () => void;
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
@@ -189,6 +191,17 @@ export function IssueSummaryTab({
   // Keyed by the issue, so opening another one starts at the end of its conversation rather than
   // wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
+  const aiMatches = useWorkItemMatches({
+    environmentId,
+    projectId: reference.projectId,
+    source: {
+      kind: "issue",
+      ...(reference.provider === undefined ? {} : { provider: reference.provider }),
+      repository: reference.repository,
+      number: reference.number,
+    },
+    version: detail.updatedAt,
+  });
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // An issue reads in the order it was written, so the window reaches backwards from the end.
   const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
@@ -215,7 +228,7 @@ export function IssueSummaryTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto" data-summary-scroll>
       <section className="px-4 py-3">
         <div>
           <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Assignees">
@@ -291,6 +304,7 @@ export function IssueSummaryTab({
             <HostMarkdown
               text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
               cwd={detail.workspaceRoot}
+              environmentId={environmentId}
             />
           )}
           <IssueReactionBar
@@ -304,32 +318,22 @@ export function IssueSummaryTab({
         </div>
       </SummarySection>
 
-      {/* Only where the host reports links at all: an empty section under a host that never
-          answers this question says the issue has no work on it, which it cannot know. */}
-      {detail.capabilities.linkedPullRequests ? (
-        <SummarySection
-          title="Related pull requests"
-          count={detail.linkedPullRequests.length}
-          // Offered whether or not anything is listed: an issue one change already mentions can
-          // still be worked on by another that never named it.
-          actions={
-            onLinkPullRequests ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
-                disabled={pendingHandoff !== null && pendingHandoff !== undefined}
-                onClick={onLinkPullRequests}
-              >
-                <LinkIcon aria-hidden className="size-3" />
-                {pendingHandoff === LINK_PULL_REQUESTS_HANDOFF_KIND
-                  ? "Preparing..."
-                  : "Link with agent"}
-              </Button>
-            ) : null
-          }
-        >
-          {detail.linkedPullRequests.length === 0 ? (
+      <SummarySection
+        title="Related pull requests"
+        {...(detail.capabilities.linkedPullRequests
+          ? { count: detail.linkedPullRequests.length }
+          : {})}
+        actions={
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "related"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.related !== undefined}
+            onClick={() => void aiMatches.find("related")}
+          />
+        }
+      >
+        {detail.capabilities.linkedPullRequests ? (
+          detail.linkedPullRequests.length === 0 ? (
             <p className="text-xs text-muted-foreground">No pull request mentions this issue.</p>
           ) : (
             <div className="space-y-0.5">
@@ -365,9 +369,53 @@ export function IssueSummaryTab({
                 );
               })}
             </div>
-          )}
-        </SummarySection>
-      ) : null}
+          )
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            This tracker does not report pull request links.
+          </p>
+        )}
+        {aiMatches.related === undefined ? null : (
+          <div className="mt-2">
+            <WorkItemMatchRows
+              matches={aiMatches.related}
+              emptyText="No likely related pull requests found."
+              onOpen={onOpenAiMatch}
+              {...(detail.capabilities.linkedPullRequests && onLinkPullRequests
+                ? {
+                    onLink: onLinkPullRequests,
+                    linking: pendingHandoff === LINK_PULL_REQUESTS_HANDOFF_KIND,
+                  }
+                : {})}
+            />
+          </div>
+        )}
+      </SummarySection>
+
+      <SummarySection
+        title="Possible duplicate issues"
+        {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
+        actions={
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "duplicate"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.duplicate !== undefined}
+            onClick={() => void aiMatches.find("duplicate")}
+          />
+        }
+      >
+        {aiMatches.duplicate === undefined ? (
+          <p className="text-xs text-muted-foreground">
+            Find issues that describe the same problem.
+          </p>
+        ) : (
+          <WorkItemMatchRows
+            matches={aiMatches.duplicate}
+            emptyText="No likely duplicate issues found."
+            onOpen={onOpenAiMatch}
+          />
+        )}
+      </SummarySection>
 
       <SummarySection
         title="Comments"
@@ -400,7 +448,13 @@ export function IssueSummaryTab({
                     variant="outline"
                     className="w-full"
                     disabled={loadingMoreComments}
-                    onClick={onLoadMoreComments}
+                    onClick={() => {
+                      setShown({
+                        url: detail.url,
+                        count: nextIssueCommentCount(shownComments, COMMENT_PAGE),
+                      });
+                      onLoadMoreComments();
+                    }}
                   >
                     {loadingMoreComments ? "Loading..." : "Load older comments"}
                   </Button>
@@ -453,6 +507,7 @@ export function IssueSummaryTab({
                           className="min-w-0 flex-1"
                           text={comment.body}
                           cwd={detail.workspaceRoot}
+                          environmentId={environmentId}
                         />
                         {canEditIssueComment(detail, comment) ? (
                           <Button

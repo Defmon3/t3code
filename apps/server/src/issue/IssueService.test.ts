@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
+  issueProjectSourceKey,
   issueSourceKey,
   type IssueCapabilities,
   type IssueTemplateList,
@@ -607,6 +608,8 @@ it.effect("asks each host for the account signed in on that host, not on another
       "github.acme.dev": "b.hassan",
       [issueSourceKey("github", "github.com")]: "bilal",
       [issueSourceKey("github", "github.acme.dev")]: "b.hassan",
+      [issueProjectSourceKey("github", "github.com", "p1" as ProjectId)]: "bilal",
+      [issueProjectSourceKey("github", "github.acme.dev", "p2" as ProjectId)]: "b.hassan",
     });
   }),
 );
@@ -635,7 +638,11 @@ it.effect("keeps adapters separate when they share a host and repository name", 
         }),
         fakeProvider("jira", {
           resolveSource: (candidate) =>
-            candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+            Effect.succeed(
+              candidate.id === "p2"
+                ? { host: "tracker.example.test", repository: "acme/web" }
+                : null,
+            ),
           getViewer: () => Effect.succeed("jira-user"),
           listIssues: ({ viewer }) => {
             asked.push(`jira:${viewer}`);
@@ -649,6 +656,158 @@ it.effect("keeps adapters separate when they share a host and repository name", 
 
     assert.deepStrictEqual(result.providers.map(({ kind }) => kind).toSorted(), ["github", "jira"]);
     assert.deepStrictEqual(asked.toSorted(), ["github:octocat", "jira:jira-user"]);
+  }),
+);
+
+it.effect("routes each repository on one project through its matching adapter", () =>
+  Effect.gen(function* () {
+    const asked: string[] = [];
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: () =>
+            Effect.succeed({
+              host: "linear.app",
+              repository: REFERENCE.repository,
+              credentialId: "user-1",
+            }),
+          getIssue: ({ repository }) => {
+            asked.push(`linear:${repository}`);
+            return Effect.succeed(issueDetail(7, { title: "Linear issue" }));
+          },
+        }),
+        fakeProvider("github", {
+          getIssue: ({ repository }) => {
+            asked.push(`github:${repository}`);
+            return Effect.succeed(issueDetail(7, { title: "GitHub issue" }));
+          },
+        }),
+      ],
+    });
+
+    const linear = yield* service.detail({ ...REFERENCE, provider: "linear" });
+    const github = yield* service.detail({ ...REFERENCE, provider: "github" });
+
+    assert.strictEqual(linear.title, "Linear issue");
+    assert.strictEqual(github.title, "GitHub issue");
+    assert.deepStrictEqual(asked, ["linear:acme/web", "github:acme/web"]);
+  }),
+);
+
+it.effect("keeps a project available when one of its issue sources is unreadable", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: () =>
+            Effect.succeed({ host: "linear.app", repository: "ENG", credentialId: "user-1" }),
+          getViewer: () => Effect.fail(unusable("linear", "unauthenticated")),
+        }),
+        fakeProvider("github", {
+          listIssues: () =>
+            Effect.succeed({
+              items: [issue(7, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            }),
+        }),
+      ],
+    });
+
+    const listed = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(
+      listed.entries.map(({ provider }) => provider),
+      ["github"],
+    );
+    assert.deepStrictEqual(listed.errors, []);
+  }),
+);
+
+it.effect("routes projects on one host through distinct credential viewers", () =>
+  Effect.gen(function* () {
+    const viewers: Array<string | undefined> = [];
+    const listings: Array<[string | undefined, string]> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/web" }),
+        project({ id: "p2", title: "api", workspaceRoot: "/api" }),
+      ],
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: (candidate) =>
+            Effect.succeed({
+              host: "linear.app",
+              repository: candidate.id === "p1" ? "ENG" : "OPS",
+              credentialId: candidate.id === "p1" ? "user-1" : "user-2",
+            }),
+          getViewer: (input: { readonly credentialId?: string }) => {
+            viewers.push(input.credentialId);
+            return Effect.succeed(input.credentialId ?? "missing");
+          },
+          listIssues: (input: { readonly credentialId?: string; readonly repository: string }) => {
+            listings.push([input.credentialId, input.repository]);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(viewers.toSorted(), ["user-1", "user-2"]);
+    assert.deepStrictEqual(listings.toSorted(), [
+      ["user-1", "ENG"],
+      ["user-2", "OPS"],
+    ]);
+    assert.strictEqual(
+      result.viewers[issueProjectSourceKey("linear", "linear.app", "p1" as ProjectId)],
+      "user-1",
+    );
+    assert.strictEqual(
+      result.viewers[issueProjectSourceKey("linear", "linear.app", "p2" as ProjectId)],
+      "user-2",
+    );
+    assert.strictEqual(result.providers.length, 1);
+    assert.strictEqual(result.providers[0]?.projectCount, 2);
+  }),
+);
+
+it.effect("keeps separate cursors for accounts that use the same Linear team", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/web" }),
+        project({ id: "p2", title: "api", workspaceRoot: "/api" }),
+      ],
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: (candidate) =>
+            Effect.succeed({
+              host: "linear.app",
+              repository: "ENG",
+              credentialId: candidate.id === "p1" ? "user-1" : "user-2",
+            }),
+          getViewer: ({ credentialId }: { readonly credentialId?: string }) =>
+            Effect.succeed(credentialId ?? "missing"),
+          listIssues: ({ credentialId }: { readonly credentialId?: string }) =>
+            Effect.succeed({
+              items: [issue(credentialId === "user-1" ? 1 : 2, "2026-07-02T00:00:00Z")],
+              truncated: true,
+              continues: true,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(Object.keys(result.nextCursors).toSorted(), [
+      '["linear","linear.app","eng","user-1"]',
+      '["linear","linear.app","eng","user-2"]',
+    ]);
   }),
 );
 
@@ -1361,6 +1520,41 @@ it.effect("an explicit invalidation makes the next listing ask the host again", 
     yield* service.invalidate({ reference: REFERENCE });
     yield* service.list({ state: "open" });
     assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("an explicit invalidation refreshes issue detail and activity", () =>
+  Effect.gen(function* () {
+    let detailVersion = 0;
+    let activityVersion = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => {
+            detailVersion += 1;
+            return Effect.succeed(issueDetail(7, { body: `detail ${detailVersion}` }));
+          },
+          getIssueActivity: () => {
+            activityVersion += 1;
+            return Effect.succeed({
+              comments: [],
+              commentCount: activityVersion,
+              commentsTruncated: false,
+              events: [],
+            });
+          },
+        }),
+      ],
+    });
+
+    assert.strictEqual((yield* service.detail(REFERENCE)).body, "detail 1");
+    assert.strictEqual((yield* service.activity(REFERENCE)).commentCount, 1);
+
+    yield* service.invalidate({});
+
+    assert.strictEqual((yield* service.detail(REFERENCE)).body, "detail 2");
+    assert.strictEqual((yield* service.activity(REFERENCE)).commentCount, 2);
   }),
 );
 

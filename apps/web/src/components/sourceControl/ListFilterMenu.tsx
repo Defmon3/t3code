@@ -16,6 +16,7 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { ProjectFavicon } from "../ProjectFavicon";
+import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
@@ -47,9 +48,6 @@ export interface ListFilterHost<Kind extends string = SourceControlProviderKind>
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 export const ALL_HOSTS_VALUE = "";
 const ALL_PROJECTS_VALUE = "all";
-
-export const LIST_MENU_TRIGGER_CLASS_NAME =
-  "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8";
 
 /**
  * What to call a host in the row. The provider's own name reads best — "GitHub" over
@@ -118,12 +116,14 @@ export function ListFilterMenu({
   return (
     <Menu>
       <MenuTrigger
-        className={cn(
-          // The icon-button size that pairs with a full-height input, so the two read as one strip.
-          LIST_MENU_TRIGGER_CLASS_NAME,
-          filtered && "text-foreground",
-        )}
-        aria-label={label}
+        render={
+          <Button
+            className={cn("relative", filtered && "[--control-icon-color:currentColor]")}
+            size="icon"
+            variant="outline"
+            aria-label={label}
+          />
+        }
       >
         <ListFilterIcon className="size-4" />
         {filtered ? (
@@ -171,7 +171,7 @@ export function ListFilterRadioGroup<Value extends string>({
           >
             <span className="flex min-w-0 items-center gap-2">
               <option.Icon aria-hidden className="size-3.5" />
-              {option.label}
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
             </span>
           </MenuRadioItem>
         );

@@ -23,7 +23,7 @@ import type {
   IssueProviderKind,
   OrchestrationProjectShell,
 } from "@t3tools/contracts";
-import { IssueProviderKind as IssueProviderKindSchema } from "@t3tools/contracts";
+import { IssueProviderKind as IssueProviderKindSchema, issueSourceKey } from "@t3tools/contracts";
 
 /**
  * The one failure shape every provider reports, so the service can decide what a failure means
@@ -140,7 +140,21 @@ export interface ProviderCreatedIssue {
   readonly url: string;
 }
 
-export interface ProviderRepositoryRef {
+export interface IssueProviderContext {
+  readonly credentialId?: string;
+}
+
+export function issueProviderContextKey(
+  provider: IssueProviderKind,
+  host: string,
+  credentialId?: string,
+): string {
+  return credentialId === undefined
+    ? issueSourceKey(provider, host)
+    : JSON.stringify([provider, host.toLowerCase(), credentialId]);
+}
+
+export interface ProviderRepositoryRef extends IssueProviderContext {
   readonly cwd: string;
   /** Provider-native repository identity, e.g. `owner/repo` or `group/subgroup/project`. */
   readonly repository: string;
@@ -152,7 +166,7 @@ export interface ProviderRepositoryRef {
   readonly host: string;
 }
 
-export interface IssueAdapterSource {
+export interface IssueAdapterSource extends IssueProviderContext {
   readonly host: string;
   readonly repository: string;
 }
@@ -168,15 +182,19 @@ export interface IssueAdapter {
 
   /**
    * Optional local project binding for adapters selected outside source control, such as a future
-   * project-level Jira setting. Synchronous by design: discovering sources must spend no API calls.
+   * project-level Jira setting. Reads local settings only; it must not spend API calls.
    */
-  readonly resolveSource?: (project: OrchestrationProjectShell) => IssueAdapterSource | null;
+  readonly resolveSource?: (
+    project: OrchestrationProjectShell,
+  ) => Effect.Effect<IssueAdapterSource | null>;
 
   /** The signed-in account, which is what involvement filtering compares against. */
-  readonly getViewer: (input: {
-    readonly cwd: string;
-    readonly host: string;
-  }) => Effect.Effect<string, IssueProviderError>;
+  readonly getViewer: (
+    input: {
+      readonly cwd: string;
+      readonly host: string;
+    } & IssueProviderContext,
+  ) => Effect.Effect<string, IssueProviderError>;
 
   readonly listIssues: (
     input: ProviderRepositoryRef & {

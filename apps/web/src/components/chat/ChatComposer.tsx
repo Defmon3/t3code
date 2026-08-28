@@ -2,6 +2,7 @@ import type {
   ApprovalRequestId,
   EnvironmentId,
   ModelSelection,
+  ProjectId,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -99,6 +100,9 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../../lib/terminalContext";
 import { useComposerPathSearch } from "../../lib/composerPathSearchState";
+import { issueEnvironment } from "../../state/issues";
+import { useEnvironmentQuery } from "../../state/query";
+import { useDebouncedValue } from "../../state/queries";
 import { type ElementContextDraft } from "../../lib/elementContext";
 import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
@@ -109,7 +113,12 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
+import {
+  buildComposerPathMenuItems,
+  type ComposerCommandItem,
+  ComposerCommandMenu,
+  serializeComposerIssueMention,
+} from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -576,6 +585,7 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
   activeThread: Thread | undefined;
+  issueSearchProjectId: ProjectId | null;
   isServerThread: boolean;
   isLocalDraftThread: boolean;
   forceExpandedOnMobile: boolean;
@@ -694,6 +704,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
+    issueSearchProjectId,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
@@ -1137,18 +1148,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
+  const debouncedIssueQuery = useDebouncedValue(pathTriggerQuery.trim(), 120);
+  const composerIssues = useEnvironmentQuery(
+    isPathTrigger && issueSearchProjectId !== null
+      ? issueEnvironment.list({
+          environmentId,
+          input: {
+            projectId: issueSearchProjectId,
+            state: debouncedIssueQuery ? "all" : "open",
+            involvement: "all",
+            limit: 8,
+            sort: debouncedIssueQuery ? "best-match" : "updated",
+            order: "desc",
+            ...(debouncedIssueQuery ? { query: debouncedIssueQuery } : {}),
+          },
+        })
+      : null,
+  );
 
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
-      return workspaceEntries.entries.map((entry) => ({
-        id: `path:${entry.kind}:${entry.path}`,
-        type: "path",
-        path: entry.path,
-        pathKind: entry.kind,
-        label: basenameOfPath(entry.path),
-        description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
-      }));
+      return buildComposerPathMenuItems({
+        issues: composerIssues.data?.entries ?? [],
+        pathItems: workspaceEntries.entries.map((entry) => ({
+          id: `path:${entry.kind}:${entry.path}`,
+          type: "path" as const,
+          path: entry.path,
+          pathKind: entry.kind,
+          label: basenameOfPath(entry.path),
+          description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
+        })),
+        query: pathTriggerQuery.trim(),
+        settledIssueQuery: debouncedIssueQuery,
+      });
     }
     if (composerTrigger.kind === "slash-command") {
       const builtInSlashCommandItems = [
@@ -1230,6 +1263,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     composerTrigger,
+    composerIssues.data?.entries,
     planModeUiEnabled,
     selectedProvider,
     selectedProviderStatus,
@@ -1299,15 +1333,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const isComposerMenuLoading =
-    composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending;
+    composerTriggerKind === "path" &&
+    (composerIssues.isPending || (pathTriggerQuery.length > 0 && workspaceEntries.isPending));
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
+      ? issueSearchProjectId !== null
+        ? "No matching issues, files, or folders."
+        : "No matching files or folders."
       : "No matching command.";
-  }, [composerTriggerKind]);
+  }, [composerTriggerKind, issueSearchProjectId]);
 
   // ------------------------------------------------------------------
   // Provider traits UI
@@ -1815,6 +1852,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
+      if (item.type === "issue") {
+        const replacement = serializeComposerIssueMention(item.issue);
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        if (
+          applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          })
+        ) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
       if (item.type === "path") {
         const replacement = `${serializeComposerFileLink(item.path)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(

@@ -21,7 +21,7 @@ it.effect("binds a project to an issue adapter without source-control types", ()
   Effect.gen(function* () {
     const jira = {
       kind: "jira",
-      resolveSource: () => ({ host: "acme.atlassian.net", repository: "ACME" }),
+      resolveSource: () => Effect.succeed({ host: "acme.atlassian.net", repository: "ACME" }),
     } as unknown as IssueAdapter;
     const registry = fromProviders([jira]);
 
@@ -59,7 +59,9 @@ it.effect("keeps two adapters that share one host and repository", () =>
     const jira = {
       kind: "jira",
       resolveSource: (candidate: OrchestrationProjectShell) =>
-        candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+        Effect.succeed(
+          candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+        ),
     } as unknown as IssueAdapter;
     const registry = fromProviders([github, jira]);
 
@@ -74,6 +76,75 @@ it.effect("keeps two adapters that share one host and repository", () =>
     assert.deepStrictEqual(result.supported.map(({ adapter }) => adapter.kind).toSorted(), [
       "github",
       "jira",
+    ]);
+  }),
+);
+
+it.effect("keeps source-control and external issue sources for one project", () =>
+  Effect.gen(function* () {
+    const project: OrchestrationProjectShell = {
+      ...PROJECT,
+      repositoryIdentity: {
+        canonicalKey: "github.com/acme/web",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://github.com/acme/web.git",
+        },
+        provider: "github",
+        displayName: "acme/web",
+      },
+    };
+    const github = { kind: "github" } as unknown as IssueAdapter;
+    const linear = {
+      kind: "linear",
+      resolveSource: () => Effect.succeed({ host: "linear.app", repository: "ENG" }),
+    } as unknown as IssueAdapter;
+    const registry = fromProviders([github, linear]);
+
+    const result = yield* registry.resolveProjects([project], {});
+
+    assert.deepStrictEqual(
+      result.supported
+        .map(({ adapter, host, repository }) => ({ kind: adapter.kind, host, repository }))
+        .toSorted((left, right) => left.kind.localeCompare(right.kind)),
+      [
+        { kind: "github", host: "github.com", repository: "acme/web" },
+        { kind: "linear", host: "linear.app", repository: "ENG" },
+      ],
+    );
+  }),
+);
+
+it.effect("keeps account-bound sources distinct on linear.app", () =>
+  Effect.gen(function* () {
+    const linear = {
+      kind: "linear",
+      resolveSource: (candidate: OrchestrationProjectShell) =>
+        Effect.succeed({
+          host: "linear.app",
+          repository: candidate.id === "p1" ? "ENG" : "OPS",
+          credentialId: candidate.id === "p1" ? "user-1" : "user-2",
+        }),
+    } as unknown as IssueAdapter;
+    const registry = fromProviders([linear]);
+
+    const result = yield* registry.resolveProjects(
+      [PROJECT, { ...PROJECT, id: "p2" as ProjectId, workspaceRoot: "/work/api" }],
+      {},
+    );
+
+    assert.deepStrictEqual(
+      result.supported.map(({ credentialId, repository }) => [credentialId, repository]),
+      [
+        ["user-1", "ENG"],
+        ["user-2", "OPS"],
+      ],
+    );
+    assert.strictEqual(result.viewerRoots.size, 2);
+    assert.deepStrictEqual([...result.viewerRoots.values()].flat().toSorted(), [
+      "/work/api",
+      "/work/web",
     ]);
   }),
 );

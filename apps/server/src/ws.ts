@@ -56,12 +56,16 @@ import {
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
   type ServerProcessDiagnosticsResult,
+  type ServerSettingsError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  IssueTrackingError,
+  WorkItemMatchError,
+  WorkItemTaskError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -132,6 +136,15 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
+import * as LinearApi from "./issue/LinearApi.ts";
+import * as LinearConnection from "./issue/LinearConnection.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import { resolveWorkItemTaskResult } from "./textGeneration/TextGenerationPrompts.ts";
+import {
+  resolveWorkItemMatches,
+  shortlistWorkItemCandidates,
+  workItemIdentityKey,
+} from "./workItems/WorkItemMatching.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -596,6 +609,7 @@ const makeWsRpcLayer = <E, R>(
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const issues = yield* IssueService.IssueService;
+      const textGeneration = yield* TextGeneration.TextGeneration;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -603,6 +617,23 @@ const makeWsRpcLayer = <E, R>(
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      const issueTrackingError =
+        (operation: IssueTrackingError["operation"], settingsDetail: string) =>
+        (
+          error:
+            | LinearApi.LinearApiError
+            | LinearApi.LinearAccountSelectionRequiredError
+            | ServerSettingsError,
+        ) =>
+          new IssueTrackingError({
+            operation,
+            detail:
+              LinearApi.isLinearApiError(error) ||
+              LinearApi.isLinearAccountSelectionRequiredError(error)
+                ? error.detail
+                : settingsDetail,
+            cause: error,
+          });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1755,9 +1786,10 @@ const makeWsRpcLayer = <E, R>(
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            serverSettings
-              .updateSettings(patch)
-              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            (patch.issueTracking?.linear?.projectTeams === undefined
+              ? serverSettings.updateSettings(patch)
+              : LinearConnection.updateLegacyLinearProjectTeams(patch)
+            ).pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
             {
               "rpc.aggregate": "server",
             },
@@ -2039,6 +2071,327 @@ const makeWsRpcLayer = <E, R>(
           observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
             "rpc.aggregate": "issues",
           }),
+        [WS_METHODS.linearConnectionStatus]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.linearConnectionStatus,
+            LinearConnection.linearConnectionStatus.pipe(
+              Effect.mapError(
+                issueTrackingError("status", "Could not migrate the Linear project bindings."),
+              ),
+            ),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.linearConnect]: ({ token, mode }) =>
+          observeRpcEffect(
+            WS_METHODS.linearConnect,
+            LinearConnection.connectLinearAccount(token, mode).pipe(
+              Effect.mapError(
+                issueTrackingError("connect", "Could not migrate the Linear project bindings."),
+              ),
+            ),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.linearDisconnect]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearDisconnect,
+            LinearConnection.disconnectLinearAccount(input).pipe(
+              Effect.mapError(
+                issueTrackingError("disconnect", "Could not clear the Linear project bindings."),
+              ),
+            ),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.linearSetProjectBinding]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearSetProjectBinding,
+            LinearConnection.setLinearProjectBinding(input).pipe(
+              Effect.mapError(
+                issueTrackingError("bind", "Could not save the Linear project binding."),
+              ),
+            ),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.workItemsGenerateTask]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workItemsGenerateTask,
+            Effect.gen(function* () {
+              const items = yield* Effect.forEach(
+                input.items,
+                (item) =>
+                  Effect.gen(function* () {
+                    const reference = {
+                      projectId: input.projectId,
+                      ...(item.provider === undefined ? {} : { provider: item.provider }),
+                      repository: item.repository,
+                      number: item.number,
+                    };
+                    if (item.kind === "issue") {
+                      const detail = yield* issues.detail(reference);
+                      return {
+                        kind: "issue" as const,
+                        provider: detail.provider,
+                        repository: detail.repository,
+                        number: detail.number,
+                        title: detail.title,
+                        url: detail.url,
+                        body: detail.body,
+                        workspaceRoot: detail.workspaceRoot,
+                      };
+                    }
+                    const detail = yield* pullRequests.detail(reference);
+                    return {
+                      kind: "pull-request" as const,
+                      provider: detail.provider,
+                      repository: detail.repository,
+                      number: detail.number,
+                      title: detail.title,
+                      url: detail.url,
+                      body: detail.body,
+                      workspaceRoot: detail.workspaceRoot,
+                    };
+                  }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new WorkItemTaskError({
+                          operation: "read-source",
+                          source: item,
+                          detail: "Could not read a selected work item.",
+                          cause,
+                        }),
+                    ),
+                  ),
+                { concurrency: 4 },
+              );
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new WorkItemTaskError({
+                      operation: "generate",
+                      source: input.items[0]!,
+                      detail: "Could not load task-generation settings.",
+                      cause,
+                    }),
+                ),
+              );
+              const generated = yield* textGeneration
+                .generateWorkItemTask({
+                  cwd: items[0]!.workspaceRoot,
+                  mode: input.mode,
+                  items,
+                  modelSelection: settings.textGenerationModelSelection,
+                })
+                .pipe(
+                  Effect.map(({ prompt }) =>
+                    resolveWorkItemTaskResult({ mode: input.mode, items }, prompt),
+                  ),
+                  Effect.orElseSucceed(() =>
+                    resolveWorkItemTaskResult({ mode: input.mode, items }, ""),
+                  ),
+                );
+              return generated;
+            }),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.workItemsFindMatches]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workItemsFindMatches,
+            Effect.gen(function* () {
+              const reference = {
+                projectId: input.projectId,
+                ...(input.source.provider === undefined ? {} : { provider: input.source.provider }),
+                repository: input.source.repository,
+                number: input.source.number,
+              };
+              const sourceRead =
+                input.source.kind === "issue"
+                  ? issues.detail(reference).pipe(
+                      Effect.map((detail) => ({
+                        detail,
+                        known:
+                          input.relationship === "related"
+                            ? detail.linkedPullRequests.map((link) =>
+                                workItemIdentityKey({
+                                  kind: "pull-request",
+                                  provider: detail.provider,
+                                  repository: link.repository,
+                                  number: link.number,
+                                }),
+                              )
+                            : [],
+                      })),
+                      Effect.mapError(
+                        (cause) =>
+                          new WorkItemMatchError({
+                            operation: "read-source",
+                            source: input.source,
+                            detail: "Could not read the source work item.",
+                            cause,
+                          }),
+                      ),
+                    )
+                  : pullRequests.detail(reference).pipe(
+                      Effect.map((detail) => ({
+                        detail,
+                        known:
+                          input.relationship === "related"
+                            ? (detail.linkedIssues ?? []).map((link) =>
+                                workItemIdentityKey({
+                                  kind: "issue",
+                                  provider: detail.provider,
+                                  repository: link.repository,
+                                  number: link.number,
+                                }),
+                              )
+                            : [],
+                      })),
+                      Effect.mapError(
+                        (cause) =>
+                          new WorkItemMatchError({
+                            operation: "read-source",
+                            source: input.source,
+                            detail: "Could not read the source work item.",
+                            cause,
+                          }),
+                      ),
+                    );
+              const { detail: sourceDetail, known } = yield* sourceRead;
+              const source = {
+                kind: input.source.kind,
+                provider: sourceDetail.provider,
+                repository: sourceDetail.repository,
+                number: sourceDetail.number,
+                title: sourceDetail.title,
+                url: sourceDetail.url,
+                body: sourceDetail.body,
+              };
+              const candidateKind =
+                input.relationship === "duplicate"
+                  ? input.source.kind
+                  : input.source.kind === "issue"
+                    ? "pull-request"
+                    : "issue";
+              const listed =
+                candidateKind === "issue"
+                  ? yield* issues
+                      .list({
+                        state: input.relationship === "duplicate" ? "all" : "open",
+                        projectId: input.projectId,
+                        limit: 50,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new WorkItemMatchError({
+                              operation: "list-candidates",
+                              source: input.source,
+                              detail: "Could not list candidate work items.",
+                              cause,
+                            }),
+                        ),
+                      )
+                  : yield* pullRequests
+                      .list({
+                        state: input.relationship === "duplicate" ? "all" : "open",
+                        projectId: input.projectId,
+                        limit: 50,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new WorkItemMatchError({
+                              operation: "list-candidates",
+                              source: input.source,
+                              detail: "Could not list candidate work items.",
+                              cause,
+                            }),
+                        ),
+                      );
+              const knownItems = new Set(known);
+              const candidates = shortlistWorkItemCandidates(
+                source,
+                listed.entries
+                  .slice(0, 50)
+                  .filter(
+                    (entry) =>
+                      !knownItems.has(workItemIdentityKey({ ...entry, kind: candidateKind })),
+                  )
+                  .map((entry) => ({ ...entry, kind: candidateKind })),
+              );
+              const candidateDetails = yield* Effect.forEach(
+                candidates,
+                (candidate) =>
+                  Effect.gen(function* () {
+                    const candidateReference = {
+                      projectId: candidate.projectId,
+                      provider: candidate.provider,
+                      repository: candidate.repository,
+                      number: candidate.number,
+                    };
+                    if (candidateKind === "issue") {
+                      const detail = yield* issues.detail(candidateReference);
+                      return {
+                        kind: "issue" as const,
+                        provider: detail.provider,
+                        repository: detail.repository,
+                        number: detail.number,
+                        title: detail.title,
+                        url: detail.url,
+                        body: detail.body,
+                      };
+                    }
+                    const detail = yield* pullRequests.detail(candidateReference);
+                    return {
+                      kind: "pull-request" as const,
+                      provider: detail.provider,
+                      repository: detail.repository,
+                      number: detail.number,
+                      title: detail.title,
+                      url: detail.url,
+                      body: detail.body,
+                    };
+                  }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new WorkItemMatchError({
+                          operation: "read-candidate",
+                          source: {
+                            kind: candidateKind,
+                            provider: candidate.provider,
+                            repository: candidate.repository,
+                            number: candidate.number,
+                          },
+                          detail: "Could not read a candidate work item.",
+                          cause,
+                        }),
+                    ),
+                  ),
+                { concurrency: 4 },
+              );
+              if (candidateDetails.length === 0) return { matches: [] };
+              const generated = yield* Effect.gen(function* () {
+                const settings = yield* serverSettings.getSettings;
+                return yield* textGeneration.findWorkItemMatches({
+                  cwd: sourceDetail.workspaceRoot,
+                  relationship: input.relationship,
+                  source,
+                  candidates: candidateDetails,
+                  modelSelection: settings.textGenerationModelSelection,
+                });
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new WorkItemMatchError({
+                      operation: "generate",
+                      source: input.source,
+                      detail: "Could not generate work item matches.",
+                      cause,
+                    }),
+                ),
+              );
+              return { matches: resolveWorkItemMatches(candidateDetails, generated.matches) };
+            }),
+            { "rpc.aggregate": "issues" },
+          ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
@@ -2662,6 +3015,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       maxRoots: RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
       processDiagnostics,
     });
+    const linear = yield* LinearApi.LinearApi;
+    const textGeneration = yield* TextGeneration.TextGeneration;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2700,6 +3055,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
+              Layer.provide(Layer.succeed(LinearApi.LinearApi, linear)),
+              Layer.provide(Layer.succeed(TextGeneration.TextGeneration, textGeneration)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

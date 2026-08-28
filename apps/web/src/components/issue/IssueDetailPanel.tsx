@@ -6,10 +6,12 @@ import type {
   IssueCloseReason,
   IssueComment,
   IssueLinkedPullRequest,
+  IssueProviderKind,
   IssueRef,
   IssueState,
   ScopedProjectRef,
   ScopedThreadRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -41,7 +43,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
-import { CondensedDetailTabStrip, DetailTabStrip } from "../sourceControl/DetailTabStrip";
+import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
 import { useMountedTabs } from "../sourceControl/useMountedTabs";
 import {
@@ -76,7 +78,7 @@ import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { IssueSummaryTab } from "./IssueSummaryTab";
 import { IssuesUnavailableState } from "./IssuesUnavailableState";
 import { IssueTimelineTab } from "./IssueTimelineTab";
-import { resolveIssueState } from "./issuePresentation";
+import { getIssueProviderPresentation, resolveIssueState } from "./issuePresentation";
 
 /** An issue has no patch to read, so there is no third tab here as there is on a change request. */
 type DetailTab = "summary" | "timeline";
@@ -111,13 +113,8 @@ const CLOSE_REASON_PHRASES: Record<IssueCloseReason, string> = {
   "not-planned": " as not planned",
 };
 
-/** Named for the host rather than "externally": the point is where you will land. */
-const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
-  github: "Open on GitHub",
-  gitlab: "Open on GitLab",
-  bitbucket: "Open on Bitbucket",
-  "azure-devops": "Open on Azure DevOps",
-};
+const openOnIssueLabel = (provider: IssueProviderKind): string =>
+  `Open on ${getIssueProviderPresentation(provider).providerName}`;
 
 /** Names no hand-off, which is the point: it holds the controls shut without claiming one is running. */
 const HANDOFF_WAITING_KIND = "waiting-for-activity";
@@ -525,6 +522,11 @@ export function IssueDetailPanel({
   const handoffDisabled = handoff !== null || activityPending;
   const handoffLabel = (kind: string, label: string) =>
     handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
+  const solveDescription = activityPending
+    ? "Waiting for the issue's comments, which go with the task"
+    : inPlaceDraft === null
+      ? "Opens a thread on this project holding the task"
+      : "Puts the task in this thread's composer";
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -534,23 +536,25 @@ export function IssueDetailPanel({
       <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
         {/* The fixed height lives on the two top-row cells — not the grid, whose later rows
             are the fold — so the actions have one immovable home in both states. */}
-        <div className="ml-4 grid h-11 min-w-0 items-center">
+        <div className="ml-4 grid h-7 min-w-0 items-center">
           <div
             aria-hidden={condensed}
             inert={condensed}
             className={cn(
-              "col-start-1 row-start-1 flex min-w-0 items-center gap-1 text-sm text-muted-foreground transition-opacity sm:text-xs motion-reduce:transition-none",
+              "col-start-1 row-start-1 flex min-w-0 items-center gap-1 text-sm text-muted-foreground transition-[opacity,transform] ease-out motion-reduce:transform-none motion-reduce:transition-none sm:text-xs",
               // Sequenced, not simultaneous: the leaving layer clears quickly before the
               // arriving one lands, so no frame shows both texts superimposed at half opacity.
               condensed
-                ? "pointer-events-none opacity-0 duration-100"
-                : "opacity-100 delay-75 duration-150",
+                ? "pointer-events-none -translate-y-1 opacity-0 duration-100"
+                : "translate-y-0 opacity-100 delay-50 duration-150",
             )}
           >
             {detail && statePresentation ? (
               <>
                 <Tooltip>
-                  <TooltipTrigger render={<span className="min-w-0 truncate" />}>
+                  <TooltipTrigger
+                    render={<span className="min-w-0 truncate font-medium text-muted-foreground" />}
+                  >
                     {detail.repository}
                   </TooltipTrigger>
                   <TooltipPopup side="top">{detail.repository}</TooltipPopup>
@@ -565,15 +569,13 @@ export function IssueDetailPanel({
                           "shrink-0 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
                         )}
-                        aria-label={`Open issue #${detail.number} on host`}
+                        aria-label={openOnIssueLabel(detail.provider)}
                       />
                     }
                   >
                     #{detail.number}
                   </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  </TooltipPopup>
+                  <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
                 </Tooltip>
               </>
             ) : null}
@@ -582,10 +584,10 @@ export function IssueDetailPanel({
             aria-hidden={!condensed}
             inert={!condensed}
             className={cn(
-              "col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 text-sm transition-opacity sm:text-xs motion-reduce:transition-none",
+              "col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 text-sm transition-[opacity,transform] ease-out motion-reduce:transform-none motion-reduce:transition-none sm:text-xs",
               condensed
-                ? "opacity-100 delay-75 duration-150"
-                : "pointer-events-none opacity-0 duration-100",
+                ? "translate-y-0 opacity-100 delay-50 duration-150"
+                : "pointer-events-none translate-y-1 opacity-0 duration-100",
             )}
           >
             {detail && statePresentation ? (
@@ -601,15 +603,13 @@ export function IssueDetailPanel({
                           "shrink-0 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
                         )}
-                        aria-label={`Open issue #${detail.number} on host`}
+                        aria-label={openOnIssueLabel(detail.provider)}
                       />
                     }
                   >
                     #{detail.number}
                   </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  </TooltipPopup>
+                  <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger
@@ -628,7 +628,7 @@ export function IssueDetailPanel({
             ) : null}
           </div>
         </div>
-        <div className="mr-4 flex h-11 min-w-0 flex-nowrap items-center justify-end gap-1">
+        <div className="mr-4 flex h-7 min-w-0 flex-nowrap items-center justify-end gap-1">
           {detail ? (
             <>
               <Menu>
@@ -715,7 +715,7 @@ export function IssueDetailPanel({
                   <MenuSeparator />
                   <MenuItem onClick={() => openOnHost(detail.url)}>
                     <ArrowUpRightIcon className="size-3.5" />
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                    {openOnIssueLabel(detail.provider)}
                   </MenuItem>
                   {/* A clipboard that is switched off or refuses says nothing on its own, and a
                       reader who has been handed nothing goes and pastes whatever was there
@@ -745,30 +745,30 @@ export function IssueDetailPanel({
               {/* Handing the issue to an agent is the reason to open one at all, so it is a
                   button of its own wherever the panel is — beside a thread as much as on the
                   page. The label goes once the chrome condenses; the button itself does not. */}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={handoffDisabled}
-                title={
-                  activityPending
-                    ? "Waiting for the issue's comments, which go with the task"
-                    : inPlaceDraft === null
-                      ? "Opens a thread on this project holding the task"
-                      : "Puts the task in this thread's composer"
-                }
-                onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-              >
-                {handoff === "solve" ? (
-                  "Opening..."
-                ) : activityPending ? (
-                  "Loading..."
-                ) : (
-                  <>
-                    <HammerIcon className="size-3" />
-                    <span className={cn(condensed && "sr-only")}>Solve</span>
-                  </>
-                )}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={handoffDisabled}
+                      onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
+                    />
+                  }
+                >
+                  {handoff === "solve" ? (
+                    "Opening..."
+                  ) : activityPending ? (
+                    "Loading..."
+                  ) : (
+                    <>
+                      <HammerIcon className="size-3" />
+                      <span className={cn(condensed && "sr-only")}>Solve</span>
+                    </>
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup side="top">{solveDescription}</TooltipPopup>
+              </Tooltip>
               {detail.state === "open" && can("close") ? (
                 closeReasons.length > 0 ? (
                   // A reason is not a second action but a part of this one, so it is chosen on the
@@ -823,32 +823,39 @@ export function IssueDetailPanel({
           ) : null}
         </div>
 
-        {/* The condensed chrome's second row: the tabs that the closing fold takes with it, and a
-            compact copy of the state so it stays in sight while the full rows are folded away.
-            Same zero-track mechanism as the fold, inverted. */}
-        <div className={cn("col-span-2 grid", condensed ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+        <div
+          className={cn(
+            "col-span-2 grid",
+            condensed
+              ? "grid-rows-[1fr]"
+              : "grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+          )}
+        >
           <div
             ref={condensedRowRef}
             className={cn(
-              "min-h-0 overflow-hidden",
+              "min-h-0 overflow-hidden transition-[opacity,transform] duration-150 ease-out motion-reduce:transform-none motion-reduce:transition-none",
               condensed
-                ? "opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                : "opacity-0",
+                ? "translate-y-0 opacity-100 delay-50"
+                : "translate-y-1 opacity-0 duration-100",
             )}
             inert={!condensed}
           >
             {detail && statePresentation ? (
-              <div className="flex min-w-0 items-center gap-1 px-4 pb-2">
-                <CondensedDetailTabStrip
-                  label="Issue tabs"
-                  tabs={TABS}
-                  active={tab}
-                  onSelect={setTab}
-                  focusable={condensed}
-                />
-                <span className="ml-auto shrink-0 truncate text-[11px] text-muted-foreground">
-                  {statePresentation.label} · updated {formatRelativeTimeLabel(detail.updatedAt)}
-                </span>
+              <div className="col-span-2 min-w-0 px-4 pb-2 pt-1">
+                <SourceControlMetaLine className="min-w-0 text-xs text-muted-foreground">
+                  <Badge
+                    variant="outline"
+                    className={cn("h-5 gap-1 rounded px-1.5", statePresentation.toneClassName)}
+                  >
+                    <statePresentation.Icon aria-hidden className="size-3" />
+                    {statePresentation.label}
+                  </Badge>
+                  <SourceControlActorLabel actor={detail.author} className="font-medium" />
+                  <span className="shrink-0">
+                    updated {formatRelativeTimeLabel(detail.updatedAt)}
+                  </span>
+                </SourceControlMetaLine>
               </div>
             ) : null}
           </div>
@@ -860,27 +867,23 @@ export function IssueDetailPanel({
         <div
           className={cn(
             "col-span-2 grid",
-            // Instant in both directions: the scroll compensation keeps the content pinned
-            // through either flip, and an animated track would fight it frame by frame. The
-            // top row's crossfade is the transition.
-            condensed ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
+            condensed
+              ? "grid-rows-[0fr]"
+              : "grid-rows-[1fr] transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
           )}
         >
           <div
             ref={foldRef}
-            // One-way on purpose: appearing content eases in over ground the instant track
-            // already reserved; departing content cuts, because its ground is gone in the
-            // same frame and the scroll compensation reads it as scrolled past.
             className={cn(
-              "min-h-0 overflow-hidden",
+              "min-h-0 overflow-hidden transition-[opacity,transform] duration-150 ease-out motion-reduce:transform-none motion-reduce:transition-none",
               condensed
-                ? "opacity-0"
-                : "opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                ? "-translate-y-1 opacity-0 duration-100"
+                : "translate-y-0 opacity-100 delay-50",
             )}
             inert={condensed}
           >
             {detail && statePresentation ? (
-              <div className="col-span-2 mt-3 min-w-0 px-4 pb-4">
+              <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
                 <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
                 <SourceControlMetaLine className="mt-2 text-xs text-muted-foreground">
                   <Badge
@@ -895,53 +898,52 @@ export function IssueDetailPanel({
                 </SourceControlMetaLine>
               </div>
             ) : null}
-
-            {detail ? (
-              <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={setTab}>
-                {tab === "timeline" ? (
-                  <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 whitespace-nowrap text-[11px] transition-opacity",
-                        (activityPending || activityError) && "opacity-35",
-                      )}
-                      aria-label={
-                        activityError
-                          ? "Comments unavailable"
-                          : `${detail.commentCount.toLocaleString()} ${
-                              detail.commentCount === 1 ? "comment" : "comments"
-                            }`
-                      }
-                    >
-                      <MessageSquareIcon aria-hidden className="size-3" />
-                      {activityError
-                        ? "—"
-                        : activityPending
-                          ? "…"
-                          : detail.commentCount.toLocaleString()}
-                    </span>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      className="h-7 px-2 text-[10px] text-muted-foreground"
-                      aria-label={
-                        timelineOrder === "oldest"
-                          ? "Show newest activity first"
-                          : "Show oldest activity first"
-                      }
-                      onClick={() =>
-                        setTimelineOrder((value) => (value === "oldest" ? "newest" : "oldest"))
-                      }
-                    >
-                      <ArrowDownUpIcon aria-hidden className="size-3" />
-                      {timelineOrder === "oldest" ? "Oldest first" : "Newest first"}
-                    </Button>
-                  </div>
-                ) : null}
-              </DetailTabStrip>
-            ) : null}
           </div>
         </div>
+        {detail ? (
+          <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={setTab}>
+            {tab === "timeline" ? (
+              <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 whitespace-nowrap text-[11px] transition-opacity",
+                    (activityPending || activityError) && "opacity-35",
+                  )}
+                  aria-label={
+                    activityError
+                      ? "Comments unavailable"
+                      : `${detail.commentCount.toLocaleString()} ${
+                          detail.commentCount === 1 ? "comment" : "comments"
+                        }`
+                  }
+                >
+                  <MessageSquareIcon aria-hidden className="size-3" />
+                  {activityError
+                    ? "—"
+                    : activityPending
+                      ? "…"
+                      : detail.commentCount.toLocaleString()}
+                </span>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="h-7 px-2 text-[10px] text-muted-foreground"
+                  aria-label={
+                    timelineOrder === "oldest"
+                      ? "Show newest activity first"
+                      : "Show oldest activity first"
+                  }
+                  onClick={() =>
+                    setTimelineOrder((value) => (value === "oldest" ? "newest" : "oldest"))
+                  }
+                >
+                  <ArrowDownUpIcon aria-hidden className="size-3" />
+                  {timelineOrder === "oldest" ? "Oldest first" : "Newest first"}
+                </Button>
+              </div>
+            ) : null}
+          </DetailTabStrip>
+        ) : null}
       </div>
 
       <div
@@ -950,8 +952,8 @@ export function IssueDetailPanel({
         // container. Collapse past two line-heights, expand only back at the very top, so the
         // boundary row cannot flap the chrome open and shut.
         onScrollCapture={(event) => {
-          if (chromeVariant !== "collapse") return;
           const scroller = event.target as HTMLElement;
+          if (chromeVariant !== "collapse") return;
           // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code block
           // running wide, the description open in an editor — is the reader moving something on
           // the page rather than the page, and its `scrollTop` is not the one the compensation
@@ -1016,14 +1018,17 @@ export function IssueDetailPanel({
                   // The section's own button knows only about a hand-off already under way, so
                   // "cannot go yet" is said to it in the one word it understands.
                   pendingHandoff={handoff ?? (activityPending ? HANDOFF_WAITING_KIND : null)}
-                  onLinkPullRequests={() =>
-                    void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, buildLinkPullRequestsHandoff)
+                  onLinkPullRequests={(match: WorkItemMatch) =>
+                    void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, (source) =>
+                      buildLinkPullRequestsHandoff(source, match),
+                    )
                   }
                   onOpenLinkedPullRequest={(link) =>
                     onOpenLinkedPullRequest === undefined
                       ? openOnHost(link.url)
                       : onOpenLinkedPullRequest(link)
                   }
+                  onOpenAiMatch={(match) => openOnHost(match.url)}
                   onRefresh={refreshDetail}
                 />
               </div>
