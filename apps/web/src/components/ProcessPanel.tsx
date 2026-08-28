@@ -56,15 +56,12 @@ export function ProcessPanel(input: {
   readonly environmentConnectionPhase: EnvironmentConnectionPhase;
   readonly projects: readonly ProcessPanelProject[];
   readonly threads: readonly ProcessPanelThread[];
-  readonly visible: boolean;
 }) {
   const query = useEnvironmentQuery(
-    input.visible
-      ? serverEnvironment.processDiscovery({
-          environmentId: input.environmentId,
-          input: { scope: "registered-project-tests" },
-        })
-      : null,
+    serverEnvironment.processDiscovery({
+      environmentId: input.environmentId,
+      input: { scope: "registered-project-tests" },
+    }),
   );
   const groups = useMemo(
     () =>
