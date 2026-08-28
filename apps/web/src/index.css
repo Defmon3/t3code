@@ -5,11 +5,6 @@
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));
 
-[data-chat-composer-top-slot][data-attached="true"] [data-project-skill-shortcut-bar] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
 /* On mobile, morph the expanded hero composer into the compact docked
    composer while it moves; the rest of the app remains visually stationary. */
 html[data-mobile-composer-route-transition="true"]::view-transition-old(root),
@@ -889,6 +884,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     margin-bottom: calc(-1 * var(--chat-composer-attachment-overlap));
   }
 
+  [data-chat-composer-form="true"]:has(.chat-composer-top-drawer)
+    [data-chat-composer-surface-top-slot="true"] {
+    padding-top: var(--chat-composer-attachment-overlap);
+  }
+
   :is(.chat-composer-drawer-surface, .chat-composer-top-drawer)::before {
     pointer-events: none;
     position: absolute;
@@ -1103,24 +1103,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
         box-shadow: inset 0 1px var(--chat-composer-highlight);
       }
     }
-
-    @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-      background: var(--chat-composer-glass-surface);
-    }
-  }
-
-  .chat-composer-glass-shell:is(
-      .chat-composer-glass-shell-attached,
-      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-    )
-    [data-project-skill-shortcut-bar] {
-    background: color-mix(
-      in srgb,
-      var(--chat-composer-glass-surface) var(--glass-opacity),
-      transparent
-    );
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 
     @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
       background: var(--chat-composer-glass-surface);
