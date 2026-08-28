@@ -7117,7 +7117,7 @@ function ChatViewContent(props: ChatViewProps) {
                             keybindings={keybindings}
                             terminalOpen={Boolean(terminalUiState.terminalOpen)}
                             gitCwd={gitCwd}
-                            topSlot={
+                            surfaceTopSlot={
                               activeProject ? (
                                 <ProjectSkillShortcutBar
                                   shortcuts={activeProject.skillShortcuts}

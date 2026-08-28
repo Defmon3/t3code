@@ -637,7 +637,7 @@ export interface ChatComposerProps {
   keybindings: ResolvedKeybindingsConfig;
   terminalOpen: boolean;
   gitCwd: string | null;
-  topSlot?: ReactNode;
+  surfaceTopSlot?: ReactNode;
 
   // Refs the parent needs kept in sync
   promptRef: React.RefObject<string>;
@@ -730,7 +730,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     keybindings,
     terminalOpen,
     gitCwd,
-    topSlot,
+    surfaceTopSlot,
     promptRef,
     composerRef,
     composerImagesRef,
@@ -1269,8 +1269,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
     (!isComposerCollapsedMobile && showPlanFollowUpPrompt && activeProposedPlan !== null);
-  const topSlotAttached =
-    props.externalDrawerAttached || showComposerTopDrawer || isTasksDrawerOpen;
   const showCollapsedMobilePromptRow =
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
@@ -3111,11 +3109,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           steps={visibleTaskSteps}
         />
       ) : null}
-      {topSlot ? (
-        <div data-chat-composer-top-slot="true" data-attached={topSlotAttached}>
-          {topSlot}
-        </div>
-      ) : null}
       <div className="relative">
         {showShoulderTabs && visibleTasksProgress && visibleTaskSteps ? (
           <ComposerTasksBadge
@@ -3154,6 +3147,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               composerProviderState.composerSurfaceClassName,
             )}
           >
+            {surfaceTopSlot ? (
+              <div data-chat-composer-surface-top-slot="true">{surfaceTopSlot}</div>
+            ) : null}
             {showCollapsedMobilePromptRow ? (
               <div className="flex items-center justify-between gap-2 px-3 py-2">
                 <button
