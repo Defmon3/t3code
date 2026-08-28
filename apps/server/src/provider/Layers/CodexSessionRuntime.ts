@@ -919,9 +919,10 @@ function readRouteFields(notification: CodexServerNotification): {
  * WIP, probe-gated: registration is deliberately explicit-signals-only. The
  * spec's "provisionally treat unknown foreign thread ids as v2 children" rule
  * needs a live wire capture of the packaged binary before it lands — blind
- * capture risks eating unrelated traffic. Until then a child whose first
- * notification precedes registration passes through as today (no regression
- * vs main, which passes everything through).
+ * capture risks eating unrelated traffic. Until then foreign child lifecycle
+ * stays out of the parent timeline. The runtime retains only its latest
+ * meaningful liveness state and replays it after explicit registration;
+ * traffic alone never creates an agent identity.
  */
 interface CollabChildAgentState {
   readonly agentThreadId: string;
@@ -938,6 +939,44 @@ interface CollabChildAgentState {
    */
   readonly spawnTurnId: TurnId | undefined;
 }
+
+function toCollabChildSettlement(notification: CodexServerNotification) {
+  switch (notification.method) {
+    case "turn/completed":
+      return {
+        method: "collabAgent/turnCompleted",
+        // Retain only the status needed to restore liveness. Completed turns
+        // may contain a large item history that should not live for the
+        // remainder of the provider session.
+        payload: { turn: { status: notification.params.turn.status } },
+      } as const;
+    case "thread/status/changed": {
+      const statusType = notification.params.status.type;
+      if (statusType !== "idle" && statusType !== "systemError") {
+        return undefined;
+      }
+      return {
+        method: "collabAgent/statusChanged",
+        payload: { status: { type: statusType } },
+      } as const;
+    }
+    case "thread/closed":
+      return { method: "collabAgent/closed", payload: {} } as const;
+    case "error":
+      if (notification.params.willRetry) {
+        return undefined;
+      }
+      return {
+        method: "collabAgent/statusChanged",
+        payload: { status: { type: "systemError" } },
+      } as const;
+    default:
+      return undefined;
+  }
+}
+
+type CollabChildSettlement = NonNullable<ReturnType<typeof toCollabChildSettlement>>;
+type CollabChildLifecycleState = CollabChildSettlement | "active";
 
 interface CollabChildMetadataState {
   readonly model: string | undefined;
@@ -1196,6 +1235,9 @@ export const makeCodexSessionRuntime = (
     const collabChildMetadataRef = yield* Ref.make(new Map<string, CollabChildMetadataState>());
     /** Child provider-thread id → its currently running provider turn id. */
     const collabChildLiveTurnsRef = yield* Ref.make(new Map<string, string>());
+    const collabChildLifecycleStatesRef = yield* Ref.make(
+      new Map<string, CollabChildLifecycleState>(),
+    );
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
     const stopHookEvaluatedTurnIdsRef = yield* Ref.make(new Set<string>());
@@ -1471,6 +1513,101 @@ export const makeCodexSessionRuntime = (
         );
     });
 
+    const setCollabChildLifecycleState = Effect.fn(
+      "CodexSessionRuntime.setCollabChildLifecycleState",
+    )(function* (agentThreadId: string, state: CollabChildLifecycleState) {
+      yield* Ref.update(collabChildLifecycleStatesRef, (current) => {
+        const next = new Map(current);
+        next.set(agentThreadId, state);
+        return next;
+      });
+    });
+
+    const emitCollabChildLifecycleAfterRegistration = Effect.fn(
+      "CodexSessionRuntime.emitCollabChildLifecycleAfterRegistration",
+    )(function* (child: CollabChildAgentState, replayActiveTurn: boolean) {
+      const lifecycleState = (yield* Ref.get(collabChildLifecycleStatesRef)).get(
+        child.agentThreadId,
+      );
+      const metadata = (yield* Ref.get(collabChildMetadataRef)).get(child.agentThreadId);
+      const identity = {
+        ...collabChildIdentity(child, metadata),
+        ...(child.parentThreadId ? { parentThreadId: child.parentThreadId } : {}),
+      };
+
+      if (lifecycleState === "active") {
+        if (
+          replayActiveTurn &&
+          (yield* Ref.get(collabChildLiveTurnsRef)).has(child.agentThreadId)
+        ) {
+          yield* emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
+            method: "collabAgent/turnStarted",
+            payload: identity,
+          });
+        }
+        return;
+      }
+      if (!lifecycleState) {
+        return;
+      }
+
+      yield* emitEvent({
+        kind: "notification",
+        threadId: options.threadId,
+        ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
+        method: lifecycleState.method,
+        payload: { ...identity, ...lifecycleState.payload },
+      });
+    });
+
+    const settleLiveCollabChildren = Effect.fn("CodexSessionRuntime.settleLiveCollabChildren")(
+      function* () {
+        const children = yield* Ref.get(collabChildAgentsRef);
+        const liveTurns = yield* Ref.get(collabChildLiveTurnsRef);
+        const lifecycleStates = yield* Ref.get(collabChildLifecycleStatesRef);
+        const liveChildren = Array.from(children.values()).filter(
+          (child) =>
+            liveTurns.has(child.agentThreadId) ||
+            lifecycleStates.get(child.agentThreadId) === "active",
+        );
+
+        yield* Effect.forEach(
+          liveChildren,
+          (child) =>
+            Effect.gen(function* () {
+              yield* markCollabChildClosed(child.agentThreadId);
+              yield* setCollabChildLifecycleState(child.agentThreadId, {
+                method: "collabAgent/closed",
+                payload: {},
+              });
+              const metadata = (yield* Ref.get(collabChildMetadataRef)).get(child.agentThreadId);
+              yield* emitEvent({
+                kind: "notification",
+                threadId: options.threadId,
+                ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
+                method: "collabAgent/closed",
+                payload: {
+                  ...collabChildIdentity(child, metadata),
+                  ...(child.parentThreadId ? { parentThreadId: child.parentThreadId } : {}),
+                },
+              }).pipe(
+                Effect.catch((cause) =>
+                  Effect.logError("Failed to emit Codex child settlement event.", {
+                    cause,
+                    agentThreadId: child.agentThreadId,
+                  }),
+                ),
+              );
+            }),
+          { discard: true },
+        );
+        yield* Ref.set(collabChildLiveTurnsRef, new Map());
+      },
+    );
+
     const settlePendingApprovals = (decision: ProviderApprovalDecision) =>
       Ref.get(pendingApprovalsRef).pipe(
         Effect.flatMap((pendingApprovals) =>
@@ -1553,6 +1690,7 @@ export const makeCodexSessionRuntime = (
               ...(state.parentThreadId ? { parentThreadId: state.parentThreadId } : {}),
             },
           });
+          yield* emitCollabChildLifecycleAfterRegistration(state, false);
           yield* startCollabChildMetadataLookup(thread.id);
           return true;
         }
@@ -1579,8 +1717,8 @@ export const makeCodexSessionRuntime = (
             return false;
           }
           const activitySpawnTurnId = (yield* Ref.get(sessionRef)).activeTurnId ?? undefined;
+          const existingChild = (yield* Ref.get(collabChildAgentsRef)).get(item.agentThreadId);
           yield* Ref.update(collabChildAgentsRef, (current) => {
-            const existing = current.get(item.agentThreadId);
             const next = new Map(current);
             // Merge-late semantics: when thread/started registered first, a
             // later subAgentActivity still carries the real agentPath (and a
@@ -1592,13 +1730,13 @@ export const makeCodexSessionRuntime = (
             next.set(item.agentThreadId, {
               agentThreadId: item.agentThreadId,
               nickname:
-                existing?.nickname ??
+                existingChild?.nickname ??
                 item.agentPath.split("/").findLast((segment) => segment.length > 0),
-              role: existing?.role,
-              agentPath: existing?.agentPath ?? item.agentPath,
-              depth: existing?.depth,
-              parentThreadId: existing?.parentThreadId,
-              spawnTurnId: existing ? existing.spawnTurnId : activitySpawnTurnId,
+              role: existingChild?.role,
+              agentPath: existingChild?.agentPath ?? item.agentPath,
+              depth: existingChild?.depth,
+              parentThreadId: existingChild?.parentThreadId,
+              spawnTurnId: existingChild ? existingChild.spawnTurnId : activitySpawnTurnId,
             });
             return next;
           });
@@ -1616,6 +1754,16 @@ export const makeCodexSessionRuntime = (
               activityKind: item.kind,
             },
           });
+          if (registeredChild && item.kind === "started") {
+            yield* emitCollabChildLifecycleAfterRegistration(registeredChild, false);
+          } else if (registeredChild && item.kind === "interacted" && !existingChild) {
+            yield* emitCollabChildLifecycleAfterRegistration(registeredChild, true);
+          } else if (registeredChild && item.kind === "interrupted") {
+            yield* setCollabChildLifecycleState(registeredChild.agentThreadId, {
+              method: "collabAgent/turnCompleted",
+              payload: { turn: { status: "interrupted" } },
+            });
+          }
           if (item.kind === "started") {
             yield* startCollabChildMetadataLookup(item.agentThreadId);
           }
@@ -1672,6 +1820,7 @@ export const makeCodexSessionRuntime = (
         const childIdentity = collabChildIdentity(child, metadata);
         switch (notification.method) {
           case "turn/started": {
+            yield* setCollabChildLifecycleState(child.agentThreadId, "active");
             yield* markCollabChildOpen(child.agentThreadId);
             const childTurnId =
               typeof (notification.params as { turn?: { id?: unknown } }).turn?.id === "string"
@@ -1693,7 +1842,11 @@ export const makeCodexSessionRuntime = (
             });
             return true;
           }
-          case "turn/completed":
+          case "turn/completed": {
+            const settlement = toCollabChildSettlement(notification);
+            if (settlement) {
+              yield* setCollabChildLifecycleState(child.agentThreadId, settlement);
+            }
             yield* Ref.update(collabChildLiveTurnsRef, (current) => {
               const next = new Map(current);
               next.delete(child.agentThreadId);
@@ -1710,7 +1863,15 @@ export const makeCodexSessionRuntime = (
               },
             });
             return true;
-          case "thread/status/changed":
+          }
+          case "thread/status/changed": {
+            const lifecycleState =
+              notification.params.status.type === "active"
+                ? "active"
+                : toCollabChildSettlement(notification);
+            if (lifecycleState) {
+              yield* setCollabChildLifecycleState(child.agentThreadId, lifecycleState);
+            }
             yield* emitEvent({
               kind: "notification",
               threadId: options.threadId,
@@ -1722,6 +1883,7 @@ export const makeCodexSessionRuntime = (
               },
             });
             return true;
+          }
           case "thread/tokenUsage/updated":
             yield* emitEvent({
               kind: "notification",
@@ -1747,7 +1909,11 @@ export const makeCodexSessionRuntime = (
               },
             });
             return true;
-          case "thread/closed":
+          case "thread/closed": {
+            const settlement = toCollabChildSettlement(notification);
+            if (settlement) {
+              yield* setCollabChildLifecycleState(child.agentThreadId, settlement);
+            }
             // The child is gone: drop its live-turn entry so a later Stop
             // doesn't waste a turn/interrupt RPC on a closed thread before
             // reaching the parent (review finding).
@@ -1765,6 +1931,7 @@ export const makeCodexSessionRuntime = (
               payload: childIdentity,
             });
             return true;
+          }
           case "error": {
             // A child error must surface as a failed agent, not vanish into
             // the default swallow (review finding: the child stayed
@@ -1776,7 +1943,12 @@ export const makeCodexSessionRuntime = (
             // path.
             const willRetry = (notification.params as { willRetry?: boolean }).willRetry === true;
             if (willRetry) {
+              yield* setCollabChildLifecycleState(child.agentThreadId, "active");
               return true;
+            }
+            const settlement = toCollabChildSettlement(notification);
+            if (settlement) {
+              yield* setCollabChildLifecycleState(child.agentThreadId, settlement);
             }
             yield* Ref.update(collabChildLiveTurnsRef, (current) => {
               const next = new Map(current);
@@ -1812,12 +1984,10 @@ export const makeCodexSessionRuntime = (
         const payload = notification.params;
         const route = readRouteFields(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
-        const childParentTurnId = (() => {
-          const providerConversationId = readNotificationThreadId(notification);
-          return providerConversationId
-            ? collabReceiverTurns.get(providerConversationId)
-            : undefined;
-        })();
+        const notificationConversationId = readNotificationThreadId(notification);
+        const childParentTurnId = notificationConversationId
+          ? collabReceiverTurns.get(notificationConversationId)
+          : undefined;
 
         rememberCollabReceiverTurns(collabReceiverTurns, notification, route.turnId);
         // Interception FIRST: a registered v2 child is usually also in the
@@ -1838,17 +2008,19 @@ export const makeCodexSessionRuntime = (
         // thread/* onto parent session state. Root-id-known guard keeps the
         // root's own early notifications flowing during session open.
         const suppressRootId = currentProviderThreadId(yield* Ref.get(sessionRef));
-        const foreignConversation = (() => {
-          const providerConversationId = readNotificationThreadId(notification);
-          return (
-            providerConversationId !== undefined &&
-            suppressRootId !== undefined &&
-            providerConversationId !== suppressRootId
-          );
-        })();
+        const rootConversation =
+          notificationConversationId !== undefined &&
+          suppressRootId !== undefined &&
+          notificationConversationId === suppressRootId;
+        const foreignConversation =
+          notificationConversationId !== undefined &&
+          suppressRootId !== undefined &&
+          notificationConversationId !== suppressRootId;
+        const childError = notification.method === "error";
         if (
+          !rootConversation &&
           (childParentTurnId !== undefined || foreignConversation) &&
-          shouldSuppressChildConversationNotification(notification.method)
+          (shouldSuppressChildConversationNotification(notification.method) || childError)
         ) {
           // Stop-everything must not depend on registration timing: a
           // child's turn/started can arrive before the subAgentActivity that
@@ -1859,6 +2031,35 @@ export const makeCodexSessionRuntime = (
           // false-positive entry costs one ignored RPC at worst.
           const foreignThreadId = readNotificationThreadId(notification);
           if (foreignThreadId !== undefined) {
+            const isActiveStatus =
+              notification.method === "thread/status/changed" &&
+              notification.params.status.type === "active";
+            const isRetryingError =
+              notification.method === "error" && notification.params.willRetry;
+            if (notification.method === "turn/started" || isActiveStatus || isRetryingError) {
+              yield* setCollabChildLifecycleState(foreignThreadId, "active");
+            } else {
+              const pendingSettlement = toCollabChildSettlement(notification);
+              if (pendingSettlement) {
+                const liveChildTurns = yield* Ref.get(collabChildLiveTurnsRef);
+                const isIdleStatus =
+                  notification.method === "thread/status/changed" &&
+                  notification.params.status.type === "idle";
+                yield* Ref.update(collabChildLifecycleStatesRef, (current) => {
+                  const existing = current.get(foreignThreadId);
+                  if (
+                    isIdleStatus &&
+                    ((existing !== undefined && existing !== "active") ||
+                      (existing === undefined && !liveChildTurns.has(foreignThreadId)))
+                  ) {
+                    return current;
+                  }
+                  const next = new Map(current);
+                  next.set(foreignThreadId, pendingSettlement);
+                  return next;
+                });
+              }
+            }
             if (notification.method === "turn/started") {
               const foreignTurnId =
                 typeof (notification.params as { turn?: { id?: unknown } }).turn?.id === "string"
@@ -1873,7 +2074,8 @@ export const makeCodexSessionRuntime = (
               }
             } else if (
               notification.method === "turn/completed" ||
-              notification.method === "thread/closed"
+              notification.method === "thread/closed" ||
+              (notification.method === "error" && !notification.params.willRetry)
             ) {
               yield* Ref.update(collabChildLiveTurnsRef, (current) => {
                 const next = new Map(current);
@@ -2455,19 +2657,19 @@ export const makeCodexSessionRuntime = (
               return Effect.void;
             }
             const nextStatus = exitCode === 0 ? "closed" : "error";
-            return updateSession(sessionRef, {
-              status: nextStatus,
-              activeTurnId: undefined,
-            }).pipe(
-              Effect.andThen(
-                emitSessionEvent(
-                  "session/exited",
-                  exitCode === 0
-                    ? "Codex App Server exited."
-                    : `Codex App Server exited with code ${exitCode}.`,
-                ),
-              ),
-            );
+            return Effect.gen(function* () {
+              yield* settleLiveCollabChildren();
+              yield* updateSession(sessionRef, {
+                status: nextStatus,
+                activeTurnId: undefined,
+              });
+              yield* emitSessionEvent(
+                "session/exited",
+                exitCode === 0
+                  ? "Codex App Server exited."
+                  : `Codex App Server exited with code ${exitCode}.`,
+              );
+            });
           }),
         ),
       ),
@@ -2523,6 +2725,7 @@ export const makeCodexSessionRuntime = (
       }
       yield* settlePendingApprovals("cancel");
       yield* settlePendingUserInputs({});
+      yield* settleLiveCollabChildren();
       yield* updateSession(sessionRef, {
         status: "closed",
         activeTurnId: undefined,
@@ -2626,13 +2829,13 @@ export const makeCodexSessionRuntime = (
             { concurrency: 8, discard: true },
           ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
           const effectiveTurnId = turnId ?? session.activeTurnId;
-          if (!effectiveTurnId) {
-            return;
+          if (effectiveTurnId) {
+            yield* client.request("turn/interrupt", {
+              threadId: providerThreadId,
+              turnId: effectiveTurnId,
+            });
           }
-          yield* client.request("turn/interrupt", {
-            threadId: providerThreadId,
-            turnId: effectiveTurnId,
-          });
+          yield* settleLiveCollabChildren();
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
