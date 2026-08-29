@@ -2,7 +2,12 @@ import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/con
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { RightPanelTabs, surfaceShortcutActionForKey, tabMuteMenuItem } from "./RightPanelTabs";
+import {
+  RightPanelTabs,
+  surfaceShortcutActionForKey,
+  tabContextMenuItems,
+  tabMuteMenuItem,
+} from "./RightPanelTabs";
 
 function shortcutEvent(
   key: string,
@@ -28,6 +33,13 @@ const secondSurface = {
   id: "browser:tab-2" as const,
   kind: "preview" as const,
   resourceId: "tab-2",
+};
+const fileSurface = {
+  id: "file:src/App.tsx" as const,
+  kind: "file" as const,
+  relativePath: "src/App.tsx",
+  revealLine: null,
+  revealRequestId: 0,
 };
 const sessions: Readonly<Record<string, PreviewSessionSnapshot>> = {
   "tab-1": {
@@ -141,6 +153,26 @@ describe("RightPanelTabs preview favicon", () => {
   it("hides a capture while the server session still describes another origin", () => {
     const html = renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
     expect(html).not.toContain("data:image/png;base64,AAAA");
+  });
+});
+
+describe("tabContextMenuItems", () => {
+  it("offers Refresh only for file surfaces that can refresh their file query", () => {
+    const options = {
+      surfaceIndex: 0,
+      surfaceCount: 1,
+      previewSessions: sessions,
+      desktopByTabId: {},
+      canResolveRuntimeTabId: false,
+      canRefreshFile: true,
+    };
+
+    expect(
+      tabContextMenuItems({ ...options, surface: fileSurface }).map((item) => item.label),
+    ).toContain("Refresh");
+    expect(
+      tabContextMenuItems({ ...options, surface: previewSurface }).map((item) => item.label),
+    ).not.toContain("Refresh");
   });
 });
 
