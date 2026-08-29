@@ -78,6 +78,7 @@ interface RightPanelTabsProps {
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
   onCopyFilePath: (relativePath: string) => void;
+  onRefreshFile?: (relativePath: string) => void;
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
@@ -163,6 +164,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
 
 type TabContextMenuAction =
   | "copy-path"
+  | "refresh"
   | "toggle-mute"
   | "close"
   | "close-others"
@@ -196,6 +198,52 @@ export function tabMuteMenuItem(input: {
     label: muted ? "Unmute tab" : "Mute tab",
     disabled: input.overlay === null || !input.canResolveRuntimeTabId,
   };
+}
+
+export function tabContextMenuItems(input: {
+  surface: RightPanelSurface;
+  surfaceIndex: number;
+  surfaceCount: number;
+  previewSessions: Readonly<Record<string, PreviewSessionSnapshot>>;
+  desktopByTabId: Readonly<Record<string, DesktopPreviewOverlay>>;
+  canResolveRuntimeTabId: boolean;
+  canRefreshFile: boolean;
+}): ContextMenuItem<TabContextMenuAction>[] {
+  const items: ContextMenuItem<TabContextMenuAction>[] = [];
+  if (input.surface.kind === "file") {
+    items.push({ id: "copy-path", label: "Copy path" });
+    if (input.canRefreshFile) items.push({ id: "refresh", label: "Refresh" });
+  }
+  const menuPreviewTabId = previewTabIdOf(input.surface, input.previewSessions);
+  const menuOverlay = menuPreviewTabId ? (input.desktopByTabId[menuPreviewTabId] ?? null) : null;
+  if (input.surface.kind === "preview") {
+    items.push({
+      id: "toggle-mute",
+      ...tabMuteMenuItem({
+        overlay: menuOverlay,
+        canResolveRuntimeTabId: input.canResolveRuntimeTabId,
+      }),
+    });
+  }
+  items.push(
+    { id: "close", label: "Close" },
+    {
+      id: "close-others",
+      label: "Close others",
+      disabled: input.surfaceCount <= 1,
+    },
+    {
+      id: "close-to-right",
+      label: "Close to the right",
+      disabled: input.surfaceIndex >= input.surfaceCount - 1,
+    },
+    {
+      id: "close-all",
+      label: "Close all",
+      disabled: input.surfaceCount === 0,
+    },
+  );
+  return items;
 }
 
 type TabAudioState = "none" | "audible" | "muted";
@@ -807,10 +855,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       const surfaceIndex = props.surfaces.findIndex((entry) => entry.id === surface.id);
       if (surfaceIndex < 0) return;
 
-      const items: ContextMenuItem<TabContextMenuAction>[] = [];
-      if (surface.kind === "file") {
-        items.push({ id: "copy-path", label: "Copy path" });
-      }
+      const items = tabContextMenuItems({
+        surface,
+        surfaceIndex,
+        surfaceCount: props.surfaces.length,
+        previewSessions: props.previewSessions,
+        desktopByTabId: props.desktopByTabId,
+        canResolveRuntimeTabId: props.previewRuntimeTabId !== undefined,
+        canRefreshFile: props.onRefreshFile !== undefined,
+      });
       const menuPreviewTabId = previewTabIdOf(surface, props.previewSessions);
       // Desktop overlay state only arrives once the preview manager has created
       // the tab. A server session id alone can still be ahead of that, and
@@ -819,40 +872,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         ? (props.desktopByTabId[menuPreviewTabId] ?? null)
         : null;
       const menuMuted = menuOverlay?.audioMuted ?? false;
-      if (surface.kind === "preview") {
-        // Not gated on audibility: silencing a quiet tab ahead of time is the
-        // point, so the item is offered whenever the tab is mutable at all.
-        items.push({
-          id: "toggle-mute",
-          ...tabMuteMenuItem({
-            overlay: menuOverlay,
-            canResolveRuntimeTabId: props.previewRuntimeTabId !== undefined,
-          }),
-        });
-      }
-      items.push(
-        { id: "close", label: "Close" },
-        {
-          id: "close-others",
-          label: "Close others",
-          disabled: props.surfaces.length <= 1,
-        },
-        {
-          id: "close-to-right",
-          label: "Close to the right",
-          disabled: surfaceIndex >= props.surfaces.length - 1,
-        },
-        {
-          id: "close-all",
-          label: "Close all",
-          disabled: props.surfaces.length === 0,
-        },
-      );
-
       const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
       switch (action) {
         case "copy-path":
           if (surface.kind === "file") props.onCopyFilePath(surface.relativePath);
+          break;
+        case "refresh":
+          if (surface.kind === "file") props.onRefreshFile?.(surface.relativePath);
           break;
         case "toggle-mute": {
           // menuOverlay repeats the disabled gate above: the desktop tab must

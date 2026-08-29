@@ -6,6 +6,7 @@ import {
   RightPanelTabs,
   surfaceShortcutActionForKey,
   surfaceShortcutTargetsTypingContext,
+  tabContextMenuItems,
   tabMuteMenuItem,
 } from "./RightPanelTabs";
 import type { RightPanelSurface } from "~/rightPanelStore";
@@ -34,6 +35,13 @@ const secondSurface = {
   id: "browser:tab-2" as const,
   kind: "preview" as const,
   resourceId: "tab-2",
+};
+const fileSurface = {
+  id: "file:src/App.tsx" as const,
+  kind: "file" as const,
+  relativePath: "src/App.tsx",
+  revealLine: null,
+  revealRequestId: 0,
 };
 const sessions: Readonly<Record<string, PreviewSessionSnapshot>> = {
   "tab-1": {
@@ -161,6 +169,26 @@ describe("RightPanelTabs processes surface", () => {
       { id: "processes", kind: "processes" },
     ]);
     expect(html).toContain("Processes");
+  });
+});
+
+describe("tabContextMenuItems", () => {
+  it("offers Refresh only for file surfaces that can refresh their file query", () => {
+    const options = {
+      surfaceIndex: 0,
+      surfaceCount: 1,
+      previewSessions: sessions,
+      desktopByTabId: {},
+      canResolveRuntimeTabId: false,
+      canRefreshFile: true,
+    };
+
+    expect(
+      tabContextMenuItems({ ...options, surface: fileSurface }).map((item) => item.label),
+    ).toContain("Refresh");
+    expect(
+      tabContextMenuItems({ ...options, surface: previewSurface }).map((item) => item.label),
+    ).not.toContain("Refresh");
   });
 });
 
