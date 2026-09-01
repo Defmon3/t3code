@@ -5,7 +5,9 @@ import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
+  providerSkillsTargetKey,
   resolveProviderSkillSourceKind,
+  selectProviderSkills,
 } from "./providerSkills.ts";
 
 describe("formatProviderSkillDisplayName", () => {
@@ -185,5 +187,90 @@ describe("resolveProviderSkillSourceKind", () => {
         path: "/opt/skills/team-review/SKILL.md",
       }),
     ).toBe("other");
+  });
+});
+
+describe("selectProviderSkills", () => {
+  const userSkill = {
+    name: "user",
+    path: "/users/test/.codex/skills/user/SKILL.md",
+    enabled: true,
+    scope: "user",
+  };
+  const projectSkill = {
+    name: "project",
+    path: "/repo/.agents/skills/project/SKILL.md",
+    enabled: true,
+    scope: "project",
+  };
+  const repoSkill = {
+    name: "repo",
+    path: "/repo/.codex/skills/repo/SKILL.md",
+    enabled: true,
+    scope: "repo",
+  };
+  const workspaceSkill = {
+    name: "workspace",
+    path: "/repo/.claude/skills/workspace/SKILL.md",
+    enabled: true,
+    scope: "workspace",
+  };
+
+  it("uses only a cache entry for its exact environment, provider, project, and thread target", () => {
+    const target = providerSkillsTargetKey({
+      environmentId: "env-a",
+      instanceId: "claude",
+      projectId: "project-a",
+      threadId: "thread-a",
+    });
+    const otherTarget = providerSkillsTargetKey({
+      environmentId: "env-a",
+      instanceId: "claude",
+      projectId: "project-b",
+      threadId: "thread-a",
+    });
+    expect(target).not.toBe(otherTarget);
+    expect(
+      selectProviderSkills({
+        scopedSkills: undefined,
+        cachedSkills: { targetKey: otherTarget, skills: [projectSkill] },
+        targetKey: target,
+        snapshotSkills: [userSkill],
+      }),
+    ).toEqual([userSkill]);
+  });
+
+  it("keeps a matching scoped cache while a refresh is pending", () => {
+    const targetKey = providerSkillsTargetKey({
+      environmentId: "env-a",
+      instanceId: "claude",
+      projectId: "project-a",
+      threadId: undefined,
+    });
+    expect(
+      selectProviderSkills({
+        scopedSkills: undefined,
+        cachedSkills: { targetKey, skills: [projectSkill] },
+        targetKey,
+        snapshotSkills: [userSkill],
+      }),
+    ).toEqual([projectSkill]);
+  });
+
+  it("does not leak project-scoped snapshot skills into an unscoped fallback", () => {
+    const targetKey = providerSkillsTargetKey({
+      environmentId: "env-a",
+      instanceId: "codex",
+      projectId: "project-a",
+      threadId: undefined,
+    });
+    expect(
+      selectProviderSkills({
+        scopedSkills: undefined,
+        cachedSkills: null,
+        targetKey,
+        snapshotSkills: [userSkill, projectSkill, repoSkill, workspaceSkill],
+      }),
+    ).toEqual([userSkill]);
   });
 });

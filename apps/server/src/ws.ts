@@ -377,6 +377,18 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
   );
 }
 
+export function resolveProviderSkillsCwd(input: {
+  readonly project: { readonly id: ProjectId; readonly workspaceRoot: string } | undefined;
+  readonly requestedProjectId: ProjectId;
+  readonly thread?:
+    | { readonly projectId: ProjectId; readonly worktreePath: string | null }
+    | undefined;
+}): string | undefined {
+  if (input.project?.id !== input.requestedProjectId) return undefined;
+  if (input.thread && input.thread.projectId !== input.requestedProjectId) return undefined;
+  return input.thread?.worktreePath ?? input.project.workspaceRoot;
+}
+
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // When a resuming client's cursor is more than this many events behind the
@@ -1703,6 +1715,37 @@ const makeWsRpcLayer = <E, R>(
               ? providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverListProviderSkills]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListProviderSkills,
+            Effect.gen(function* () {
+              const project = yield* projectionSnapshotQuery
+                .getProjectShellById(input.projectId)
+                .pipe(Effect.orElseSucceed(() => Option.none()));
+              const thread =
+                input.threadId === undefined
+                  ? undefined
+                  : yield* projectionSnapshotQuery
+                      .getThreadShellById(input.threadId)
+                      .pipe(Effect.orElseSucceed(() => Option.none()));
+              const cwd = resolveProviderSkillsCwd({
+                project: Option.getOrUndefined(project),
+                requestedProjectId: input.projectId,
+                ...(thread === undefined || Option.isNone(thread) ? {} : { thread: thread.value }),
+              });
+              if (
+                cwd === undefined ||
+                (input.threadId !== undefined && (thread === undefined || Option.isNone(thread)))
+              ) {
+                return { skills: [] };
+              }
+
+              return {
+                skills: yield* providerRegistry.listSkills({ instanceId: input.instanceId, cwd }),
+              };
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.providerUploadFeedback]: (input) =>

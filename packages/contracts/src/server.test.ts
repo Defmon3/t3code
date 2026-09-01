@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ServerConfig,
   ServerProvider,
+  ServerProviderListSkillsInput,
   ServerProviders,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
@@ -12,6 +13,7 @@ const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
+const decodeListProviderSkillsInput = Schema.decodeUnknownSync(ServerProviderListSkillsInput);
 
 const baseProviderSnapshot = {
   instanceId: "codex",
@@ -26,6 +28,16 @@ const baseProviderSnapshot = {
 };
 
 describe("ServerProvider", () => {
+  it("decodes provider skill lookup targets with an optional thread", () => {
+    expect(
+      decodeListProviderSkillsInput({
+        instanceId: "claudeAgent",
+        projectId: "project-a",
+        threadId: "thread-a",
+      }),
+    ).toEqual({ instanceId: "claudeAgent", projectId: "project-a", threadId: "thread-a" });
+  });
+
   it("defaults capability arrays when decoding provider snapshots", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",

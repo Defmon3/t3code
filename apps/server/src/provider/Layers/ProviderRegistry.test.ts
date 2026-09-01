@@ -871,78 +871,97 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
-      it.effect("does not run provider probes during layer construction", () =>
-        Effect.gen(function* () {
-          const codexDriver = ProviderDriverKind.make("codex");
-          const codexInstanceId = ProviderInstanceId.make("codex");
-          const initialProvider = {
-            instanceId: codexInstanceId,
-            driver: codexDriver,
-            status: "warning",
-            enabled: true,
-            installed: false,
-            auth: { status: "unknown" },
-            checkedAt: "2026-06-10T00:00:00.000Z",
-            version: null,
-            message: "Checking Codex provider status.",
-            models: [],
-            slashCommands: [],
-            skills: [],
-          } as const satisfies ServerProvider;
-          const refreshCalls = yield* Ref.make(0);
-          const instance = {
-            instanceId: codexInstanceId,
-            driverKind: codexDriver,
-            continuationIdentity: {
+      it.effect(
+        "does not run provider probes during layer construction and routes cwd-scoped skills",
+        () =>
+          Effect.gen(function* () {
+            const codexDriver = ProviderDriverKind.make("codex");
+            const codexInstanceId = ProviderInstanceId.make("codex");
+            const initialProvider = {
+              instanceId: codexInstanceId,
+              driver: codexDriver,
+              status: "warning",
+              enabled: true,
+              installed: false,
+              auth: { status: "unknown" },
+              checkedAt: "2026-06-10T00:00:00.000Z",
+              version: null,
+              message: "Checking Codex provider status.",
+              models: [],
+              slashCommands: [],
+              skills: [],
+            } as const satisfies ServerProvider;
+            const refreshCalls = yield* Ref.make(0);
+            const skillCwds = yield* Ref.make<ReadonlyArray<string>>([]);
+            const instance = {
+              instanceId: codexInstanceId,
               driverKind: codexDriver,
-              continuationKey: "codex:instance:codex",
-            },
-            displayName: undefined,
-            enabled: true,
-            snapshot: {
-              maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                provider: codexDriver,
-                packageName: null,
-              }),
-              getSnapshot: Effect.succeed(initialProvider),
-              refresh: Ref.update(refreshCalls, (count) => count + 1).pipe(
-                Effect.andThen(Effect.never),
-              ),
-              streamChanges: Stream.empty,
-            },
-            adapter: {} as ProviderInstance["adapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
-          } satisfies ProviderInstance;
-          const instanceRegistryLayer = Layer.succeed(
-            ProviderInstanceRegistry.ProviderInstanceRegistry,
-            {
-              getInstance: (instanceId) =>
-                Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
-              listInstances: Effect.succeed([instance]),
-              listUnavailable: Effect.succeed([]),
-              streamChanges: Stream.empty,
-              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-            },
-          );
-          const scope = yield* Scope.make();
-          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-          const runtimeServices = yield* Layer.build(
-            ProviderRegistryLive.pipe(
-              Layer.provideMerge(instanceRegistryLayer),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-background-refresh-",
+              continuationIdentity: {
+                driverKind: codexDriver,
+                continuationKey: "codex:instance:codex",
+              },
+              displayName: undefined,
+              enabled: true,
+              snapshot: {
+                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: codexDriver,
+                  packageName: null,
                 }),
+                getSnapshot: Effect.succeed(initialProvider),
+                refresh: Ref.update(refreshCalls, (count) => count + 1).pipe(
+                  Effect.andThen(Effect.never),
+                ),
+                streamChanges: Stream.empty,
+              },
+              adapter: {} as ProviderInstance["adapter"],
+              textGeneration: {} as ProviderInstance["textGeneration"],
+              listSkills: (cwd) =>
+                Ref.update(skillCwds, (cwds) => [...cwds, cwd]).pipe(
+                  Effect.as([{ name: "workspace", path: `${cwd}/SKILL.md`, enabled: true }]),
+                ),
+            } satisfies ProviderInstance;
+            const instanceRegistryLayer = Layer.succeed(
+              ProviderInstanceRegistry.ProviderInstanceRegistry,
+              {
+                getInstance: (instanceId) =>
+                  Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+                listInstances: Effect.succeed([instance]),
+                listUnavailable: Effect.succeed([]),
+                streamChanges: Stream.empty,
+                subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+              },
+            );
+            const scope = yield* Scope.make();
+            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+            const runtimeServices = yield* Layer.build(
+              ProviderRegistryLive.pipe(
+                Layer.provideMerge(instanceRegistryLayer),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(process.cwd(), {
+                    prefix: "t3-provider-registry-background-refresh-",
+                  }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
               ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ).pipe(Scope.provide(scope));
-          yield* Effect.gen(function* () {
-            const registry = yield* ProviderRegistry.ProviderRegistry;
-            assert.deepStrictEqual(yield* registry.getProviders, [initialProvider]);
-            assert.strictEqual(yield* Ref.get(refreshCalls), 0);
-          }).pipe(Effect.provide(runtimeServices));
-        }),
+            ).pipe(Scope.provide(scope));
+            yield* Effect.gen(function* () {
+              const registry = yield* ProviderRegistry.ProviderRegistry;
+              assert.deepStrictEqual(yield* registry.getProviders, [initialProvider]);
+              assert.deepStrictEqual(
+                yield* registry.listSkills({ instanceId: codexInstanceId, cwd: "/workspace/a" }),
+                [{ name: "workspace", path: "/workspace/a/SKILL.md", enabled: true }],
+              );
+              assert.deepStrictEqual(yield* Ref.get(skillCwds), ["/workspace/a"]);
+              assert.deepStrictEqual(
+                yield* registry.listSkills({
+                  instanceId: ProviderInstanceId.make("missing"),
+                  cwd: "/other",
+                }),
+                [],
+              );
+              assert.strictEqual(yield* Ref.get(refreshCalls), 0);
+            }).pipe(Effect.provide(runtimeServices));
+          }),
       );
 
       it.effect("refreshes OpenCode catalogs and preserves other providers", () =>

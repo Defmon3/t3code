@@ -251,7 +251,7 @@ function appendCustomCodexModels(
   return customEntries.length === 0 ? models : [...models, ...customEntries];
 }
 
-function parseCodexSkillsListResponse(
+export function parseCodexSkillsListResponse(
   response: CodexSchema.V2SkillsListResponse,
   cwd: string,
 ): ReadonlyArray<ServerProviderSkill> {
@@ -287,6 +287,14 @@ function parseCodexSkillsListResponse(
   });
 }
 
+export function parseScopedCodexSkillsListResponse(
+  response: CodexSchema.V2SkillsListResponse,
+  cwd: string,
+): ReadonlyArray<ServerProviderSkill> {
+  const matchingEntry = response.data.find((entry) => entry.cwd === cwd);
+  return matchingEntry ? parseCodexSkillsListResponse({ data: [matchingEntry] }, cwd) : [];
+}
+
 const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   client: CodexClient.CodexAppServerClient["Service"],
 ) {
@@ -318,7 +326,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   };
 }
 
-const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
+const openCodexAppServerProbe = Effect.fn("openCodexAppServerProbe")(function* (input: {
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly launchArgs?: string;
@@ -384,34 +392,60 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
   const version = versionMatch ? versionMatch[1] : undefined;
 
-  const accountResponse = yield* client.request("account/read", {});
-  if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
+  return { client, version };
+});
+
+export const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(
+  function* (input: {
+    readonly binaryPath: string;
+    readonly homePath?: string;
+    readonly launchArgs?: string;
+    readonly cwd: string;
+    readonly customModels?: ReadonlyArray<string>;
+    readonly environment?: NodeJS.ProcessEnv;
+  }) {
+    const { client, version } = yield* openCodexAppServerProbe(input);
+    const accountResponse = yield* client.request("account/read", {});
+    if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
+      return {
+        account: accountResponse,
+        version,
+        models: appendCustomCodexModels([], input.customModels ?? []),
+        skills: [],
+      } satisfies CodexAppServerProviderSnapshot;
+    }
+
+    const [skillsResponse, models] = yield* Effect.all(
+      [
+        client.request("skills/list", {
+          cwds: [input.cwd],
+        }),
+        requestAllCodexModels(client),
+      ],
+      { concurrency: "unbounded" },
+    );
+
     return {
       account: accountResponse,
       version,
-      models: appendCustomCodexModels([], input.customModels ?? []),
-      skills: [],
+      models: applyPreferredCodexDefaultModel(
+        appendCustomCodexModels(models, input.customModels ?? []),
+      ),
+      skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
     } satisfies CodexAppServerProviderSnapshot;
-  }
+  },
+);
 
-  const [skillsResponse, models] = yield* Effect.all(
-    [
-      client.request("skills/list", {
-        cwds: [input.cwd],
-      }),
-      requestAllCodexModels(client),
-    ],
-    { concurrency: "unbounded" },
-  );
-
-  return {
-    account: accountResponse,
-    version,
-    models: applyPreferredCodexDefaultModel(
-      appendCustomCodexModels(models, input.customModels ?? []),
-    ),
-    skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
-  } satisfies CodexAppServerProviderSnapshot;
+export const listCodexSkills = Effect.fn("listCodexSkills")(function* (input: {
+  readonly binaryPath: string;
+  readonly homePath?: string;
+  readonly launchArgs?: string;
+  readonly cwd: string;
+  readonly environment?: NodeJS.ProcessEnv;
+}) {
+  const { client } = yield* openCodexAppServerProbe(input);
+  const skillsResponse = yield* client.request("skills/list", { cwds: [input.cwd] });
+  return parseScopedCodexSkillsListResponse(skillsResponse, input.cwd);
 });
 
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {

@@ -840,6 +840,7 @@ const buildAppUnderTest = (options?: {
             getProviders: Effect.succeed([]),
             refresh: () => Effect.succeed([]),
             refreshInstance: () => Effect.succeed([]),
+            listSkills: () => Effect.succeed([]),
             getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
               Effect.succeed(
                 makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
@@ -9562,4 +9563,72 @@ it.live(
       assert.deepEqual(transferBudgetViolations(runs), []);
     }).pipe(Effect.provide(NodeServices.layer)),
   120_000,
+);
+it.effect("routes websocket rpc server.listProviderSkills with the active workspace cwd", () =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("codex_work");
+    const projectId = ProjectId.make("project-skills");
+    const threadId = ThreadId.make("thread-skills");
+    const skills = [
+      {
+        name: "project-review",
+        path: "/tmp/project-worktree/.agents/skills/project-review/SKILL.md",
+        scope: "repo",
+        enabled: true,
+      },
+    ] as const;
+    const receivedInputs: Array<{ readonly instanceId: ProviderInstanceId; readonly cwd: string }> =
+      [];
+
+    yield* buildAppUnderTest({
+      layers: {
+        providerRegistry: {
+          listSkills: (input) =>
+            Effect.sync(() => {
+              receivedInputs.push(input);
+              return skills;
+            }),
+        },
+        projectionSnapshotQuery: {
+          getProjectShellById: (requestedProjectId) =>
+            Effect.succeed(
+              Option.some({
+                ...makeDefaultOrchestrationReadModel().projects[0]!,
+                id: requestedProjectId,
+                workspaceRoot: "/tmp/project",
+              }),
+            ),
+          getThreadShellById: (requestedThreadId) =>
+            Effect.succeed(
+              Option.some(
+                makeDefaultOrchestrationThreadShell({
+                  id: requestedThreadId,
+                  projectId,
+                  worktreePath: "/tmp/project-worktree",
+                }),
+              ),
+            ),
+        },
+      },
+    });
+
+    const wsUrl = yield* getWsServerUrl("/ws");
+    const responses = yield* Effect.scoped(
+      withWsRpcClient(wsUrl, (client) =>
+        Effect.all([
+          client[WS_METHODS.serverListProviderSkills]({ instanceId, projectId }),
+          client[WS_METHODS.serverListProviderSkills]({ instanceId, projectId, threadId }),
+        ]),
+      ),
+    );
+
+    assert.deepStrictEqual(receivedInputs, [
+      { instanceId, cwd: "/tmp/project" },
+      { instanceId, cwd: "/tmp/project-worktree" },
+    ]);
+    assert.deepStrictEqual(
+      responses.map((response) => response.skills),
+      [skills, skills],
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer))),
 );

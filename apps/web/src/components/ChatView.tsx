@@ -7668,6 +7668,7 @@ function ChatViewContent(props: ChatViewProps) {
                             issueSearchProjectId={
                               supportsIssues ? (activeProject?.id ?? null) : null
                             }
+                            activeProjectId={activeProject?.id ?? null}
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
