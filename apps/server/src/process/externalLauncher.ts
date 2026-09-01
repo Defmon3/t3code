@@ -20,16 +20,16 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
-import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
@@ -467,27 +467,7 @@ const resolveFileManagerRevealKind = Effect.fn("externalLauncher.resolveFileMana
   },
 );
 
-// Editor discovery walks PATH for every known editor and runs for every
-// client connect (the server config embeds the available editors). Memoize
-// the discovered set for a bounded window so repeat connects skip even the
-// per-command cache lookups in @t3tools/shared/shell.
-//
-// This deliberately does not use `Effect.cachedWithTTL`: that memoizes the
-// first caller's Exit whatever it is, including an interrupt. Callers run this
-// on the connection fiber under a timeout (`resolveAvailableEditorsForConfig`),
-// so one client disconnecting mid-scan would cache the interrupt and replay it
-// to every later connect for the whole TTL, breaking `server.getConfig`
-// permanently. Storing only on success means an interrupted scan leaves the
-// cache untouched and the next connect simply rescans.
-// Expiry uses the monotonic clock (Clock.currentTimeNanos), matching the
-// command-resolution cache in @t3tools/shared/shell, so a backward wall-clock
-// adjustment cannot keep an expired entry alive.
-const EDITOR_DISCOVERY_CACHE_TTL_NANOS = 60_000_000_000n;
-
-interface EditorDiscoveryCacheEntry {
-  readonly editors: ReadonlyArray<EditorId>;
-  readonly expiresAtNanos: bigint;
-}
+const EDITOR_DISCOVERY_CACHE_TTL = Duration.seconds(60);
 
 /**
  * ExternalLauncher - Service tag for browser/editor launch operations.
@@ -758,30 +738,22 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
 
-  const editorDiscoveryCache = yield* Ref.make<Option.Option<EditorDiscoveryCacheEntry>>(
-    Option.none(),
+  // Configuration bootstrap can ask from many reconnecting clients at once.
+  // Cache a detached scan fiber so callers share one probe set; timing out or
+  // disconnecting cancels only that caller's join, not discovery itself.
+  const editorDiscovery = yield* Effect.cachedWithTTL(
+    Effect.uninterruptible(
+      Effect.forkDetach(
+        provideCommandResolutionServices(resolveAvailableEditors()).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    ),
+    EDITOR_DISCOVERY_CACHE_TTL,
   );
-  const cachedAvailableEditors = Effect.gen(function* () {
-    const nowNanos = yield* Clock.currentTimeNanos;
-    const entry = yield* Ref.get(editorDiscoveryCache);
-    if (Option.isSome(entry) && entry.value.expiresAtNanos > nowNanos) {
-      return entry.value.editors;
-    }
-    const editors = yield* provideCommandResolutionServices(resolveAvailableEditors()).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-    );
-    yield* Ref.set(
-      editorDiscoveryCache,
-      Option.some({
-        editors,
-        expiresAtNanos: nowNanos + EDITOR_DISCOVERY_CACHE_TTL_NANOS,
-      }),
-    );
-    return editors;
-  });
 
   return ExternalLauncher.of({
-    resolveAvailableEditors: () => cachedAvailableEditors,
+    resolveAvailableEditors: () => Effect.flatMap(editorDiscovery, Fiber.join),
     resolveFileManagerRevealKind: () =>
       provideCommandResolutionServices(resolveFileManagerRevealKind()).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

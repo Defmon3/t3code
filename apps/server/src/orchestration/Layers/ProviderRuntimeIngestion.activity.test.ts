@@ -1,6 +1,7 @@
 import {
   EventId,
   ProviderDriverKind,
+  RuntimeItemId,
   RuntimeTaskId,
   ThreadId,
   type ProviderRuntimeEvent,
@@ -140,5 +141,59 @@ describe("runtimeEventToActivities tool streaming persistence", () => {
     expect(activities).toHaveLength(1);
     const payload = activities[0]?.payload as Record<string, unknown>;
     expect(payload.data).toEqual(streamingData);
+  });
+
+  it("drops screenshot bytes from completed MCP activities", () => {
+    const screenshotData = "A".repeat(1_500_000);
+    const event = {
+      ...base,
+      type: "item.completed",
+      eventId: EventId.make("evt-preview-snapshot-completed"),
+      itemId: RuntimeItemId.make("preview-snapshot-call-1"),
+      payload: {
+        itemType: "mcp_tool_call",
+        status: "completed",
+        title: "preview_snapshot",
+        data: {
+          item: {
+            type: "mcp_tool_call",
+            id: "preview-snapshot-call-1",
+            tool: "preview_snapshot",
+            server: "t3-code",
+            status: "completed",
+            arguments: { tabId: "tab-1" },
+            result: {
+              content: [
+                { type: "text", text: "Snapshot captured for https://example.com" },
+                { type: "image", data: screenshotData, mimeType: "image/png" },
+              ],
+            },
+          },
+        },
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    const activities = runtimeEventToActivities(event);
+
+    expect(activities).toHaveLength(1);
+    const payload = activities[0]?.payload as Record<string, unknown>;
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain(screenshotData.slice(0, 1_000));
+    expect(serialized.length).toBeLessThan(2_000);
+    expect(payload).toMatchObject({
+      itemType: "mcp_tool_call",
+      toolCallId: "preview-snapshot-call-1",
+      status: "completed",
+      data: {
+        item: {
+          id: "preview-snapshot-call-1",
+          tool: "preview_snapshot",
+          server: "t3-code",
+          status: "completed",
+          arguments: { tabId: "tab-1" },
+          result: { content: "Snapshot captured for https://example.com" },
+        },
+      },
+    });
   });
 });

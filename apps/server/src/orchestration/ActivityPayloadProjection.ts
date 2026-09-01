@@ -166,7 +166,8 @@ function summarizeToolTextOutput(value: string): string | null {
  * Fields of an MCP tool-call item both clients render in the expanded
  * work-log row. Everything else — notably `result`, which carries the full
  * tool output and dominates wire size on MCP-heavy threads — is summarized
- * or dropped. Full payloads remain in persistence.
+ * or dropped. Ingestion also uses this projection for completed MCP calls so
+ * binary result blocks do not accumulate in persistence.
  */
 const MCP_ITEM_KEPT_FIELDS = [
   "type",
@@ -330,8 +331,8 @@ function projectAcpContent(value: unknown): Record<string, unknown> | undefined 
 }
 
 /**
- * Removes activity payload fields that no current client reads while retaining
- * the full payload in persistence and the event store.
+ * Removes activity payload fields that no current client reads. This is also
+ * the durable representation for completed MCP calls.
  */
 export function projectActivityPayload(
   activity: OrchestrationThreadActivity,

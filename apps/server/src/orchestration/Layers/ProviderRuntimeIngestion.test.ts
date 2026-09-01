@@ -2297,21 +2297,14 @@ describe("ProviderRuntimeIngestion", () => {
         event.type === "thread.message-sent" &&
         event.payload.messageId.startsWith("assistant:item-buffered-request-append"),
     );
-    expect(assistantEvents).toHaveLength(4);
-    expect(assistantEvents[0]?.payload.streaming).toBe(true);
+    expect(assistantEvents).toHaveLength(2);
+    expect(assistantEvents[0]?.payload.streaming).toBe(false);
     expect(assistantEvents[0]?.payload.text).toBe("first half");
+    expect(assistantEvents[1]?.payload.messageId).toBe(
+      "assistant:item-buffered-request-append:segment:1",
+    );
     expect(assistantEvents[1]?.payload.streaming).toBe(false);
-    expect(assistantEvents[1]?.payload.text).toBe("");
-    expect(assistantEvents[2]?.payload.messageId).toBe(
-      "assistant:item-buffered-request-append:segment:1",
-    );
-    expect(assistantEvents[2]?.payload.streaming).toBe(true);
-    expect(assistantEvents[2]?.payload.text).toBe(" second half");
-    expect(assistantEvents[3]?.payload.messageId).toBe(
-      "assistant:item-buffered-request-append:segment:1",
-    );
-    expect(assistantEvents[3]?.payload.streaming).toBe(false);
-    expect(assistantEvents[3]?.payload.text).toBe("");
+    expect(assistantEvents[1]?.payload.text).toBe(" second half");
   });
 
   it("starts a new streaming assistant message segment after approval", async () => {

@@ -1,4 +1,7 @@
+import { CommandId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -27,6 +31,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    const crypto = yield* Crypto.Crypto;
 
     const inactivityThresholdMs = Math.max(
       1,
@@ -106,6 +112,32 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         if (reaped) {
           reapedCount += 1;
+          if (thread?.session && thread.session.status !== "stopped") {
+            const stoppedAt = DateTime.formatIso(yield* DateTime.now);
+            yield* orchestrationEngine
+              .dispatch({
+                type: "thread.session.set",
+                commandId: CommandId.make(yield* crypto.randomUUIDv4),
+                threadId: binding.threadId,
+                session: {
+                  ...thread.session,
+                  status: "stopped",
+                  activeTurnId: null,
+                  updatedAt: stoppedAt,
+                },
+                createdAt: stoppedAt,
+              })
+              .pipe(
+                Effect.retry({ times: 1 }),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("provider.session.reaper.projection-reconcile-failed", {
+                    threadId: binding.threadId,
+                    provider: binding.provider,
+                    cause,
+                  }),
+                ),
+              );
+          }
         }
       }
 

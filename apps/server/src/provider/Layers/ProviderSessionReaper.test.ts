@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  type OrchestrationCommand,
   ProjectId,
   ThreadId,
   TurnId,
@@ -18,6 +19,7 @@ import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProviderValidationError } from "../Errors.ts";
@@ -152,6 +154,7 @@ describe("ProviderSessionReaper", () => {
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
+    const dispatchedCommands: OrchestrationCommand[] = [];
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
       (request) =>
         (input.stopSessionImplementation
@@ -202,6 +205,17 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(runtimeRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(
+        Layer.succeed(OrchestrationEngineService, {
+          readEvents: () => Stream.empty,
+          dispatch: (command) =>
+            Effect.sync(() => dispatchedCommands.push(command)).pipe(
+              Effect.as({ sequence: dispatchedCommands.length }),
+            ),
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
@@ -230,7 +244,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { stopSession, stoppedThreadIds };
+    return { stopSession, stoppedThreadIds, dispatchedCommands };
   }
 
   it("reaps stale persisted sessions without active turns", async () => {
@@ -274,10 +288,21 @@ describe("ProviderSessionReaper", () => {
 
     await startReaper();
 
-    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    await waitFor(
+      () => harness.stopSession.mock.calls.length === 1 && harness.dispatchedCommands.length === 1,
+    );
 
     expect(harness.stopSession.mock.calls[0]?.[0]).toEqual({ threadId });
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
+    expect(harness.dispatchedCommands[0]).toMatchObject({
+      type: "thread.session.set",
+      threadId,
+      session: {
+        threadId,
+        status: "stopped",
+        activeTurnId: null,
+      },
+    });
   });
 
   it("skips stale sessions when the thread still has an active turn", async () => {
