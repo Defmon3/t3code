@@ -2,6 +2,40 @@ import type { ServerProviderSkill, ServerProviderSlashCommand } from "@t3tools/c
 
 export type ProviderSkillSourceKind = "app" | "repo" | "project" | "personal" | "system" | "other";
 
+export interface ProviderSkillsTarget {
+  readonly environmentId: string;
+  readonly instanceId: string;
+  readonly projectId: string | null;
+  readonly threadId: string | undefined;
+}
+
+export interface CachedProviderSkills {
+  readonly targetKey: string;
+  readonly skills: ReadonlyArray<ServerProviderSkill>;
+}
+
+export function providerSkillsTargetKey(target: ProviderSkillsTarget): string {
+  return `${target.environmentId}\u0000${target.instanceId}\u0000${target.projectId ?? ""}\u0000${target.threadId ?? ""}`;
+}
+
+export function selectProviderSkills(input: {
+  readonly scopedSkills: ReadonlyArray<ServerProviderSkill> | undefined;
+  readonly cachedSkills: CachedProviderSkills | null;
+  readonly targetKey: string;
+  readonly snapshotSkills: ReadonlyArray<ServerProviderSkill>;
+}): ReadonlyArray<ServerProviderSkill> {
+  if (input.scopedSkills !== undefined) {
+    return input.scopedSkills;
+  }
+  if (input.cachedSkills?.targetKey === input.targetKey) {
+    return input.cachedSkills.skills;
+  }
+  return input.snapshotSkills.filter((skill) => {
+    const source = resolveProviderSkillSourceKind(skill);
+    return source !== "project" && source !== "repo";
+  });
+}
+
 function titleCaseWords(value: string): string {
   const words: string[] = [];
   for (const segment of value.split(/[\s:_-]+/)) {

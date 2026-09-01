@@ -10,11 +10,13 @@ import type {
   RuntimeMode,
   ScopedThreadRef,
   ServerProvider,
+  ServerProviderSkill,
   ThreadId,
 } from "@t3tools/contracts";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProjectId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
@@ -332,9 +334,13 @@ import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
+  providerSkillsTargetKey,
+  selectProviderSkills,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 
 const runtimeModeConfig: Record<
@@ -625,6 +631,7 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
   activeThread: Thread | undefined;
+  activeProjectId: ProjectId | null;
   isServerThread: boolean;
   isLocalDraftThread: boolean;
   forceExpandedOnMobile: boolean;
@@ -746,6 +753,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
+    activeProjectId,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
@@ -1292,6 +1300,43 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
+  const providerSkillsThreadId = _isServerThread ? (activeThreadId ?? undefined) : undefined;
+  const providerSkills = useEnvironmentQuery(
+    composerTrigger?.kind === "skill" && activeProjectId !== null
+      ? serverEnvironment.providerSkills({
+          environmentId,
+          input: {
+            instanceId: selectedInstanceId,
+            projectId: activeProjectId,
+            ...(providerSkillsThreadId ? { threadId: providerSkillsThreadId } : {}),
+          },
+        })
+      : null,
+  );
+  const scopedProviderSkillsTargetKey = providerSkillsTargetKey({
+    environmentId,
+    instanceId: selectedInstanceId,
+    projectId: activeProjectId,
+    threadId: providerSkillsThreadId,
+  });
+  const [cachedProviderSkills, setCachedProviderSkills] = useState<{
+    readonly targetKey: string;
+    readonly skills: ReadonlyArray<ServerProviderSkill>;
+  } | null>(null);
+  useEffect(() => {
+    if (providerSkills.data) {
+      setCachedProviderSkills({
+        targetKey: scopedProviderSkillsTargetKey,
+        skills: providerSkills.data.skills,
+      });
+    }
+  }, [providerSkills.data, scopedProviderSkillsTargetKey]);
+  const selectedProviderSkills = selectProviderSkills({
+    scopedSkills: providerSkills.data?.skills,
+    cachedSkills: cachedProviderSkills,
+    targetKey: scopedProviderSkillsTargetKey,
+    snapshotSkills: selectedProviderStatus?.skills ?? [],
+  });
 
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
@@ -1367,19 +1412,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return searchSlashCommandItems(slashCommandItems, query);
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
-        (skill) => ({
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: formatProviderSkillDisplayName(skill),
-          description:
-            skill.shortDescription ??
-            skill.description ??
-            (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
-        }),
-      );
+      return searchProviderSkills(selectedProviderSkills, composerTrigger.query).map((skill) => ({
+        id: `skill:${selectedProvider}:${skill.name}`,
+        type: "skill" as const,
+        provider: selectedProvider,
+        skill,
+        label: formatProviderSkillDisplayName(skill),
+        description:
+          skill.shortDescription ??
+          skill.description ??
+          (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+      }));
     }
     return [];
   }, [
@@ -1387,6 +1430,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     planModeUiEnabled,
     selectedProvider,
     selectedProviderStatus,
+    selectedProviderSkills,
     settings.showSkillsInSlashMenu,
     workspaceEntries.entries,
   ]);
@@ -1453,7 +1497,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const isComposerMenuLoading =
-    composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending;
+    (composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending) ||
+    (composerTriggerKind === "skill" && providerSkills.isPending && composerMenuItems.length === 0);
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
@@ -4036,7 +4081,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       ? composerTerminalContexts
                       : []
                   }
-                  skills={selectedProviderStatus?.skills ?? []}
+                  skills={selectedProviderSkills}
                   {...(showMobilePendingAnswerActions ? { className: "max-sm:pb-11" } : {})}
                   onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                   onChange={onPromptChange}

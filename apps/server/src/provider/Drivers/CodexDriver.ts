@@ -23,6 +23,7 @@
  */
 import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -36,7 +37,12 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
-import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
+import {
+  checkCodexProviderStatus,
+  listCodexSkills,
+  makePendingCodexProvider,
+} from "../Layers/CodexProvider.ts";
+import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
@@ -227,6 +233,26 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         snapshot,
         adapter,
         textGeneration,
+        listSkills: (cwd) =>
+          listCodexSkills({
+            binaryPath: effectiveConfig.binaryPath,
+            homePath: effectiveConfig.homePath,
+            launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+            cwd,
+            environment: processEnv,
+          }).pipe(
+            Effect.scoped,
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.timeout(Duration.seconds(10)),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Codex scoped skill discovery failed; using provider snapshot.", {
+                cause: String(cause),
+              }).pipe(
+                Effect.andThen(snapshot.getSnapshot),
+                Effect.map((provider) => provider.skills),
+              ),
+            ),
+          ),
       } satisfies ProviderInstance;
     }),
 };

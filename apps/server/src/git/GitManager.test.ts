@@ -673,6 +673,7 @@ function makeManager(input?: {
     Layer.succeed(TextGeneration.TextGeneration, textGeneration),
     Layer.mock(ProviderRegistry.ProviderRegistry)({
       getProviders: Effect.succeed([]),
+      listSkills: () => Effect.succeed([]),
     }),
     Layer.succeed(
       ProjectSetupScriptRunner.ProjectSetupScriptRunner,

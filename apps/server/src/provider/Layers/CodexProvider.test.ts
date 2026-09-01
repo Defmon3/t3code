@@ -1,6 +1,64 @@
 import { assert, it } from "@effect/vitest";
 
-import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
+import {
+  applyPreferredCodexDefaultModel,
+  mapCodexModelCapabilities,
+  parseCodexSkillsListResponse,
+  parseScopedCodexSkillsListResponse,
+} from "./CodexProvider.ts";
+
+it("keeps only the requested cwd's skills when Codex returns multiple workspace entries", () => {
+  const skills = parseCodexSkillsListResponse(
+    {
+      data: [
+        {
+          cwd: "/workspace/a",
+          skills: [
+            {
+              name: "a",
+              path: "/workspace/a/.agents/skills/a/SKILL.md",
+              enabled: true,
+              scope: "workspace",
+            },
+          ],
+        },
+        {
+          cwd: "/workspace/b",
+          skills: [
+            {
+              name: "b",
+              path: "/workspace/b/.agents/skills/b/SKILL.md",
+              enabled: true,
+              scope: "workspace",
+            },
+          ],
+        },
+      ],
+    } as never,
+    "/workspace/b",
+  );
+  assert.deepStrictEqual(
+    skills.map((skill) => skill.name),
+    ["b"],
+  );
+});
+
+it("does not leak another workspace when scoped Codex discovery has no exact cwd", () => {
+  assert.deepStrictEqual(
+    parseScopedCodexSkillsListResponse(
+      {
+        data: [
+          {
+            cwd: "/workspace/a",
+            skills: [{ name: "a", path: "/workspace/a/.agents/skills/a/SKILL.md", enabled: true }],
+          },
+        ],
+      } as never,
+      "/workspace/b",
+    ),
+    [],
+  );
+});
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({

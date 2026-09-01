@@ -510,6 +510,20 @@ export const ProviderRegistryLive = Layer.effect(
       return yield* refreshOneSource(providerSource);
     });
 
+    const listSkills = Effect.fn("listSkills")(function* (input: {
+      readonly instanceId: ProviderInstanceId;
+      readonly cwd: string;
+    }) {
+      const instance = yield* instanceRegistry.getInstance(input.instanceId);
+      if (instance === undefined || !instance.enabled) {
+        return [];
+      }
+      if (instance.listSkills !== undefined) {
+        return yield* instance.listSkills(input.cwd);
+      }
+      return (yield* instance.snapshot.getSnapshot).skills;
+    });
+
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
       "getProviderMaintenanceCapabilitiesForInstance",
     )(function* (instanceId: ProviderInstanceId, provider: ProviderDriverKind) {
@@ -724,6 +738,7 @@ export const ProviderRegistryLive = Layer.effect(
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      listSkills,
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {

@@ -7289,6 +7289,7 @@ function ChatViewContent(props: ChatViewProps) {
                             activeThreadId={activeThreadId}
                             activeThreadEnvironmentId={activeThread?.environmentId}
                             activeThread={activeThread}
+                            activeProjectId={activeProject?.id ?? null}
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
