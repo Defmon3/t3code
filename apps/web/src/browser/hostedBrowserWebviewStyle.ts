@@ -12,18 +12,20 @@ export interface HostedBrowserWebviewWrapperStyle {
   readonly height: number;
   readonly zIndex: number;
   readonly pointerEvents: "auto" | "none";
-  readonly opacity?: number;
   readonly borderRadius?: number;
-  readonly visibility?: "visible";
+  readonly visibility?: "hidden" | "visible";
 }
+
+export const HIDDEN_BROWSER_WEBVIEW_OFFSET = -100_000;
 
 export function resolveHostedBrowserWebviewWrapperStyle(input: {
   readonly active: boolean;
+  readonly renderingActive: boolean;
   readonly cornerRadius?: number;
   readonly rect: BrowserSurfaceRect | null;
   readonly hiddenSize: HostedBrowserWebviewSize;
 }): HostedBrowserWebviewWrapperStyle {
-  const { active, cornerRadius = 0, hiddenSize, rect } = input;
+  const { active, cornerRadius = 0, hiddenSize, rect, renderingActive } = input;
   if (active && rect) {
     return {
       left: rect.x,
@@ -37,15 +39,12 @@ export function resolveHostedBrowserWebviewWrapperStyle(input: {
   }
 
   return {
-    left: 0,
-    top: 0,
+    left: HIDDEN_BROWSER_WEBVIEW_OFFSET,
+    top: HIDDEN_BROWSER_WEBVIEW_OFFSET,
     width: hiddenSize.width,
     height: hiddenSize.height,
-    zIndex: 0,
+    zIndex: -1,
     pointerEvents: "none",
-    // why: an off-viewport guest can have its compositor surface culled even
-    // with background throttling disabled, stalling CDP and capture requests.
-    visibility: "visible",
-    opacity: 0,
+    visibility: renderingActive ? "visible" : "hidden",
   };
 }

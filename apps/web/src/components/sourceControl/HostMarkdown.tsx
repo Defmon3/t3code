@@ -1,5 +1,6 @@
 import { ExternalLinkIcon, PaperclipIcon, PlayIcon } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
+import type { Options as ReactMarkdownOptions } from "react-markdown";
 
 import { cn } from "~/lib/utils";
 
@@ -22,11 +23,13 @@ export function HostMarkdown({
   cwd,
   environmentId,
   className,
+  extraRemarkPlugins,
 }: {
   text: string;
   cwd: string;
   environmentId?: EnvironmentId | undefined;
   className?: string;
+  extraRemarkPlugins?: ReactMarkdownOptions["remarkPlugins"];
 }) {
   const segments = splitHostBody(text);
   return (
@@ -39,6 +42,7 @@ export function HostMarkdown({
               text={segment.text}
               cwd={cwd}
               environmentId={environmentId}
+              {...(extraRemarkPlugins == null ? {} : { extraRemarkPlugins })}
             />
           );
         }

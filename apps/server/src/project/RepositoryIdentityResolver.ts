@@ -208,18 +208,10 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
     },
   );
 
-  const repositoryIdentityByCwdCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
+  const repositoryRootCache = yield* Cache.makeWith<string, string | null>(
     (cwd) =>
       resolutionSemaphore
-        .withPermits(1)(
-          Effect.promise(() => findRepositoryRoot(cwd)).pipe(
-            Effect.flatMap((rootPath) =>
-              rootPath === null
-                ? Effect.succeed(null)
-                : Cache.get(repositoryIdentityCache, rootPath),
-            ),
-          ),
-        )
+        .withPermits(1)(Effect.promise(() => findRepositoryRoot(cwd)))
         .pipe(
           Effect.timeoutOrElse({
             duration: options.discoveryTimeout ?? DEFAULT_REPOSITORY_IDENTITY_DISCOVERY_TIMEOUT,
@@ -230,9 +222,7 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
       capacity: options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY,
       timeToLive: Exit.match({
         onSuccess: (value) =>
-          value === null
-            ? (options.negativeCacheTtl ?? DEFAULT_NEGATIVE_CACHE_TTL)
-            : (options.positiveCacheTtl ?? DEFAULT_POSITIVE_CACHE_TTL),
+          value === null ? Duration.zero : (options.positiveCacheTtl ?? DEFAULT_POSITIVE_CACHE_TTL),
         onFailure: () => Duration.zero,
       }),
     },
@@ -241,7 +231,16 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
   const resolve: RepositoryIdentityResolver["Service"]["resolve"] = Effect.fn(
     "RepositoryIdentityResolver.resolve",
   )(function* (cwd) {
-    return yield* Cache.get(repositoryIdentityByCwdCache, cwd);
+    return yield* Effect.gen(function* () {
+      const cacheKey = yield* Cache.get(repositoryRootCache, cwd);
+      if (cacheKey === null) return null;
+      return yield* Cache.get(repositoryIdentityCache, cacheKey);
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: options.discoveryTimeout ?? DEFAULT_REPOSITORY_IDENTITY_DISCOVERY_TIMEOUT,
+        orElse: () => Effect.succeed(null),
+      }),
+    );
   });
 
   return RepositoryIdentityResolver.of({ resolve });

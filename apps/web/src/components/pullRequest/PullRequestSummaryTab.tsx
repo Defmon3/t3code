@@ -59,6 +59,7 @@ import {
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { pullRequestLabelColor } from "./pullRequestList.logic";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
   useWorkItemMatches,
@@ -69,12 +70,6 @@ import {
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
   return login.toLowerCase();
-}
-
-/** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
-function labelDotColor(color: string | null): string | null {
-  const hex = color?.trim().replace(/^#/, "") ?? "";
-  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
 }
 
 /** The avatar carries the attribution alone; who it is arrives on hover, like the reviewer row. */
@@ -499,7 +494,7 @@ export function PullRequestSummaryTab({
             <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.map((label) => {
-                  const dot = labelDotColor(label.color);
+                  const dot = pullRequestLabelColor(label.color);
                   return (
                     <span
                       key={label.name}
