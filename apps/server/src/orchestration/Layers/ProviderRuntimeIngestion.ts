@@ -800,7 +800,7 @@ export function runtimeEventToActivities(
       // call into both the event store and the projection table. No reader
       // needs it: ws.ts and http.ts apply `projectActivityPayload` before any
       // payload reaches a client. Persist the projected form for non-terminal
-      // updates; `item.completed` below still persists the full payload.
+      // updates; MCP completions below use the same bounded representation.
       return [
         projectActivityPayload({
           id: event.eventId,
@@ -829,27 +829,28 @@ export function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "tool",
-          kind: "tool.completed",
-          summary: event.payload.title ?? "Tool",
-          payload: {
-            itemType: event.payload.itemType,
-            ...(event.itemId !== undefined ? { toolCallId: event.itemId } : {}),
-            ...(event.payload.status ? { status: event.payload.status } : {}),
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
-            ...(event.payload.parentToolUseId
-              ? { parentToolUseId: event.payload.parentToolUseId }
-              : {}),
-          },
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
+      const activity = {
+        id: event.eventId,
+        createdAt: event.createdAt,
+        tone: "tool",
+        kind: "tool.completed",
+        summary: event.payload.title ?? "Tool",
+        payload: {
+          itemType: event.payload.itemType,
+          ...(event.itemId !== undefined ? { toolCallId: event.itemId } : {}),
+          ...(event.payload.status ? { status: event.payload.status } : {}),
+          ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+          ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+          ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+          ...(event.payload.parentToolUseId
+            ? { parentToolUseId: event.payload.parentToolUseId }
+            : {}),
         },
+        turnId: toTurnId(event.turnId) ?? null,
+        ...maybeSequence,
+      } satisfies OrchestrationThreadActivity;
+      return [
+        event.payload.itemType === "mcp_tool_call" ? projectActivityPayload(activity) : activity,
       ];
     }
 
@@ -1145,65 +1146,6 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
 
-  const flushBufferedAssistantMessage = (input: {
-    event: ProviderRuntimeEvent;
-    threadId: ThreadId;
-    messageId: MessageId;
-    turnId?: TurnId;
-    createdAt: string;
-    commandTag: string;
-  }) =>
-    Effect.gen(function* () {
-      const bufferedText = yield* takeBufferedAssistantText(input.messageId);
-      if (!hasRenderableAssistantText(bufferedText)) {
-        return false;
-      }
-
-      yield* orchestrationEngine.dispatch({
-        type: "thread.message.assistant.delta",
-        commandId: yield* providerCommandId(input.event, input.commandTag),
-        threadId: input.threadId,
-        messageId: input.messageId,
-        delta: bufferedText,
-        ...(input.turnId ? { turnId: input.turnId } : {}),
-        createdAt: input.createdAt,
-      });
-      return true;
-    });
-
-  const flushBufferedAssistantMessagesForTurn = (input: {
-    event: ProviderRuntimeEvent;
-    threadId: ThreadId;
-    turnId: TurnId;
-    createdAt: string;
-    commandTag: string;
-  }) =>
-    Effect.gen(function* () {
-      const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
-        input.threadId,
-        input.turnId,
-      );
-      const flushedMessageIds = new Set<MessageId>();
-      yield* Effect.forEach(
-        assistantMessageIds,
-        (messageId) =>
-          flushBufferedAssistantMessage({
-            event: input.event,
-            threadId: input.threadId,
-            messageId,
-            turnId: input.turnId,
-            createdAt: input.createdAt,
-            commandTag: input.commandTag,
-          }).pipe(
-            Effect.tap((flushed) =>
-              flushed ? Effect.sync(() => flushedMessageIds.add(messageId)) : Effect.void,
-            ),
-          ),
-        { concurrency: 1 },
-      ).pipe(Effect.asVoid);
-      return flushedMessageIds;
-    });
-
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1225,7 +1167,7 @@ const make = Effect.gen(function* () {
             : "";
       const hasRenderableText = hasRenderableAssistantText(text);
 
-      if (hasRenderableText) {
+      if (hasRenderableText && input.hasProjectedMessage) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
           commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
@@ -1243,6 +1185,7 @@ const make = Effect.gen(function* () {
           commandId: yield* providerCommandId(input.event, input.commandTag),
           threadId: input.threadId,
           messageId: input.messageId,
+          ...(!input.hasProjectedMessage && hasRenderableText ? { text } : {}),
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
         });
@@ -1258,7 +1201,6 @@ const make = Effect.gen(function* () {
     commandTag: string;
     finalDeltaCommandTag: string;
     hasProjectedMessage: boolean;
-    flushedMessageIds?: ReadonlySet<MessageId>;
   }) =>
     Effect.gen(function* () {
       const activeMessageId = yield* getActiveAssistantMessageIdForTurn(
@@ -1277,9 +1219,7 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
         commandTag: input.commandTag,
         finalDeltaCommandTag: input.finalDeltaCommandTag,
-        hasProjectedMessage:
-          input.hasProjectedMessage ||
-          (input.flushedMessageIds?.has(activeMessageId.value) ?? false),
+        hasProjectedMessage: input.hasProjectedMessage,
       });
       yield* forgetAssistantMessageId(input.threadId, input.turnId, activeMessageId.value);
 
@@ -1732,23 +1672,6 @@ const make = Effect.gen(function* () {
           : undefined;
       if (pauseForUserTurnId) {
         const detailedThread = yield* getLoadedThreadDetail();
-        const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
-          serverSettingsService.getSettings,
-          (settings) => (settings.enableLegacyTokenStreaming ? "streaming" : "buffered"),
-        );
-        const flushedMessageIds =
-          assistantDeliveryMode === "buffered"
-            ? yield* flushBufferedAssistantMessagesForTurn({
-                event,
-                threadId: thread.id,
-                turnId: pauseForUserTurnId,
-                createdAt: now,
-                commandTag:
-                  event.type === "request.opened"
-                    ? "assistant-delta-flush-on-request-opened"
-                    : "assistant-delta-flush-on-user-input-requested",
-              })
-            : new Set<MessageId>();
         yield* finalizeActiveAssistantSegmentForTurn({
           event,
           threadId: thread.id,
@@ -1767,7 +1690,6 @@ const make = Effect.gen(function* () {
             hasAssistantMessageForTurn(detailedThread.messages, pauseForUserTurnId, {
               streamingOnly: true,
             }),
-          flushedMessageIds,
         });
       }
 
