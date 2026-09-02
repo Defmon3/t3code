@@ -46,6 +46,9 @@ offers to compact the conversation before you continue. You can also select **Co
 from the context meter. On every client, you can enter `/compact` in the message composer, and
 Claude can show its own resume prompt when you continue an old session.
 
+On web and desktop, active Claude Opus and Fable threads offer a **Compact** action after they
+reach 350,000 context tokens, so you can compact between turns before continuing.
+
 ## Where Claude Skills Are Loaded
 
 T3 Code looks for Claude skills in the Claude config directory's `skills` folder, then

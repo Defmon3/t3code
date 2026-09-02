@@ -350,7 +350,8 @@ import { ComposerSurface } from "./chat/ComposerSurface";
 import {
   hasAvailableClaudeCompactionProvider,
   hasDismissedResumeCompaction,
-  shouldOfferResumeCompaction,
+  resolveClaudeCompactionOffer,
+  shouldShowClaudeCompactionOffer,
 } from "./chat/ContextWindowMeter.logic";
 import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
 import {
@@ -5208,12 +5209,23 @@ function ChatViewContent(props: ChatViewProps) {
   // Session-scoped dismissals, one key per (thread, snapshot). A set rather
   // than a single slot so dismissing the banner on one thread does not
   // resurface it on another thread dismissed earlier.
-  const [dismissedResumeCompactionKeys, setDismissedResumeCompactionKeys] = useState<
+  const [dismissedClaudeCompactionOfferKeys, setDismissedClaudeCompactionOfferKeys] = useState<
     ReadonlySet<string>
   >(new Set());
-  const resumeCompactionKey =
+  const claudeCompactionOffer =
     activeThread && activeContextWindow
-      ? `${activeThread.id}:${activeContextWindow.updatedAt}`
+      ? resolveClaudeCompactionOffer({
+          provider: selectedProvider,
+          model: activeThread.modelSelection.model,
+          usedTokens: activeContextWindow.usedTokens,
+          updatedAt: activeContextWindow.updatedAt,
+          now: `${nowMinute}:00.000Z`,
+          activeSession: phase === "ready" || phase === "running",
+        })
+      : null;
+  const claudeCompactionOfferKey =
+    claudeCompactionOffer && activeThread && activeContextWindow
+      ? `${claudeCompactionOffer}:${activeThread.id}:${activeContextWindow.updatedAt}`
       : null;
   const compactDisabled =
     !activeThread ||
@@ -5239,28 +5251,25 @@ function ChatViewContent(props: ChatViewProps) {
           ? "Enable a Claude provider before compacting"
           : "Compacting is unavailable right now"
     : null;
-  const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+  const claudeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (
       !activeThread ||
       !activeContextWindow ||
-      resumeCompactionKey === null ||
-      dismissedResumeCompactionKeys.has(resumeCompactionKey) ||
-      resumeCompactionPermanentlyDismissed ||
-      nativeResumeCompactionDismissed ||
+      claudeCompactionOfferKey === null ||
+      !shouldShowClaudeCompactionOffer({
+        offer: claudeCompactionOffer,
+        resumePermanentlyDismissed: resumeCompactionPermanentlyDismissed,
+        nativeResumeDismissed: nativeResumeCompactionDismissed,
+      }) ||
+      dismissedClaudeCompactionOfferKeys.has(claudeCompactionOfferKey) ||
       pendingUserInputs.length > 0 ||
-      phase === "running" ||
-      !shouldOfferResumeCompaction({
-        provider: selectedProvider,
-        usedTokens: activeContextWindow.usedTokens,
-        updatedAt: activeContextWindow.updatedAt,
-        now: `${nowMinute}:00.000Z`,
-      })
+      phase === "running"
     ) {
       return null;
     }
 
     const dismiss = () =>
-      setDismissedResumeCompactionKeys((keys) => new Set(keys).add(resumeCompactionKey));
+      setDismissedClaudeCompactionOfferKeys((keys) => new Set(keys).add(claudeCompactionOfferKey));
     const compactAction = (
       <Button
         size="xs"
@@ -5275,11 +5284,17 @@ function ChatViewContent(props: ChatViewProps) {
       </Button>
     );
     return {
-      id: `resume-compaction:${resumeCompactionKey}`,
+      id: `claude-compaction:${claudeCompactionOfferKey}`,
       variant: "info",
       icon: <Minimize2Icon />,
-      title: "Resume with less context",
-      description: `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from an older session`,
+      title:
+        claudeCompactionOffer === "active"
+          ? "Compact context before your next turn"
+          : "Resume with less context",
+      description:
+        claudeCompactionOffer === "active"
+          ? `${formatContextWindowTokens(activeContextWindow.usedTokens)} active tokens`
+          : `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from an older session`,
       actions: compactDisabledReason ? (
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex">{compactAction}</span>} />
@@ -5288,7 +5303,7 @@ function ChatViewContent(props: ChatViewProps) {
       ) : (
         compactAction
       ),
-      dismissLabel: "Keep full history",
+      dismissLabel: claudeCompactionOffer === "active" ? "Keep full context" : "Keep full history",
       onDismiss: dismiss,
     };
   }, [
@@ -5296,15 +5311,14 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread,
     compactDisabled,
     compactDisabledReason,
+    claudeCompactionOffer,
+    claudeCompactionOfferKey,
     composerRef,
-    dismissedResumeCompactionKeys,
+    dismissedClaudeCompactionOfferKeys,
     nativeResumeCompactionDismissed,
-    nowMinute,
     pendingUserInputs.length,
     phase,
-    resumeCompactionKey,
     resumeCompactionPermanentlyDismissed,
-    selectedProvider,
   ]);
   const handleRestoreThreadBranch = useCallback(() => {
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {
@@ -5316,15 +5330,15 @@ function ChatViewContent(props: ChatViewProps) {
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
-    const resumeCompactionItems =
-      resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
+    const claudeCompactionItems =
+      claudeCompactionBannerItem === null ? [] : [claudeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...systemComposerBannerItems,
         ...backgroundLivenessItems,
-        ...resumeCompactionItems,
+        ...claudeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
       ];
@@ -5332,7 +5346,7 @@ function ChatViewContent(props: ChatViewProps) {
     return [
       ...systemComposerBannerItems,
       ...backgroundLivenessItems,
-      ...resumeCompactionItems,
+      ...claudeCompactionItems,
       ...wokeThreadItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -5382,7 +5396,7 @@ function ChatViewContent(props: ChatViewProps) {
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
-    resumeCompactionBannerItem,
+    claudeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
     wokeThreadBannerItem,
