@@ -5,7 +5,9 @@ import {
   formatContextWindowCompactionMessage,
   hasAvailableClaudeCompactionProvider,
   hasDismissedResumeCompaction,
+  resolveClaudeCompactionOffer,
   resolveContextWindowModelDisplayName,
+  shouldShowClaudeCompactionOffer,
   shouldOfferResumeCompaction,
 } from "./ContextWindowMeter.logic";
 
@@ -176,6 +178,145 @@ describe("shouldOfferResumeCompaction", () => {
         usedTokens: 300_000,
         updatedAt: "2026-08-24T09:00:00.000Z",
         now,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveClaudeCompactionOffer", () => {
+  const now = "2026-08-24T12:00:00.000Z";
+
+  it.each([
+    "claude-opus-5",
+    "opus",
+    "claude-opus-4.6",
+    "CLAUDE-OPUS-9-2",
+    "claude-fable-5-1",
+    "fable",
+    "claude-fable-5.1",
+    " FABLE-6.1 ",
+  ])("offers active compaction for supported Claude model %s at 350,000 tokens", (model) => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider: "claudeAgent",
+        model,
+        usedTokens: 350_000,
+        updatedAt: "2026-08-24T11:59:00.000Z",
+        now,
+        activeSession: true,
+      }),
+    ).toBe("active");
+  });
+
+  it("does not offer active compaction below 350,000 tokens", () => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider: "claudeAgent",
+        model: "opus",
+        usedTokens: 349_999,
+        updatedAt: "2026-08-24T11:59:00.000Z",
+        now,
+        activeSession: true,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["claudeAgent", "claude-sonnet-5"],
+    ["claudeAgent", "haiku"],
+    ["codex", "claude-opus-5"],
+    ["claudeAgent", "opus-not-a-model"],
+    ["claudeAgent", "fabled"],
+  ])("rejects active compaction for %s with %s", (provider, model) => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider,
+        model,
+        usedTokens: 350_000,
+        updatedAt: "2026-08-24T11:59:00.000Z",
+        now,
+        activeSession: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("retains the old-thread resume offer below the active threshold", () => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider: "claudeAgent",
+        model: "claude-sonnet-5",
+        usedTokens: 100_000,
+        updatedAt: "2026-08-24T10:50:00.000Z",
+        now,
+        activeSession: true,
+      }),
+    ).toBe("resume");
+  });
+
+  it("prioritizes the active offer when an Opus or Fable thread is also old", () => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        usedTokens: 350_000,
+        updatedAt: "2026-08-24T10:50:00.000Z",
+        now,
+        activeSession: true,
+      }),
+    ).toBe("active");
+  });
+
+  it("does not offer active compaction for a disconnected recent thread", () => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider: "claudeAgent",
+        model: "opus",
+        usedTokens: 350_000,
+        updatedAt: "2026-08-24T11:59:00.000Z",
+        now,
+        activeSession: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the old-thread resume offer for a disconnected thread", () => {
+    expect(
+      resolveClaudeCompactionOffer({
+        provider: "claudeAgent",
+        model: "opus",
+        usedTokens: 350_000,
+        updatedAt: "2026-08-24T10:50:00.000Z",
+        now,
+        activeSession: false,
+      }),
+    ).toBe("resume");
+  });
+});
+
+describe("shouldShowClaudeCompactionOffer", () => {
+  it("does not let resume dismissal suppress an active offer", () => {
+    expect(
+      shouldShowClaudeCompactionOffer({
+        offer: "active",
+        resumePermanentlyDismissed: true,
+        nativeResumeDismissed: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("suppresses a resume offer when either resume dismissal is present", () => {
+    expect(
+      shouldShowClaudeCompactionOffer({
+        offer: "resume",
+        resumePermanentlyDismissed: true,
+        nativeResumeDismissed: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowClaudeCompactionOffer({
+        offer: "resume",
+        resumePermanentlyDismissed: false,
+        nativeResumeDismissed: true,
       }),
     ).toBe(false);
   });
