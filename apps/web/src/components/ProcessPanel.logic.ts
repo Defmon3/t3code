@@ -58,9 +58,10 @@ export function processPanelStatus(input: {
   readonly hasData: boolean;
   readonly hasQueryError: boolean;
   readonly hasDataError: boolean;
+  readonly hasStaleData: boolean;
 }): {
-  readonly label: "Live" | "Connecting" | "Unavailable";
-  readonly tone: "live" | "muted" | "error";
+  readonly label: "Live" | "Connecting" | "Stale" | "Unavailable";
+  readonly tone: "live" | "muted" | "warning" | "error";
 } {
   if (
     input.environmentConnectionPhase === "available" ||
@@ -75,9 +76,25 @@ export function processPanelStatus(input: {
   ) {
     return { label: "Connecting", tone: "muted" };
   }
+  if (input.hasStaleData) return { label: "Stale", tone: "warning" };
   if (input.hasQueryError || input.hasDataError) return { label: "Unavailable", tone: "error" };
   if (!input.hasData) return { label: "Connecting", tone: "muted" };
   return { label: "Live", tone: "live" };
+}
+
+export function processPanelNotice(input: {
+  readonly queryError: string | null;
+  readonly diagnosticsError: string | null;
+  readonly hasStaleData: boolean;
+}): { readonly message: string; readonly tone: "warning" | "error" } | null {
+  if (input.hasStaleData && input.diagnosticsError) {
+    return {
+      tone: "warning",
+      message: `Showing the last successful test discovery. ${input.diagnosticsError}`,
+    };
+  }
+  const message = input.queryError ?? input.diagnosticsError;
+  return message ? { tone: "error", message } : null;
 }
 
 function isWindowsPath(path: string): boolean {

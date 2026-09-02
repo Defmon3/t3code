@@ -8,6 +8,7 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import {
   deriveProcessPanelGroups,
   formatTestCommand,
+  processPanelNotice,
   processPanelStatus,
   type ProcessPanelProject,
   type ProcessPanelThread,
@@ -78,8 +79,14 @@ export function ProcessPanel(input: {
     hasData: query.data !== null && query.data !== undefined,
     hasQueryError: query.error !== null && query.error !== undefined,
     hasDataError: query.data ? Option.isSome(query.data.error) : false,
+    hasStaleData: query.data?.stale === true,
   });
   const diagnosticsError = query.data ? Option.getOrNull(query.data.error) : null;
+  const notice = processPanelNotice({
+    queryError: query.error,
+    diagnosticsError: diagnosticsError?.message ?? null,
+    hasStaleData: query.data?.stale === true,
+  });
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto" aria-label="Running tests">
@@ -99,7 +106,9 @@ export function ProcessPanel(input: {
                 ? "flex items-center gap-1 text-[11px] text-muted-foreground"
                 : status.tone === "error"
                   ? "flex items-center gap-1 text-[11px] text-destructive"
-                  : "flex items-center gap-1 text-[11px] text-muted-foreground"
+                  : status.tone === "warning"
+                    ? "flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400"
+                    : "flex items-center gap-1 text-[11px] text-muted-foreground"
             }
           >
             <span
@@ -108,7 +117,9 @@ export function ProcessPanel(input: {
                   ? "size-1.5 rounded-full bg-emerald-500"
                   : status.tone === "error"
                     ? "size-1.5 rounded-full bg-destructive"
-                    : "size-1.5 rounded-full bg-muted-foreground/60"
+                    : status.tone === "warning"
+                      ? "size-1.5 rounded-full bg-amber-500"
+                      : "size-1.5 rounded-full bg-muted-foreground/60"
               }
               aria-hidden
             />
@@ -116,11 +127,19 @@ export function ProcessPanel(input: {
           </span>
         </div>
       </header>
-      {query.error || diagnosticsError ? (
-        <p className="px-3 py-2 text-destructive text-xs">
-          {query.error ?? diagnosticsError?.message ?? "Tests unavailable."}
+      {notice ? (
+        <p
+          className={
+            notice.tone === "warning"
+              ? "px-3 py-2 text-amber-700 text-xs dark:text-amber-300"
+              : "px-3 py-2 text-destructive text-xs"
+          }
+          role={notice.tone === "warning" ? "status" : undefined}
+        >
+          {notice.message}
         </p>
-      ) : query.isPending && !query.data ? (
+      ) : null}
+      {notice?.tone === "error" ? null : query.isPending && !query.data ? (
         <p className="px-3 py-2 text-muted-foreground text-xs">Loading tests…</p>
       ) : groups.length === 0 ? (
         <p className="px-3 py-2 text-muted-foreground text-xs">No tests detected.</p>

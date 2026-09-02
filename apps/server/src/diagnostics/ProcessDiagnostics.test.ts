@@ -120,6 +120,86 @@ describe("ProcessDiagnostics", () => {
     }),
   );
 
+  it.effect(
+    "retains the last successful discovery through a timeout and replaces it after recovery",
+    () =>
+      Effect.gen(function* () {
+        let discoveryCalls = 0;
+        let freeMemory = 256;
+        const telemetryLayer = makeTelemetryLayer(makeNativeSnapshot([]), undefined, {
+          discoverProcesses: () => {
+            discoveryCalls += 1;
+            if (discoveryCalls === 2) {
+              return Effect.fail(
+                new NativeTelemetryClient.NativeTelemetryRequestTimedOut({
+                  operation: "discoverProcesses",
+                  timeoutMs: 10_000,
+                }),
+              );
+            }
+            return Effect.succeed([
+              {
+                pid: 4_000 + discoveryCalls,
+                ppid: 1,
+                startTimeMs: 1_000,
+                runTimeMs: 1_000,
+                name: "vitest",
+                command: "vp test",
+                cwd: "/workspace",
+                status: "Running",
+                cpuPercent: 1,
+                cpuTimeMs: 1,
+                residentBytes: 1,
+                virtualBytes: 1,
+                ioReadBytes: 0,
+                ioWriteBytes: 0,
+                ioSemantics: "storage" as const,
+              },
+            ]);
+          },
+        });
+        const layer = Layer.effect(
+          ProcessDiagnostics.ProcessDiagnostics,
+          ProcessDiagnostics.make({
+            readCpuInfos: () => [],
+            readFreeMemory: () => freeMemory,
+            readTotalMemory: () => 1_024,
+          }),
+        ).pipe(Layer.provideMerge(telemetryLayer));
+        const read = Effect.service(ProcessDiagnostics.ProcessDiagnostics).pipe(
+          Effect.flatMap((processDiagnostics) =>
+            processDiagnostics.read({ roots: ["/workspace"] }),
+          ),
+        );
+
+        return yield* Effect.gen(function* () {
+          const fresh = yield* read;
+          freeMemory = 512;
+          yield* TestClock.adjust("2 seconds");
+          const stale = yield* read;
+          yield* TestClock.adjust("2 seconds");
+          const recovered = yield* read;
+
+          expect(discoveryCalls).toBe(3);
+          expect(stale).toMatchObject({
+            readAt: fresh.readAt,
+            stale: true,
+            hostMemoryUsedBytes: 512,
+            hostMemoryTotalBytes: 1_024,
+            processes: [{ pid: 4_001 }],
+            error: Option.some({
+              message: "Resource monitor 'discoverProcesses' request timed out after 10000ms.",
+            }),
+          });
+          expect(recovered).toMatchObject({
+            processes: [{ pid: 4_003 }],
+            error: Option.none(),
+          });
+          expect(recovered).not.toHaveProperty("stale");
+        }).pipe(Effect.provide(Layer.merge(layer, TestClock.layer())));
+      }),
+  );
+
   it.effect("aggregates a large test-process sibling set", () =>
     Effect.gen(function* () {
       const root: ResourceMonitorDiscoveredProcessSample = {
