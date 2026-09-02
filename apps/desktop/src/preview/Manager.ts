@@ -520,6 +520,23 @@ export const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
   !input.shift &&
   !input.alt;
 
+export const serializePreviewCapture = <A>(
+  tails: WeakMap<object, Promise<void>>,
+  target: object,
+  capture: () => Promise<A>,
+): Promise<A> => {
+  const previous = tails.get(target) ?? Promise.resolve();
+  const current = previous.then(capture);
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  tails.set(target, tail);
+  return current.finally(() => {
+    if (tails.get(target) === tail) tails.delete(target);
+  });
+};
+
 const isPreviewInputSignal = (value: unknown): value is PreviewInputSignal => {
   if (typeof value !== "object" || value === null || !("kind" in value)) return false;
   if (value.kind === "pointer") {
@@ -586,6 +603,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const controlSessionsRef = yield* SynchronizedRef.make<
     ReadonlyMap<number, BrowserControlSession>
   >(new Map());
+  const captureTails = new WeakMap<Electron.WebContents, Promise<void>>();
   const diagnosticsRef = yield* Ref.make<ReadonlyMap<number, BrowserDiagnostics>>(new Map());
   const observationsRef = yield* Ref.make<ReadonlyMap<string, PreviewObservationState>>(new Map());
   const expectedAgentInputsRef = yield* Ref.make<
@@ -630,6 +648,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
   const isUnknownVizError = (cause: unknown) =>
     cause instanceof Error && cause.message.includes("UnknownVizError");
+  const capturePage = (
+    errorContext: PreviewOperationContext,
+    wc: Electron.WebContents,
+    rect?: Electron.Rectangle,
+  ) =>
+    Effect.tryPromise({
+      try: (signal) => {
+        return serializePreviewCapture(captureTails, wc, () => {
+          if (signal.aborted) throw signal.reason;
+          return wc.capturePage(rect);
+        });
+      },
+      catch: (cause) => new PreviewOperationError({ ...errorContext, cause }),
+    });
   const currentIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const currentMillis = Clock.currentTimeMillis;
   const encodeJson = (errorContext: PreviewOperationContext, value: unknown) =>
@@ -2574,13 +2606,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const [createdAt, millis, image] = yield* Effect.all([
       currentIso,
       currentMillis,
-      attemptPromise(
+      capturePage(
         {
           operation: "captureScreenshot.capturePage",
           tabId,
           webContentsId: wc.id,
         },
-        () => wc.capturePage(),
+        wc,
       ),
     ]);
     const id = `browser-screenshot-${artifactSiteSlug(wc.getURL())}-${millis.toString(36)}`;
@@ -2627,13 +2659,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (!captureSession?.consumers.has("picture-in-picture") || captureSession.scope === null)
       return;
     const wc = yield* requireWebContents(tabId);
-    const image = yield* attemptPromise(
+    const image = yield* capturePage(
       {
         operation: "frameCapture.capturePage",
         tabId,
         webContentsId: wc.id,
       },
-      () => wc.capturePage(),
+      wc,
     );
     const currentCaptureSession = yield* Effect.all(
       [SynchronizedRef.get(frameCaptureSessionsRef), SynchronizedRef.get(tabsRef)],
@@ -3176,13 +3208,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             webContentsId: wc.id,
           });
         }
-        yield* attemptPromise(
+        yield* capturePage(
           {
             operation: "recording.warmSource",
             tabId,
             webContentsId: wc.id,
           },
-          () => wc.capturePage().then(() => undefined),
+          wc,
         ).pipe(Effect.retry({ times: 1 }), Effect.ignore);
         const currentWebContents = yield* requireWebContents(tabId);
         if (currentWebContents !== wc || wc.isDestroyed()) {
@@ -3528,13 +3560,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         : null;
       const [accessibility, sourceImage, diagnostics, timelines] = yield* Effect.all([
         send("Accessibility.getFullAXTree"),
-        attemptPromise(
+        capturePage(
           {
             operation: "automationSnapshot.capturePage",
             tabId,
             webContentsId: wc.id,
           },
-          () => wc.capturePage(),
+          wc,
         ).pipe(
           Effect.retry({
             while: (error) => isUnknownVizError(error.cause),
@@ -3940,9 +3972,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     sendCleanup: SendCommand,
   ) {
     yield* prepareAutomationInput(send, false);
-    const keySequence = makePreviewAutomationKeySequence(input, {
-      isMac: hostPlatform === "darwin",
-    });
+    const keySequence = makePreviewAutomationKeySequence(input);
     const previouslyFocused = yield* attempt(
       { operation: "automationPress.getFocusedWebContents", tabId, webContentsId: wc.id },
       () => webContents.getFocusedWebContents(),
@@ -3950,7 +3980,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     let keyDownAttempted = false;
     const releaseInput = Effect.gen(function* () {
       if (keyDownAttempted) {
-        yield* sendCleanup("Input.dispatchKeyEvent", keySequence.keyUp).pipe(Effect.ignore);
+        yield* attempt(
+          { operation: "automationPress.releaseNativeKey", tabId, webContentsId: wc.id },
+          () => wc.sendInputEvent(keySequence.keyUp),
+        ).pipe(Effect.ignore);
       }
       yield* sendCleanup("Emulation.setFocusEmulationEnabled", { enabled: false }).pipe(
         Effect.ignore,
@@ -3971,7 +4004,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       yield* send("Emulation.setFocusEmulationEnabled", { enabled: true });
       yield* expectAgentInput(tabId, keySequence.signal);
       keyDownAttempted = true;
-      yield* send("Input.dispatchKeyEvent", keySequence.keyDown);
+      yield* attempt(
+        { operation: "automationPress.dispatchNativeKey", tabId, webContentsId: wc.id },
+        () => {
+          wc.sendInputEvent(keySequence.keyDown);
+          if (keySequence.char) wc.sendInputEvent(keySequence.char);
+        },
+      );
     }).pipe(Effect.ensuring(releaseInput));
   });
 
