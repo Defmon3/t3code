@@ -1,4 +1,4 @@
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   isClaudeResumeCompactionQuestion,
@@ -17,27 +17,33 @@ export type ClaudeCompactionOffer = "active" | "resume";
 
 const HIGH_CONTEXT_CLAUDE_MODEL_PATTERN = /^(?:claude-)?(?:opus|fable)(?:[-.]\d+)*$/;
 
-export function hasAvailableClaudeCompactionProvider(input: {
+export function providerSupportsManualCompaction(
+  provider: ProviderInstanceEntry | null | undefined,
+): boolean {
+  return provider?.snapshot.slashCommands.some((command) => command.name === "compact") ?? false;
+}
+
+export function hasAvailableCompactionProvider(input: {
   readonly providers: ReadonlyArray<ProviderInstanceEntry>;
+  readonly driverKind: ProviderDriverKind;
   readonly instanceId: ProviderInstanceId | null;
   readonly lockedInstanceId: ProviderInstanceId | null;
 }): boolean {
-  const claudeProviders = input.providers.filter(
-    (provider) => provider.driverKind === "claudeAgent",
+  const driverProviders = input.providers.filter(
+    (provider) => provider.driverKind === input.driverKind,
   );
   const lockedContinuationGroupKey = input.lockedInstanceId
-    ? claudeProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
+    ? driverProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
         ?.continuationGroupKey
     : undefined;
   const compatibleProviders = lockedContinuationGroupKey
-    ? claudeProviders.filter(
+    ? driverProviders.filter(
         (provider) => provider.continuationGroupKey === lockedContinuationGroupKey,
       )
-    : claudeProviders;
+    : driverProviders;
 
-  return (
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined) !==
-    undefined
+  return providerSupportsManualCompaction(
+    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
   );
 }
 
