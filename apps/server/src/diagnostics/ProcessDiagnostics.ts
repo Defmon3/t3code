@@ -329,6 +329,7 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* (
   const readFreeMemory = options.readFreeMemory ?? NodeOS.freemem;
   const readTotalMemory = options.readTotalMemory ?? NodeOS.totalmem;
   const processDiscoveryCache = new Map<string, ProcessDiscoveryCacheEntry>();
+  const lastSuccessfulProcessDiscoveries = new Map<string, ServerProcessDiagnosticsResult>();
   const processDiscoveryCacheMutex = yield* Semaphore.make(1);
   const hostMetrics = createHostMetricsSampler({
     readCpuTicks: () => hostCpuTicks(readCpuInfos()),
@@ -398,7 +399,7 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* (
         processes,
         error: Option.none(),
       };
-    }).pipe(Effect.catch((error) => unavailable(processDiscoveryErrorMessage(error))));
+    });
   const cachedRegisteredProjectDiagnostics = (roots: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const normalizedRoots = normalizeRegisteredRoots(roots);
@@ -430,6 +431,23 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* (
           );
           const cachedRead = yield* Effect.cachedWithTTL(
             readRegisteredProjectDiagnostics(normalizedRoots).pipe(
+              Effect.tap((diagnostics) =>
+                Effect.sync(() => {
+                  lastSuccessfulProcessDiscoveries.set(cacheKey, diagnostics);
+                }),
+              ),
+              Effect.catch((error) => {
+                const previousDiagnostics = lastSuccessfulProcessDiscoveries.get(cacheKey);
+                if (previousDiagnostics) {
+                  return Effect.succeed({
+                    ...previousDiagnostics,
+                    ...hostMetrics.read("discovery"),
+                    stale: true,
+                    error: Option.some({ message: processDiscoveryErrorMessage(error) }),
+                  });
+                }
+                return unavailable(processDiscoveryErrorMessage(error));
+              }),
               Effect.ensuring(markCacheEntrySettled),
               Effect.uninterruptible,
             ),

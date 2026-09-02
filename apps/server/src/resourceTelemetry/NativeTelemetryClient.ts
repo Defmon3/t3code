@@ -258,13 +258,22 @@ interface PendingHistoryRequest {
   readonly snapshots: ReadonlyArray<ResourceMonitorSnapshotEvent>;
 }
 
-interface PendingDiscoveryRequest {
+export interface PendingDiscoveryRequest {
+  readonly rootKey: string;
   readonly deferred: Deferred.Deferred<
     ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
     NativeTelemetryClientError
   >;
   readonly processes: ReadonlyArray<ResourceMonitorDiscoveredProcessSample>;
+  readonly completed: Option.Option<ReadonlyArray<ResourceMonitorDiscoveredProcessSample>>;
 }
+
+export type SharedProcessDiscovery =
+  | { readonly type: "pending"; readonly request: PendingDiscoveryRequest }
+  | {
+      readonly type: "completed";
+      readonly processes: ReadonlyArray<ResourceMonitorDiscoveredProcessSample>;
+    };
 
 type DiscoveryCompletionOutcome =
   | {
@@ -421,6 +430,59 @@ export function canCommandNativeTelemetrySidecar(
   return hasHandle && (status === "healthy" || status === "degraded");
 }
 
+export const shareProcessDiscoveryRequest = Effect.fn("shareProcessDiscoveryRequest")(function* <
+  E,
+  R,
+>(input: {
+  readonly mutex: Semaphore.Semaphore;
+  readonly pending: Ref.Ref<Map<string, PendingDiscoveryRequest>>;
+  readonly rootKey: string;
+  readonly start: () => Effect.Effect<PendingDiscoveryRequest, E, R>;
+}): Effect.fn.Return<SharedProcessDiscovery, E, R> {
+  return yield* input.mutex.withPermits(1)(
+    Effect.gen(function* () {
+      const selected = yield* Ref.modify(input.pending, (pending) => {
+        const next = new Map(pending);
+        let selected: SharedProcessDiscovery | undefined;
+        for (const [requestId, request] of next) {
+          if (request.rootKey !== input.rootKey && Option.isSome(request.completed)) {
+            next.delete(requestId);
+            continue;
+          }
+          if (request.rootKey !== input.rootKey || selected) continue;
+          if (Option.isSome(request.completed)) {
+            next.delete(requestId);
+            selected = { type: "completed", processes: request.completed.value };
+          } else {
+            selected = { type: "pending", request };
+          }
+        }
+        return [selected === undefined ? Option.none() : Option.some(selected), next] as const;
+      });
+      if (Option.isSome(selected)) {
+        return selected.value;
+      }
+      return { type: "pending" as const, request: yield* input.start() };
+    }),
+  );
+});
+
+export const clearProcessDiscoveryRequest = Effect.fn("clearProcessDiscoveryRequest")(function* (
+  pending: Ref.Ref<Map<string, PendingDiscoveryRequest>>,
+  deferred: PendingDiscoveryRequest["deferred"],
+) {
+  yield* Ref.update(pending, (current) => {
+    const next = new Map(current);
+    for (const [requestId, candidate] of next) {
+      if (candidate.deferred === deferred) {
+        next.delete(requestId);
+        break;
+      }
+    }
+    return next;
+  });
+});
+
 export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(function* () {
   const binary = yield* ResourceMonitorBinary.ResourceMonitorBinary;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -452,6 +514,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
   );
   const pendingHistories = yield* Ref.make(new Map<string, PendingHistoryRequest>());
   const pendingDiscoveries = yield* Ref.make(new Map<string, PendingDiscoveryRequest>());
+  const discoveryMutex = yield* Semaphore.make(1);
   const snapshots = yield* PubSub.sliding<NativeTelemetrySnapshot>(8);
   const healthChanges = yield* PubSub.sliding<NativeTelemetryClientHealth>(4);
   const retryQueue = yield* Queue.sliding<void>(1);
@@ -609,7 +672,11 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
                 ];
               }
               if (event.done) {
-                next.delete(event.requestId);
+                next.set(event.requestId, {
+                  ...request,
+                  processes,
+                  completed: Option.some(processes),
+                });
                 return [
                   Option.some({
                     deferred: request.deferred,
@@ -618,7 +685,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
                   next,
                 ];
               }
-              next.set(event.requestId, { deferred: request.deferred, processes });
+              next.set(event.requestId, { ...request, processes });
               return [Option.none(), next];
             },
           );
@@ -1022,52 +1089,70 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
           reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
         });
       }
-      const requestId = yield* crypto.randomUUIDv4.pipe(
-        Effect.mapError(
-          (cause) =>
-            new NativeTelemetryCommandFailed({
-              operation: "createProcessDiscoveryRequestId",
-              cause,
-            }),
-        ),
-      );
-      const deferred = yield* Deferred.make<
-        ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
-        NativeTelemetryClientError
-      >();
-      yield* Ref.update(pendingDiscoveries, (pending) => {
-        const next = new Map(pending);
-        next.set(requestId, { deferred, processes: [] });
-        return next;
+      const normalizedRoots = normalizeProcessDiscoveryRoots(roots, platform);
+      const request = yield* shareProcessDiscoveryRequest({
+        mutex: discoveryMutex,
+        pending: pendingDiscoveries,
+        rootKey: normalizedRoots.join("\u0000"),
+        start: () =>
+          Effect.gen(function* () {
+            const requestId = yield* crypto.randomUUIDv4.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new NativeTelemetryCommandFailed({
+                    operation: "createProcessDiscoveryRequestId",
+                    cause,
+                  }),
+              ),
+            );
+            const deferred = yield* Deferred.make<
+              ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+              NativeTelemetryClientError
+            >();
+            const request: PendingDiscoveryRequest = {
+              rootKey: normalizedRoots.join("\u0000"),
+              deferred,
+              processes: [],
+              completed: Option.none(),
+            };
+            yield* Ref.update(pendingDiscoveries, (pending) => {
+              const next = new Map(pending);
+              next.set(requestId, request);
+              return next;
+            });
+            yield* writeCommand(Option.getOrThrow(current.handle), {
+              version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+              type: "discoverProcesses",
+              requestId,
+              roots: [...normalizedRoots],
+            }).pipe(
+              Effect.tapError(() =>
+                Ref.update(pendingDiscoveries, (pending) => {
+                  const next = new Map(pending);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            return request;
+          }),
       });
-      return yield* writeCommand(Option.getOrThrow(current.handle), {
-        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
-        type: "discoverProcesses",
-        requestId,
-        roots: [...normalizeProcessDiscoveryRoots(roots, platform)],
-      }).pipe(
-        Effect.andThen(
-          Deferred.await(deferred).pipe(
-            Effect.timeoutOption(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
-                    new NativeTelemetryRequestTimedOut({
-                      operation: "discoverProcesses",
-                      timeoutMs: Duration.toMillis(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
-                    }),
-                  ),
-                onSome: Effect.succeed,
-              }),
-            ),
-          ),
-        ),
-        Effect.ensuring(
-          Ref.update(pendingDiscoveries, (pending) => {
-            const next = new Map(pending);
-            next.delete(requestId);
-            return next;
+      if (request.type === "completed") return request.processes;
+      return yield* Deferred.await(request.request.deferred).pipe(
+        Effect.timeoutOption(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new NativeTelemetryRequestTimedOut({
+                  operation: "discoverProcesses",
+                  timeoutMs: Duration.toMillis(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+                }),
+              ),
+            onSome: (processes) =>
+              clearProcessDiscoveryRequest(pendingDiscoveries, request.request.deferred).pipe(
+                Effect.as(processes),
+              ),
           }),
         ),
       );

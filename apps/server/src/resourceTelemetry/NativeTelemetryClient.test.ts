@@ -9,19 +9,24 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
 import {
   NativeTelemetryRequestTimedOut,
   NativeTelemetryStreamClosed,
+  type NativeTelemetryClientError,
+  type PendingDiscoveryRequest,
   appendProcessDiscoveryChunk,
   canCommandNativeTelemetrySidecar,
   canRequestNativeTelemetryRetry,
+  clearProcessDiscoveryRequest,
   commitCollectionControlUpdate,
   nativeTelemetrySupervisorFailureMessage,
   retainRecentNativeTelemetryFailures,
   resolveNativeSampleIntervalMs,
+  shareProcessDiscoveryRequest,
   synchronizeCollectionControlOnStart,
 } from "./NativeTelemetryClient.ts";
 
@@ -112,6 +117,144 @@ describe("canCommandNativeTelemetrySidecar", () => {
     expect(canCommandNativeTelemetrySidecar("unavailable", true)).toBe(false);
     expect(canCommandNativeTelemetrySidecar("degraded", false)).toBe(false);
   });
+});
+
+describe("shareProcessDiscoveryRequest", () => {
+  it.effect("shares only discovery requests for the same normalized roots", () =>
+    Effect.gen(function* () {
+      const mutex = yield* Semaphore.make(1);
+      const pending = yield* Ref.make<Map<string, PendingDiscoveryRequest>>(new Map());
+      let starts = 0;
+      const start = (rootKey: string) =>
+        Effect.gen(function* () {
+          starts += 1;
+          const deferred = yield* Deferred.make<
+            ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+            NativeTelemetryClientError
+          >();
+          const request: PendingDiscoveryRequest = {
+            rootKey,
+            deferred,
+            processes: [],
+            completed: Option.none(),
+          };
+          yield* Ref.update(pending, (current) =>
+            new Map(current).set(`discovery-${starts}`, request),
+          );
+          return request;
+        });
+
+      const first = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-a",
+        start: () => start("/workspace-a"),
+      });
+      const sameRoots = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-a",
+        start: () => start("/workspace-a"),
+      });
+      const differentRoots = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-b",
+        start: () => start("/workspace-b"),
+      });
+
+      expect(first).toEqual(sameRoots);
+      expect(differentRoots.type).toBe("pending");
+      expect(starts).toBe(2);
+    }),
+  );
+
+  it.effect("clears active successes and returns a late discovery result once", () =>
+    Effect.gen(function* () {
+      const mutex = yield* Semaphore.make(1);
+      const pending = yield* Ref.make<Map<string, PendingDiscoveryRequest>>(new Map());
+      let starts = 0;
+      const start = () =>
+        Effect.gen(function* () {
+          starts += 1;
+          const deferred = yield* Deferred.make<
+            ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+            NativeTelemetryClientError
+          >();
+          const request: PendingDiscoveryRequest = {
+            rootKey: "/workspace-a",
+            deferred,
+            processes: [],
+            completed: Option.none(),
+          };
+          yield* Ref.set(pending, new Map([[`discovery-${starts}`, request]]));
+          return request;
+        });
+
+      const first = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-a",
+        start,
+      });
+      expect(first.type).toBe("pending");
+      if (first.type !== "pending") return;
+      yield* Ref.set(
+        pending,
+        new Map([
+          [
+            "discovery-1",
+            {
+              ...first.request,
+              completed: Option.some([discoveryProcess(4_242)]),
+            },
+          ],
+        ]),
+      );
+
+      yield* clearProcessDiscoveryRequest(pending, first.request.deferred);
+      const fresh = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-a",
+        start,
+      });
+      expect(fresh.type).toBe("pending");
+      if (fresh.type !== "pending") return;
+      expect(starts).toBe(2);
+
+      yield* Ref.set(
+        pending,
+        new Map([
+          [
+            "discovery-2",
+            {
+              ...fresh.request,
+              completed: Option.some([discoveryProcess(4_242)]),
+            },
+          ],
+        ]),
+      );
+
+      const lateResult = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-a",
+        start,
+      });
+      expect(lateResult).toEqual({ type: "completed", processes: [discoveryProcess(4_242)] });
+      expect(starts).toBe(2);
+
+      const recovered = yield* shareProcessDiscoveryRequest({
+        mutex,
+        pending,
+        rootKey: "/workspace-a",
+        start,
+      });
+      expect(recovered.type).toBe("pending");
+      expect(starts).toBe(3);
+    }),
+  );
 });
 
 describe("appendProcessDiscoveryChunk", () => {

@@ -4,6 +4,7 @@ import {
   deriveProcessPanelGroups,
   formatTestCommand,
   isTestCommand,
+  processPanelNotice,
   processPanelStatus,
   type ProcessPanelEntry,
 } from "./ProcessPanel.logic";
@@ -288,6 +289,7 @@ describe("processPanelStatus", () => {
         hasData: false,
         hasQueryError: false,
         hasDataError: false,
+        hasStaleData: false,
       }),
     ).toEqual({
       label: "Connecting",
@@ -299,6 +301,7 @@ describe("processPanelStatus", () => {
         hasData: true,
         hasQueryError: false,
         hasDataError: false,
+        hasStaleData: false,
       }),
     ).toEqual({
       label: "Live",
@@ -310,6 +313,7 @@ describe("processPanelStatus", () => {
         hasData: true,
         hasQueryError: true,
         hasDataError: false,
+        hasStaleData: false,
       }),
     ).toEqual({ label: "Unavailable", tone: "error" });
     expect(
@@ -318,6 +322,7 @@ describe("processPanelStatus", () => {
         hasData: true,
         hasQueryError: false,
         hasDataError: true,
+        hasStaleData: false,
       }),
     ).toEqual({ label: "Unavailable", tone: "error" });
   });
@@ -329,6 +334,7 @@ describe("processPanelStatus", () => {
         hasData: true,
         hasQueryError: false,
         hasDataError: false,
+        hasStaleData: false,
       }),
     ).toEqual({ label: "Unavailable", tone: "error" });
   });
@@ -340,7 +346,31 @@ describe("processPanelStatus", () => {
         hasData: false,
         hasQueryError: false,
         hasDataError: false,
+        hasStaleData: false,
       }),
     ).toEqual({ label: "Unavailable", tone: "error" });
+  });
+
+  it("marks retained discovery data stale without hiding its warning", () => {
+    expect(
+      processPanelStatus({
+        environmentConnectionPhase: "connected",
+        hasData: true,
+        hasQueryError: false,
+        hasDataError: true,
+        hasStaleData: true,
+      }),
+    ).toEqual({ label: "Stale", tone: "warning" });
+    expect(
+      processPanelNotice({
+        queryError: null,
+        diagnosticsError: "Resource monitor 'discoverProcesses' request timed out after 10000ms.",
+        hasStaleData: true,
+      }),
+    ).toEqual({
+      tone: "warning",
+      message:
+        "Showing the last successful test discovery. Resource monitor 'discoverProcesses' request timed out after 10000ms.",
+    });
   });
 });
