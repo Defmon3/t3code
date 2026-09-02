@@ -67,6 +67,49 @@ describe("isPreviewRefreshShortcut", () => {
   });
 });
 
+describe("serializePreviewCapture", () => {
+  it("waits for an abandoned native capture before starting the next capture", async () => {
+    const target = {};
+    const tails = new WeakMap<object, Promise<void>>();
+    let resolveFirst: ((value: string) => void) | undefined;
+    const firstCapture = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const secondCapture = vi.fn(async () => "second");
+
+    const first = PreviewManager.serializePreviewCapture(tails, target, firstCapture);
+    const second = PreviewManager.serializePreviewCapture(tails, target, secondCapture);
+    await Promise.resolve();
+
+    expect(firstCapture).toHaveBeenCalledOnce();
+    expect(secondCapture).not.toHaveBeenCalled();
+
+    resolveFirst?.("first");
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+    expect(secondCapture).toHaveBeenCalledOnce();
+  });
+
+  it("continues the queue after a native capture failure", async () => {
+    const target = {};
+    const tails = new WeakMap<object, Promise<void>>();
+    const failed = PreviewManager.serializePreviewCapture(tails, target, async () => {
+      throw new Error("UnknownVizError");
+    });
+    const recovered = PreviewManager.serializePreviewCapture(
+      tails,
+      target,
+      async () => "recovered",
+    );
+
+    await expect(failed).rejects.toThrow("UnknownVizError");
+    await expect(recovered).resolves.toBe("recovered");
+  });
+});
+
 describe("previewWindowOpenAction", () => {
   const details = (overrides: {
     readonly url?: string;
@@ -3565,27 +3608,25 @@ describe("PreviewManager", () => {
       Effect.gen(function* () {
         let failKeyDown = false;
         let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
-        const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-          if (
-            failKeyDown &&
-            method === "Input.dispatchKeyEvent" &&
-            (params?.["type"] === "keyDown" || params?.["type"] === "rawKeyDown")
-          ) {
+        const sendInputEvent = vi.fn((event: Electron.KeyboardInputEvent) => {
+          if (failKeyDown && event.type === "rawKeyDown") {
             throw new Error("key dispatch failed");
           }
-          if (
-            method === "Input.dispatchKeyEvent" &&
-            (params?.["type"] === "keyDown" || params?.["type"] === "rawKeyDown")
-          ) {
+          if (event.type === "rawKeyDown") {
+            const shiftedDigit = event.keyCode === "1" && event.modifiers?.includes("shift");
             humanInput?.(
               {},
-              {
-                kind: "key",
-                key: params["key"],
-                code: params["code"] ?? "Digit1",
-              },
+              shiftedDigit
+                ? { kind: "key", key: "!", code: "Digit1" }
+                : {
+                    kind: "key",
+                    key: event.keyCode.toLowerCase(),
+                    code: `Key${event.keyCode}`,
+                  },
             );
           }
+        });
+        const sendCommand = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
           return method === "Runtime.evaluate" ? { result: { value: { ok: true } } } : undefined;
         });
         const restoreFocus = vi.fn();
@@ -3604,6 +3645,7 @@ describe("PreviewManager", () => {
           isLoading: () => false,
           isDevToolsOpened: () => false,
           focus,
+          sendInputEvent,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -3641,13 +3683,6 @@ describe("PreviewManager", () => {
           ([method, params]) =>
             method === "Emulation.setFocusEmulationEnabled" && params?.["enabled"] === true,
         );
-        const keyDownIndex = calls.findIndex(
-          ([method, params]) =>
-            method === "Input.dispatchKeyEvent" && params?.["type"] === "keyDown",
-        );
-        const keyUpIndex = calls.findIndex(
-          ([method, params]) => method === "Input.dispatchKeyEvent" && params?.["type"] === "keyUp",
-        );
         const focusOffIndex = calls.findIndex(
           ([method, params]) =>
             method === "Emulation.setFocusEmulationEnabled" && params?.["enabled"] === false,
@@ -3679,55 +3714,39 @@ describe("PreviewManager", () => {
         expect(restoreFocus).toHaveBeenCalledOnce();
         expect(methods).toContain("Page.bringToFront");
         expect(enableIndex).toBeLessThan(focusOnIndex);
-        expect(focusOnIndex).toBeLessThan(keyDownIndex);
-        expect(keyDownIndex).toBeLessThan(keyUpIndex);
-        expect(keyUpIndex).toBeLessThan(focusOffIndex);
-        expect(
-          calls.filter(
-            ([method, params]) =>
-              method === "Input.dispatchKeyEvent" && params?.["type"] === "keyUp",
-          ),
-        ).toHaveLength(1);
+        expect(focusOnIndex).toBeLessThan(focusOffIndex);
+        expect(sendInputEvent.mock.calls.map(([event]) => event.type)).toEqual([
+          "rawKeyDown",
+          "char",
+          "keyUp",
+        ]);
         expect(sendCommand).toHaveBeenCalledWith("Input.setIgnoreInputEvents", { ignore: false });
 
         sendCommand.mockClear();
+        sendInputEvent.mockClear();
         failKeyDown = true;
         const failedPress = yield* Effect.exit(manager.automationPress("tab_input", { key: "y" }));
 
         expect(Exit.isFailure(failedPress)).toBe(true);
-        expect(sendCommand).toHaveBeenCalledWith("Input.dispatchKeyEvent", {
+        expect(sendInputEvent).toHaveBeenLastCalledWith({
           type: "keyUp",
-          key: "y",
-          code: "KeyY",
-          modifiers: 0,
-          windowsVirtualKeyCode: 89,
-          location: 0,
-          isKeypad: false,
+          keyCode: "Y",
+          modifiers: [],
         });
         expect(sendCommand).toHaveBeenCalledWith("Emulation.setFocusEmulationEnabled", {
           enabled: false,
         });
         expect(restoreFocus).toHaveBeenCalledTimes(2);
-        expect(
-          sendCommand.mock.calls.filter(
-            ([method, params]) =>
-              method === "Input.dispatchKeyEvent" && params?.["type"] === "keyUp",
-          ),
-        ).toHaveLength(1);
+        expect(sendInputEvent).toHaveBeenCalledTimes(2);
 
         sendCommand.mockClear();
+        sendInputEvent.mockClear();
         failKeyDown = false;
         yield* manager.automationPress("tab_input", { key: "!" });
-        expect(sendCommand).toHaveBeenCalledWith("Input.dispatchKeyEvent", {
-          type: "keyDown",
-          key: "!",
-          code: "Digit1",
-          modifiers: 0,
-          windowsVirtualKeyCode: 49,
-          location: 0,
-          isKeypad: false,
-          text: "!",
-          unmodifiedText: "!",
+        expect(sendInputEvent).toHaveBeenCalledWith({
+          type: "rawKeyDown",
+          keyCode: "1",
+          modifiers: ["shift"],
         });
         expect(restoreFocus).toHaveBeenCalledTimes(3);
       }),
