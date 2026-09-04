@@ -560,6 +560,15 @@ export const OrchestrationProjectShell = Schema.Struct({
 });
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 
+export const BackgroundWorkItem = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  category: Schema.Literals(["agent", "monitor"]),
+  title: Schema.optional(TrimmedNonEmptyString),
+  status: Schema.Literals(["pending", "running", "waiting"]),
+  taskType: Schema.optional(TrimmedNonEmptyString),
+});
+export type BackgroundWorkItem = typeof BackgroundWorkItem.Type;
+
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -598,6 +607,8 @@ export const OrchestrationThreadShell = Schema.Struct({
    * live work. Optional so old servers/clients interop; absent = none.
    */
   backgroundLiveness: Schema.optional(Schema.NullOr(Schema.Literals(["working", "monitoring"]))),
+  /** Optional for interop with servers that predate per-task background work details. */
+  backgroundWork: Schema.optional(Schema.Array(BackgroundWorkItem)),
   /**
    * Current plan step while a turn runs, for the Working indicators
    * (sidebar row, in-chat working line). Cleared when the turn settles —

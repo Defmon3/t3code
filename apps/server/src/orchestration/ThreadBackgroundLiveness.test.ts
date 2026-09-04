@@ -71,6 +71,14 @@ describe("ThreadBackgroundLiveness", () => {
     expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("monitoring");
     liveness.recordTaskLiveness({
       threadId,
+      taskId: "m1",
+      taskType: undefined,
+      status: "waiting",
+      kind: "updated",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("monitoring");
+    liveness.recordTaskLiveness({
+      threadId,
       taskId: "a1",
       taskType: "subagent",
       status: undefined,
@@ -93,6 +101,61 @@ describe("ThreadBackgroundLiveness", () => {
       kind: "completed",
     });
     expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
+  });
+
+  it("keeps concrete live details and derives liveness from the same items", () => {
+    const liveness = ThreadBackgroundLiveness.make();
+    liveness.recordTaskLiveness({
+      threadId: "details",
+      taskId: "agent-1",
+      taskType: "local_agent",
+      status: "pending",
+      title: "Review auth flow",
+      kind: "started",
+    });
+    liveness.recordTaskLiveness({
+      threadId: "details",
+      taskId: "agent-1",
+      taskType: "local_agent",
+      status: "waiting",
+      title: "Waiting for review",
+      kind: "updated",
+    });
+
+    expect(liveness.getThreadBackgroundWork("details")).toEqual([
+      {
+        taskId: "agent-1",
+        category: "agent",
+        title: "Waiting for review",
+        status: "waiting",
+        taskType: "local_agent",
+      },
+    ]);
+    expect(liveness.getThreadBackgroundLiveness("details")).toBe("working");
+
+    const snapshot = liveness.getThreadBackgroundWork("details");
+    const first = snapshot[0] as { status: "pending" | "running" | "waiting" } | undefined;
+    if (first) first.status = "running";
+    expect(liveness.getThreadBackgroundWork("details")[0]?.status).toBe("waiting");
+
+    liveness.recordTaskLiveness({
+      threadId: "details",
+      taskId: "agent-1",
+      taskType: undefined,
+      status: "completed",
+      kind: "completed",
+    });
+    expect(liveness.getThreadBackgroundWork("details")).toEqual([]);
+    expect(liveness.getThreadBackgroundLiveness("details")).toBeNull();
+
+    liveness.recordTaskLiveness({
+      threadId: "details",
+      taskId: "agent-1",
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundWork("details")).toEqual([]);
   });
 
   it("terminal rows without a taskType still clear monitor entries", () => {

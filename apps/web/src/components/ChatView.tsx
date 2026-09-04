@@ -329,6 +329,7 @@ import {
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
 import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { BackgroundWorkBanner } from "./chat/BackgroundWorkBanner";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import {
   hasAvailableCompactionProvider,
@@ -5328,8 +5329,18 @@ function ChatViewContent(props: ChatViewProps) {
   // banner is the only visible stop affordance. Stop routes through the
   // stop-everything interrupt: it kills every live background task before
   // interrupting, and works by session, so no active turn is needed.
+  const activeBackgroundWork =
+    !isWorking && activeThread ? activeThreadShell?.backgroundWork : undefined;
   const activeBackgroundLiveness =
-    !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
+    !isWorking && activeThread
+      ? activeBackgroundWork === undefined
+        ? (activeThreadShell?.backgroundLiveness ?? null)
+        : activeBackgroundWork.some((item) => item.category === "agent")
+          ? "working"
+          : activeBackgroundWork.length > 0
+            ? "monitoring"
+            : null
+      : null;
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command
@@ -5368,6 +5379,20 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeBackgroundLiveness === null || !activeThread) {
       return null;
     }
+    if (activeBackgroundWork !== undefined) {
+      return {
+        id: `background-liveness:${activeThread.id}`,
+        variant: "default",
+        priority: "activity",
+        content: (
+          <BackgroundWorkBanner
+            items={activeBackgroundWork}
+            isStopping={isStoppingBackgroundWork}
+            onStop={() => void handleStopBackgroundWork()}
+          />
+        ),
+      };
+    }
     const working = activeBackgroundLiveness === "working";
     const liveCount = agentPanelModel.liveCount;
     return {
@@ -5399,6 +5424,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [
     activeBackgroundLiveness,
     activeThread,
+    activeBackgroundWork,
     agentPanelModel.liveCount,
     handleStopBackgroundWork,
     isStoppingBackgroundWork,
