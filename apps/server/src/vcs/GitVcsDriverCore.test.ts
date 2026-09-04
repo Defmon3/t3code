@@ -1113,6 +1113,28 @@ it.effect("keeps ref namespaces isolated and marks current and origin default re
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("marks the local default branch in history refs", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["branch", "feature/local"]);
+    yield* git(cwd, ["tag", "release/v1"]);
+    yield* git(remote, ["init", "--bare"]);
+    yield* git(cwd, ["remote", "add", "origin", remote]);
+    yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+    yield* git(cwd, ["remote", "set-head", "origin", initialBranch]);
+
+    const local = yield* driver.listHistoryRefs({ cwd, namespace: "local", refresh: true });
+    const tags = yield* driver.listHistoryRefs({ cwd, namespace: "tag" });
+
+    assert.equal(local.refs.find((ref) => ref.name === initialBranch)?.isDefault, true);
+    assert.equal(local.refs.find((ref) => ref.name === "feature/local")?.isDefault, false);
+    assert.isTrue(tags.refs.every((ref) => !ref.isDefault));
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("filters history refs with a case-insensitive substring query", () =>
   Effect.gen(function* () {
     const cwd = yield* makeTmpDir();

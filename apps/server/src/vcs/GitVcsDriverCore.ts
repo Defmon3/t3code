@@ -3178,6 +3178,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           },
         });
       }
+      const defaultLocalBranch =
+        namespace === "local" ? yield* resolveDefaultBranchName(input.cwd, "origin") : null;
       const normalizedQuery = query?.toLowerCase() ?? null;
       const matchingRefs =
         normalizedQuery === null
@@ -3186,7 +3188,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const isComplete = matchingRefs.length <= GIT_REF_SNAPSHOT_MAX_REFS;
       const refs = matchingRefs.slice(0, GIT_REF_SNAPSHOT_MAX_REFS).map(({ fullName, ref }) => ({
         ...ref,
-        isDefault: namespace === "remote" && fullName === defaultRemoteRef,
+        isDefault:
+          namespace === "remote"
+            ? fullName === defaultRemoteRef
+            : namespace === "local" && ref.name === defaultLocalBranch,
       }));
       snapshot = {
         gitCommonDir: repositoryPaths.gitCommonDir,
