@@ -359,6 +359,7 @@ describe("ProviderRuntimeIngestion", () => {
       engine,
       dispatch,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readShell: () => Effect.runPromise(snapshotQuery.getShellSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
@@ -3371,6 +3372,55 @@ describe("ProviderRuntimeIngestion", () => {
         (entry: ProviderRuntimeTestProposedPlan) => entry.id === "plan:thread-1:turn:turn-task-1",
       )?.planMarkdown,
     ).toBe("# Plan title");
+  });
+
+  it("projects updated task descriptions into live background work details", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-background-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "background-agent",
+        taskType: "local_agent",
+        description: "Initial review",
+      },
+    });
+    harness.emit({
+      type: "task.updated",
+      eventId: asEventId("evt-background-updated"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "background-agent",
+        taskType: "local_agent",
+        status: "waiting",
+        description: "Review auth flow",
+      },
+    });
+
+    await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-background-updated"),
+    );
+    const shell = await harness.readShell();
+    const thread = shell.threads.find((entry) => entry.id === "thread-1");
+    expect(thread).toBeDefined();
+    if (!thread) throw new Error("Expected background thread shell");
+    expect(thread.backgroundLiveness).toBe("working");
+    expect(thread.backgroundWork).toEqual([
+      {
+        taskId: "background-agent",
+        category: "agent",
+        title: "Review auth flow",
+        status: "waiting",
+        taskType: "local_agent",
+      },
+    ]);
   });
 
   it("titles task activities with the task description, including on completion", async () => {

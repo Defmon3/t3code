@@ -389,6 +389,10 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
+  const backgroundWorkFields = (threadId: string) => {
+    const backgroundWork = threadBackgroundLiveness.getThreadBackgroundWork(threadId);
+    return backgroundWork.length > 0 ? { backgroundWork } : {};
+  };
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const sql = yield* SqlClient.SqlClient;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -2261,6 +2265,7 @@ pending_approval_requests AS (
                       backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                         row.threadId,
                       ),
+                      ...backgroundWorkFields(row.threadId),
                       planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
                     } satisfies OrchestrationThreadShell)
                   : Result.failVoid,
@@ -2410,6 +2415,7 @@ pending_approval_requests AS (
                   backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                     row.threadId,
                   ),
+                  ...backgroundWorkFields(row.threadId),
                   planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
                 }),
               ),
@@ -2695,6 +2701,7 @@ pending_approval_requests AS (
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,
         ),
+        ...backgroundWorkFields(threadRow.value.threadId),
         planProgress: threadPlanProgress.getThreadPlanProgress(threadRow.value.threadId),
       } satisfies OrchestrationThreadShell);
     });

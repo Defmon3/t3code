@@ -1919,7 +1919,11 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "task.started" || event.type === "task.progress") {
+      if (
+        event.type === "task.started" ||
+        event.type === "task.progress" ||
+        event.type === "task.updated"
+      ) {
         const description = event.payload.description?.trim();
         if (description) {
           yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
@@ -1958,6 +1962,7 @@ const make = Effect.gen(function* () {
             taskId: payload.taskId,
             taskType: payload.taskType,
             status: payload.status,
+            title: payload.description,
             agentId: payload.agentId,
             kind:
               event.type === "task.started"

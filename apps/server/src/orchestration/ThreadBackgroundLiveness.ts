@@ -1,6 +1,6 @@
 /**
- * ThreadBackgroundLivenessService - in-memory per-thread background liveness
- * for the sidebar status pill.
+ * ThreadBackgroundLivenessService - in-memory per-thread background work
+ * details and the liveness summary derived from them.
  *
  * The turn can settle while native background work runs on (subagent fleets,
  * workflow runs, Monitor watch loops); the shell previously showed nothing.
@@ -15,17 +15,12 @@
  *
  * @module ThreadBackgroundLivenessService
  */
-import { INERT_TASK_TYPES, MONITOR_TASK_TYPES } from "@t3tools/contracts";
+import { INERT_TASK_TYPES, MONITOR_TASK_TYPES, type BackgroundWorkItem } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 export type ThreadBackgroundLiveness = "working" | "monitoring" | null;
-
-interface ThreadLivenessState {
-  readonly agents: Set<string>;
-  readonly monitors: Set<string>;
-}
 
 // Classification sets are the shared contracts copies (MONITOR_TASK_TYPES:
 // watch loops — monitor tasks plus background shells, which in practice are
@@ -57,6 +52,7 @@ export class ThreadBackgroundLivenessService extends Context.Service<
       readonly taskId: string;
       readonly taskType: string | undefined;
       readonly status: string | undefined;
+      readonly title?: string | undefined;
       readonly kind: "started" | "progress" | "updated" | "completed";
       readonly agentId?: string | undefined;
     }) => void;
@@ -69,34 +65,24 @@ export class ThreadBackgroundLivenessService extends Context.Service<
      * "monitoring" only when watch loops are the ONLY live work.
      */
     readonly getThreadBackgroundLiveness: (threadId: string) => ThreadBackgroundLiveness;
+    readonly getThreadBackgroundWork: (threadId: string) => ReadonlyArray<BackgroundWorkItem>;
   }
 >()("t3/orchestration/ThreadBackgroundLiveness/ThreadBackgroundLivenessService") {}
 
 export function make(): ThreadBackgroundLivenessService["Service"] {
-  const stateByThreadId = new Map<string, ThreadLivenessState>();
+  const stateByThreadId = new Map<string, Map<string, BackgroundWorkItem>>();
 
-  const stateFor = (threadId: string): ThreadLivenessState => {
-    const existing = stateByThreadId.get(threadId);
-    if (existing) {
-      return existing;
-    }
-    const created: ThreadLivenessState = { agents: new Set(), monitors: new Set() };
-    stateByThreadId.set(threadId, created);
-    return created;
-  };
-
-  // Classification is per-transition, not sticky: a task first seen without
-  // a taskType may later reveal itself as a shell, become inert, or turn out
-  // to be agent-owned. Every path drops any prior entry for the taskId so a
-  // stale bucket assignment can't pin the thread's status (review finding).
+  // Classification is refreshed when a transition supplies taskType. A
+  // status-only update preserves the known category, while a task first seen
+  // without type defaults to agent. Map replacement prevents stale duplicate
+  // categories from pinning the thread's status.
   const drop = (threadId: string, taskId: string) => {
     const state = stateByThreadId.get(threadId);
     if (!state) {
       return;
     }
-    state.agents.delete(taskId);
-    state.monitors.delete(taskId);
-    if (state.agents.size === 0 && state.monitors.size === 0) {
+    state.delete(taskId);
+    if (state.size === 0) {
       stateByThreadId.delete(threadId);
     }
   };
@@ -134,19 +120,35 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
       // row after idle must not put the task back in the live set (#7128).
       if ((input.kind === "progress" || input.kind === "updated") && input.status === undefined) {
         const existing = stateByThreadId.get(input.threadId);
-        const stillLive =
-          existing !== undefined &&
-          (existing.agents.has(input.taskId) || existing.monitors.has(input.taskId));
+        const stillLive = existing?.has(input.taskId) ?? false;
         if (!stillLive) {
           return;
         }
       }
 
-      drop(input.threadId, input.taskId);
-      const state = stateFor(input.threadId);
-      const bucket =
-        taskType !== undefined && MONITOR_TASK_TYPES.has(taskType) ? state.monitors : state.agents;
-      bucket.add(input.taskId);
+      const existing = stateByThreadId.get(input.threadId)?.get(input.taskId);
+      const state = stateByThreadId.get(input.threadId) ?? new Map<string, BackgroundWorkItem>();
+      const category =
+        taskType !== undefined
+          ? MONITOR_TASK_TYPES.has(taskType)
+            ? "monitor"
+            : "agent"
+          : (existing?.category ?? "agent");
+      state.set(input.taskId, {
+        taskId: input.taskId,
+        category,
+        ...(input.title
+          ? { title: input.title }
+          : existing?.title
+            ? { title: existing.title }
+            : {}),
+        status:
+          input.status === "pending" || input.status === "waiting" || input.status === "running"
+            ? input.status
+            : (existing?.status ?? "running"),
+        ...(taskType ? { taskType } : existing?.taskType ? { taskType: existing.taskType } : {}),
+      });
+      stateByThreadId.set(input.threadId, state);
     },
 
     clearThreadLiveness: (threadId) => {
@@ -158,14 +160,19 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
       if (!state) {
         return null;
       }
-      if (state.agents.size > 0) {
-        return "working";
+      for (const item of state.values()) {
+        if (item.category === "agent") {
+          return "working";
+        }
       }
-      if (state.monitors.size > 0) {
+      if (state.size > 0) {
         return "monitoring";
       }
       return null;
     },
+
+    getThreadBackgroundWork: (threadId) =>
+      Array.from(stateByThreadId.get(threadId)?.values() ?? [], (item) => ({ ...item })),
   };
 }
 
