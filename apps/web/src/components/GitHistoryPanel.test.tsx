@@ -386,6 +386,31 @@ function loadMoreHistory(panel: ReactElement<Record<string, unknown>>): void {
   (loadMore?.props.onClick as (() => void) | undefined)?.();
 }
 
+type LayoutEntry = { readonly contentRect: { readonly width: number } };
+
+/** Drives the panel's ResizeObserver so the next render uses the narrow layout. */
+function applyNarrowLayout(panel: ReactElement<Record<string, unknown>>): void {
+  const panelRef = panel.props.ref as { current: HTMLElement | null };
+  panelRef.current = {} as HTMLElement;
+  const callbacks: Array<(entries: ReadonlyArray<LayoutEntry>) => void> = [];
+  class LayoutObserver {
+    constructor(callback: (entries: ReadonlyArray<LayoutEntry>) => void) {
+      callbacks.push(callback);
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Reflect.set(globalThis, "ResizeObserver", LayoutObserver);
+  try {
+    flushEffects();
+  } finally {
+    Reflect.deleteProperty(globalThis, "ResizeObserver");
+  }
+  expect(callbacks).toHaveLength(1);
+  callbacks[0]?.([{ contentRect: { width: 640 } }]);
+}
+
 function renderComponent(
   element: ReactElement<Record<string, unknown>>,
 ): ReactElement<Record<string, unknown>> {
@@ -826,6 +851,34 @@ describe("GitHistoryPanel", () => {
   it("keeps the desktop refs and details workflow available at ordinary desktop widths", () => {
     expect(isWideHistoryLayout(1119)).toBe(false);
     expect(isWideHistoryLayout(1120)).toBe(true);
+  });
+
+  it("opens the narrow-layout branches sheet after a failed history load", () => {
+    historyState.pages.set(undefined, {
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Could not read Git history.")),
+    });
+
+    applyNarrowLayout(renderPanel());
+    const narrowPanel = renderPanel();
+    const branches = visitElements(
+      narrowPanel,
+      (element) => element.props["aria-controls"] === "git-history-refs-panel",
+    );
+    expect(branches).not.toBeNull();
+    (branches?.props.onClick as (() => void) | undefined)?.();
+
+    const openedPanel = renderPanel();
+    const refsPane = visitElements(
+      openedPanel,
+      (element) => element.props.id === "git-history-refs-panel",
+    );
+    expect(refsPane).not.toBeNull();
+
+    (refsPane?.props.onClose as (() => void) | undefined)?.();
+    const closedPanel = renderPanel();
+    const header = visitElements(closedPanel, (element) => element.type === "header");
+    expect(header?.props.inert).toBeUndefined();
   });
 
   it("filters history by commit message", () => {
