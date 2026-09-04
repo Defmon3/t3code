@@ -842,6 +842,55 @@ it.effect("returns full commit details and root commit changed files", () =>
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("keeps gpg signature output out of history and commit details records", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+
+    // Stand-in for gpg: git prints whatever it writes ahead of the log records.
+    const gpgProgram = pathService.join(cwd, "fake-gpg.sh");
+    yield* fileSystem.writeFileString(
+      gpgProgram,
+      '#!/bin/sh\necho "gpg: Signature made by a fake signer" 1>&2\nexit 0\n',
+    );
+    yield* fileSystem.chmod(gpgProgram, 0o755);
+    yield* git(cwd, ["config", "gpg.program", gpgProgram.replaceAll("\\", "/")]);
+    yield* git(cwd, ["config", "log.showSignature", "true"]);
+
+    const tree = yield* git(cwd, ["rev-parse", "HEAD^{tree}"]);
+    const parent = yield* git(cwd, ["rev-parse", "HEAD"]);
+    yield* writeTextFile(
+      cwd,
+      "signed-commit-object",
+      `tree ${tree}\nparent ${parent}\n` +
+        "author Test <test@test.com> 1700000000 +0000\n" +
+        "committer Test <test@test.com> 1700000000 +0000\n" +
+        "gpgsig -----BEGIN PGP SIGNATURE-----\n \n aaaa\n -----END PGP SIGNATURE-----\n" +
+        "\nsigned subject\n",
+    );
+    const hash = yield* git(cwd, [
+      "hash-object",
+      "-w",
+      "-t",
+      "commit",
+      pathService.join(cwd, "signed-commit-object"),
+    ]);
+    yield* git(cwd, ["update-ref", "HEAD", hash]);
+
+    const history = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.match(history.commits[0]?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(history.commits[0]?.hash, hash);
+    assert.equal(history.commits[0]?.subject, "signed subject");
+
+    const details = yield* driver.getCommitDetails({ cwd, hash });
+    assert.match(details.commit?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(details.commit?.subject, "signed subject");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("pages commit files once, rejects replay, and cleans up after the final page", () =>
   Effect.gen(function* () {
     const cwd = yield* makeTmpDir();
