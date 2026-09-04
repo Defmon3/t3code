@@ -7,6 +7,7 @@ import {
   type VcsListCommitFilesResult,
   type VcsHistoryRef,
 } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import type { ReactElement } from "react";
@@ -59,6 +60,7 @@ const historyState = vi.hoisted(() => ({
 }));
 
 const fontState = vi.hoisted(() => ({ interfaceSize: 16 }));
+const settingsState = vi.hoisted(() => ({ timestampFormat: "24-hour" as TimestampFormat }));
 const localStorageState = vi.hoisted(() => ({ favoriteBranches: [] as ReadonlyArray<string> }));
 
 vi.mock("../hooks/useCopyToClipboard", () => ({
@@ -70,8 +72,15 @@ vi.mock("../hooks/useCopyToClipboard", () => ({
 
 vi.mock("../hooks/useSettings", () => ({
   useClientSettings: <Value,>(
-    selector: (settings: { readonly fontSizeInterface: number }) => Value,
-  ) => selector({ fontSizeInterface: fontState.interfaceSize }),
+    selector: (settings: {
+      readonly fontSizeInterface: number;
+      readonly timestampFormat: TimestampFormat;
+    }) => Value,
+  ) =>
+    selector({
+      fontSizeInterface: fontState.interfaceSize,
+      timestampFormat: settingsState.timestampFormat,
+    }),
 }));
 
 vi.mock("../hooks/useLocalStorage", () => ({
@@ -418,6 +427,7 @@ describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
     fontState.interfaceSize = 16;
+    settingsState.timestampFormat = "24-hour";
     localStorageState.favoriteBranches = [];
     effectQueue.cursor = 0;
     effectQueue.dependencies.length = 0;
@@ -539,6 +549,46 @@ describe("GitHistoryPanel", () => {
     expect(generations).toContain(2);
     expect(generations).not.toContain(3);
     expect(generations.at(-1)).toBe(2);
+  });
+
+  it("renders commit dates in the configured timestamp format", () => {
+    const authoredAt = new Date(2026, 0, 15, 13, 5).toISOString();
+    const historyCommit = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Add panel"),
+      authoredAt,
+    };
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const readRowDate = () => {
+      const list = historyList(renderPanel());
+      const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+      const rowButton = visitElements(
+        historyRow,
+        (element) => element.props["data-commit-hash"] === historyCommit.hash,
+      );
+      const dateCell = visitElements(
+        historyRow,
+        (element) =>
+          typeof element.props.children === "string" && element.props.children.includes(":05"),
+      );
+      return {
+        ariaLabel: rowButton?.props["aria-label"] as string,
+        visible: dateCell?.props.children as string,
+      };
+    };
+
+    settingsState.timestampFormat = "24-hour";
+    const twentyFourHour = readRowDate();
+    expect(twentyFourHour.visible).toContain("13:05");
+    expect(twentyFourHour.ariaLabel).toContain("13:05");
+
+    hooks.reset();
+    settingsState.timestampFormat = "12-hour";
+    const twelveHour = readRowDate();
+    expect(twelveHour.visible).toContain("1:05");
+    expect(twelveHour.visible).not.toContain("13:05");
+    expect(twelveHour.ariaLabel).toContain("1:05");
+    expect(twelveHour.ariaLabel).not.toContain("13:05");
   });
 
   it("rekeys open history reads when the shared VCS history revision changes", () => {

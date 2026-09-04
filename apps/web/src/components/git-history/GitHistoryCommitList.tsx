@@ -1,4 +1,5 @@
 import type { GitHistoryCommit } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   CheckIcon,
   CircleDotIcon,
@@ -15,6 +16,7 @@ import {
   type GitHistoryGraphRow,
 } from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
+import { formatShortTimestamp, parseTimestampDate } from "../../timestampFormat";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
@@ -33,20 +35,16 @@ export function queryErrorMessage(cause: Cause.Cause<unknown>): string {
     : "Could not load Git history.";
 }
 
-export function formatCommitDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return value;
+export function formatCommitDate(value: string, timestampFormat: TimestampFormat): string {
+  const date = parseTimestampDate(value);
+  if (!date) return value;
   const now = new Date();
   const elapsedMs = now.valueOf() - date.valueOf();
   if (elapsedMs >= 0 && elapsedMs < 60 * 60 * 1_000) {
     const minutes = Math.max(1, Math.floor(elapsedMs / 60_000));
     return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
   }
-  const time = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(date);
+  const time = formatShortTimestamp(value, timestampFormat);
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
@@ -256,6 +254,7 @@ export function CommitRow(props: {
   rowHeight?: number;
   refKinds: ReadonlyMap<string, CommitRefKind>;
   issueUrlPrefix?: string;
+  timestampFormat: TimestampFormat;
   selected: boolean;
   onSelect: (hash: string) => void;
 }) {
@@ -267,6 +266,7 @@ export function CommitRow(props: {
   });
   const pullRequestNumber = pullRequestNumberFromSubject(commit.subject);
   const isMergeCommit = commit.parentHashes.length > 1 || /^Merge\b/i.test(commit.subject);
+  const authoredAtLabel = formatCommitDate(commit.authoredAt, props.timestampFormat);
   return (
     <div
       className={cn(
@@ -281,7 +281,7 @@ export function CommitRow(props: {
         className="absolute inset-0 z-0 outline-none focus-visible:bg-accent/60"
         onClick={() => props.onSelect(commit.hash)}
         aria-pressed={props.selected}
-        aria-label={`${commit.subject || "No subject"}. Author ${commit.authorName}, ${formatCommitDate(commit.authoredAt)}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : commit.parentHashes.length === 1 ? "One parent." : "Root commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
+        aria-label={`${commit.subject || "No subject"}. Author ${commit.authorName}, ${authoredAtLabel}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : commit.parentHashes.length === 1 ? "One parent." : "Root commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
       />
       <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-stretch">
         <GraphCell
@@ -338,7 +338,7 @@ export function CommitRow(props: {
             {commit.authorName}
           </span>
           <span className="truncate text-muted-foreground @max-[720px]:hidden">
-            {formatCommitDate(commit.authoredAt)}
+            {authoredAtLabel}
           </span>
         </div>
       </div>

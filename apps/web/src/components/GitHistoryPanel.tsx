@@ -122,6 +122,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const isWideLayout = useWideHistoryLayout(panelRef);
   const interfaceFontSize = useClientSettings((settings) => settings.fontSizeInterface);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const rowHeight = gitHistoryRowHeight(interfaceFontSize);
   const baseTargetKey = `${props.environmentId}:${props.cwd}`;
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
@@ -698,6 +699,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                       laneCount={laneCount}
                       rowHeight={rowHeight}
                       refKinds={commitRefKinds}
+                      timestampFormat={timestampFormat}
                       {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
                       selected={item.commit.hash === selectedHash}
                       onSelect={setSelectedHash}
@@ -752,6 +754,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                 flexBasis: detailsPaneWidth,
               }}
               details={selectedCommitDetails}
+              timestampFormat={timestampFormat}
               files={selectedCommitFiles}
               filesCapped={commitFilesCapped}
               filesHasMore={commitFilesHasMore}
@@ -795,6 +798,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                   id="git-history-details-panel"
                   className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
                   details={selectedCommitDetails}
+                  timestampFormat={timestampFormat}
                   files={selectedCommitFiles}
                   filesCapped={commitFilesCapped}
                   filesHasMore={commitFilesHasMore}
