@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -12,13 +13,45 @@ const mocks = vi.hoisted(() => ({
   openFile: vi.fn(),
   openInBrowser: vi.fn(),
   openInEditor: vi.fn(),
+  searchProjectEntries: vi.fn(),
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({ availableEditors: [] }) }));
+vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../hooks/useSettings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../hooks/useSettings")>();
+  const settings = actual.getClientSettings();
+  return {
+    ...actual,
+    useClientSettings: (select?: (value: typeof settings) => unknown) =>
+      select ? select(settings) : settings,
+  };
+});
 vi.mock("~/lib/openPullRequestLink", () => ({ useOpenChangeRequestLink: () => () => false }));
 vi.mock("../state/assets", () => ({ assetEnvironment: { createUrl: "asset-url" } }));
-vi.mock("../state/entities", () => ({ useActiveEnvironmentId: () => "env-1" }));
+vi.mock("../state/entities", () => ({
+  readThreadShell: () => null,
+  useActiveEnvironmentId: () => "env-1",
+  useProjects: () => [],
+}));
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: "preview-open" } }));
+vi.mock("../state/projects", () => ({ projectEnvironment: { searchEntries: "project-search" } }));
+vi.mock("../state/presentation", () => ({
+  useEnvironmentPresentation: () => ({
+    isReady: true,
+    presentation: {
+      entry: {
+        target: null,
+        profile: { _id: "Option", _tag: "None" },
+      },
+      connection: { phase: "connected", error: null, traceId: null },
+      serverConfig: null,
+    },
+  }),
+}));
+vi.mock("../remoteOpen", () => ({
+  useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }),
+}));
 vi.mock("../state/server", () => ({
   serverEnvironment: { configValueAtom: () => "server-config" },
 }));
@@ -27,9 +60,13 @@ vi.mock("../state/session", () => ({
 }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/use-atom-query-runner", () => ({
-  useAtomQueryRunner: () => mocks.createAssetUrl,
+  useAtomQueryRunner: (operation: string) =>
+    operation === "project-search" ? mocks.searchProjectEntries : mocks.createAssetUrl,
 }));
-vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => mocks.openInEditor }));
+vi.mock("../editorPreferences", () => ({
+  useOpenInPreferredEditor: () => mocks.openInEditor,
+  usePreferredEditor: () => [null, vi.fn()],
+}));
 vi.mock("../previewStateStore", () => ({ isPreviewSupportedInRuntime: () => true }));
 vi.mock("../browser/openFileInPreview", () => ({
   BrowserPreviewUnavailableError: class BrowserPreviewUnavailableError extends Error {},
@@ -55,7 +92,8 @@ vi.mock("./ui/tooltip", () => ({
 
 import ChatMarkdown from "./ChatMarkdown";
 
-const threadRef = { environmentId: "env-1", threadId: "thread-1" } as never;
+const environmentId = EnvironmentId.make("env-1");
+const threadRef = { environmentId, threadId: "thread-1" } as never;
 
 function renderChatLink(path: string, withThread = true) {
   captured.link = null;
@@ -64,6 +102,7 @@ function renderChatLink(path: string, withThread = true) {
       text={`[Open the file](file:///${path})`}
       cwd="G:/workspace"
       threadRef={withThread ? threadRef : undefined}
+      environmentId={withThread ? undefined : environmentId}
     />,
   );
   const link = captured.link as FileLinkElement | null;
@@ -77,6 +116,7 @@ describe("ChatMarkdown file link routing", () => {
     vi.clearAllMocks();
     mocks.openInBrowser.mockResolvedValue({ _tag: "Success" });
     mocks.openInEditor.mockResolvedValue({ _tag: "Success" });
+    mocks.searchProjectEntries.mockResolvedValue({ _tag: "Success", value: { entries: [] } });
   });
 
   it("opens workspace HTML with the absolute path validated by the browser preview server", async () => {

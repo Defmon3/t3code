@@ -635,7 +635,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       ]);
       assert.deepEqual(deep.threadRows, [{ updatedAt: at(4) }]);
       assert.equal(deep.statements.length, shallow.statements.length);
-      assert.equal(shallow.statements.length, 6);
+      assert.equal(shallow.statements.length, 5);
       for (const measurement of [shallow, deep]) {
         assert.deepEqual(
           measurement.projectionStateRows,

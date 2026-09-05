@@ -8,7 +8,12 @@
  * of. Two controls wide is the whole design, and the trigger's dot is what says the list is
  * narrowed.
  */
-import type { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectIconOverride,
+  ProjectId,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
 import type { ElementType, ReactNode } from "react";
 
@@ -203,6 +208,8 @@ export function ListProjectFilterGroup({
     readonly id: ProjectId;
     readonly title: string;
     readonly workspaceRoot: string;
+    readonly faviconPath?: string | null | undefined;
+    readonly projectIcon?: ProjectIconOverride | null | undefined;
   }>;
   projectId: ProjectId | undefined;
   /**
@@ -250,6 +257,13 @@ export function ListProjectFilterGroup({
                   <ProjectFavicon
                     environmentId={environmentId}
                     cwd={project.workspaceRoot}
+                    projectName={project.title}
+                    {...(project.faviconPath === undefined
+                      ? {}
+                      : { faviconPath: project.faviconPath })}
+                    {...(project.projectIcon === undefined
+                      ? {}
+                      : { projectIcon: project.projectIcon })}
                     fallbackIcon={FolderGit2Icon}
                     className="size-3.5 shrink-0"
                   />

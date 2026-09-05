@@ -67,6 +67,7 @@ import {
   RightPanelTabs,
   type IssueTabStatus,
   type PullRequestTabStatus,
+  type PullRequestTabStatusSeed,
 } from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
@@ -415,14 +416,14 @@ function IssuesRouteView() {
     [activeIssueSurfaceId],
   );
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
-    Record<string, PullRequestTabStatus>
+    Record<string, PullRequestTabStatusSeed>
   >({});
   const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
     const id = pullRequestSurfaceId(status);
     setPullRequestTabStatuses((current) =>
       current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
         ? current
-        : { ...current, [id]: status },
+        : { ...current, [id]: { state: status.state, isDraft: status.isDraft } },
     );
   }, []);
 
@@ -1421,6 +1422,7 @@ function IssuesRouteView() {
         {rightPanelState.isOpen && activeSurface && issueEnvironmentId !== null ? (
           <RightPanelTabs
             mode="inline"
+            environmentId={issueEnvironmentId}
             widthStorageKey="t3code:issue-panel-width"
             // Default to roughly half the viewport: an issue's conversation needs more room
             // than a chat, so the 540px chat-preview default squashes it. SSR has no window,
@@ -1439,6 +1441,7 @@ function IssuesRouteView() {
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
+            onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
             onAddGitHistory={() => undefined}
@@ -1455,7 +1458,7 @@ function IssuesRouteView() {
             issueAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}
-            pullRequestStatuses={pullRequestTabStatuses}
+            pullRequestStatusSeeds={pullRequestTabStatuses}
             issueStatuses={issueTabStatuses}
           >
             {activeSurface.kind === "pull-request" ? (

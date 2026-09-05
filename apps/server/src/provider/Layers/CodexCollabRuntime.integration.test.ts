@@ -9,6 +9,7 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -274,7 +275,7 @@ describe("CodexSessionRuntime collab integration", () => {
       const runtime = yield* makeCodexSessionRuntime({
         threadId: ThreadId.make("thread-collab-model-activity"),
         binaryPath: peerPath,
-        cwd: "/tmp",
+        cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
@@ -366,7 +367,7 @@ describe("CodexSessionRuntime collab integration", () => {
       const runtime = yield* makeCodexSessionRuntime({
         threadId: ThreadId.make("thread-collab-model-spawn"),
         binaryPath: peerPath,
-        cwd: "/tmp",
+        cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
@@ -445,7 +446,7 @@ describe("CodexSessionRuntime collab integration", () => {
           const runtime = yield* makeCodexSessionRuntime({
             threadId: ThreadId.make(`thread-collab-model-${name}`),
             binaryPath: peerPath,
-            cwd: "/tmp",
+            cwd: NodeOS.tmpdir(),
             runtimeMode: "full-access",
             environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
           });
@@ -484,7 +485,7 @@ describe("CodexSessionRuntime collab integration", () => {
       const runtime = yield* makeCodexSessionRuntime({
         threadId: ThreadId.make("thread-collab-integration"),
         binaryPath: peerPath,
-        cwd: "/tmp",
+        cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
@@ -714,7 +715,7 @@ describe("CodexSessionRuntime collab integration", () => {
       const runtime = yield* makeCodexSessionRuntime({
         threadId: ThreadId.make("thread-collab-stop"),
         binaryPath: peerPath,
-        cwd: "/tmp",
+        cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
@@ -819,7 +820,7 @@ describe("CodexSessionRuntime collab integration", () => {
       const runtime = yield* makeCodexSessionRuntime({
         threadId: ThreadId.make("thread-codex-queued-stop"),
         binaryPath: peerPath,
-        cwd: "/tmp",
+        cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
@@ -916,7 +917,7 @@ describe("CodexSessionRuntime collab integration", () => {
         const runtime = yield* makeCodexSessionRuntime({
           threadId: ThreadId.make("thread-codex-mcp-elicitation"),
           binaryPath: peerPath,
-          cwd: "/tmp",
+          cwd: NodeOS.tmpdir(),
           runtimeMode: "auto",
           environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
         });

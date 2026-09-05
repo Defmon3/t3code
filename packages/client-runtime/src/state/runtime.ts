@@ -13,12 +13,10 @@ import {
   type EnvironmentRpcInput,
   type EnvironmentRpcStreamFailure,
   type EnvironmentRpcStreamValue,
-  type EnvironmentStreamCommandRpcTag,
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
   EnvironmentRpcUnavailableError,
   request,
-  runStream,
   subscribe,
 } from "../rpc/client.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
@@ -54,6 +52,10 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
   readonly refreshAfterSettledIntervalMs?: number;
+  readonly refreshTrigger?: (target: {
+    readonly environmentId: EnvironmentIdType;
+    readonly input: Input;
+  }) => Atom.Atom<unknown> | undefined;
 }
 
 interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
@@ -587,20 +589,27 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         }),
         Atom.setIdleTTL(idleTtlMs),
       );
-    const refreshedQueryAtom =
-      options.refreshAfterSettledIntervalMs !== undefined
-        ? withSettledRefresh(
+    const intervalQuery =
+      options.refreshIntervalMs === undefined
+        ? queryAtom
+        : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
+    const refreshTrigger = options.refreshTrigger?.(target);
+    const settledQuery =
+      options.refreshAfterSettledIntervalMs === undefined
+        ? intervalQuery
+        : withSettledRefresh(
             queryAtom,
             options.refreshAfterSettledIntervalMs,
             Atom.map(
               connectionStateAtom(target.environmentId),
               (state) => Option.getOrNull(AsyncResult.value(state)) === true,
             ),
-          )
-        : options.refreshIntervalMs === undefined
-          ? queryAtom
-          : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
-    return refreshedQueryAtom.pipe(
+          );
+    const triggeredQuery =
+      refreshTrigger === undefined
+        ? settledQuery
+        : settledQuery.pipe(Atom.makeRefreshOnSignal(refreshTrigger));
+    return triggeredQuery.pipe(
       Atom.setIdleTTL(options.refreshAfterSettledIntervalMs === undefined ? idleTtlMs : 0),
       Atom.withLabel(`${options.label}:${key}`),
     );
@@ -685,29 +694,6 @@ export function createEnvironmentCommand<R, ER, Input, A, E>(
   });
 }
 
-function createEnvironmentStreamCommand<R, ER, Input, A, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
-  options: {
-    readonly label: string;
-    readonly execute: (input: Input) => Stream.Stream<A, E, EnvironmentSupervisor | R>;
-    readonly scheduler?: AtomCommandScheduler;
-    readonly concurrency?: AtomCommandConcurrency<{
-      readonly environmentId: EnvironmentIdType;
-      readonly input: Input;
-    }>;
-  },
-) {
-  return createRuntimeStreamCommand(runtime, {
-    label: options.label,
-    ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
-    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
-    execute: (target) =>
-      runStreamInEnvironment(target.environmentId, options.execute(target.input)).pipe(
-        Stream.withSpan(options.label),
-      ),
-  });
-}
-
 export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends EnvironmentUnaryRpcTag>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: {
@@ -717,6 +703,10 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
     readonly refreshAfterSettledIntervalMs?: number;
+    readonly refreshTrigger?: (target: {
+      readonly environmentId: EnvironmentIdType;
+      readonly input: EnvironmentRpcInput<TTag>;
+    }) => Atom.Atom<unknown> | undefined;
   },
 ) {
   return createEnvironmentQueryAtomFamily(runtime, {
@@ -729,6 +719,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.refreshAfterSettledIntervalMs === undefined
       ? {}
       : { refreshAfterSettledIntervalMs: options.refreshAfterSettledIntervalMs }),
+    ...(options.refreshTrigger === undefined ? {} : { refreshTrigger: options.refreshTrigger }),
     execute: (input: EnvironmentRpcInput<TTag>) => request(options.tag, input),
   });
 }
@@ -805,29 +796,5 @@ export function createEnvironmentRpcCommand<R, ER, TTag extends EnvironmentUnary
         Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
       );
     },
-  });
-}
-
-export function createEnvironmentRpcStreamCommand<
-  R,
-  ER,
-  TTag extends EnvironmentStreamCommandRpcTag,
->(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
-  options: {
-    readonly label: string;
-    readonly tag: TTag;
-    readonly scheduler?: AtomCommandScheduler;
-    readonly concurrency?: AtomCommandConcurrency<{
-      readonly environmentId: EnvironmentIdType;
-      readonly input: EnvironmentRpcInput<TTag>;
-    }>;
-  },
-) {
-  return createEnvironmentStreamCommand(runtime, {
-    label: options.label,
-    ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
-    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
-    execute: (input: EnvironmentRpcInput<TTag>) => runStream(options.tag, input),
   });
 }

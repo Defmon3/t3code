@@ -6,10 +6,16 @@ import { useEffect, useState } from "react";
  * diff virtualizes against its own scroll position. The caller hides the inactive ones with
  * `visibility`, which keeps boxes, sizes and scroll offsets.
  */
-export function useMountedTabs<Tab extends string>(tab: Tab): ReadonlySet<Tab> {
-  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<Tab>>(() => new Set<Tab>([tab]));
+export function useMountedTabs<Tab extends string>(tab: Tab, scope?: string): ReadonlySet<Tab> {
+  const [mountState, setMountState] = useState(() => ({ scope, tabs: new Set<Tab>([tab]) }));
+  const mountedTabs = mountState.scope === scope ? mountState.tabs : new Set<Tab>([tab]);
   useEffect(() => {
-    setMountedTabs((previous) => (previous.has(tab) ? previous : new Set<Tab>(previous).add(tab)));
-  }, [tab]);
+    setMountState((previous) => {
+      if (previous.scope !== scope) return { scope, tabs: new Set<Tab>([tab]) };
+      return previous.tabs.has(tab)
+        ? previous
+        : { scope, tabs: new Set<Tab>(previous.tabs).add(tab) };
+    });
+  }, [scope, tab]);
   return mountedTabs;
 }

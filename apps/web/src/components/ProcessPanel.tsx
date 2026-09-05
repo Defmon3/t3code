@@ -151,6 +151,8 @@ export function ProcessPanel(input: {
                 <ProjectFavicon
                   environmentId={input.environmentId}
                   cwd={group.project.workspaceRoot}
+                  projectName={group.project.title}
+                  projectIcon={group.project.projectIcon}
                   faviconPath={group.project.faviconPath}
                 />
                 <span className="min-w-0 truncate font-medium">{group.project.title}</span>

@@ -124,7 +124,6 @@ export interface TextGenerationService {
   generateWorkItemTask(input: WorkItemTaskGenerationInput): Promise<WorkItemTaskGenerationResult>;
   findWorkItemMatches(input: WorkItemMatchGenerationInput): Promise<WorkItemMatchGenerationResult>;
 }
-
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -166,9 +165,6 @@ export class TextGeneration extends Context.Service<
     ) => Effect.Effect<WorkItemMatchGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
-
-/** @deprecated Use `TextGeneration["Service"]`. */
-export type TextGenerationShape = TextGeneration["Service"];
 
 type TextGenerationOp =
   | "generateCommitMessage"

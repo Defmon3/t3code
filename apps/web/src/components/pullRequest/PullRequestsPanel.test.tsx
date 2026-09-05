@@ -42,6 +42,6 @@ describe("PullRequestsPanel", () => {
 
     expect(markup).toContain('aria-label="Search pull requests"');
     expect(markup).toContain("This repository has no pull requests to open.");
-    expect(markup).toContain("Filter pull requests");
+    expect(markup).toContain(">Filters<");
   });
 });

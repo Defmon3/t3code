@@ -10,7 +10,7 @@ const renderedDetailRows = vi.hoisted(() => [] as string[]);
 function renderedText(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(renderedText).join("");
-  return isValidElement(value) ? renderedText(value.props.children) : "";
+  return isValidElement<{ children?: unknown }>(value) ? renderedText(value.props.children) : "";
 }
 
 vi.mock("../ui/button", () => ({
@@ -25,7 +25,12 @@ vi.mock("../ui/button", () => ({
     "aria-controls"?: string;
     "aria-expanded"?: boolean;
   }) => {
-    renderedButtons.push({ label: children, expanded, controls, onClick });
+    renderedButtons.push({
+      label: children,
+      ...(expanded === undefined ? {} : { expanded }),
+      ...(controls === undefined ? {} : { controls }),
+      ...(onClick === undefined ? {} : { onClick }),
+    });
     return null;
   },
 }));

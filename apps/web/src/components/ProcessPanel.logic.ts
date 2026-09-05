@@ -1,3 +1,4 @@
+import type { ProjectIconOverride } from "@t3tools/contracts";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import { formatTestCommand, isTestCommand } from "@t3tools/shared/testCommand";
 
@@ -22,6 +23,7 @@ export interface ProcessPanelProject {
   readonly title: string;
   readonly workspaceRoot: string;
   readonly faviconPath?: string | null | undefined;
+  readonly projectIcon?: ProjectIconOverride | null | undefined;
 }
 
 export interface ProcessPanelThread {

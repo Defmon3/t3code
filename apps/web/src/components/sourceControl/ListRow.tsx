@@ -24,6 +24,7 @@ export function ListRow({
   onNumberContextMenu,
   repository,
   meta,
+  metaClassName,
   matchedElsewhere,
   updatedAt,
   trailing,
@@ -47,6 +48,8 @@ export function ListRow({
    * would arrive as a single child and take the whole group as one fact.
    */
   meta: ReadonlyArray<ReactNode>;
+  /** Lets a surface define responsive metadata slots without teaching this frame its domain. */
+  metaClassName?: string;
   /**
    * A search found this, but in something the row does not show — a body, a comment, a commit
    * message. Saying so is the difference between a result and an apparently random row.
@@ -75,7 +78,9 @@ export function ListRow({
       {glyph}
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium text-foreground">{title}</span>
-        <SourceControlMetaLine className="mt-0.5 overflow-hidden text-xs text-muted-foreground/70">
+        <SourceControlMetaLine
+          className={cn("mt-0.5 overflow-hidden text-xs text-muted-foreground/70", metaClassName)}
+        >
           <span className="flex shrink-0 items-center gap-1">
             {showProvider ? (
               <Tooltip>

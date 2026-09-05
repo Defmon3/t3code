@@ -51,6 +51,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // take well beyond the default 30s (e.g. a 375k-file repo takes ~40s on an idle
 // machine). Give it generous headroom while still bounding a genuinely hung git.
 const WORKTREE_ADD_TIMEOUT_MS = 300_000;
+const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
@@ -60,6 +61,10 @@ const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
 const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
+// Patches the clients render are parsed against git's default a/ and b/ path
+// prefixes. A repository or global diff.noprefix or diff.mnemonicPrefix would
+// otherwise leak into the patch and leave every parsed file unnamed.
+export const PATCH_RENDER_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"] as const;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
@@ -187,13 +192,19 @@ function statusUpstreamRefreshFailureCooldown(consecutiveFailures: number): Dura
   return Duration.min(Duration.millis(cooldownMs), STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN);
 }
 
-class GitRefsSnapshotCacheKey extends Data.Class<{
+class GitListRefsSnapshotCacheKey extends Data.Class<{
   gitCommonDir: string;
+  namespace: GitRefNamespace;
+  prefix: string | null;
+  worktreeRoot: string | null;
   epoch: number;
 }> {}
 
-class GitRefsRefreshCacheKey extends Data.Class<{
+class GitListRefsRefreshCacheKey extends Data.Class<{
   gitCommonDir: string;
+  namespace: GitRefNamespace;
+  prefix: string | null;
+  worktreeRoot: string | null;
   generation: number;
 }> {}
 
@@ -201,13 +212,6 @@ interface GitRepositoryPaths {
   readonly gitCommonDir: string;
   readonly worktreeRoot: string | null;
   readonly currentBranch: string | null;
-}
-
-interface GitRefsSnapshot {
-  readonly localBranches: ReadonlyArray<VcsRef>;
-  readonly remoteBranches: ReadonlyArray<VcsRef>;
-  readonly worktreePaths: ReadonlyArray<string>;
-  readonly hasPrimaryRemote: boolean;
 }
 
 interface ExecuteGitOptions {
@@ -1560,15 +1564,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
-  const remoteBranchExists = (
-    cwd: string,
-    remoteName: string,
-    refName: string,
-  ): Effect.Effect<boolean, GitCommandError> =>
+  const remoteBranchExists: GitVcsDriver.GitVcsDriver["Service"]["remoteBranchExists"] = (input) =>
     executeGit(
       "GitVcsDriver.remoteBranchExists",
-      cwd,
-      ["show-ref", "--verify", "--quiet", `refs/remotes/${remoteName}/${refName}`],
+      input.cwd,
+      ["show-ref", "--verify", "--quiet", `refs/remotes/${input.remoteName}/${input.refName}`],
       {
         allowNonZeroExit: true,
       },
@@ -1715,7 +1715,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
       if (
         primaryRemoteName &&
-        (yield* remoteBranchExists(cwd, primaryRemoteName, normalizedCandidate))
+        (yield* remoteBranchExists({
+          cwd,
+          remoteName: primaryRemoteName,
+          refName: normalizedCandidate,
+        }))
       ) {
         return `${primaryRemoteName}/${normalizedCandidate}`;
       }
@@ -2232,9 +2236,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           };
         }
 
-        const hasRemoteBranch = yield* remoteBranchExists(cwd, publishRemoteName, branch).pipe(
-          Effect.orElseSucceed(() => false),
-        );
+        const hasRemoteBranch = yield* remoteBranchExists({
+          cwd,
+          remoteName: publishRemoteName,
+          refName: branch,
+        }).pipe(Effect.orElseSucceed(() => false));
         if (hasRemoteBranch) {
           return {
             status: "skipped_up_to_date" as const,
@@ -2470,6 +2476,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             "--no-ext-diff",
             "--no-textconv",
             "--minimal",
+            ...PATCH_RENDER_PREFIX_ARGS,
             "--",
             "/dev/null",
             relativePath,
@@ -2522,6 +2529,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "--no-ext-diff",
         "--no-textconv",
         "--minimal",
+        ...PATCH_RENDER_PREFIX_ARGS,
         ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
         "HEAD",
         "--",
@@ -2558,6 +2566,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               "--no-ext-diff",
               "--no-textconv",
               "--minimal",
+              ...PATCH_RENDER_PREFIX_ARGS,
               ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
               `${baseRef}...HEAD`,
             ],
@@ -2788,145 +2797,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
-  const readGitRefsSnapshot = Effect.fn("readGitRefsSnapshot")(function* (gitCommonDir: string) {
-    const fetchCwd =
-      path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
-    const gitDirArgs = ["--git-dir", gitCommonDir] as const;
-    const [refsResult, defaultRefResult, worktreeListResult, remoteNamesResult] = yield* Effect.all(
-      [
-        executeGitWithStableDiagnostics(
-          "GitVcsDriver.listRefs.snapshotRefs",
-          fetchCwd,
-          [
-            ...gitDirArgs,
-            "for-each-ref",
-            "--format=%(refname)%09%(committerdate:unix)%09%(symref)",
-            "refs/heads",
-            "refs/remotes",
-          ],
-          {
-            timeoutMs: 30_000,
-            maxOutputBytes: 16 * 1024 * 1024,
-            fallbackErrorDetail: "Git ref snapshot enumeration failed.",
-          },
-        ),
-        executeGit(
-          "GitVcsDriver.listRefs.defaultRef",
-          fetchCwd,
-          [...gitDirArgs, "symbolic-ref", "refs/remotes/origin/HEAD"],
-          {
-            timeoutMs: 5_000,
-            allowNonZeroExit: true,
-          },
-        ),
-        executeGit(
-          "GitVcsDriver.listRefs.worktreeList",
-          fetchCwd,
-          [...gitDirArgs, "worktree", "list", "--porcelain", "-z"],
-          {
-            timeoutMs: 30_000,
-            allowNonZeroExit: true,
-            maxOutputBytes: 16 * 1024 * 1024,
-          },
-        ),
-        executeGit("GitVcsDriver.listRefs.remoteNames", fetchCwd, [...gitDirArgs, "remote"], {
-          timeoutMs: 5_000,
-          allowNonZeroExit: true,
-        }),
-      ],
-      { concurrency: 2 },
-    );
-
-    const remoteNames =
-      remoteNamesResult.exitCode === 0 ? parseRemoteNames(remoteNamesResult.stdout) : [];
-    if (remoteNamesResult.exitCode !== 0 && remoteNamesResult.stderr.trim().length > 0) {
-      yield* Effect.logWarning(
-        `GitVcsDriver.listRefs: remote name lookup returned code ${remoteNamesResult.exitCode} for ${gitCommonDir}: ${remoteNamesResult.stderr.trim()}. Falling back to an empty remote name list.`,
-      );
-    }
-    const defaultBranch =
-      defaultRefResult.exitCode === 0
-        ? defaultRefResult.stdout.trim().replace(/^refs\/remotes\/origin\//, "")
-        : null;
-    const parsedWorktreeEntries =
-      worktreeListResult.exitCode === 0
-        ? parseWorktreeEntries(worktreeListResult.stdout).map((worktree) => ({
-            ...worktree,
-            path: path.normalize(path.resolve(worktree.path)),
-          }))
-        : [];
-    const existingWorktreeEntries = yield* Effect.filter(
-      parsedWorktreeEntries,
-      (worktree) =>
-        fileSystem.stat(worktree.path).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-        ),
-      { concurrency: 16 },
-    );
-    const worktreeMap = new Map(
-      existingWorktreeEntries.flatMap((worktree) =>
-        worktree.branchName === null ? [] : [[worktree.branchName, worktree.path] as const],
-      ),
-    );
-    const localBranches: Array<{ readonly ref: VcsRef; readonly lastCommit: number }> = [];
-    const remoteBranches: Array<{ readonly ref: VcsRef; readonly lastCommit: number }> = [];
-
-    for (const line of refsResult.stdout.split("\n")) {
-      if (line.length === 0) continue;
-      const [fullRefName, lastCommitRaw, symbolicTarget] = line.split("\t");
-      if (!fullRefName || symbolicTarget) continue;
-      const parsedLastCommit = Number.parseInt(lastCommitRaw ?? "0", 10);
-      const lastCommit = Number.isFinite(parsedLastCommit) ? parsedLastCommit : 0;
-
-      if (fullRefName.startsWith("refs/heads/")) {
-        const name = fullRefName.slice("refs/heads/".length);
-        localBranches.push({
-          ref: {
-            name,
-            current: false,
-            isRemote: false,
-            isDefault: name === defaultBranch,
-            worktreePath: worktreeMap.get(name) ?? null,
-          },
-          lastCommit,
-        });
-        continue;
-      }
-      if (!fullRefName.startsWith("refs/remotes/")) continue;
-
-      const name = fullRefName.slice("refs/remotes/".length);
-      const parsedRemoteRef = parseRemoteRefWithRemoteNames(name, remoteNames);
-      const remoteBranch: VcsRef = {
-        name,
-        current: false,
-        isRemote: true,
-        isDefault:
-          defaultBranch !== null &&
-          parsedRemoteRef?.remoteName === "origin" &&
-          parsedRemoteRef.branchName === defaultBranch,
-        worktreePath: null,
-        ...(parsedRemoteRef ? { remoteName: parsedRemoteRef.remoteName } : {}),
-      };
-      remoteBranches.push({ ref: remoteBranch, lastCommit });
-    }
-
-    const byRecencyThenName = (
-      left: { readonly ref: VcsRef; readonly lastCommit: number },
-      right: { readonly ref: VcsRef; readonly lastCommit: number },
-    ) =>
-      left.lastCommit !== right.lastCommit
-        ? right.lastCommit - left.lastCommit
-        : left.ref.name.localeCompare(right.ref.name);
-
-    return {
-      localBranches: localBranches.toSorted(byRecencyThenName).map(({ ref }) => ref),
-      remoteBranches: remoteBranches.toSorted(byRecencyThenName).map(({ ref }) => ref),
-      worktreePaths: existingWorktreeEntries.map((worktree) => worktree.path),
-      hasPrimaryRemote: remoteNames.includes("origin"),
-    } satisfies GitRefsSnapshot;
-  });
-
   const listRefsEpochByCommonDir = new Map<string, number>();
   let listRefsEpochSequence = 0;
   const bumpListRefsEpoch = (gitCommonDir: string): number => {
@@ -2962,22 +2832,109 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   };
   const bumpListRefsGeneration = (gitCommonDir: string): number =>
     setListRefsGeneration(gitCommonDir, ++listRefsGenerationSequence);
+  const readListRefsSnapshot = Effect.fn("readListRefsSnapshot")(function* (
+    cacheKey: GitListRefsSnapshotCacheKey,
+  ) {
+    const refRoot =
+      cacheKey.namespace === "local"
+        ? "refs/heads/"
+        : cacheKey.namespace === "remote"
+          ? "refs/remotes/"
+          : "refs/tags/";
+    const output = yield* executeGitWithStableDiagnostics(
+      "GitVcsDriver.listRefs.snapshot",
+      cacheKey.worktreeRoot ?? cacheKey.gitCommonDir,
+      [
+        "for-each-ref",
+        `--count=${GIT_REF_SNAPSHOT_MAX_REFS + 1}`,
+        "--sort=refname",
+        "--format=%(refname)%09%(creatordate:unix)%09%(HEAD)%09%(symref)%09%(upstream:short)%09%(upstream:track)%09%(worktreepath)",
+        `${refRoot}${cacheKey.prefix ?? ""}`,
+      ],
+      {
+        maxOutputBytes: GIT_REF_SNAPSHOT_MAX_OUTPUT_BYTES,
+        fallbackErrorDetail: "Git ref snapshot enumeration failed.",
+      },
+    );
+    const parsedRefs: Array<{ readonly fullName: string; readonly ref: VcsRef }> = [];
+    let defaultRemoteRef: string | null = null;
+    for (const line of output.stdout.split("\n")) {
+      if (line.length === 0) continue;
+      const [
+        fullName,
+        ,
+        headMarker = "",
+        symbolicTarget = "",
+        upstreamName = "",
+        upstreamTrack = "",
+        worktreePath = "",
+      ] = line.split("\t");
+      if (!fullName) continue;
+      if (cacheKey.namespace === "remote" && symbolicTarget.startsWith(refRoot)) {
+        defaultRemoteRef = symbolicTarget;
+        continue;
+      }
+      if (symbolicTarget) continue;
+      const name = fullName.slice(refRoot.length);
+      if (name.length === 0) continue;
+      parsedRefs.push({
+        fullName,
+        ref: {
+          name,
+          current: cacheKey.namespace === "local" && headMarker === "*",
+          isDefault: false,
+          isRemote: cacheKey.namespace === "remote",
+          ...(cacheKey.namespace === "tag" ? { isTag: true } : {}),
+          worktreePath: worktreePath.length > 0 ? worktreePath : null,
+          ...(cacheKey.namespace === "local" && upstreamName.length > 0
+            ? { upstreamName, ...parseRefUpstreamTrack(upstreamTrack) }
+            : {}),
+        },
+      });
+    }
+    const isComplete = parsedRefs.length <= GIT_REF_SNAPSHOT_MAX_REFS;
+    const refs = parsedRefs.slice(0, GIT_REF_SNAPSHOT_MAX_REFS).map(({ fullName, ref }) => ({
+      ...ref,
+      isDefault: cacheKey.namespace === "remote" && fullName === defaultRemoteRef,
+    }));
+    return {
+      gitCommonDir: cacheKey.gitCommonDir,
+      namespace: cacheKey.namespace,
+      prefix: cacheKey.prefix,
+      refs,
+      currentRef: refs.find((ref) => ref.current) ?? null,
+      hasPrimaryRemote:
+        cacheKey.namespace === "remote" && refs.some((ref) => ref.name.startsWith("origin/")),
+      isComplete,
+    } satisfies Omit<GitListRefsSnapshot, "expiresAt">;
+  });
   const listRefsSnapshotCache = yield* Cache.makeWith(
-    (cacheKey: GitRefsSnapshotCacheKey) => readGitRefsSnapshot(cacheKey.gitCommonDir),
+    (cacheKey: GitListRefsSnapshotCacheKey) =>
+      Effect.yieldNow.pipe(Effect.andThen(readListRefsSnapshot(cacheKey))),
     {
       capacity: LIST_REFS_SNAPSHOT_CACHE_CAPACITY,
       timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_REFS_SNAPSHOT_CACHE_TTL : Duration.zero),
     },
   );
   const listRefsRefreshSnapshotCache = yield* Cache.makeWith(
-    (cacheKey: GitRefsRefreshCacheKey) =>
-      Effect.suspend(() => {
-        const epoch = bumpListRefsEpoch(cacheKey.gitCommonDir);
-        return Cache.get(
-          listRefsSnapshotCache,
-          new GitRefsSnapshotCacheKey({ gitCommonDir: cacheKey.gitCommonDir, epoch }),
-        );
-      }),
+    (cacheKey: GitListRefsRefreshCacheKey) =>
+      Effect.yieldNow.pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            const epoch = bumpListRefsEpoch(cacheKey.gitCommonDir);
+            return Cache.get(
+              listRefsSnapshotCache,
+              new GitListRefsSnapshotCacheKey({
+                gitCommonDir: cacheKey.gitCommonDir,
+                namespace: cacheKey.namespace,
+                prefix: cacheKey.prefix,
+                worktreeRoot: cacheKey.worktreeRoot,
+                epoch,
+              }),
+            );
+          }),
+        ),
+      ),
     {
       capacity: LIST_REFS_SNAPSHOT_CACHE_CAPACITY,
       timeToLive: (exit) =>
@@ -2985,24 +2942,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
   const resolveListRefsSnapshot = Effect.fn("resolveListRefsSnapshot")(function* (
-    gitCommonDir: string,
+    repositoryPaths: GitRepositoryPaths,
+    namespace: GitRefNamespace,
+    prefix: string | null,
     refresh: boolean,
   ) {
     while (true) {
-      const generation = currentListRefsGeneration(gitCommonDir);
-      const currentEpoch = listRefsEpochByCommonDir.get(gitCommonDir);
+      const generation = currentListRefsGeneration(repositoryPaths.gitCommonDir);
+      const currentEpoch = listRefsEpochByCommonDir.get(repositoryPaths.gitCommonDir);
+      const cacheKey = {
+        gitCommonDir: repositoryPaths.gitCommonDir,
+        namespace,
+        prefix,
+        worktreeRoot: repositoryPaths.worktreeRoot,
+      };
       const snapshot =
         refresh || currentEpoch === undefined
           ? yield* Cache.get(
               listRefsRefreshSnapshotCache,
-              new GitRefsRefreshCacheKey({ gitCommonDir, generation }),
+              new GitListRefsRefreshCacheKey({ ...cacheKey, generation }),
             )
           : yield* Cache.get(
               listRefsSnapshotCache,
-              new GitRefsSnapshotCacheKey({ gitCommonDir, epoch: currentEpoch }),
+              new GitListRefsSnapshotCacheKey({ ...cacheKey, epoch: currentEpoch }),
             );
-      if (currentListRefsGeneration(gitCommonDir) === generation) {
-        return snapshot;
+      if (currentListRefsGeneration(repositoryPaths.gitCommonDir) === generation) {
+        return {
+          ...snapshot,
+          expiresAt: (yield* Clock.currentTimeMillis) + GIT_REF_SNAPSHOT_TTL_MS,
+        };
       }
     }
   });
@@ -3012,16 +2980,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const repositoryPathsCacheKey = normalizeRepositoryPathsCacheKey(cwd);
     const repositoryPaths = yield* Cache.get(repositoryPathsCache, repositoryPathsCacheKey);
     if (repositoryPaths === null) return;
-    const previousGeneration = currentListRefsGeneration(repositoryPaths.gitCommonDir);
     bumpListRefsGeneration(repositoryPaths.gitCommonDir);
     bumpListRefsEpoch(repositoryPaths.gitCommonDir);
-    yield* Cache.invalidate(
-      listRefsRefreshSnapshotCache,
-      new GitRefsRefreshCacheKey({
-        gitCommonDir: repositoryPaths.gitCommonDir,
-        generation: previousGeneration,
-      }),
-    );
     yield* Cache.invalidate(repositoryPathsRefreshCache, repositoryPathsCacheKey);
     yield* Cache.invalidate(repositoryPathsCache, repositoryPathsCacheKey);
   });
@@ -3093,78 +3053,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         snapshotId = continuation.snapshotId;
         offset = continuation.offset;
       } else {
-        const refRoot =
-          namespace === "local"
-            ? "refs/heads/"
-            : namespace === "remote"
-              ? "refs/remotes/"
-              : "refs/tags/";
-        const output = yield* executeGitWithStableDiagnostics(
-          "GitVcsDriver.listRefs.snapshot",
-          input.cwd,
-          [
-            "for-each-ref",
-            `--count=${GIT_REF_SNAPSHOT_MAX_REFS + 1}`,
-            "--sort=refname",
-            "--format=%(refname)%09%(creatordate:unix)%09%(symref)%09%(upstream:short)%09%(upstream:track)%09%(worktreepath)",
-            `${refRoot}${prefix ?? ""}`,
-          ],
-          {
-            maxOutputBytes: GIT_REF_SNAPSHOT_MAX_OUTPUT_BYTES,
-            fallbackErrorDetail: "Git ref snapshot enumeration failed.",
-          },
-        );
-        const parsedRefs: Array<{ readonly fullName: string; readonly ref: VcsRef }> = [];
-        let defaultRemoteRef: string | null = null;
-        for (const line of output.stdout.split("\n")) {
-          if (line.length === 0) continue;
-          const [
-            fullName,
-            ,
-            symbolicTarget = "",
-            upstreamName = "",
-            upstreamTrack = "",
-            worktreePath = "",
-          ] = line.split("\t");
-          if (!fullName) continue;
-          if (namespace === "remote" && symbolicTarget.startsWith(refRoot)) {
-            defaultRemoteRef = symbolicTarget;
-            continue;
-          }
-          if (symbolicTarget) continue;
-          const name = fullName.slice(refRoot.length);
-          if (name.length === 0) continue;
-          parsedRefs.push({
-            fullName,
-            ref: {
-              name,
-              current: namespace === "local" && name === repositoryPaths.currentBranch,
-              isDefault: false,
-              isRemote: namespace === "remote",
-              ...(namespace === "tag" ? { isTag: true } : {}),
-              worktreePath: worktreePath.length > 0 ? worktreePath : null,
-              ...(namespace === "local" && upstreamName.length > 0
-                ? { upstreamName, ...parseRefUpstreamTrack(upstreamTrack) }
-                : {}),
-            },
-          });
-        }
-        const isComplete = parsedRefs.length <= GIT_REF_SNAPSHOT_MAX_REFS;
-        const refs = parsedRefs.slice(0, GIT_REF_SNAPSHOT_MAX_REFS).map(({ fullName, ref }) => ({
-          ...ref,
-          isDefault: namespace === "remote" && fullName === defaultRemoteRef,
-        }));
-        snapshot = {
-          gitCommonDir: repositoryPaths.gitCommonDir,
+        snapshot = yield* resolveListRefsSnapshot(
+          repositoryPaths,
           namespace,
           prefix,
-          refs,
-          currentRef: refs.find((ref) => ref.current) ?? null,
-          hasPrimaryRemote:
-            namespace === "remote" && refs.some((ref) => ref.name.startsWith("origin/")),
-          isComplete,
-          expiresAt: (yield* Clock.currentTimeMillis) + GIT_REF_SNAPSHOT_TTL_MS,
-        };
+          input.refresh === true,
+        );
         snapshotId = storeListRefsSnapshot(snapshot);
         offset = 0;
       }
@@ -3426,7 +3320,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
     if (repositoryPaths === null) return [];
-    return (yield* resolveListRefsSnapshot(repositoryPaths.gitCommonDir, false)).worktreePaths;
+    const output = yield* executeGit(
+      "GitVcsDriver.listWorktreePaths",
+      cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      { timeoutMs: 30_000, allowNonZeroExit: true, maxOutputBytes: 16 * 1024 * 1024 },
+    );
+    if (output.exitCode !== 0) return [];
+    const worktrees = parseWorktreeEntries(output.stdout).map((worktree) => ({
+      ...worktree,
+      path: path.normalize(path.resolve(worktree.path)),
+    }));
+    const existingWorktrees = yield* Effect.filter(
+      worktrees,
+      (worktree) =>
+        fileSystem.stat(worktree.path).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ),
+      { concurrency: 16 },
+    );
+    return existingWorktrees.map((worktree) => worktree.path);
   });
 
   const getCommitDetails: GitVcsDriver.GitVcsDriver["Service"]["getCommitDetails"] = Effect.fn(
@@ -3865,7 +3779,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       "GitVcsDriver.removeWorktree",
       input.cwd,
       args,
-      { timeoutMs: 15_000, allowNonZeroExit: true },
+      {
+        // Removing dependency-heavy worktrees is filesystem-bound and can take
+        // minutes, especially on Windows. Keep it bounded without interrupting
+        // git midway through cleanup.
+        timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS,
+        allowNonZeroExit: true,
+      },
     );
     if (result.exitCode === 0) {
       return;
@@ -4142,6 +4062,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     resolveDefaultBranchName,
     fetchRemote: (input) => withListRefsInvalidation(input.cwd, fetchRemote(input)),
     remoteExists,
+    remoteBranchExists,
     resolveRemoteTrackingCommit,
     fetchRemoteBranch: (input) => withListRefsInvalidation(input.cwd, fetchRemoteBranch(input)),
     fetchRemoteTrackingBranch: (input) =>

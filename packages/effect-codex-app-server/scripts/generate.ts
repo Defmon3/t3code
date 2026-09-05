@@ -206,6 +206,40 @@ const ExperimentalTopLevelSchemaProperties: Record<string, Record<string, Schema
   },
 };
 
+function applyCodex0151DefinitionCompatibility(
+  exportName: string,
+  definitionName: string,
+  definitionSchema: Schema.Json,
+): Schema.Json {
+  const isThreadResponse =
+    exportName === "V2ThreadReadResponse" ||
+    exportName === "V2ThreadResumeResponse" ||
+    exportName === "V2ThreadRollbackResponse";
+  if (
+    !isThreadResponse ||
+    definitionName !== "CodexErrorInfo" ||
+    typeof definitionSchema !== "object"
+  ) {
+    return definitionSchema;
+  }
+
+  const schema = definitionSchema as {
+    readonly oneOf?: ReadonlyArray<{ readonly enum?: ReadonlyArray<string> }>;
+  };
+  const [firstVariant, ...remainingVariants] = schema.oneOf ?? [];
+  if (!firstVariant?.enum || firstVariant.enum.includes("rateLimitExceeded")) {
+    return definitionSchema;
+  }
+
+  return {
+    ...definitionSchema,
+    oneOf: [
+      { ...firstVariant, enum: [...firstVariant.enum, "rateLimitExceeded"] },
+      ...remainingVariants,
+    ],
+  };
+}
+
 const getGeneratedPaths = Effect.fn("getGeneratedPaths")(function* () {
   const path = yield* Path.Path;
   const generatedDir = path.join(import.meta.dirname, "..", "src", "_generated");
@@ -340,6 +374,60 @@ function stripNullDefaults(value: Schema.Json): Schema.Json {
       .filter(([key, child]) => !(key === "default" && child === null))
       .map(([key, child]) => [key, stripNullDefaults(child)]),
   ) as Schema.Json;
+}
+
+// Codex 0.153 adds async questions to agent messages. Keep older protocol
+// fields until the next full refresh, including every thread history namespace.
+function addAsyncQuestionFields(value: Schema.Json): Schema.Json {
+  if (Array.isArray(value)) {
+    return value.map(addAsyncQuestionFields);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const properties = "properties" in value ? value.properties : undefined;
+  const itemType =
+    properties && typeof properties === "object" && "type" in properties
+      ? properties.type
+      : undefined;
+  if (
+    properties &&
+    typeof properties === "object" &&
+    itemType &&
+    typeof itemType === "object" &&
+    "enum" in itemType &&
+    Array.isArray(itemType.enum) &&
+    itemType.enum.includes("agentMessage")
+  ) {
+    return {
+      ...value,
+      properties: {
+        ...properties,
+        delivery: { anyOf: [{ type: "string", enum: ["async"] }, { type: "null" }] },
+        questions: {
+          anyOf: [
+            {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  options: {
+                    anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+                  },
+                },
+                required: ["title"],
+              },
+            },
+            { type: "null" },
+          ],
+        },
+      },
+    };
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, addAsyncQuestionFields(child)]),
+  );
 }
 
 function toPascalCaseMethod(method: string) {
@@ -618,7 +706,8 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
 
     for (const [definitionName, definitionSchema] of Object.entries(parsed.definitions ?? {})) {
       const compatibleDefinitionSchema =
-        Codex0150DefinitionSchemas[definitionName] ?? definitionSchema;
+        Codex0150DefinitionSchemas[definitionName] ??
+        applyCodex0151DefinitionCompatibility(file.exportName, definitionName, definitionSchema);
       aggregateSchemas[localDefinitionNames.get(definitionName)!] = stripNullDefaults(
         normalizeNullableTypes(
           rewriteExternalRefs(
@@ -667,7 +756,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
   for (const [name, schema] of Object.entries(aggregateSchemas).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    generator.addSchema(name, schema as never);
+    generator.addSchema(name, addAsyncQuestionFields(schema) as never);
   }
 
   const generatedEntries = new Map<string, string>();

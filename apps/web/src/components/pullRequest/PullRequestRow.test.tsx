@@ -50,4 +50,26 @@ describe("PullRequestRow", () => {
       markup.indexOf('aria-label="Select pingdotgg/t3code pull request #6315"'),
     ).toBeGreaterThan(markup.indexOf("</button>"));
   });
+
+  it("renders responsive label pills", () => {
+    const markup = renderToStaticMarkup(
+      <PullRequestRow
+        entry={{
+          ...entry,
+          labels: [
+            { name: "bug", color: "d73a4a" },
+            { name: "feature", color: "a2eeef" },
+          ],
+        }}
+        selected={false}
+        showProjectTitle={false}
+        showProvider={false}
+        onSelect={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain(">bug<");
+    expect(markup).toContain(">feature<");
+    expect(markup).toContain("@xl/pr-row-meta:hidden");
+  });
 });
