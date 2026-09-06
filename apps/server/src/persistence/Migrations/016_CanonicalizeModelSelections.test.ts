@@ -402,6 +402,7 @@ layer("048_ClearAutomaticProjectModelDefaults", (it) => {
         )
         VALUES
           ('project-auto', 'Auto', '/tmp/auto', '{"instanceId":"codex","model":"gpt-5.6-sol"}', NULL, NULL, '[]', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z', NULL),
+          ('project-malformed', 'Malformed', '/tmp/malformed', '{"instanceId":"codex","model":"gpt-5.6-sol"}', NULL, NULL, '[]', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z', NULL),
           ('project-title-only', 'Title only', '/tmp/title-only', '{"instanceId":"codex","model":"gpt-5.6-sol"}', NULL, NULL, '[]', '2026-08-01T00:00:00.000Z', '2026-08-02T00:00:00.000Z', NULL),
           ('project-explicit', 'Explicit', '/tmp/explicit', '{"instanceId":"codex","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"high"}]}', NULL, NULL, '[]', '2026-08-01T00:00:00.000Z', '2026-08-02T00:00:00.000Z', NULL)
       `;
@@ -423,6 +424,7 @@ layer("048_ClearAutomaticProjectModelDefaults", (it) => {
         )
         VALUES
           ('event-auto-create', 'project', 'project-auto', 0, 'project.created', '2026-08-01T00:00:00.000Z', 'command-auto-create', NULL, 'command-auto-create', 'client', '{"defaultModelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"}}', '{}'),
+          ('event-malformed-create', 'project', 'project-malformed', 0, 'project.created', '2026-08-01T00:00:00.000Z', 'command-malformed-create', NULL, 'command-malformed-create', 'client', '{"workspaceRoot":"G:\\claude-harness","defaultModelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"}}', '{}'),
           ('event-title-create', 'project', 'project-title-only', 0, 'project.created', '2026-08-01T00:00:00.000Z', 'command-title-create', NULL, 'command-title-create', 'client', '{"defaultModelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"}}', '{}'),
           ('event-title-update', 'project', 'project-title-only', 1, 'project.meta-updated', '2026-08-02T00:00:00.000Z', 'command-title-update', NULL, 'command-title-update', 'client', '{"title":"Renamed"}', '{}'),
           ('event-explicit-create', 'project', 'project-explicit', 0, 'project.created', '2026-08-01T00:00:00.000Z', 'command-explicit-create', NULL, 'command-explicit-create', 'client', '{"defaultModelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"}}', '{}'),
@@ -448,6 +450,10 @@ layer("048_ClearAutomaticProjectModelDefaults", (it) => {
           selection:
             '{"instanceId":"codex","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"high"}]}',
         },
+        {
+          projectId: "project-malformed",
+          selection: '{"instanceId":"codex","model":"gpt-5.6-sol"}',
+        },
         { projectId: "project-title-only", selection: null },
       ]);
 
@@ -460,6 +466,7 @@ layer("048_ClearAutomaticProjectModelDefaults", (it) => {
           json_extract(payload_json, '$.defaultModelSelection.model') AS "model"
         FROM orchestration_events
         WHERE event_type = 'project.created'
+          AND json_valid(payload_json)
         ORDER BY stream_id
       `;
       assert.deepStrictEqual(createdEvents, [
