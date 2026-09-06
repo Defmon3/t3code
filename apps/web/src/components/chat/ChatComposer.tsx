@@ -1,10 +1,10 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import type {
   ApprovalRequestId,
   AssistantCitation,
   ChatFileAttachment,
   EnvironmentId,
   ModelSelection,
-  ProjectId,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -12,7 +12,6 @@ import type {
   RuntimeMode,
   ScopedThreadRef,
   ServerProvider,
-  ServerProviderSkill,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -24,6 +23,7 @@ import {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
 import {
   Fragment,
   memo,
@@ -63,6 +63,7 @@ import {
 import {
   composerFloatingLayerProps,
   isInsideCollapsedComposerControls,
+  isInsideComposerFloatingLayer,
   isInsideRestingComposerControlScope,
 } from "./composerEventScope";
 import {
@@ -104,7 +105,7 @@ import { ComposerSurface } from "./ComposerSurface";
 import {
   ComposerBannerStack,
   type ComposerBannerStackContent,
-  type ComposerBannerStackEntry,
+  type ComposerBannerStackItem,
 } from "./ComposerBannerStack";
 import { compressImageForStash, prepareImageForAttachment } from "../../lib/imageCompression";
 import {
@@ -146,9 +147,6 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../../lib/terminalContext";
 import { useComposerPathSearch } from "../../lib/composerPathSearchState";
-import { issueEnvironment } from "../../state/issues";
-import { useEnvironmentQuery } from "../../state/query";
-import { useDebouncedValue } from "../../state/queries";
 import { type ElementContextDraft } from "../../lib/elementContext";
 import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
@@ -167,12 +165,7 @@ import { measureRestingComposerControls } from "./restingComposerControlsMeasure
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import {
-  buildComposerPathMenuItems,
-  type ComposerCommandItem,
-  ComposerCommandMenu,
-  serializeComposerIssueMention,
-} from "./ComposerCommandMenu";
+import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -251,20 +244,6 @@ type ComposerCommandMenuPosition = {
   maxHeight: number;
   width: number;
 };
-
-export function resolveComposerCommandMenuPosition(input: {
-  verticalAnchor: Pick<DOMRect, "top">;
-  horizontalAnchor: Pick<DOMRect, "left" | "width">;
-  viewportHeight: number;
-  drawerInset: number;
-}): ComposerCommandMenuPosition {
-  return {
-    bottom: input.viewportHeight - input.verticalAnchor.top,
-    left: input.horizontalAnchor.left + input.drawerInset,
-    maxHeight: Math.max(96, input.verticalAnchor.top - 24),
-    width: Math.max(0, input.horizontalAnchor.width - input.drawerInset * 2),
-  };
-}
 
 const COMPOSER_SCROLL_COLLAPSE_THRESHOLD_PX = 24;
 const COMPOSER_SCROLL_GESTURE_RESET_MS = 120;
@@ -732,20 +711,23 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
       const mainSurface = form?.querySelector<HTMLElement>(
         '[data-chat-composer-main-surface="true"]',
       );
-      const verticalAnchor = form ?? mainSurface ?? anchor;
-      const horizontalAnchor = mainSurface ?? form ?? anchor;
+      const rect = (mainSurface ?? form ?? anchor).getBoundingClientRect();
       const rootFontSizePx =
         Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
       const drawerInsetRem = Number.parseFloat(
         window.getComputedStyle(form ?? anchor).getPropertyValue("--chat-composer-drawer-inset"),
       );
       const drawerInset = drawerInsetRem * rootFontSizePx;
-      const next = resolveComposerCommandMenuPosition({
-        verticalAnchor: verticalAnchor.getBoundingClientRect(),
-        horizontalAnchor: horizontalAnchor.getBoundingClientRect(),
-        viewportHeight: window.innerHeight,
-        drawerInset,
-      });
+      // One extra pixel prevents fractional layout coordinates from exposing
+      // the canvas between the drawer mask and the composer's foreground edge.
+      // Mirrors --chat-composer-attachment-overlap: calc(1rem + 1px).
+      const composerOverlap = rootFontSizePx + 1;
+      const next = {
+        bottom: window.innerHeight - rect.top - composerOverlap,
+        left: rect.left + drawerInset,
+        maxHeight: Math.max(96, rect.top - 24 + composerOverlap),
+        width: Math.max(0, rect.width - drawerInset * 2),
+      };
       setPosition((current) =>
         current && composerCommandMenuPositionsEqual(current, next) ? current : next,
       );
@@ -808,7 +790,6 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
-  RotateCcwIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -836,9 +817,7 @@ import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
-  providerSkillsTargetKey,
   resolveProviderSkillsForCwd,
-  selectProviderSkills,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
@@ -1199,8 +1178,6 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
   activeThread: Thread | undefined;
-  issueSearchProjectId: ProjectId | null;
-  activeProjectId: ProjectId | null;
   /** Timeline messages including optimistic sends, for ArrowUp prompt recall. */
   promptHistoryMessages: ReadonlyArray<ChatMessage>;
   isServerThread: boolean;
@@ -1208,14 +1185,15 @@ export interface ChatComposerProps {
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
-  // Connection presentation
+  // Session phase
   phase: SessionPhase;
-  isTurnRunning: boolean;
   isConnecting: boolean;
   isSendBusy: boolean;
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
-  bannerItems: readonly ComposerBannerStackEntry[];
+  bannerItems: readonly ComposerBannerStackItem[];
+  /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
+  onUsageLimitsCommand?: (() => void) | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -1271,12 +1249,13 @@ export interface ChatComposerProps {
   keybindings: ResolvedKeybindingsConfig;
   terminalOpen: boolean;
   gitCwd: string | null;
-  surfaceTopSlot?: ReactNode;
   restingControlsHost: HTMLDivElement | null;
   restingControlsHaveLeadingContext: boolean;
   onRestingControlsVisibilityChange: (visible: boolean) => void;
   getTimelineScrollableNode: () => HTMLElement | null;
   isTimelineAtLogicalEnd: () => boolean;
+  /** Whether the timeline has more content than fits above the composer. */
+  timelineOverflows: boolean;
   onComposerOverlayHeightChange: (height: number) => void;
   /**
    * Whether the desktop resting layout is active. Reported from a layout
@@ -1345,15 +1324,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
-    issueSearchProjectId,
-    activeProjectId,
     promptHistoryMessages,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
     projectSelectionRequired,
     phase,
-    isTurnRunning,
     isConnecting,
     isSendBusy,
     sendDisabledReason: externalSendDisabledReason,
@@ -1385,12 +1361,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     keybindings,
     terminalOpen,
     gitCwd,
-    surfaceTopSlot,
     restingControlsHost,
     restingControlsHaveLeadingContext,
     onRestingControlsVisibilityChange,
     getTimelineScrollableNode,
     isTimelineAtLogicalEnd,
+    timelineOverflows,
     onComposerOverlayHeightChange,
     onRestingChange,
     promptRef,
@@ -1671,6 +1647,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [selectedProviderEntry],
   );
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
+  const selectedProviderSkills = selectedProviderStatus
+    ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
+    : [];
   const selectedProviderSlashCommands = selectedProviderStatus
     ? resolveProviderSlashCommandsForCwd(selectedProviderStatus, gitCwd)
     : [];
@@ -1923,62 +1902,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
-  const debouncedIssueQuery = useDebouncedValue(pathTriggerQuery.trim(), 120);
-  const composerIssues = useEnvironmentQuery(
-    isPathTrigger && issueSearchProjectId !== null
-      ? issueEnvironment.list({
-          environmentId,
-          input: {
-            projectId: issueSearchProjectId,
-            state: debouncedIssueQuery ? "all" : "open",
-            involvement: "all",
-            limit: 8,
-            sort: debouncedIssueQuery ? "best-match" : "updated",
-            order: "desc",
-            ...(debouncedIssueQuery ? { query: debouncedIssueQuery } : {}),
-          },
-        })
-      : null,
-  );
-  const providerSkillsThreadId = _isServerThread ? (activeThreadId ?? undefined) : undefined;
-  const providerSkills = useEnvironmentQuery(
-    composerTrigger?.kind === "skill" && activeProjectId !== null
-      ? serverEnvironment.providerSkills({
-          environmentId,
-          input: {
-            instanceId: selectedInstanceId,
-            projectId: activeProjectId,
-            ...(providerSkillsThreadId ? { threadId: providerSkillsThreadId } : {}),
-          },
-        })
-      : null,
-  );
-  const scopedProviderSkillsTargetKey = providerSkillsTargetKey({
-    environmentId,
-    instanceId: selectedInstanceId,
-    projectId: activeProjectId,
-    threadId: providerSkillsThreadId,
-  });
-  const [cachedProviderSkills, setCachedProviderSkills] = useState<{
-    readonly targetKey: string;
-    readonly skills: ReadonlyArray<ServerProviderSkill>;
-  } | null>(null);
-  useEffect(() => {
-    if (providerSkills.data) {
-      setCachedProviderSkills({
-        targetKey: scopedProviderSkillsTargetKey,
-        skills: providerSkills.data.skills,
-      });
-    }
-  }, [providerSkills.data, scopedProviderSkillsTargetKey]);
-  const selectedProviderSkills = selectProviderSkills({
-    scopedSkills: providerSkills.data?.skills,
-    cachedSkills: cachedProviderSkills,
-    targetKey: scopedProviderSkillsTargetKey,
-    snapshotSkills: selectedProviderStatus
-      ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
-      : [],
-  });
   const compactSlashCommandAvailable =
     composerTrigger?.kind === "slash-command" &&
     prompt.slice(0, composerTrigger.rangeStart).trim() === "" &&
@@ -1994,19 +1917,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
-      return buildComposerPathMenuItems({
-        issues: composerIssues.data?.entries ?? [],
-        pathItems: workspaceEntries.entries.map((entry) => ({
-          id: `path:${entry.kind}:${entry.path}`,
-          type: "path" as const,
-          path: entry.path,
-          pathKind: entry.kind,
-          label: basenameOfPath(entry.path),
-          description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
-        })),
-        query: pathTriggerQuery.trim(),
-        settledIssueQuery: debouncedIssueQuery,
-      });
+      return workspaceEntries.entries.map((entry) => ({
+        id: `path:${entry.kind}:${entry.path}`,
+        type: "path",
+        path: entry.path,
+        pathKind: entry.kind,
+        label: basenameOfPath(entry.path),
+        description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
+      }));
     }
     if (composerTrigger.kind === "slash-command") {
       const builtInSlashCommandItems = [
@@ -2089,13 +2007,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [
     compactSlashCommandAvailable,
     composerTrigger,
-    composerIssues.data?.entries,
     planModeUiEnabled,
     selectedProvider,
     selectedProviderSkills,
     selectedProviderSlashCommands,
     selectedProviderStatus,
-    selectedProviderSkills,
     settings.showSkillsInSlashMenu,
     workspaceEntries.entries,
   ]);
@@ -2144,7 +2060,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
-    if (isTurnRunning) {
+    if (phase === "running") {
       return "running";
     }
     if (showPlanFollowUpPrompt) {
@@ -2158,25 +2074,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting,
     isPreparingWorktree,
     isSendBusy,
-    isTurnRunning,
+    phase,
     prompt,
     showPlanFollowUpPrompt,
   ]);
 
   const isComposerMenuLoading =
-    (composerTriggerKind === "path" &&
-      (composerIssues.isPending || (pathTriggerQuery.length > 0 && workspaceEntries.isPending))) ||
-    (composerTriggerKind === "skill" && providerSkills.isPending && composerMenuItems.length === 0);
+    composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending;
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
     }
     return composerTriggerKind === "path"
-      ? issueSearchProjectId !== null
-        ? "No matching issues, files, or folders."
-        : "No matching files or folders."
+      ? "No matching files or folders."
       : "No matching command.";
-  }, [composerTriggerKind, issueSearchProjectId]);
+  }, [composerTriggerKind]);
 
   // ------------------------------------------------------------------
   // Provider traits UI
@@ -2242,7 +2154,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
   const collapsedComposerPrimaryActionDisabled =
-    isTurnRunning ||
+    phase === "running" ||
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
@@ -2775,6 +2687,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   }, [readComposerSnapshot]);
 
+  const { onUsageLimitsCommand } = props;
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
       if (composerSelectLockRef.current) return;
@@ -2784,22 +2697,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
-      if (item.type === "issue") {
-        const replacement = serializeComposerIssueMention(item.issue);
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        if (
-          applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-          })
-        ) {
-          setComposerHighlightedItemId(null);
-        }
-        return;
-      }
       if (item.type === "path") {
         const replacement = `${serializeComposerFileLink(item.path)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
@@ -2841,6 +2738,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "provider-slash-command") {
+        if (item.command.name === USAGE_LIMITS_COMMAND.name && onUsageLimitsCommand) {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            onUsageLimitsCommand();
+          }
+          return;
+        }
         const replacement = `/${item.command.name} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
@@ -2881,6 +2789,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       applyPromptReplacement,
       handleInteractionModeChange,
       planModeUiEnabled,
+      onUsageLimitsCommand,
       resolveActiveComposerTrigger,
     ],
   );
@@ -2931,7 +2840,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isConnecting ||
       noProviderAvailable ||
       environmentUnavailable !== null ||
-      isTurnRunning
+      phase === "running"
     ) {
       return false;
     }
@@ -2949,7 +2858,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     isSendDisabled,
     noProviderAvailable,
-    isTurnRunning,
+    phase,
     showPlanFollowUpPrompt,
   ]);
 
@@ -3809,6 +3718,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isScrollCollapsed: isComposerScrollCollapsed,
     hasExpandedChrome: composerHasExpandedChrome,
     collapseOnBlur: settings.composerCollapseOnBlur,
+    timelineOverflows,
   });
   // The relocated controls live in the context strip whenever the composer is
   // collapsed for any reason, the desktop resting layout or the phone
@@ -5125,9 +5035,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               composerProviderState.composerSurfaceClassName,
             )}
           >
-            {surfaceTopSlot ? (
-              <div data-chat-composer-surface-top-slot="true">{surfaceTopSlot}</div>
-            ) : null}
             {showCollapsedMobilePromptRow ? (
               <div className="flex items-center justify-between gap-2 px-3 py-2">
                 <button
@@ -5366,7 +5273,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                     />
                                   }
                                 >
-                                  <RotateCcwIcon />
+                                  <RefreshIcon />
                                 </TooltipTrigger>
                                 <TooltipPopup
                                   side="top"
@@ -5445,7 +5352,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   />
                                 }
                               >
-                                <RotateCcwIcon />
+                                <RefreshIcon />
                               </TooltipTrigger>
                               <TooltipPopup
                                 side="top"
@@ -5518,7 +5425,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   />
                                 }
                               >
-                                <RotateCcwIcon />
+                                <RefreshIcon />
                               </TooltipTrigger>
                               <TooltipPopup
                                 side="top"
@@ -5725,7 +5632,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
-                    isRunning={isTurnRunning}
+                    isRunning={phase === "running"}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }

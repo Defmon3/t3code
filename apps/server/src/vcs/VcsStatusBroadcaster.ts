@@ -22,10 +22,12 @@ import type {
   VcsStatusStreamEvent,
 } from "@t3tools/contracts";
 import { mergeGitStatusParts } from "@t3tools/shared/git";
+import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 // Wake cadence used only when automatic fetching is disabled (configured
 // interval zero). The loop skips the actual refresh in that case, so this
@@ -156,12 +158,17 @@ export const autoPullPolicyLayer = Layer.effect(
   VcsAutoPullPolicy,
   Effect.gen(function* () {
     const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
     return {
-      isEnabled: (cwd: string) =>
-        snapshots.getActiveProjectByWorkspaceRoot(cwd).pipe(
-          Effect.map((project) => project._tag === "Some" && project.value.autoPull === true),
-          Effect.orElseSucceed(() => false),
-        ),
+      isEnabled: Effect.fn("VcsAutoPullPolicy.isEnabled")(
+        function* (cwd: string) {
+          const project = yield* snapshots.getActiveProjectByWorkspaceRoot(cwd);
+          if (project._tag === "None") return false;
+          const settings = yield* serverSettings.getSettings;
+          return resolveProjectAutoPull(settings, project.value.id, project.value.autoPull);
+        },
+        Effect.orElseSucceed(() => false),
+      ),
     };
   }),
 );

@@ -1,17 +1,15 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   type EnvironmentId,
-  type IssueLink,
   type PullRequestAction,
   type PullRequestMergeMethod,
   type PullRequestListEntry,
   type PullRequestUpdateMethod,
   type PullRequestRef,
-  type PullRequestState,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
-  type WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -38,7 +36,6 @@ import {
   PanelRightIcon,
   PencilIcon,
   PlayIcon,
-  RefreshCwIcon,
   RotateCcwIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -88,6 +85,7 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
   MenuItem,
@@ -100,10 +98,8 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PullRequestDetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
-import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
-import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
-import { useMountedTabs } from "../sourceControl/useMountedTabs";
+import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
+import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
@@ -117,11 +113,9 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
-  buildLinkIssuesHandoff,
   buildResolveConflictsPrompt,
   handoffPrompt,
   handoffReviewComments,
-  LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
   isStackedPullRequestBase,
   pullRequestActionMenuHasGroup,
@@ -459,10 +453,7 @@ export function PullRequestDetailPanel({
   refreshToken: forcedRefreshToken = 0,
   onActed,
   onClose,
-  onStateChange,
-  onOpenLinkedIssue,
   context = "page",
-  chromeVariant = "full",
   composerDraftTarget,
 }: {
   environmentId: EnvironmentId;
@@ -489,27 +480,12 @@ export function PullRequestDetailPanel({
   onActed?: () => void;
   /** Page-owned detail columns use this to clear the selected pull request. */
   onClose?: () => void;
-  /** Keeps surrounding inferred thread state in step with refreshed host state. */
-  onStateChange?: (status: {
-    projectId: string;
-    repository: string;
-    number: number;
-    state: PullRequestState;
-    isDraft: boolean;
-  }) => void;
-  /**
-   * Opens one of the issues this pull request references, as a peer tab beside it. Supplied by
-   * whoever mounted the panel, because only they know which panel the tab belongs in.
-   */
-  onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   /**
    * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
    * own pull request, so the branch is already under the reader's feet — and checking it out
    * again is at best a no-op and at worst git refusing a branch two checkouts.
    */
   context?: "page" | "thread";
-  /** Whether scrolling may collapse the pull request metadata chrome. */
-  chromeVariant?: "full" | "collapse";
   /**
    * The open thread's composer. Beside the thread whose own pull request this is, hand-offs
    * land here instead of opening a new thread — the branch is already under the reader's feet.
@@ -538,15 +514,33 @@ export function PullRequestDetailPanel({
     selectCodeCommit(oid);
     setTab("code");
   };
+  // Every tab the reader has opened stays mounted behind the active one. The diff viewer
+  // always needed this (it virtualizes against its own scroll position); the trace showed the
+  // summary needs it too — a large description re-parses its whole markdown on every return
+  // to the tab. `visibility` keeps boxes, sizes and scroll offsets, and takes hidden content
+  // out of the tab order and the accessibility tree.
   const tabScopeKey = `${environmentId}:${pullRequestKey}`;
-  const mountedTabs = useMountedTabs(tab, tabScopeKey);
+  const [tabMountState, setTabMountState] = useState(() => ({
+    key: tabScopeKey,
+    tabs: new Set<DetailTab>(["summary"]),
+  }));
+  // A previously visited Code tab must not fetch diffs for every later PR while hidden.
+  const mountedTabs =
+    tabMountState.key === tabScopeKey ? tabMountState.tabs : new Set<DetailTab>([tab]);
+  useEffect(() => {
+    setTabMountState((previous) => {
+      if (previous.key !== tabScopeKey) return { key: tabScopeKey, tabs: new Set([tab]) };
+      if (previous.tabs.has(tab)) return previous;
+      return { key: tabScopeKey, tabs: new Set(previous.tabs).add(tab) };
+    });
+  }, [tab, tabScopeKey]);
   const [chromeCondensed, setChromeCondensed] = useState(false);
   // Each mounted tab remembers its own scroll chrome; short tabs cannot scroll to reopen it.
   const chromeStateByTab = useRef<Partial<Record<DetailTab, boolean>>>({});
   useEffect(() => {
     setChromeCondensed(chromeStateByTab.current[tab] ?? false);
   }, [tab]);
-  const condensed = chromeVariant === "collapse" && chromeCondensed;
+  const condensed = chromeCondensed;
   const scrollerRef = useRef<HTMLElement | null>(null);
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
@@ -629,6 +623,14 @@ export function PullRequestDetailPanel({
         : {
             ...resolvedCoreDetail,
             ...sharedSummary,
+            closedAt:
+              sharedSummary.closedAt === undefined
+                ? resolvedCoreDetail.closedAt
+                : sharedSummary.closedAt,
+            mergedAt:
+              sharedSummary.mergedAt === undefined
+                ? resolvedCoreDetail.mergedAt
+                : sharedSummary.mergedAt,
             // A summary may come from an older server that does not report draft state. Keep the
             // detail's required value instead of making the complete detail shape partial.
             isDraft: sharedSummary.isDraft ?? resolvedCoreDetail.isDraft,
@@ -679,9 +681,9 @@ export function PullRequestDetailPanel({
           environmentId,
           input: {
             cwd: detail.workspaceRoot,
-            namespace: "remote",
-            // The default branch is represented by the remote HEAD target.
-            limit: 200,
+            includeMatchingRemoteRefs: true,
+            // listRefs keeps the current ref first and a known default second.
+            limit: 2,
           },
         }),
   );
@@ -708,16 +710,6 @@ export function PullRequestDetailPanel({
     }
     activityRevision.current = next;
   }, [activityQuery.refresh, coreDetail, tabScopeKey]);
-  useLayoutEffect(() => {
-    if (!resolvedCoreDetail) return;
-    onStateChange?.({
-      projectId: resolvedCoreDetail.projectId,
-      repository: resolvedCoreDetail.repository,
-      number: resolvedCoreDetail.number,
-      state: resolvedCoreDetail.state,
-      isDraft: resolvedCoreDetail.isDraft,
-    });
-  }, [onStateChange, resolvedCoreDetail]);
   // Reuse activity and diff until core detail reports a changed revision. Keyed by
   // the pull request rather than by the panel, because this one panel shows a different pull
   // request every time it is opened.
@@ -732,10 +724,16 @@ export function PullRequestDetailPanel({
   // invalidation goes first so the re-reads miss that cache; if it fails, the reads still run
   // and at worst answer from it.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
+  const [isInvalidating, setIsInvalidating] = useState(false);
   const refreshFromHost = useCallback(async () => {
-    await invalidate({ environmentId, input: { reference } });
-    refreshDetail();
-    setRefreshToken((token) => token + 1);
+    setIsInvalidating(true);
+    try {
+      await invalidate({ environmentId, input: { reference } });
+      refreshDetail();
+      setRefreshToken((token) => token + 1);
+    } finally {
+      setIsInvalidating(false);
+    }
   }, [environmentId, invalidate, reference, refreshDetail]);
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);
@@ -964,13 +962,7 @@ export function PullRequestDetailPanel({
   };
 
   /** A question about the change, which needs a thread and nothing else. */
-  const startAsk = async (
-    kind: string,
-    task: ThreadTask,
-    // What the toast says landed, for the hand-offs that need a thread and no checkout but are
-    // not questions.
-    announce?: { readonly title: string; readonly description: string },
-  ) => {
+  const startAsk = async (kind: string, task: ThreadTask) => {
     if (!detail || handoff !== null) return;
     if (attachTarget !== null) {
       writeTaskToComposer(attachTarget, task);
@@ -998,15 +990,13 @@ export function PullRequestDetailPanel({
     }
     toastManager.add({
       type: "success",
-      ...(announce ?? {
-        title: "Asked in a thread",
-        // "Ask" leaves the composer empty on purpose, so saying the question is in it would send
-        // the reader looking for something that is not there. The chips are what landed.
-        description:
-          task.prompt.length > 0
-            ? "The question is in the composer — read it over, then send."
-            : "The pull request is in the composer — type your question, then send.",
-      }),
+      title: "Asked in a thread",
+      // "Ask" leaves the composer empty on purpose, so saying the question is in it would send
+      // the reader looking for something that is not there. The chips are what landed.
+      description:
+        task.prompt.length > 0
+          ? "The question is in the composer — read it over, then send."
+          : "The pull request is in the composer — type your question, then send.",
     });
   };
 
@@ -1168,32 +1158,6 @@ export function PullRequestDetailPanel({
     });
   };
 
-  /**
-   * Links one selected issue with an agent. No checkout: the link is a line in
-   * the description, and nothing here touches code.
-   */
-  const linkIssues = (issue: WorkItemMatch) => {
-    if (!detail) return;
-    void startAsk(
-      LINK_ISSUES_HANDOFF_KIND,
-      buildLinkIssuesHandoff(
-        {
-          number: detail.number,
-          title: detail.title,
-          url: detail.url,
-          headBranch: detail.headBranch,
-          baseBranch: detail.baseBranch,
-        },
-        issue,
-      ),
-      {
-        title: "Opened in a thread",
-        description: "The task is in the composer — read it over, then send.",
-      },
-    );
-  };
-
-  /** Lines the reader marked in the diff, handed to the current agent composer. */
   const addSelectionToAgent = (selection: PullRequestAgentSelectionInput) => {
     if (!detail) return;
     void startAsk(
@@ -1708,8 +1672,14 @@ export function PullRequestDetailPanel({
                   <MoreHorizontalIcon className="size-4" />
                 </MenuTrigger>
                 <MenuPopup align="end" side="bottom" className="min-w-72">
-                  <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
-                    <RefreshCwIcon className="size-3.5" />
+                  <MenuItem
+                    disabled={isInvalidating || detailQuery.isPending}
+                    onClick={() => void refreshFromHost()}
+                  >
+                    <RefreshIcon
+                      className="size-3.5"
+                      refreshing={isInvalidating || detailQuery.isPending}
+                    />
                     Refresh
                   </MenuItem>
                   <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
@@ -1839,26 +1809,7 @@ export function PullRequestDetailPanel({
                     <ArrowUpRightIcon className="size-3.5" />
                     {openOnHostLabel(detail.provider)}
                   </MenuItem>
-                  {/* A clipboard that is switched off or refuses says nothing on its own, and a
-                      reader who has been handed nothing goes and pastes whatever was there
-                      before. The refusal is the host's own sentence, because it is the only
-                      thing that says which of the two happened. */}
-                  <MenuItem
-                    onClick={() =>
-                      void writeTextToClipboard(detail.url, "pull request link").catch(
-                        (error: unknown) => {
-                          toastManager.add({
-                            type: "error",
-                            title: "Could not copy the link",
-                            description:
-                              error instanceof Error
-                                ? error.message
-                                : "The clipboard refused it. Open the pull request on the host instead.",
-                          });
-                        },
-                      )
-                    }
-                  >
+                  <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
                     <LinkIcon className="size-3.5" />
                     Copy link
                   </MenuItem>
@@ -2185,12 +2136,30 @@ export function PullRequestDetailPanel({
         </div>
 
         {detail ? (
-          <DetailTabStrip
-            label="Pull request tabs"
-            tabs={visibleTabs}
-            active={tab}
-            onSelect={setTab}
+          <nav
+            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Pull request tabs"
           >
+            <ToggleGroup
+              size="segmented"
+              variant="segmented"
+              value={[tab]}
+              onValueChange={(next) => {
+                const nextTab = visibleTabs.find((item) => item.value === next[0])?.value;
+                if (nextTab) setTab(nextTab);
+              }}
+            >
+              {visibleTabs.map((item) => (
+                <Toggle
+                  key={item.value}
+                  value={item.value}
+                  onPointerEnter={item.value === "code" ? () => void loadCodeTab() : undefined}
+                  onFocus={item.value === "code" ? () => void loadCodeTab() : undefined}
+                >
+                  {item.label}
+                </Toggle>
+              ))}
+            </ToggleGroup>
             {tab === "summary" ? (
               <span className="ml-auto inline-flex shrink-0 items-center">
                 {workflowApprovalsRequired > 0 && can("approve-workflows") ? (
@@ -2320,21 +2289,14 @@ export function PullRequestDetailPanel({
                 </Button>
               </div>
             ) : null}
-          </DetailTabStrip>
+          </nav>
         ) : null}
       </div>
 
       <div
         className="relative min-h-0 flex-1 overflow-hidden"
         onScrollCapture={(event) => {
-          if (chromeVariant !== "collapse") return;
           const scroller = event.target as HTMLElement;
-          // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code
-          // block running wide, the capped list of stranded conversations — is the reader
-          // moving something on the page rather than the page, and its `scrollTop` is not the
-          // one the compensation belongs to. Summary and timeline render their scroller as the
-          // marked wrapper's only child, so that is what the mark asks about.
-          if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
           scrollerRef.current = scroller;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
@@ -2361,16 +2323,14 @@ export function PullRequestDetailPanel({
         {detailQuery.error && !detail ? (
           <PullRequestsUnavailableState
             error={detailQuery.error}
+            refreshing={detailQuery.isPending}
             onRetry={refreshDetail}
             {...(unavailableGitHubUrl ? { gitHubUrl: unavailableGitHubUrl } : {})}
           />
         ) : detail ? (
           <PullRequestMarkdownContext value={detail.provider === "github" ? repositoryUrl : null}>
             {mountedTabs.has("summary") ? (
-              <div
-                data-tab-scroller
-                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
-              >
+              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
                   environmentId={environmentId}
                   threadRef={threadRef}
@@ -2382,8 +2342,6 @@ export function PullRequestDetailPanel({
                   fixFindingLabel={handoffLabels.fixFinding}
                   fixCheckLabel={handoffLabels.fixCheck}
                   onFixFinding={startFixFinding}
-                  onLinkIssues={linkIssues}
-                  {...(onOpenLinkedIssue ? { onOpenLinkedIssue } : {})}
                   actionPending={actionPending}
                   onCommentAction={performCommentAction}
                   onRefresh={refreshDetail}
@@ -2391,15 +2349,11 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
-              <div
-                data-tab-scroller
-                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
-              >
+              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
                 {activityPending ? (
-                  <TimelineGhost />
+                  <PullRequestTimelineGhost />
                 ) : activityError ? (
-                  <ActivityUnavailableState
-                    title="Could not load pull request activity"
+                  <PullRequestActivityUnavailableState
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />
@@ -2417,8 +2371,6 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("code") ? (
-              // No mark: the viewer keeps its scrollport inside itself, under its own toolbar,
-              // so no child of this wrapper is the tab's own scrollport to fold against.
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab

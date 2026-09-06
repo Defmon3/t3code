@@ -138,7 +138,6 @@ it.effect("marks active running sessions that have persisted resume state", () =
       queryWithThreads([active, archived, ready, missingResumeState]),
     ),
     Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, {
-      touch: () => Effect.void,
       getBinding: (threadId) =>
         Effect.sync(() => bindingReads.push(threadId)).pipe(
           Effect.as(
@@ -152,6 +151,7 @@ it.effect("marks active running sessions that have persisted resume state", () =
           ),
         ),
       upsert: (binding) => Effect.sync(() => upserts.push(binding)),
+      recordImportedTranscript: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.succeed([]),
@@ -241,7 +241,6 @@ it.effect.each(["marked update", "opt-in restart"] as const)(
         continueAfterRestart: recovery === "opt-in restart",
         providerService,
         directory: {
-          touch: () => Effect.void,
           getBinding: (threadId) =>
             Effect.sync(() => {
               const binding = bindings.get(threadId);
@@ -267,6 +266,7 @@ it.effect.each(["marked update", "opt-in restart"] as const)(
                 firstMarkerCleared ? Deferred.succeed(continuationCleared, undefined) : Effect.void,
               ),
             ),
+          recordImportedTranscript: () => Effect.die("unused"),
           getProvider: () => Effect.die("unused"),
           listThreadIds: () => Effect.die("unused"),
           listBindings: () => Effect.succeed([]),
@@ -377,7 +377,6 @@ it.effect("does not continue archived or deleted marked sessions", () => {
         }),
     },
     directory: {
-      touch: () => Effect.void,
       getBinding: (threadId) => {
         const thread = threadId === archived.id ? archived : deleted;
         return Effect.succeed(
@@ -394,6 +393,7 @@ it.effect("does not continue archived or deleted marked sessions", () => {
         );
       },
       upsert: () => Effect.void,
+      recordImportedTranscript: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.succeed([]),
@@ -435,7 +435,6 @@ it.effect("retries continuation preparation before settling a persistent failure
   return runReconciliation({
     threads: [thread],
     directory: {
-      touch: () => Effect.void,
       getBinding: () =>
         Effect.succeed(
           Option.some({
@@ -450,6 +449,7 @@ it.effect("retries continuation preparation before settling a persistent failure
           }),
         ),
       upsert: () => Effect.void,
+      recordImportedTranscript: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.succeed([]),
@@ -521,7 +521,7 @@ it.effect("reconciles multiple active and archived orphans but skips live sessio
           ),
         ),
       upsert: (binding) => Effect.sync(() => upserts.push(binding)),
-      touch: () => Effect.die("unused"),
+      recordImportedTranscript: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.succeed([]),
@@ -601,7 +601,7 @@ it.effect(
                   }),
                 ),
         upsert: () => Effect.fail(writeFailure),
-        touch: () => Effect.die("unused"),
+        recordImportedTranscript: () => Effect.die("unused"),
         getProvider: () => Effect.die("unused"),
         listThreadIds: () => Effect.die("unused"),
         listBindings: () => Effect.succeed([]),
@@ -639,7 +639,7 @@ it.effect("retries failed projections and continues after a persistent failure",
     directory: {
       getBinding: () => Effect.succeed(Option.none()),
       upsert: () => Effect.void,
-      touch: () => Effect.die("unused"),
+      recordImportedTranscript: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.succeed([]),
@@ -689,7 +689,7 @@ it.effect("does not fail startup when the live provider session inventory cannot
     Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, {
       getBinding: () => Effect.die("unused"),
       upsert: () => Effect.die("unused"),
-      touch: () => Effect.die("unused"),
+      recordImportedTranscript: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.succeed([]),
@@ -739,7 +739,6 @@ for (const scenario of [
       threads: [thread],
       continueAfterRestart: scenario !== "disabled",
       directory: {
-        touch: () => Effect.void,
         getBinding: () =>
           Effect.succeed(
             Option.some({
@@ -763,6 +762,7 @@ for (const scenario of [
           Effect.sync(() => {
             upserts.push(binding);
           }),
+        recordImportedTranscript: () => Effect.die("unused"),
         getProvider: () => Effect.die("unused"),
         listThreadIds: () => Effect.die("unused"),
         listBindings: () => Effect.succeed([]),
@@ -829,7 +829,6 @@ for (const preparedStatus of [
             }),
         },
         directory: {
-          touch: () => Effect.void,
           getBinding: () => Effect.sync(() => Option.some(binding)),
           upsert: (next: ProviderSessionDirectory.ProviderRuntimeBinding) =>
             Effect.gen(function* () {
@@ -837,6 +836,7 @@ for (const preparedStatus of [
               if (binding.status !== "starting" || sends.length === 0) return;
               yield* Deferred.succeed(cleared, undefined);
             }),
+          recordImportedTranscript: () => Effect.die("unused"),
           getProvider: () => Effect.die("unused"),
           listThreadIds: () => Effect.die("unused"),
           listBindings: () =>
@@ -937,12 +937,12 @@ it.effect("settles failed opt-in recovery without retrying the provider turn", (
           }),
       },
       directory: {
-        touch: () => Effect.void,
         getBinding: () => Effect.sync(() => Option.some(binding)),
         upsert: (next) =>
           Effect.sync(() => {
             binding = next;
           }),
+        recordImportedTranscript: () => Effect.die("unused"),
         getProvider: () => Effect.die("unused"),
         listThreadIds: () => Effect.die("unused"),
         listBindings: () => Effect.succeed([]),

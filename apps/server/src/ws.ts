@@ -1,3 +1,7 @@
+import {
+  sameUsageLimitCommandCoverage,
+  withUsageLimitsCommands,
+} from "@t3tools/shared/usageLimits";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -33,7 +37,6 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
-  type OrchestrationShellSnapshot,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
@@ -43,7 +46,6 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
-  RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchContentsError,
@@ -55,17 +57,13 @@ import {
   type RelayClientInstallProgressEvent,
   ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
-  type ServerProcessDiagnosticsResult,
-  type ServerSettingsError,
+  type ServerLifecycleStreamEvent,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
-  IssueTrackingError,
-  WorkItemMatchError,
-  WorkItemTaskError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -103,6 +101,7 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
@@ -126,33 +125,21 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
+import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import {
-  makeProcessDiscoveryCollector,
-  processDiscoveryRoots as collectProcessDiscoveryRoots,
-  type ProcessDiscoveryWorktree,
-} from "./diagnostics/ProcessDiscoveryCollector.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import * as IssueService from "./issue/IssueService.ts";
-import * as LinearApi from "./issue/LinearApi.ts";
-import * as LinearConnection from "./issue/LinearConnection.ts";
-import * as TextGeneration from "./textGeneration/TextGeneration.ts";
-import { resolveWorkItemTaskResult } from "./textGeneration/TextGenerationPrompts.ts";
-import {
-  resolveWorkItemMatches,
-  shortlistWorkItemCandidates,
-  workItemIdentityKey,
-} from "./workItems/WorkItemMatching.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -181,41 +168,6 @@ const resolveDiscoveryForConfig = <A, E, R>(
     Effect.timeoutOption(CONFIG_DISCOVERY_TIMEOUT),
     Effect.map(Option.getOrElse(onTimeout)),
   );
-
-type ProcessDiscoveryGit = Pick<GitVcsDriver.GitVcsDriver["Service"], "listWorktreePaths">;
-
-export function processDiscoveryRoots(
-  snapshot: OrchestrationShellSnapshot,
-  worktrees: ReadonlyArray<ProcessDiscoveryWorktree> = [],
-): ReadonlyArray<string> {
-  return collectProcessDiscoveryRoots(snapshot, worktrees, RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS);
-}
-
-export function processDiscoveryWorktrees(
-  snapshot: OrchestrationShellSnapshot,
-  git: ProcessDiscoveryGit,
-) {
-  const workspaceRoots = [...new Set(snapshot.projects.map((project) => project.workspaceRoot))];
-  return Effect.forEach(
-    workspaceRoots,
-    (workspaceRoot) =>
-      git.listWorktreePaths(workspaceRoot).pipe(
-        Effect.map((paths) => [workspaceRoot, paths] as const),
-        Effect.orElseSucceed(() => [workspaceRoot, []] as const),
-      ),
-    { concurrency: 4 },
-  ).pipe(
-    Effect.map((resolvedWorktrees) => {
-      const pathsByWorkspaceRoot = new Map(resolvedWorktrees);
-      return snapshot.projects.flatMap((project) =>
-        (pathsByWorkspaceRoot.get(project.workspaceRoot) ?? []).map((path) => ({
-          projectId: project.id,
-          path,
-        })),
-      );
-    }),
-  );
-}
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
@@ -381,18 +333,6 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
   );
 }
 
-export function resolveProviderSkillsCwd(input: {
-  readonly project: { readonly id: ProjectId; readonly workspaceRoot: string } | undefined;
-  readonly requestedProjectId: ProjectId;
-  readonly thread?:
-    | { readonly projectId: ProjectId; readonly worktreePath: string | null }
-    | undefined;
-}): string | undefined {
-  if (input.project?.id !== input.requestedProjectId) return undefined;
-  if (input.thread && input.thread.projectId !== input.requestedProjectId) return undefined;
-  return input.thread?.worktreePath ?? input.project.workspaceRoot;
-}
-
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // When a resuming client's cursor is more than this many events behind the
@@ -525,20 +465,11 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
   };
 }
 
-const makeWsRpcLayer = <E, R>(
+const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
-  processDiscoveryCollector: {
-    readonly read: () => Effect.Effect<
-      ServerProcessDiagnosticsResult & {
-        readonly registeredProjectWorktrees: ReadonlyArray<ProcessDiscoveryWorktree>;
-      },
-      E,
-      R
-    >;
-  },
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -590,6 +521,7 @@ const makeWsRpcLayer = <E, R>(
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerService = yield* ProviderService.ProviderService;
+      const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService;
       const providerInstances = yield* ProviderInstanceRegistry;
@@ -638,6 +570,7 @@ const makeWsRpcLayer = <E, R>(
         return true;
       });
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -670,32 +603,14 @@ const makeWsRpcLayer = <E, R>(
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
-      const issues = yield* IssueService.IssueService;
-      const textGeneration = yield* TextGeneration.TextGeneration;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
+      const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
-      const issueTrackingError =
-        (operation: IssueTrackingError["operation"], settingsDetail: string) =>
-        (
-          error:
-            | LinearApi.LinearApiError
-            | LinearApi.LinearAccountSelectionRequiredError
-            | ServerSettingsError,
-        ) =>
-          new IssueTrackingError({
-            operation,
-            detail:
-              LinearApi.isLinearApiError(error) ||
-              LinearApi.isLinearAccountSelectionRequiredError(error)
-                ? error.detail
-                : settingsDetail,
-            cause: error,
-          });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1312,59 +1227,67 @@ const makeWsRpcLayer = <E, R>(
           );
       };
 
-      const loadServerConfig = Effect.gen(function* () {
-        const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providers = yield* providerRegistry.getProviders;
-        const settings = ServerSettings.redactServerSettingsForClient(
-          yield* serverSettings.getSettings,
-        );
-        const environment = yield* serverEnvironment.getDescriptor;
-        const auth = yield* serverAuth.getDescriptor();
-        const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
-          externalLauncher.resolveAvailableEditors(),
-        );
-        const fileManagerRevealKind = availableEditors.includes("file-manager")
-          ? yield* resolveFileManagerRevealKindForConfig(
-              externalLauncher.resolveFileManagerRevealKind(),
-            )
-          : undefined;
+      // Only clients that answer /usage-limits themselves see it in the catalogs;
+      // an older client would send the injected command to the provider.
+      const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
+        Effect.gen(function* () {
+          const keybindingsConfig = yield* keybindings.loadConfigState;
+          const currentProviders = yield* providerRegistry.getProviders;
+          const providers = options.usageLimitsCommand
+            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
+            : currentProviders;
+          const settings = ServerSettings.redactServerSettingsForClient(
+            yield* serverSettings.getSettings,
+          );
+          const environment = yield* serverEnvironment.getDescriptor;
+          const auth = yield* serverAuth.getDescriptor();
+          const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
+            externalLauncher.resolveAvailableEditors(),
+          );
+          const fileManagerRevealKind = availableEditors.includes("file-manager")
+            ? yield* resolveFileManagerRevealKindForConfig(
+                externalLauncher.resolveFileManagerRevealKind(),
+              )
+            : undefined;
 
-        return {
-          environment,
-          auth,
-          cwd: config.cwd,
-          keybindingsConfigPath: config.keybindingsConfigPath,
-          keybindings: keybindingsConfig.keybindings,
-          issues: keybindingsConfig.issues,
-          providers,
-          availableEditors,
-          // Same discovery-with-timeout treatment as editors: a slow probe
-          // must not stall server.getConfig, so it degrades to no targets.
-          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
-            remoteOpenTargets.resolveTargets(),
-          ),
-          observability: {
-            logsDirectoryPath: config.logsDir,
-            localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
-            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-            ...(config.otlpMetricsUrl !== undefined
-              ? { otlpMetricsUrl: config.otlpMetricsUrl }
-              : {}),
-            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
-          },
-          settings,
-          shellResumeCompletionMarker: true,
-          ...(fileManagerRevealKind === undefined
-            ? {}
-            : {
-                shellRevealInFileManager: true,
-                shellRevealInFileManagerKind: fileManagerRevealKind,
-              }),
-          threadResumeCompletionMarker: true,
-          threadSnapshotPagination: true,
-        };
-      });
+          return {
+            environment,
+            auth,
+            cwd: config.cwd,
+            keybindingsConfigPath: config.keybindingsConfigPath,
+            keybindings: keybindingsConfig.keybindings,
+            issues: keybindingsConfig.issues,
+            providers,
+            availableEditors,
+            // Same discovery-with-timeout treatment as editors: a slow probe
+            // must not stall server.getConfig, so it degrades to no targets.
+            remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
+              remoteOpenTargets.resolveTargets(),
+            ),
+            observability: {
+              logsDirectoryPath: config.logsDir,
+              localTracingEnabled: true,
+              ...(config.otlpTracesUrl !== undefined
+                ? { otlpTracesUrl: config.otlpTracesUrl }
+                : {}),
+              otlpTracesEnabled: config.otlpTracesUrl !== undefined,
+              ...(config.otlpMetricsUrl !== undefined
+                ? { otlpMetricsUrl: config.otlpMetricsUrl }
+                : {}),
+              otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
+            },
+            settings,
+            shellResumeCompletionMarker: true,
+            ...(fileManagerRevealKind === undefined
+              ? {}
+              : {
+                  shellRevealInFileManager: true,
+                  shellRevealInFileManagerKind: fileManagerRevealKind,
+                }),
+            threadResumeCompletionMarker: true,
+            threadSnapshotPagination: true,
+          };
+        });
 
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
@@ -1841,9 +1764,13 @@ const makeWsRpcLayer = <E, R>(
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverGetConfig]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
-            "rpc.aggregate": "server",
-          }),
+          observeRpcEffect(
+            WS_METHODS.serverGetConfig,
+            loadServerConfig({ usageLimitsCommand: false }),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
@@ -1891,37 +1818,6 @@ const makeWsRpcLayer = <E, R>(
                 }
               }
               return { providers };
-            }),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverListProviderSkills]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverListProviderSkills,
-            Effect.gen(function* () {
-              const project = yield* projectionSnapshotQuery
-                .getProjectShellById(input.projectId)
-                .pipe(Effect.orElseSucceed(() => Option.none()));
-              const thread =
-                input.threadId === undefined
-                  ? undefined
-                  : yield* projectionSnapshotQuery
-                      .getThreadShellById(input.threadId)
-                      .pipe(Effect.orElseSucceed(() => Option.none()));
-              const cwd = resolveProviderSkillsCwd({
-                project: Option.getOrUndefined(project),
-                requestedProjectId: input.projectId,
-                ...(thread === undefined || Option.isNone(thread) ? {} : { thread: thread.value }),
-              });
-              if (
-                cwd === undefined ||
-                (input.threadId !== undefined && (thread === undefined || Option.isNone(thread)))
-              ) {
-                return { skills: [] };
-              }
-
-              return {
-                skills: yield* providerRegistry.listSkills({ instanceId: input.instanceId, cwd }),
-              };
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -2096,10 +1992,9 @@ const makeWsRpcLayer = <E, R>(
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            (patch.issueTracking?.linear?.projectTeams === undefined
-              ? serverSettings.updateSettings(patch)
-              : LinearConnection.updateLegacyLinearProjectTeams(patch)
-            ).pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            serverSettings
+              .updateSettings(patch)
+              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
             {
               "rpc.aggregate": "server",
             },
@@ -2123,25 +2018,14 @@ const makeWsRpcLayer = <E, R>(
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverGetProcessDiagnostics]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverGetProcessDiagnostics,
-            input.scope === "registered-project-tests"
-              ? processDiscoveryCollector.read().pipe(
-                  Effect.tapError((cause) =>
-                    Effect.logError("process discovery root load failed", { cause }),
-                  ),
-                  Effect.catch(() =>
-                    processDiagnostics.unavailable(
-                      "Process discovery could not load registered projects.",
-                    ),
-                  ),
-                )
-              : processDiagnostics.read({}),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
+        [WS_METHODS.serverGetProcessDiagnostics]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetProcessDiagnostics, processDiagnostics.read, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverGetHostResources]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetHostResources, hostResources.read, {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverGetProcessResourceHistory,
@@ -2331,391 +2215,6 @@ const makeWsRpcLayer = <E, R>(
             pullRequests.requestReviewers(input),
             { "rpc.aggregate": "pull-requests" },
           ),
-        [WS_METHODS.issuesList]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesList, issues.list(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesDetail]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesDetail, issues.detail(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesActivity]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesActivity, issues.activity(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesCommentsPage]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesCommentsPage, issues.commentsPage(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesRunAction]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesRunAction, issues.runAction(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesComment]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesComment, issues.comment(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesUpdateComment]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesUpdateComment, issues.updateComment(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesSetReaction]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesSetReaction, issues.setReaction(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesCreate]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesCreate, issues.create(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesUpdate]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesUpdate, issues.update(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesSetLabels]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesSetLabels, issues.setLabels(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesSetAssignees]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesSetAssignees, issues.setAssignees(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesLabelCandidates]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesLabelCandidates, issues.labelCandidates(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesAssigneeCandidates]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesAssigneeCandidates, issues.assigneeCandidates(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesTemplates]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesTemplates, issues.templates(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.issuesInvalidate]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
-            "rpc.aggregate": "issues",
-          }),
-        [WS_METHODS.linearConnectionStatus]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.linearConnectionStatus,
-            LinearConnection.linearConnectionStatus.pipe(
-              Effect.mapError(
-                issueTrackingError("status", "Could not migrate the Linear project bindings."),
-              ),
-            ),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.linearConnect]: ({ token, mode }) =>
-          observeRpcEffect(
-            WS_METHODS.linearConnect,
-            LinearConnection.connectLinearAccount(token, mode).pipe(
-              Effect.mapError(
-                issueTrackingError("connect", "Could not migrate the Linear project bindings."),
-              ),
-            ),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.linearDisconnect]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.linearDisconnect,
-            LinearConnection.disconnectLinearAccount(input).pipe(
-              Effect.mapError(
-                issueTrackingError("disconnect", "Could not clear the Linear project bindings."),
-              ),
-            ),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.linearSetProjectBinding]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.linearSetProjectBinding,
-            LinearConnection.setLinearProjectBinding(input).pipe(
-              Effect.mapError(
-                issueTrackingError("bind", "Could not save the Linear project binding."),
-              ),
-            ),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.workItemsGenerateTask]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.workItemsGenerateTask,
-            Effect.gen(function* () {
-              const items = yield* Effect.forEach(
-                input.items,
-                (item) =>
-                  Effect.gen(function* () {
-                    const reference = {
-                      projectId: input.projectId,
-                      ...(item.provider === undefined ? {} : { provider: item.provider }),
-                      repository: item.repository,
-                      number: item.number,
-                    };
-                    if (item.kind === "issue") {
-                      const detail = yield* issues.detail(reference);
-                      return {
-                        kind: "issue" as const,
-                        provider: detail.provider,
-                        repository: detail.repository,
-                        number: detail.number,
-                        title: detail.title,
-                        url: detail.url,
-                        body: detail.body,
-                        workspaceRoot: detail.workspaceRoot,
-                      };
-                    }
-                    const detail = yield* pullRequests.detail(reference);
-                    return {
-                      kind: "pull-request" as const,
-                      provider: detail.provider,
-                      repository: detail.repository,
-                      number: detail.number,
-                      title: detail.title,
-                      url: detail.url,
-                      body: detail.body,
-                      workspaceRoot: detail.workspaceRoot,
-                    };
-                  }).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new WorkItemTaskError({
-                          operation: "read-source",
-                          source: item,
-                          detail: "Could not read a selected work item.",
-                          cause,
-                        }),
-                    ),
-                  ),
-                { concurrency: 4 },
-              );
-              const settings = yield* serverSettings.getSettings.pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new WorkItemTaskError({
-                      operation: "generate",
-                      source: input.items[0]!,
-                      detail: "Could not load task-generation settings.",
-                      cause,
-                    }),
-                ),
-              );
-              const generated = yield* textGeneration
-                .generateWorkItemTask({
-                  cwd: items[0]!.workspaceRoot,
-                  mode: input.mode,
-                  items,
-                  modelSelection: settings.textGenerationModelSelection,
-                })
-                .pipe(
-                  Effect.map(({ prompt }) =>
-                    resolveWorkItemTaskResult({ mode: input.mode, items }, prompt),
-                  ),
-                  Effect.orElseSucceed(() =>
-                    resolveWorkItemTaskResult({ mode: input.mode, items }, ""),
-                  ),
-                );
-              return generated;
-            }),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.workItemsFindMatches]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.workItemsFindMatches,
-            Effect.gen(function* () {
-              const reference = {
-                projectId: input.projectId,
-                ...(input.source.provider === undefined ? {} : { provider: input.source.provider }),
-                repository: input.source.repository,
-                number: input.source.number,
-              };
-              const sourceRead =
-                input.source.kind === "issue"
-                  ? issues.detail(reference).pipe(
-                      Effect.map((detail) => ({
-                        detail,
-                        known:
-                          input.relationship === "related"
-                            ? detail.linkedPullRequests.map((link) =>
-                                workItemIdentityKey({
-                                  kind: "pull-request",
-                                  provider: detail.provider,
-                                  repository: link.repository,
-                                  number: link.number,
-                                }),
-                              )
-                            : [],
-                      })),
-                      Effect.mapError(
-                        (cause) =>
-                          new WorkItemMatchError({
-                            operation: "read-source",
-                            source: input.source,
-                            detail: "Could not read the source work item.",
-                            cause,
-                          }),
-                      ),
-                    )
-                  : pullRequests.detail(reference).pipe(
-                      Effect.map((detail) => ({
-                        detail,
-                        known:
-                          input.relationship === "related"
-                            ? (detail.linkedIssues ?? []).map((link) =>
-                                workItemIdentityKey({
-                                  kind: "issue",
-                                  provider: detail.provider,
-                                  repository: link.repository,
-                                  number: link.number,
-                                }),
-                              )
-                            : [],
-                      })),
-                      Effect.mapError(
-                        (cause) =>
-                          new WorkItemMatchError({
-                            operation: "read-source",
-                            source: input.source,
-                            detail: "Could not read the source work item.",
-                            cause,
-                          }),
-                      ),
-                    );
-              const { detail: sourceDetail, known } = yield* sourceRead;
-              const source = {
-                kind: input.source.kind,
-                provider: sourceDetail.provider,
-                repository: sourceDetail.repository,
-                number: sourceDetail.number,
-                title: sourceDetail.title,
-                url: sourceDetail.url,
-                body: sourceDetail.body,
-              };
-              const candidateKind =
-                input.relationship === "duplicate"
-                  ? input.source.kind
-                  : input.source.kind === "issue"
-                    ? "pull-request"
-                    : "issue";
-              const listed =
-                candidateKind === "issue"
-                  ? yield* issues
-                      .list({
-                        state: input.relationship === "duplicate" ? "all" : "open",
-                        projectId: input.projectId,
-                        limit: 50,
-                      })
-                      .pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new WorkItemMatchError({
-                              operation: "list-candidates",
-                              source: input.source,
-                              detail: "Could not list candidate work items.",
-                              cause,
-                            }),
-                        ),
-                      )
-                  : yield* pullRequests
-                      .list({
-                        state: input.relationship === "duplicate" ? "all" : "open",
-                        projectId: input.projectId,
-                        limit: 50,
-                      })
-                      .pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new WorkItemMatchError({
-                              operation: "list-candidates",
-                              source: input.source,
-                              detail: "Could not list candidate work items.",
-                              cause,
-                            }),
-                        ),
-                      );
-              const knownItems = new Set(known);
-              const candidates = shortlistWorkItemCandidates(
-                source,
-                listed.entries
-                  .slice(0, 50)
-                  .filter(
-                    (entry) =>
-                      !knownItems.has(workItemIdentityKey({ ...entry, kind: candidateKind })),
-                  )
-                  .map((entry) => ({ ...entry, kind: candidateKind })),
-              );
-              const candidateDetails = yield* Effect.forEach(
-                candidates,
-                (candidate) =>
-                  Effect.gen(function* () {
-                    const candidateReference = {
-                      projectId: candidate.projectId,
-                      provider: candidate.provider,
-                      repository: candidate.repository,
-                      number: candidate.number,
-                    };
-                    if (candidateKind === "issue") {
-                      const detail = yield* issues.detail(candidateReference);
-                      return {
-                        kind: "issue" as const,
-                        provider: detail.provider,
-                        repository: detail.repository,
-                        number: detail.number,
-                        title: detail.title,
-                        url: detail.url,
-                        body: detail.body,
-                      };
-                    }
-                    const detail = yield* pullRequests.detail(candidateReference);
-                    return {
-                      kind: "pull-request" as const,
-                      provider: detail.provider,
-                      repository: detail.repository,
-                      number: detail.number,
-                      title: detail.title,
-                      url: detail.url,
-                      body: detail.body,
-                    };
-                  }).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new WorkItemMatchError({
-                          operation: "read-candidate",
-                          source: {
-                            kind: candidateKind,
-                            provider: candidate.provider,
-                            repository: candidate.repository,
-                            number: candidate.number,
-                          },
-                          detail: "Could not read a candidate work item.",
-                          cause,
-                        }),
-                    ),
-                  ),
-                { concurrency: 4 },
-              );
-              if (candidateDetails.length === 0) return { matches: [] };
-              const generated = yield* Effect.gen(function* () {
-                const settings = yield* serverSettings.getSettings;
-                return yield* textGeneration.findWorkItemMatches({
-                  cwd: sourceDetail.workspaceRoot,
-                  relationship: input.relationship,
-                  source,
-                  candidates: candidateDetails,
-                  modelSelection: settings.textGenerationModelSelection,
-                });
-              }).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new WorkItemMatchError({
-                      operation: "generate",
-                      source: input.source,
-                      detail: "Could not generate work item matches.",
-                      cause,
-                    }),
-                ),
-              );
-              return { matches: resolveWorkItemMatches(candidateDetails, generated.matches) };
-            }),
-            { "rpc.aggregate": "issues" },
-          ),
         [WS_METHODS.pullRequestsLabelCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsLabelCandidates,
@@ -2859,6 +2358,31 @@ const makeWsRpcLayer = <E, R>(
           observeRpcEffect(
             WS_METHODS.attachmentsDelete,
             deletePendingAttachment(input.attachmentId),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.agentSessionsScan]: () =>
+          observeRpcEffect(WS_METHODS.agentSessionsScan, agentSessionScanner.scan, {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.agentSessionsImport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentSessionsImport,
+            importRecentAgentThreads(input).pipe(
+              Effect.provideService(AgentSessionScanner.AgentSessionScanner, agentSessionScanner),
+              Effect.provideService(
+                OrchestrationEngine.OrchestrationEngineService,
+                orchestrationEngine,
+              ),
+              Effect.provideService(
+                ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+                projectionSnapshotQuery,
+              ),
+              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(
+                ProviderSessionDirectory.ProviderSessionDirectory,
+                providerSessionDirectory,
+              ),
+            ),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.assetsCreateUrl]: (input) =>
@@ -3005,26 +2529,6 @@ const makeWsRpcLayer = <E, R>(
           ),
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
-            "rpc.aggregate": "vcs",
-          }),
-        [WS_METHODS.vcsListHistoryRefs]: (input) =>
-          observeRpcEffect(WS_METHODS.vcsListHistoryRefs, gitWorkflow.listHistoryRefs(input), {
-            "rpc.aggregate": "vcs",
-          }),
-        [WS_METHODS.vcsGetHistory]: (input) =>
-          observeRpcEffect(WS_METHODS.vcsGetHistory, gitWorkflow.getHistory(input), {
-            "rpc.aggregate": "vcs",
-          }),
-        [WS_METHODS.vcsGetCommitDetails]: (input) =>
-          observeRpcEffect(WS_METHODS.vcsGetCommitDetails, gitWorkflow.getCommitDetails(input), {
-            "rpc.aggregate": "vcs",
-          }),
-        [WS_METHODS.vcsListCommitFiles]: (input) =>
-          observeRpcEffect(WS_METHODS.vcsListCommitFiles, gitWorkflow.listCommitFiles(input), {
-            "rpc.aggregate": "vcs",
-          }),
-        [WS_METHODS.vcsGetCommitDiff]: (input) =>
-          observeRpcEffect(WS_METHODS.vcsGetCommitDiff, gitWorkflow.getCommitDiff(input), {
             "rpc.aggregate": "vcs",
           }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
@@ -3210,6 +2714,8 @@ const makeWsRpcLayer = <E, R>(
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
             Effect.gen(function* () {
+              const usageLimitsCommand = input.usageLimitsCommand === true;
+              const config = yield* loadServerConfig({ usageLimitsCommand });
               const keybindingsUpdates = keybindings.streamChanges.pipe(
                 Stream.map((event) => ({
                   version: 1 as const,
@@ -3220,7 +2726,33 @@ const makeWsRpcLayer = <E, R>(
                   },
                 })),
               );
-              const providerStatuses = providerRegistry.streamChanges.pipe(
+              const providerStatuses = Stream.zipLatestWith(
+                // The registry stream carries changes only. Seed it with the current
+                // providers so a source refresh that lands before any provider change
+                // still pairs up and reaches the client.
+                Stream.concat(
+                  Stream.fromEffect(providerRegistry.getProviders),
+                  providerRegistry.streamChanges,
+                ),
+                usageLimitSources.streamChanges.pipe(
+                  // Quota updates already have their own stream. Republish the model
+                  // catalog only when the set of providers offered the command changes.
+                  Stream.changesWith(
+                    usageLimitsCommand ? sameUsageLimitCommandCoverage : () => true,
+                  ),
+                ),
+                (providers, sources) =>
+                  usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
+              ).pipe(
+                // Both sides replay their current value, so the first pairing normally
+                // repeats the snapshot the client already holds. Compare against that
+                // snapshot rather than dropping blindly: a refresh that landed between
+                // the snapshot and the subscription still goes out.
+                (updates) => Stream.concat(Stream.make(config.providers), updates),
+                Stream.changesWith(
+                  (previous, next) => JSON.stringify(previous) === JSON.stringify(next),
+                ),
+                Stream.drop(1),
                 Stream.map((providers) => ({
                   version: 1 as const,
                   type: "providerStatuses" as const,
@@ -3281,11 +2813,7 @@ const makeWsRpcLayer = <E, R>(
               );
 
               return Stream.concat(
-                Stream.make({
-                  version: 1 as const,
-                  type: "snapshot" as const,
-                  config: yield* loadServerConfig,
-                }),
+                Stream.make({ version: 1 as const, type: "snapshot" as const, config }),
                 liveUpdates,
               );
             }),
@@ -3295,11 +2823,18 @@ const makeWsRpcLayer = <E, R>(
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerLifecycle,
             Effect.gen(function* () {
+              const liveBuffer = yield* Queue.unbounded<ServerLifecycleStreamEvent>();
+              yield* Effect.forkScoped(
+                lifecycleEvents.stream.pipe(
+                  Stream.runForEach((event) => Queue.offer(liveBuffer, event)),
+                ),
+                { startImmediately: true },
+              );
               const snapshot = yield* lifecycleEvents.snapshot;
               const snapshotEvents = Array.from(snapshot.events).toSorted(
                 (left, right) => left.sequence - right.sequence,
               );
-              const liveEvents = lifecycleEvents.stream.pipe(
+              const liveEvents = Stream.fromQueue(liveBuffer).pipe(
                 Stream.filter((event) => event.sequence > snapshot.sequence),
               );
               return Stream.concat(Stream.fromIterable(snapshotEvents), liveEvents);
@@ -3392,27 +2927,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         ),
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
-    const issues = yield* IssueService.IssueService;
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-    const git = yield* GitVcsDriver.GitVcsDriver;
-    const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
-    const processDiscoveryCollector = yield* makeProcessDiscoveryCollector({
-      loadTopology: () =>
-        projectionSnapshotQuery.getShellSnapshot().pipe(
-          Effect.map((snapshot) => ({
-            knownRoots: processDiscoveryRoots(snapshot),
-          })),
-        ),
-      loadWorktrees: () =>
-        Effect.gen(function* () {
-          const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-          return { worktrees: yield* processDiscoveryWorktrees(snapshot, git) };
-        }),
-      maxRoots: RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
-      processDiagnostics,
-    });
-    const linear = yield* LinearApi.LinearApi;
-    const textGeneration = yield* TextGeneration.TextGeneration;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3445,17 +2959,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
-              processDiscoveryCollector,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
-              Layer.provide(Layer.succeed(LinearApi.LinearApi, linear)),
-              Layer.provide(Layer.succeed(TextGeneration.TextGeneration, textGeneration)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

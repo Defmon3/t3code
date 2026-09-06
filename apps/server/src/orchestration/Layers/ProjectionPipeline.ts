@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  isImportedAgentSessionMessageId,
   type ChatAttachment,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
@@ -335,33 +336,6 @@ function derivePendingUserInputCountFromActivities(
   }
 
   return openRequestIds.size;
-}
-
-function deriveHasActionableProposedPlan(input: {
-  readonly latestTurnId: string | null;
-  readonly proposedPlans: ReadonlyArray<ProjectionThreadProposedPlan>;
-}): boolean {
-  const sorted = [...input.proposedPlans].toSorted(
-    (left, right) =>
-      left.updatedAt.localeCompare(right.updatedAt) || left.planId.localeCompare(right.planId),
-  );
-
-  let latestForTurn: ProjectionThreadProposedPlan | null = null;
-  if (input.latestTurnId !== null) {
-    for (let index = sorted.length - 1; index >= 0; index -= 1) {
-      const plan = sorted[index];
-      if (plan?.turnId === input.latestTurnId) {
-        latestForTurn = plan;
-        break;
-      }
-    }
-  }
-  if (latestForTurn !== null) {
-    return latestForTurn.implementedAt === null;
-  }
-
-  const latestPlan = sorted.at(-1) ?? null;
-  return latestPlan !== null && latestPlan.implementedAt === null;
 }
 
 function retainProjectionMessagesAfterRevert(
@@ -770,15 +744,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
       let hasActionableProposedPlan = existingRow.value.hasActionableProposedPlan;
       if (fields.hasActionableProposedPlan) {
-        const proposedPlans = yield* projectionThreadProposedPlanRepository.listByThreadId({
+        const actionable = yield* projectionThreadProposedPlanRepository.hasActionableByThreadId({
           threadId,
-        });
-        hasActionableProposedPlan = deriveHasActionableProposedPlan({
           latestTurnId: existingRow.value.latestTurnId,
-          proposedPlans,
-        })
-          ? 1
-          : 0;
+        });
+        hasActionableProposedPlan = actionable ? 1 : 0;
       }
 
       yield* projectionThreadRepository.upsert({
@@ -1005,6 +975,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: event.payload.linkedPullRequest }
               : {}),
+            ...(event.payload.branchPullRequest !== undefined
+              ? { branchPullRequest: event.payload.branchPullRequest }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1091,6 +1064,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               Option.isSome(projectedMessage) &&
               projectedMessage.value.threadId === event.payload.threadId &&
               projectedMessage.value.role === "user" &&
+              !isImportedAgentSessionMessageId(projectedMessage.value.messageId) &&
               (previousLatest === null || projectedMessage.value.createdAt > previousLatest)
                 ? projectedMessage.value.createdAt
                 : previousLatest,

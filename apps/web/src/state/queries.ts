@@ -9,30 +9,24 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
-import {
-  VcsSnapshotExpiredError,
-  type EnvironmentId,
-  type OrchestrationThread,
-  type ProjectContentMatch,
-  type ProjectEntryKind,
-  type ThreadId,
-  type VcsHistoryRef,
-  type VcsListHistoryRefsResult,
-  type VcsListRefsResult,
-  type VcsRef,
+import type {
+  EnvironmentId,
+  OrchestrationThread,
+  ProjectContentMatch,
+  ProjectEntryKind,
+  VcsListRefsResult,
+  VcsRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
 import { projectContentSearch, projectEnvironment } from "./projects";
-import { formatEnvironmentQueryError, useEnvironmentQuery } from "./query";
-import { useEnvironmentThread } from "./threads";
+import { useEnvironmentQuery } from "./query";
 import { vcsEnvironment } from "./vcs";
 
 const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
@@ -42,7 +36,6 @@ const PROJECT_CONTENT_SEARCH_LIMIT = 500;
 const THREAD_SEARCH_DEBOUNCE_MS = 200;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
-const EMPTY_HISTORY_REFS: ReadonlyArray<VcsHistoryRef> = [];
 const EMPTY_CONTENT_MATCHES: ReadonlyArray<ProjectContentMatch> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> = Object.freeze([]);
@@ -108,64 +101,15 @@ export function useThreadSearch(
   };
 }
 
-export function useThreadDetail(
-  environmentId: EnvironmentId | null,
-  threadId: ThreadId | null,
-): ThreadDetailView {
-  const state = useEnvironmentThread(environmentId, threadId);
-  return {
-    data: Option.getOrNull(state.data),
-    error: Option.getOrNull(state.error),
-    isPending: state.status === "synchronizing",
-    isDeleted: state.status === "deleted",
-  };
-}
-
-export function useBranches(target: VcsRefTarget) {
+export function usePaginatedBranches(target: VcsRefTarget) {
   const query = target.query?.trim() ?? "";
-  return useEnvironmentQuery(
-    target.environmentId !== null && target.cwd !== null
-      ? vcsEnvironment.listRefs({
-          environmentId: target.environmentId,
-          input: {
-            cwd: target.cwd,
-            ...(query.length > 0 ? { prefix: query } : {}),
-            limit: VCS_REF_LIST_LIMIT,
-          },
-        })
-      : null,
-  );
-}
-
-export function usePaginatedBranches(
-  target: VcsRefTarget,
-  options?: {
-    readonly limit?: number;
-    readonly namespace?: "local" | "remote" | "tag";
-    readonly revision?: number;
-  },
-) {
-  const query = target.query?.trim() ?? "";
-  const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
-  const namespace = options?.namespace ?? "local";
-  const revision = options?.revision ?? 0;
-  const [queryGeneration, setQueryGeneration] = useState(0);
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const targetKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([
-          target.environmentId,
-          target.cwd,
-          query,
-          limit,
-          namespace,
-          revision,
-          refreshGeneration,
-        ])
+      ? JSON.stringify([target.environmentId, target.cwd, query])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
-    readonly cursors: ReadonlyArray<string | undefined>;
+    readonly cursors: ReadonlyArray<number | undefined>;
   }>({
     targetKey,
     cursors: INITIAL_BRANCH_CURSORS,
@@ -179,27 +123,14 @@ export function usePaginatedBranches(
               environmentId: target.environmentId!,
               input: {
                 cwd: target.cwd!,
-                ...(query.length > 0 ? { prefix: query } : {}),
+                ...(query.length > 0 ? { query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
-                limit,
-                queryGeneration: queryGeneration + revision,
-                namespace,
-                ...(refreshGeneration > 0 ? { refresh: true } : {}),
+                limit: VCS_REF_LIST_LIMIT,
               },
             }),
           )
         : [],
-    [
-      cursors,
-      limit,
-      query,
-      queryGeneration,
-      namespace,
-      revision,
-      refreshGeneration,
-      target.cwd,
-      target.environmentId,
-    ],
+    [cursors, query, target.cwd, target.environmentId],
   );
   const pagesAtom = useMemo(
     () =>
@@ -209,42 +140,29 @@ export function usePaginatedBranches(
     [pageAtoms, targetKey],
   );
   const results = useAtomValue(pagesAtom);
-  const values = useMemo(
-    () =>
-      results.flatMap((result) => {
-        const value = Option.getOrNull(AsyncResult.value(result));
-        return value === null ? [] : [value];
-      }),
-    [results],
-  );
-  const data = useMemo<VcsListRefsResult | null>(() => {
-    const first = values[0] ?? null;
-    const last = values.at(-1) ?? null;
-    if (first === null || last === null) return null;
-    const refs = new Map<string, VcsRef>();
-    for (const value of values) {
-      for (const ref of value.refs) refs.set(ref.name, ref);
+  const values = results.flatMap((result) => {
+    const value = Option.getOrNull(AsyncResult.value(result));
+    return value === null ? [] : [value];
+  });
+  const refs = new Map<string, VcsRef>();
+  for (const value of values) {
+    for (const ref of value.refs) {
+      refs.set(ref.name, ref);
     }
-    return {
-      refs: [...refs.values()],
-      currentRef: first.currentRef,
-      isRepo: first.isRepo,
-      hasPrimaryRemote: first.hasPrimaryRemote,
-      nextCursor: last.nextCursor,
-      isComplete: last.isComplete,
-    };
-  }, [values]);
+  }
+  const first = values[0] ?? null;
+  const last = values.at(-1) ?? null;
+  const data: VcsListRefsResult | null =
+    first === null || last === null
+      ? null
+      : {
+          refs: [...refs.values()],
+          isRepo: first.isRepo,
+          hasPrimaryRemote: first.hasPrimaryRemote,
+          nextCursor: last.nextCursor,
+          totalCount: Math.max(...values.map((value) => value.totalCount)),
+        };
   const failed = results.find((result) => result._tag === "Failure");
-  const expiredPage =
-    failed?._tag === "Failure" && Schema.is(VcsSnapshotExpiredError)(Cause.squash(failed.cause));
-  const recoveredSnapshotGeneration = useRef<number | null>(null);
-  useEffect(() => {
-    if (!expiredPage || recoveredSnapshotGeneration.current === queryGeneration) return;
-    recoveredSnapshotGeneration.current = queryGeneration;
-    setQueryGeneration((generation) => generation + 1);
-    setRefreshGeneration((generation) => generation + 1);
-    setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [expiredPage, queryGeneration, targetKey]);
   const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
   const error =
     failed?._tag === "Failure"
@@ -256,17 +174,12 @@ export function usePaginatedBranches(
         })()
       : null;
   const refresh = useCallback(() => {
-    setQueryGeneration((generation) => generation + 1);
-    setRefreshGeneration((generation) => generation + 1);
+    const firstPage = pageAtoms[0];
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [targetKey]);
-  const retry = useCallback(() => {
-    const failedIndex = results.findIndex((result) => result._tag === "Failure");
-    const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
-    if (failedPageAtom !== undefined) {
-      appAtomRegistry.refresh(failedPageAtom);
+    if (firstPage !== undefined) {
+      appAtomRegistry.refresh(firstPage);
     }
-  }, [pageAtoms, results]);
+  }, [pageAtoms, targetKey]);
   const loadNext = useCallback(() => {
     if (targetKey === null || data?.nextCursor === null || data?.nextCursor === undefined) {
       return;
@@ -287,155 +200,6 @@ export function usePaginatedBranches(
     isPending: results.some((result) => result.waiting),
     isFetchingNextPage,
     refresh,
-    retry,
-    loadNext,
-  };
-}
-
-export function usePaginatedHistoryRefs(
-  target: VcsRefTarget,
-  options?: {
-    readonly limit?: number;
-    readonly namespace?: "local" | "remote" | "tag";
-    readonly revision?: number;
-  },
-) {
-  const query = target.query?.trim() ?? "";
-  const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
-  const namespace = options?.namespace ?? "local";
-  const revision = options?.revision ?? 0;
-  const [queryGeneration, setQueryGeneration] = useState(0);
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const refSearchKey = JSON.stringify([
-    target.environmentId,
-    target.cwd,
-    query,
-    limit,
-    namespace,
-    revision,
-  ]);
-  const [refreshSearchKey, setRefreshSearchKey] = useState<string | null>(null);
-  const isRefreshRequest = refreshSearchKey === refSearchKey;
-  const targetKey =
-    target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([
-          target.environmentId,
-          target.cwd,
-          query,
-          limit,
-          namespace,
-          revision,
-          refreshGeneration,
-        ])
-      : null;
-  const [pagination, setPagination] = useState<{
-    readonly targetKey: string | null;
-    readonly cursors: ReadonlyArray<string | undefined>;
-  }>({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_BRANCH_CURSORS;
-  const pageAtoms = useMemo(
-    () =>
-      target.environmentId !== null && target.cwd !== null
-        ? cursors.map((cursor) =>
-            vcsEnvironment.listHistoryRefs({
-              environmentId: target.environmentId!,
-              cacheKey: `${revision}:${queryGeneration}`,
-              input: {
-                cwd: target.cwd!,
-                ...(query.length > 0 ? { query } : {}),
-                ...(cursor === undefined ? {} : { cursor }),
-                limit,
-                namespace,
-                ...(cursor === undefined && isRefreshRequest ? { refresh: true } : {}),
-              },
-            }),
-          )
-        : [],
-    [
-      cursors,
-      isRefreshRequest,
-      limit,
-      namespace,
-      query,
-      queryGeneration,
-      refSearchKey,
-      refreshGeneration,
-      refreshSearchKey,
-      revision,
-      target.cwd,
-      target.environmentId,
-    ],
-  );
-  const pagesAtom = useMemo(
-    () =>
-      Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
-        Atom.withLabel(`web:vcs-history-ref-pages:${targetKey ?? "empty"}`),
-      ),
-    [pageAtoms, targetKey],
-  );
-  const results = useAtomValue(pagesAtom);
-  const values = useMemo(
-    () =>
-      results.flatMap((result) => {
-        const value = Option.getOrNull(AsyncResult.value(result));
-        return value === null ? [] : [value];
-      }),
-    [results],
-  );
-  const data = useMemo<VcsListHistoryRefsResult | null>(() => {
-    const first = values[0] ?? null;
-    const last = values.at(-1) ?? null;
-    if (first === null || last === null) return null;
-    const refs = new Map<string, VcsHistoryRef>();
-    for (const value of values) for (const ref of value.refs) refs.set(ref.name, ref);
-    return { ...last, refs: [...refs.values()], currentRef: first.currentRef };
-  }, [values]);
-  const failed = results.find((result) => result._tag === "Failure");
-  const expiredPage =
-    failed?._tag === "Failure" && Schema.is(VcsSnapshotExpiredError)(Cause.squash(failed.cause));
-  const effectiveQueryGeneration = `${revision}:${queryGeneration}`;
-  const recoveredSnapshotGeneration = useRef<string | null>(null);
-  useEffect(() => {
-    if (!expiredPage || recoveredSnapshotGeneration.current === effectiveQueryGeneration) return;
-    recoveredSnapshotGeneration.current = effectiveQueryGeneration;
-    setQueryGeneration((generation) => generation + 1);
-    setRefreshGeneration((generation) => generation + 1);
-    setRefreshSearchKey(refSearchKey);
-    setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [effectiveQueryGeneration, expiredPage, refSearchKey, targetKey]);
-  useEffect(() => {
-    if (refreshSearchKey !== null && !isRefreshRequest) setRefreshSearchKey(null);
-  }, [isRefreshRequest, refreshSearchKey]);
-  const error = failed?._tag === "Failure" ? formatEnvironmentQueryError(failed.cause) : null;
-  const refresh = useCallback(() => {
-    setQueryGeneration((generation) => generation + 1);
-    setRefreshGeneration((generation) => generation + 1);
-    setRefreshSearchKey(refSearchKey);
-    setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [refSearchKey, targetKey]);
-  const retry = useCallback(() => {
-    const failedIndex = results.findIndex((result) => result._tag === "Failure");
-    const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
-    if (failedPageAtom !== undefined) appAtomRegistry.refresh(failedPageAtom);
-  }, [pageAtoms, results]);
-  const loadNext = useCallback(() => {
-    if (targetKey === null || data?.nextCursor === null || data?.nextCursor === undefined) return;
-    setPagination((current) => {
-      const currentCursors =
-        current.targetKey === targetKey ? current.cursors : INITIAL_BRANCH_CURSORS;
-      return currentCursors.includes(data.nextCursor!)
-        ? { targetKey, cursors: currentCursors }
-        : { targetKey, cursors: [...currentCursors, data.nextCursor!] };
-    });
-  }, [data?.nextCursor, targetKey]);
-  return {
-    data,
-    refs: data?.refs ?? EMPTY_HISTORY_REFS,
-    error,
-    isPending: results.some((result) => result.waiting),
-    isFetchingNextPage: isPaginatedBranchesNextPagePending(results),
-    refresh,
-    retry,
     loadNext,
   };
 }

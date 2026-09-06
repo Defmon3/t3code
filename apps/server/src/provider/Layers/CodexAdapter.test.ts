@@ -40,7 +40,6 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
-import type { T3HookRunner } from "../../hooks/T3HookRunner.ts";
 import {
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
@@ -223,7 +222,7 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
   upsert: () => Effect.void,
-  touch: () => Effect.void,
+  recordImportedTranscript: () => Effect.die("unused"),
   getProvider: () =>
     Effect.die(new Error("ProviderSessionDirectory.getProvider is not used in test")),
   getBinding: () => Effect.succeed(Option.none()),
@@ -354,7 +353,8 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         Stream.runHead,
         Effect.forkChild,
       );
-      yield* adapter.compactThread!(threadId);
+      NodeAssert.ok(adapter.compaction?.type === "native");
+      yield* adapter.compaction.start(threadId);
       yield* runtime.emit({
         id: asEventId("evt-compaction-item-completed"),
         kind: "notification",
@@ -476,50 +476,6 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       const runtime = runtimeFactory.lastRuntime;
       NodeAssert.ok(runtime);
       NodeAssert.equal(runtime.options.launchArgs, "--strict-config --enable foo");
-    }).pipe(Effect.provide(layer));
-  });
-
-  it.effect("loads T3 project hooks for full-access Codex sessions", () => {
-    const runtimeFactory = makeRuntimeFactory();
-    const hookPlan = {
-      configPath: "G:/project/.t3code/hooks.json",
-      hasPreToolUseHooks: true,
-      hasPreToolUseHooksNow: Effect.succeed(true),
-      evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
-      evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
-    };
-    const hookRunner = {
-      prepare: (cwd: string) => {
-        NodeAssert.equal(cwd, "G:/project");
-        return Effect.succeed(hookPlan);
-      },
-    } satisfies T3HookRunner["Service"];
-    const layer = Layer.effect(
-      CodexAdapter,
-      Effect.gen(function* () {
-        const codexConfig = decodeCodexSettings({});
-        return yield* makeCodexAdapter(codexConfig, {
-          hookRunner,
-          makeRuntime: runtimeFactory.factory,
-        });
-      }),
-    ).pipe(
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
-      Layer.provideMerge(providerSessionDirectoryTestLayer),
-      Layer.provideMerge(NodeServices.layer),
-    );
-
-    return Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("codex"),
-        threadId: asThreadId("sess-hooked"),
-        runtimeMode: "full-access",
-        cwd: "G:/project",
-      });
-
-      NodeAssert.equal(runtimeFactory.lastRuntime?.options.hookPlan, hookPlan);
     }).pipe(Effect.provide(layer));
   });
 
@@ -714,44 +670,6 @@ function codexTurnEvent(method: "turn/started" | "turn/completed", turnId: strin
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
-  it.effect("preserves T3 hook metadata on Codex approval requests", () =>
-    Effect.gen(function* () {
-      const { adapter, runtime } = yield* startLifecycleRuntime();
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      yield* runtime.emit({
-        id: asEventId("evt-hook-request"),
-        kind: "request",
-        provider: ProviderDriverKind.make("codex"),
-        threadId: asThreadId("thread-1"),
-        createdAt: "2026-01-01T00:00:00.000Z",
-        method: "item/commandExecution/requestApproval",
-        requestId: ApprovalRequestId.make("req-hook-1"),
-        requestKind: "command",
-        payload: {
-          command: "git push origin main",
-          approvalSource: "hook",
-          approvalTitle: "Push protected branch?",
-          approvalDescription: "This updates a shared branch.",
-          approvalReason: "Project policy requires confirmation.",
-        },
-      });
-
-      const event = yield* Fiber.join(firstEventFiber);
-      NodeAssert.equal(event._tag, "Some");
-      if (event._tag !== "Some" || event.value.type !== "request.opened") {
-        return;
-      }
-      NodeAssert.deepStrictEqual(event.value.payload.args, {
-        command: "git push origin main",
-        approvalSource: "hook",
-        approvalTitle: "Push protected branch?",
-        approvalDescription: "This updates a shared branch.",
-        approvalReason: "Project policy requires confirmation.",
-      });
-    }),
-  );
-
   it.effect("calculates one Codex turn total from cumulative counters", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
