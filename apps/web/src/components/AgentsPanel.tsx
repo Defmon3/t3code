@@ -21,7 +21,7 @@ import {
   formatSubagentModelLabel,
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId, TimestampFormat } from "@t3tools/contracts";
 import { Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -29,6 +29,8 @@ import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "~/timestampFormat";
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -137,8 +139,45 @@ function agentActivityText(agent: RuntimeSubagent): string | null {
   );
 }
 
+function AgentTimestamp({
+  agent,
+  kind,
+  timestampFormat,
+}: {
+  agent: RuntimeSubagent;
+  kind: "spawned" | "updated";
+  timestampFormat: TimestampFormat;
+}) {
+  const timestamp = kind === "spawned" ? agent.firstSeenAt : agent.updatedAt;
+  const label = formatDayAwareTimestamp(timestamp, timestampFormat);
+  if (!label) {
+    return null;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="whitespace-nowrap font-mono text-[.65rem] tabular-nums text-muted-foreground/70" />
+        }
+      >
+        {kind} {label}
+      </TooltipTrigger>
+      <TooltipPopup>
+        {kind === "spawned" ? "Spawned" : "Updated"}{" "}
+        {formatChatTimestampTooltip(timestamp, timestampFormat)}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 /** Flat, non-interactive agent status line. No unfold. */
-function AgentRow({ agent }: { agent: RuntimeSubagent }) {
+function AgentRow({
+  agent,
+  timestampFormat,
+}: {
+  agent: RuntimeSubagent;
+  timestampFormat: TimestampFormat;
+}) {
   const visuals = STATUS_VISUALS[agent.status];
   const statusLabel =
     agent.kind === "subagent_batch" && agent.status === "idle" ? "Idle" : visuals.label;
@@ -178,14 +217,20 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
       </span>
       <span
         className={cn(
-          "col-start-2 col-end-4 row-start-2 block truncate text-xs",
+          "col-start-2 row-start-2 block min-w-0 truncate text-xs",
           agent.status === "failed" ? "text-destructive-foreground" : "text-muted-foreground",
         )}
       >
         {activity ?? statusLabel}
       </span>
-      <span className="col-start-2 col-end-4 row-start-3 truncate font-mono text-[.7rem] tabular-nums text-muted-foreground/70">
+      <span className="col-start-3 row-start-2 text-right">
+        <AgentTimestamp agent={agent} kind="updated" timestampFormat={timestampFormat} />
+      </span>
+      <span className="col-start-2 row-start-3 min-w-0 truncate font-mono text-[.7rem] tabular-nums text-muted-foreground/70">
         {metadata.join(" · ")}
+      </span>
+      <span className="col-start-3 row-start-3 text-right">
+        <AgentTimestamp agent={agent} kind="spawned" timestampFormat={timestampFormat} />
       </span>
       <span className="sr-only">{statusLabel}</span>
     </div>
@@ -318,9 +363,11 @@ function WorkflowScriptView({
  */
 function PhaseSection({
   phase,
+  timestampFormat,
   defaultOpen = false,
 }: {
   phase: AgentPanelWorkflowGroup["phases"][number];
+  timestampFormat: TimestampFormat;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen || phase.state === "running");
@@ -370,7 +417,11 @@ function PhaseSection({
           </span>
         ) : null}
       </button>
-      {open ? phase.members.map((member) => <AgentRow key={member.id} agent={member} />) : null}
+      {open
+        ? phase.members.map((member) => (
+            <AgentRow key={member.id} agent={member} timestampFormat={timestampFormat} />
+          ))
+        : null}
     </div>
   );
 }
@@ -380,11 +431,13 @@ function ExpandedWorkflowSection({
   group,
   environmentId,
   threadId,
+  timestampFormat,
   onCollapse,
 }: {
   group: AgentPanelWorkflowGroup;
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  timestampFormat: TimestampFormat;
   onCollapse: () => void;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
@@ -440,13 +493,18 @@ function ExpandedWorkflowSection({
         />
       ) : null}
       {group.phases.map((phase) => (
-        <PhaseSection key={phase.index} phase={phase} defaultOpen={!workflowIsLive(group)} />
+        <PhaseSection
+          key={phase.index}
+          phase={phase}
+          timestampFormat={timestampFormat}
+          defaultOpen={!workflowIsLive(group)}
+        />
       ))}
       {group.unphasedMembers.map((member) => (
-        <AgentRow key={member.id} agent={member} />
+        <AgentRow key={member.id} agent={member} timestampFormat={timestampFormat} />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
-        <AgentRow agent={group.workflow} />
+        <AgentRow agent={group.workflow} timestampFormat={timestampFormat} />
       ) : null}
     </section>
   );
@@ -504,10 +562,12 @@ function WorkflowSection({
   group,
   environmentId,
   threadId,
+  timestampFormat,
 }: {
   group: AgentPanelWorkflowGroup;
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  timestampFormat: TimestampFormat;
 }) {
   const [open, setOpen] = useState(() => workflowIsLive(group));
   return open ? (
@@ -515,6 +575,7 @@ function WorkflowSection({
       group={group}
       environmentId={environmentId}
       threadId={threadId}
+      timestampFormat={timestampFormat}
       onCollapse={() => setOpen(false)}
     />
   ) : (
@@ -526,10 +587,12 @@ export function AgentsPanel({
   model,
   environmentId = null,
   threadId = null,
+  timestampFormat,
 }: {
   model: AgentPanelModel;
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
+  timestampFormat: TimestampFormat;
 }) {
   if (!model.hasAgents) {
     return (
@@ -546,7 +609,7 @@ export function AgentsPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" hideScrollbars>
         <div className="flex flex-col gap-2 p-2">
           {model.workflows.map((group) => (
             <WorkflowSection
@@ -554,6 +617,7 @@ export function AgentsPanel({
               group={group}
               environmentId={environmentId}
               threadId={threadId}
+              timestampFormat={timestampFormat}
             />
           ))}
           {model.directAgents.length > 0 ? (
@@ -562,7 +626,7 @@ export function AgentsPanel({
                 Direct spawns
               </div>
               {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
+                <AgentRow key={agent.id} agent={agent} timestampFormat={timestampFormat} />
               ))}
             </section>
           ) : null}
