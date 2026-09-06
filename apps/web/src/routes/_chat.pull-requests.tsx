@@ -99,7 +99,7 @@ import {
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
-import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
+import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatusSeed } from "../components/RightPanelTabs";
@@ -1572,14 +1572,14 @@ function PullRequestsRouteView() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <PullRequestListGhost rows={7} />
+        <ListGhost label="Loading pull requests" rows={7} />
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
           title="Pull requests unavailable"
           error="Update your T3 Code servers to browse pull requests."
         />
       ) : firstLoad ? (
-        <PullRequestListGhost rows={7} />
+        <ListGhost label="Loading pull requests" rows={7} />
       ) : listQuery.error && entries.length === 0 ? (
         <PullRequestsUnavailableState
           error={listQuery.error}
@@ -1587,7 +1587,7 @@ function PullRequestsRouteView() {
           onRetry={() => listQuery.refresh()}
         />
       ) : carriedToNothing ? (
-        <PullRequestListGhost rows={7} />
+        <ListGhost label="Loading pull requests" rows={7} />
       ) : entries.length === 0 ? (
         <PullRequestListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}
