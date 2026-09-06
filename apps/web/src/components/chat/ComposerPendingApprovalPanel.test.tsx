@@ -51,65 +51,45 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain("File read approval");
   });
 
-  it("keeps a long hook request bounded, wrapped, and keyboard-scrollable", () => {
-    const reason = "Protected branch policy\nWorking Dir: G:\\argus\nBranch: main";
-    const detail = `mcp__issues__issue_create: ${"x".repeat(1_133)}`;
+  it("shows the app name and message for an MCP access request", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
         approval={{
-          requestId: ApprovalRequestId.make("approval-hook-1"),
-          requestKind: "command",
-          createdAt: "2026-08-11T00:00:00.000Z",
-          source: "hook",
-          title: "Push protected branch?",
-          description: "This command updates the shared remote branch.",
-          reason,
+          requestId: ApprovalRequestId.make("approval-safari"),
+          requestKind: "mcp-elicitation",
+          createdAt: "2026-08-24T00:00:00.000Z",
+          appName: "Safari",
+          detail: "Allow ChatGPT to use Safari?",
+        }}
+        pendingCount={1}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="App access approval"');
+    expect(markup).toContain('aria-label="App access request"');
+    expect(markup).toContain(">Safari<");
+    expect(markup).toContain("Allow ChatGPT to use Safari?");
+  });
+
+  it("limits long app names so the complete approval message stays readable", () => {
+    const appName = "A".repeat(200);
+    const detail = "Allow ChatGPT to access the selected application?";
+    const markup = renderToStaticMarkup(
+      <ComposerPendingApprovalPanel
+        approval={{
+          requestId: ApprovalRequestId.make("approval-long-app-name"),
+          requestKind: "mcp-elicitation",
+          createdAt: "2026-08-24T00:00:00.000Z",
+          appName,
           detail,
         }}
         pendingCount={1}
       />,
     );
 
-    expect(markup).toContain("Push protected branch?");
-    expect(markup).toContain("Hook");
-    expect(markup).toContain("Requested action");
-    expect(markup).toContain('data-approval-reason="complete"');
-    expect(markup).toContain(reason);
-    expect(markup).toContain("This command updates the shared remote branch.");
-    expect(detail).toHaveLength(1_160);
+    expect(markup).toContain("max-w-32 shrink truncate");
+    expect(markup).toContain(appName);
+    expect(markup).toContain('data-approval-detail="complete"');
     expect(markup).toContain(detail);
-    expect(markup).toContain('aria-label="Requested action"');
-    expect(markup).toContain('tabindex="0"');
-    expect(markup).toContain("max-h-28");
-    expect(markup).toContain("overflow-auto");
-    expect(markup).toContain("whitespace-pre-wrap");
-    expect(markup).toContain("[overflow-wrap:anywhere]");
-    expect(markup).toContain("[scrollbar-width:thin]");
-    expect(markup).not.toContain("truncate");
-    expect(markup).not.toContain("line-clamp");
-    expect(markup).toContain("min-w-0");
-    expect(markup).not.toContain('role="alertdialog"');
-  });
-
-  it("labels Claude permission requests as engine approvals", () => {
-    const markup = renderToStaticMarkup(
-      <ComposerPendingApprovalPanel
-        approval={{
-          requestId: ApprovalRequestId.make("approval-engine-1"),
-          requestKind: "file-read",
-          createdAt: "2026-08-23T14:55:00.000Z",
-          source: "engine",
-          title: "Read outside working directory?",
-          reason: "Path is outside allowed working directories.",
-          detail: "C:\\Users\\defmon3\\.claude\\house-rules.md",
-        }}
-        pendingCount={1}
-      />,
-    );
-
-    expect(markup).toContain("Read outside working directory?");
-    expect(markup).toContain("Engine permission");
-    expect(markup).toContain("Path is outside allowed working directories.");
-    expect(markup).not.toContain("Project hook");
   });
 });

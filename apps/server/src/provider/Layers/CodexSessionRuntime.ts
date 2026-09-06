@@ -6,6 +6,7 @@ import {
   ProviderItemId,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
+  type ProviderApprovalOption,
   type ProviderEvent,
   type ProviderInteractionMode,
   type ProviderRequestKind,
@@ -38,7 +39,6 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
-import type { T3HookPlan } from "../../hooks/T3HookRunner.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
@@ -74,6 +74,58 @@ const CodexUserInputAnswerObject = Schema.Struct({
 });
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
+const NullableMcpElicitationString = Schema.NullOr(Schema.String);
+const McpElicitationMetadata = Schema.Struct({
+  app: Schema.optionalKey(NullableMcpElicitationString),
+  app_name: Schema.optionalKey(NullableMcpElicitationString),
+  appName: Schema.optionalKey(NullableMcpElicitationString),
+  connector_name: Schema.optionalKey(NullableMcpElicitationString),
+  connectorName: Schema.optionalKey(NullableMcpElicitationString),
+  allowPersistentApproval: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+  persist: Schema.optionalKey(
+    Schema.NullOr(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+  ),
+  target: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        app: Schema.optionalKey(NullableMcpElicitationString),
+        name: Schema.optionalKey(NullableMcpElicitationString),
+      }),
+    ),
+  ),
+  tool_params: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        app: Schema.optionalKey(NullableMcpElicitationString),
+        app_name: Schema.optionalKey(NullableMcpElicitationString),
+      }),
+    ),
+  ),
+});
+const McpElicitationFormField = Schema.Struct({
+  type: Schema.optionalKey(NullableMcpElicitationString),
+  title: Schema.optionalKey(NullableMcpElicitationString),
+  description: Schema.optionalKey(NullableMcpElicitationString),
+  default: Schema.optionalKey(Schema.Unknown),
+  enum: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+  enumNames: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+  oneOf: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Array(
+        Schema.Struct({
+          const: Schema.String,
+          title: Schema.optionalKey(NullableMcpElicitationString),
+        }),
+      ),
+    ),
+  ),
+});
+const McpElicitationForm = Schema.Struct({
+  properties: Schema.optionalKey(Schema.Record(Schema.String, McpElicitationFormField)),
+  required: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+});
+const isMcpElicitationMetadata = Schema.is(McpElicitationMetadata);
+const isMcpElicitationForm = Schema.is(McpElicitationForm);
 
 // TODO: Verify `packages/effect-codex-app-server/scripts/generate.ts` so the generated
 // `V2TurnStartParams` schema includes `collaborationMode` directly.
@@ -85,6 +137,12 @@ const CodexTurnStartParamsWithCollaborationMode = EffectCodexSchema.V2TurnStartP
 const decodeCodexTurnStartParamsWithCollaborationMode = Schema.decodeUnknownEffect(
   CodexTurnStartParamsWithCollaborationMode,
 );
+const CodexChildResumeMetadata = Schema.Struct({
+  thread: Schema.Struct({ id: Schema.String }),
+  model: Schema.String,
+  reasoningEffort: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+const decodeCodexChildResumeMetadata = Schema.decodeUnknownEffect(CodexChildResumeMetadata);
 
 export type CodexTurnStartParamsWithCollaborationMode =
   typeof CodexTurnStartParamsWithCollaborationMode.Type;
@@ -108,7 +166,6 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
-  readonly hookPlan?: T3HookPlan;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -139,6 +196,7 @@ export interface CodexSessionRuntimeShape {
   readonly sendTurn: (
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
+  readonly compactThread: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
@@ -216,7 +274,6 @@ interface PendingApproval {
   readonly requestKind: ProviderRequestKind;
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
-  readonly source?: "hook" | "stop-hook";
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
 }
 
@@ -234,19 +291,170 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
-export function isCodexStopHookBoundary(input: {
-  readonly isClosed: boolean;
-  readonly hasHookPlan: boolean;
-  readonly providerThreadId: string | undefined;
-  readonly notificationThreadId: string;
-  readonly turnStatus: string;
-}): boolean {
+type McpElicitationPersistenceDecision = Extract<
+  ProviderApprovalDecision,
+  "acceptForSession" | "acceptAlways"
+>;
+
+function mcpElicitationPersistenceDecision(
+  value: string,
+): McpElicitationPersistenceDecision | null {
+  const normalized = value.toLowerCase();
+  if (normalized.includes("session")) return "acceptForSession";
+  if (
+    normalized.includes("always") ||
+    normalized.includes("permanent") ||
+    normalized.includes("forever") ||
+    normalized.includes("persistent")
+  ) {
+    return "acceptAlways";
+  }
+  return null;
+}
+
+function mcpElicitationFormFields(payload: EffectCodexSchema.McpServerElicitationRequestParams) {
+  if (payload.mode === "url" || !isMcpElicitationForm(payload.requestedSchema)) {
+    return undefined;
+  }
+  return payload.requestedSchema;
+}
+
+function mcpElicitationFieldOptions(field: typeof McpElicitationFormField.Type) {
+  if (field.oneOf) {
+    return field.oneOf.map((option) => ({ value: option.const, label: option.title }));
+  }
+  return (field.enum ?? []).map((value, index) => ({
+    value,
+    label: field.enumNames?.[index],
+  }));
+}
+
+function isMcpElicitationPersistenceField(
+  key: string,
+  field: typeof McpElicitationFormField.Type,
+): boolean {
   return (
-    !input.isClosed &&
-    input.hasHookPlan &&
-    input.providerThreadId === input.notificationThreadId &&
-    input.turnStatus === "completed"
+    mcpElicitationPersistenceDecision(key) !== null ||
+    key.toLowerCase() === "persist" ||
+    mcpElicitationPersistenceDecision(field.title ?? "") !== null ||
+    mcpElicitationPersistenceDecision(field.description ?? "") !== null
   );
+}
+
+/** Returns the app and approval choices advertised by an MCP elicitation. */
+export function describeMcpElicitation(
+  payload: EffectCodexSchema.McpServerElicitationRequestParams,
+): { readonly appName: string; readonly options: ReadonlyArray<ProviderApprovalOption> } {
+  const metadata = isMcpElicitationMetadata(payload._meta) ? payload._meta : undefined;
+  const appName =
+    metadata?.app_name ??
+    metadata?.appName ??
+    metadata?.app ??
+    metadata?.target?.app ??
+    metadata?.target?.name ??
+    metadata?.tool_params?.app_name ??
+    metadata?.tool_params?.app ??
+    payload.message.match(/^Allow ChatGPT to use (.+?)\?$/i)?.[1] ??
+    metadata?.connector_name ??
+    metadata?.connectorName ??
+    payload.serverName;
+  const persistenceOptions = new Map<McpElicitationPersistenceDecision, string>();
+  const persist = metadata?.persist;
+  for (const value of typeof persist === "string" ? [persist] : (persist ?? [])) {
+    const decision = mcpElicitationPersistenceDecision(value);
+    if (decision) persistenceOptions.set(decision, "");
+  }
+  if (metadata?.allowPersistentApproval) {
+    persistenceOptions.set("acceptAlways", "");
+  }
+
+  const form = mcpElicitationFormFields(payload);
+  for (const [key, field] of Object.entries(form?.properties ?? {})) {
+    for (const option of mcpElicitationFieldOptions(field)) {
+      const decision = mcpElicitationPersistenceDecision(option.value);
+      if (decision) persistenceOptions.set(decision, option.label ?? "");
+    }
+    if (field.type === "boolean" && isMcpElicitationPersistenceField(key, field)) {
+      persistenceOptions.set("acceptAlways", field.title ?? "");
+    }
+  }
+
+  return {
+    appName,
+    options: [
+      { decision: "cancel", label: "Cancel" },
+      { decision: "decline", label: "Decline" },
+      ...(persistenceOptions.has("acceptForSession") &&
+      toMcpElicitationResponse(payload, "acceptForSession").action === "accept"
+        ? [
+            {
+              decision: "acceptForSession" as const,
+              label: persistenceOptions.get("acceptForSession") || "Always allow this session",
+            },
+          ]
+        : []),
+      ...(persistenceOptions.has("acceptAlways") &&
+      toMcpElicitationResponse(payload, "acceptAlways").action === "accept"
+        ? [
+            {
+              decision: "acceptAlways" as const,
+              label: persistenceOptions.get("acceptAlways") || "Always allow",
+            },
+          ]
+        : []),
+      { decision: "accept", label: "Approve" },
+    ],
+  };
+}
+
+/** Converts a T3 approval decision into the MCP elicitation wire response. */
+export function toMcpElicitationResponse(
+  payload: EffectCodexSchema.McpServerElicitationRequestParams,
+  decision: ProviderApprovalDecision,
+): EffectCodexSchema.McpServerElicitationRequestResponse {
+  if (decision === "decline" || decision === "cancel") {
+    return { action: decision };
+  }
+
+  if (payload.mode === "url") {
+    return { action: "decline" };
+  }
+
+  const persist =
+    decision === "acceptForSession"
+      ? "session"
+      : decision === "acceptAlways"
+        ? "always"
+        : undefined;
+  const form = mcpElicitationFormFields(payload);
+  const content: Record<string, unknown> = {};
+
+  for (const [key, field] of Object.entries(form?.properties ?? {})) {
+    const options = mcpElicitationFieldOptions(field);
+    const chosenOption = options.find((option) =>
+      persist
+        ? mcpElicitationPersistenceDecision(option.value) === decision
+        : /once|accept|approve|allow/i.test(option.value) &&
+          mcpElicitationPersistenceDecision(option.value) === null,
+    );
+    if (chosenOption) {
+      content[key] = chosenOption.value;
+    } else if (field.type === "boolean" && isMcpElicitationPersistenceField(key, field)) {
+      content[key] = decision === "acceptAlways";
+    } else if (field.default !== undefined && field.default !== null) {
+      content[key] = field.default;
+    }
+  }
+
+  if (form?.required?.some((key) => !Object.hasOwn(content, key))) {
+    return { action: "decline" };
+  }
+
+  return {
+    action: "accept",
+    ...(persist ? { _meta: { persist } } : {}),
+    ...(form ? { content } : {}),
+  };
 }
 
 type CodexServerNotification = {
@@ -283,10 +491,7 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
-function runtimeModeToThreadConfig(
-  input: RuntimeMode,
-  interceptApprovals = false,
-): {
+function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
   // Always explicit: omitting the field on resume keeps the thread's previous
@@ -315,7 +520,7 @@ function runtimeModeToThreadConfig(
     case "full-access":
     default:
       return {
-        approvalPolicy: interceptApprovals ? "untrusted" : "never",
+        approvalPolicy: "never",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       };
@@ -327,9 +532,8 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
-  readonly interceptApprovals?: boolean;
 }): EffectCodexSchema.V2ThreadStartParams {
-  const config = runtimeModeToThreadConfig(input.runtimeMode, input.interceptApprovals);
+  const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
@@ -400,7 +604,6 @@ export function buildTurnStartParams(input: {
   readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean;
-  readonly interceptApprovals?: boolean;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -416,7 +619,7 @@ export function buildTurnStartParams(input: {
     turnInput.push(attachment);
   }
 
-  const config = runtimeModeToThreadConfig(input.runtimeMode, input.interceptApprovals);
+  const config = runtimeModeToThreadConfig(input.runtimeMode);
   const collaborationMode = buildCodexCollaborationMode({
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -494,7 +697,6 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
-  readonly interceptApprovals?: boolean;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -502,9 +704,6 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
-    ...(input.interceptApprovals !== undefined
-      ? { interceptApprovals: input.interceptApprovals }
-      : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -539,7 +738,9 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     case "thread/unarchived":
     case "thread/closed":
     case "thread/name/updated":
+    case "thread/settings/updated":
     case "thread/tokenUsage/updated":
+    case "model/rerouted":
     case "turn/started":
     case "hook/started":
     case "turn/completed":
@@ -712,6 +913,35 @@ interface CollabChildAgentState {
   readonly spawnTurnId: TurnId | undefined;
 }
 
+interface CollabChildMetadataState {
+  readonly model: string | undefined;
+  readonly effort: string | undefined;
+  readonly lookupStarted: boolean;
+  readonly closed: boolean;
+}
+
+function collabChildIdentity(
+  child: CollabChildAgentState,
+  metadata: CollabChildMetadataState | undefined,
+) {
+  return {
+    agentThreadId: child.agentThreadId,
+    ...(child.nickname ? { nickname: child.nickname } : {}),
+    ...(child.role ? { role: child.role } : {}),
+    ...(child.agentPath ? { agentPath: child.agentPath } : {}),
+    ...(metadata?.model ? { model: metadata.model } : {}),
+    ...(metadata?.effort ? { effort: metadata.effort } : {}),
+  };
+}
+
+function nonEmptyMetadataValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function readThreadSpawnSource(thread: { readonly source: unknown }):
   | {
       nickname: string | undefined;
@@ -777,7 +1007,9 @@ function shouldSuppressChildConversationNotification(
     method === "thread/closed" ||
     method === "thread/compacted" ||
     method === "thread/name/updated" ||
+    method === "thread/settings/updated" ||
     method === "thread/tokenUsage/updated" ||
+    method === "model/rerouted" ||
     method === "turn/started" ||
     method === "turn/completed" ||
     method === "turn/plan/updated" ||
@@ -808,6 +1040,8 @@ const CHILD_AGENT_EVENT_METHODS: ReadonlySet<string> = new Set([
   "turn/completed",
   "thread/status/changed",
   "thread/tokenUsage/updated",
+  "thread/settings/updated",
+  "model/rerouted",
   "item/started",
   "item/completed",
   "thread/closed",
@@ -826,7 +1060,6 @@ const CHILD_CHATTER_METHODS: ReadonlySet<string> = new Set([
   "turn/plan/updated",
   "turn/diff/updated",
   "thread/name/updated",
-  "thread/settings/updated",
   "rawResponseItem/completed",
   // Child-owned thread lifecycle: the parent adapter maps these onto the
   // PARENT thread (archived/compacted state), so a child compacting would
@@ -934,65 +1167,11 @@ export const makeCodexSessionRuntime = (
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const collabChildAgentsRef = yield* Ref.make(new Map<string, CollabChildAgentState>());
+    const collabChildMetadataRef = yield* Ref.make(new Map<string, CollabChildMetadataState>());
     /** Child provider-thread id → its currently running provider turn id. */
     const collabChildLiveTurnsRef = yield* Ref.make(new Map<string, string>());
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
-    const stopHookEvaluatedTurnIdsRef = yield* Ref.make(new Set<string>());
-    const allowHookApprovalsForSessionRef = yield* Ref.make(false);
-    const interceptApprovalsAtStart = options.hookPlan?.hasPreToolUseHooks === true;
-
-    const evaluatePreToolUseHook = Effect.fn("CodexSessionRuntime.evaluatePreToolUseHook")(
-      function* (toolName: string, toolInput: unknown) {
-        if (!options.hookPlan || (yield* Ref.get(allowHookApprovalsForSessionRef))) {
-          return { decision: "allow" as const };
-        }
-        return yield* options.hookPlan
-          .evaluatePreToolUse({
-            provider: PROVIDER,
-            threadId: options.threadId,
-            toolName,
-            toolInput,
-          })
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.succeed({
-                decision: "ask" as const,
-                title: "T3 hook failed",
-                description: undefined,
-                reason:
-                  cause instanceof Error
-                    ? cause.message
-                    : "A T3 project hook failed before this tool could run.",
-              }),
-            ),
-          );
-      },
-    );
-
-    const evaluateStopHook = Effect.fn("CodexSessionRuntime.evaluateStopHook")(function* () {
-      if (!options.hookPlan) {
-        return { decision: "allow" as const };
-      }
-      return yield* options.hookPlan
-        .evaluateStop({
-          provider: PROVIDER,
-          threadId: options.threadId,
-        })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.succeed({
-              decision: "ask" as const,
-              title: "T3 hook failed",
-              description: undefined,
-              reason:
-                cause instanceof Error
-                  ? cause.message
-                  : "A T3 project hook failed before this turn could complete.",
-            }),
-          ),
-        );
-    });
 
     // `~` is not shell-expanded when env vars are set via
     // `child_process.spawn`; `expandHomePath` lets a configured
@@ -1084,6 +1263,133 @@ export const makeCodexSessionRuntime = (
         message,
       });
 
+    const updateCollabChildMetadata = (
+      agentThreadId: string,
+      update: { readonly model?: string; readonly effort?: string },
+      overwriteKnown: boolean,
+    ) =>
+      Ref.modify(collabChildMetadataRef, (current) => {
+        const previous = current.get(agentThreadId) ?? {
+          model: undefined,
+          effort: undefined,
+          lookupStarted: false,
+          closed: false,
+        };
+        const model =
+          update.model && (overwriteKnown || !previous.model) ? update.model : previous.model;
+        const effort =
+          update.effort && (overwriteKnown || !previous.effort) ? update.effort : previous.effort;
+        const changed = model !== previous.model || effort !== previous.effort;
+        if (!changed) {
+          return [false, current] as const;
+        }
+        const next = new Map(current);
+        next.set(agentThreadId, { ...previous, model, effort });
+        return [true, next] as const;
+      });
+
+    const markCollabChildClosed = (agentThreadId: string) =>
+      Ref.update(collabChildMetadataRef, (current) => {
+        const previous = current.get(agentThreadId) ?? {
+          model: undefined,
+          effort: undefined,
+          lookupStarted: false,
+          closed: false,
+        };
+        if (previous.closed) {
+          return current;
+        }
+        const next = new Map(current);
+        next.set(agentThreadId, { ...previous, closed: true });
+        return next;
+      });
+
+    const markCollabChildOpen = (agentThreadId: string) =>
+      Ref.update(collabChildMetadataRef, (current) => {
+        const previous = current.get(agentThreadId);
+        if (!previous?.closed) {
+          return current;
+        }
+        const next = new Map(current);
+        next.set(agentThreadId, { ...previous, closed: false });
+        return next;
+      });
+
+    const emitCollabChildMetadataUpdated = Effect.fn(
+      "CodexSessionRuntime.emitCollabChildMetadataUpdated",
+    )(function* (agentThreadId: string) {
+      const child = (yield* Ref.get(collabChildAgentsRef)).get(agentThreadId);
+      const metadata = (yield* Ref.get(collabChildMetadataRef)).get(agentThreadId);
+      if (!child || metadata?.closed) {
+        return;
+      }
+      yield* emitEvent({
+        kind: "notification",
+        threadId: options.threadId,
+        ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
+        method: "collabAgent/metadataUpdated",
+        payload: collabChildIdentity(child, metadata),
+      });
+    });
+
+    const startCollabChildMetadataLookup = Effect.fn(
+      "CodexSessionRuntime.startCollabChildMetadataLookup",
+    )(function* (agentThreadId: string) {
+      const shouldStart = yield* Ref.modify(collabChildMetadataRef, (current) => {
+        const previous = current.get(agentThreadId) ?? {
+          model: undefined,
+          effort: undefined,
+          lookupStarted: false,
+          closed: false,
+        };
+        if (previous.lookupStarted || previous.closed) {
+          return [false, current] as const;
+        }
+        const next = new Map(current);
+        next.set(agentThreadId, { ...previous, lookupStarted: true });
+        return [true, next] as const;
+      });
+      if (!shouldStart) {
+        return;
+      }
+
+      // The child is already loaded. This rejoins it without starting a turn,
+      // and excludeTurns avoids loading or replaying its history.
+      yield* client.raw
+        .request("thread/resume", { threadId: agentThreadId, excludeTurns: true })
+        .pipe(
+          Effect.flatMap(decodeCodexChildResumeMetadata),
+          Effect.timeout("5 seconds"),
+          Effect.flatMap((response) =>
+            Effect.gen(function* () {
+              if (response.thread.id !== agentThreadId) {
+                return;
+              }
+              const child = (yield* Ref.get(collabChildAgentsRef)).get(agentThreadId);
+              const metadata = (yield* Ref.get(collabChildMetadataRef)).get(agentThreadId);
+              if (!child || metadata?.closed) {
+                return;
+              }
+              const model = nonEmptyMetadataValue(response.model);
+              const effort = nonEmptyMetadataValue(response.reasoningEffort);
+              const changed = yield* updateCollabChildMetadata(
+                agentThreadId,
+                {
+                  ...(model ? { model } : {}),
+                  ...(effort ? { effort } : {}),
+                },
+                false,
+              );
+              if (changed) {
+                yield* emitCollabChildMetadataUpdated(agentThreadId);
+              }
+            }),
+          ),
+          Effect.catch(() => Effect.void),
+          Effect.forkIn(runtimeScope),
+        );
+    });
+
     const settlePendingApprovals = (decision: ProviderApprovalDecision) =>
       Ref.get(pendingApprovalsRef).pipe(
         Effect.flatMap((pendingApprovals) =>
@@ -1124,6 +1430,10 @@ export const makeCodexSessionRuntime = (
           if (!spawn) {
             return false;
           }
+          const rootProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+          if (thread.id === rootProviderThreadId) {
+            return false;
+          }
           // Merge with any subAgentActivity registration that got here
           // first. spawnTurnId is REGISTRATION-time-only on both paths: for
           // an already-known child we keep its value (set or unset) — a
@@ -1150,20 +1460,19 @@ export const makeCodexSessionRuntime = (
             next.set(thread.id, state);
             return next;
           });
+          const metadata = (yield* Ref.get(collabChildMetadataRef)).get(thread.id);
           yield* emitEvent({
             kind: "notification",
             threadId: options.threadId,
             method: "collabAgent/started",
             ...(state.spawnTurnId ? { turnId: state.spawnTurnId } : {}),
             payload: {
-              agentThreadId: state.agentThreadId,
-              ...(state.nickname ? { nickname: state.nickname } : {}),
-              ...(state.role ? { role: state.role } : {}),
-              ...(state.agentPath ? { agentPath: state.agentPath } : {}),
+              ...collabChildIdentity(state, metadata),
               ...(state.depth !== undefined ? { depth: state.depth } : {}),
               ...(state.parentThreadId ? { parentThreadId: state.parentThreadId } : {}),
             },
           });
+          yield* startCollabChildMetadataLookup(thread.id);
           return true;
         }
 
@@ -1213,17 +1522,22 @@ export const makeCodexSessionRuntime = (
             return next;
           });
           const registeredChild = (yield* Ref.get(collabChildAgentsRef)).get(item.agentThreadId);
+          const metadata = (yield* Ref.get(collabChildMetadataRef)).get(item.agentThreadId);
           yield* emitEvent({
             kind: "notification",
             threadId: options.threadId,
             method: "collabAgent/activity",
             ...(registeredChild?.spawnTurnId ? { turnId: registeredChild.spawnTurnId } : {}),
             payload: {
-              agentThreadId: item.agentThreadId,
-              agentPath: item.agentPath,
+              ...(registeredChild
+                ? collabChildIdentity(registeredChild, metadata)
+                : { agentThreadId: item.agentThreadId, agentPath: item.agentPath }),
               activityKind: item.kind,
             },
           });
+          if (item.kind === "started") {
+            yield* startCollabChildMetadataLookup(item.agentThreadId);
+          }
           return true;
         }
 
@@ -1239,19 +1553,45 @@ export const makeCodexSessionRuntime = (
         if (providerConversationId === interceptRootId) {
           return false;
         }
+
+        if (
+          interceptRootId !== undefined &&
+          (notification.method === "thread/settings/updated" ||
+            notification.method === "model/rerouted")
+        ) {
+          const model = nonEmptyMetadataValue(
+            notification.method === "thread/settings/updated"
+              ? notification.params.threadSettings.model
+              : notification.params.toModel,
+          );
+          const effort =
+            notification.method === "thread/settings/updated"
+              ? nonEmptyMetadataValue(notification.params.threadSettings.effort)
+              : undefined;
+          const changed = yield* updateCollabChildMetadata(
+            providerConversationId,
+            {
+              ...(model ? { model } : {}),
+              ...(effort ? { effort } : {}),
+            },
+            true,
+          );
+          if (changed && (yield* Ref.get(collabChildAgentsRef)).has(providerConversationId)) {
+            yield* emitCollabChildMetadataUpdated(providerConversationId);
+          }
+          return true;
+        }
+
         const children = yield* Ref.get(collabChildAgentsRef);
         const child = children.get(providerConversationId);
         if (!child) {
           return false;
         }
-        const childIdentity = {
-          agentThreadId: child.agentThreadId,
-          ...(child.nickname ? { nickname: child.nickname } : {}),
-          ...(child.role ? { role: child.role } : {}),
-          ...(child.agentPath ? { agentPath: child.agentPath } : {}),
-        };
+        const metadata = (yield* Ref.get(collabChildMetadataRef)).get(child.agentThreadId);
+        const childIdentity = collabChildIdentity(child, metadata);
         switch (notification.method) {
           case "turn/started": {
+            yield* markCollabChildOpen(child.agentThreadId);
             const childTurnId =
               typeof (notification.params as { turn?: { id?: unknown } }).turn?.id === "string"
                 ? ((notification.params as { turn: { id: string } }).turn.id as string)
@@ -1335,6 +1675,7 @@ export const makeCodexSessionRuntime = (
               next.delete(child.agentThreadId);
               return next;
             });
+            yield* markCollabChildClosed(child.agentThreadId);
             yield* emitEvent({
               kind: "notification",
               threadId: options.threadId,
@@ -1545,138 +1886,14 @@ export const makeCodexSessionRuntime = (
           if (providerThreadId && payload.threadId !== providerThreadId) {
             return Effect.void;
           }
-          return Effect.gen(function* () {
-            const isClosed = yield* Ref.get(closedRef);
-            if (
-              isCodexStopHookBoundary({
-                isClosed,
-                hasHookPlan: options.hookPlan !== undefined,
-                providerThreadId,
-                notificationThreadId: payload.threadId,
-                turnStatus: payload.turn.status,
-              })
-            ) {
-              const turnId = TurnId.make(payload.turn.id);
-              const shouldEvaluate = yield* Ref.modify(stopHookEvaluatedTurnIdsRef, (current) => {
-                if (current.has(payload.turn.id)) {
-                  return [false, current] as const;
-                }
-                const next = new Set(current);
-                next.add(payload.turn.id);
-                return [true, next] as const;
-              });
-              if (!shouldEvaluate) {
-                return;
-              }
-              yield* Effect.gen(function* () {
-                const decision = yield* evaluateStopHook();
-                if (yield* Ref.get(closedRef)) {
-                  return;
-                }
-                if (decision.decision === "allow") {
-                  yield* updateSession(sessionRef, {
-                    status: "ready",
-                    activeTurnId: undefined,
-                  });
-                  return;
-                }
-                if (decision.decision === "deny") {
-                  const message = decision.reason ?? "A T3 project hook denied turn completion.";
-                  yield* updateSession(sessionRef, {
-                    status: "error",
-                    activeTurnId: undefined,
-                    lastError: message,
-                  });
-                  yield* emitEvent({
-                    kind: "error",
-                    threadId: options.threadId,
-                    method: "t3/stopHook/denied",
-                    message,
-                  });
-                  return;
-                }
-
-                const requestId = ApprovalRequestId.make(
-                  yield* randomUUIDv4("command-approval-request"),
-                );
-                const approval = yield* Deferred.make<ProviderApprovalDecision>();
-                yield* Ref.update(pendingApprovalsRef, (current) => {
-                  const next = new Map(current);
-                  next.set(requestId, {
-                    requestId,
-                    jsonRpcId: `stop-hook:${payload.turn.id}`,
-                    requestKind: "command",
-                    turnId,
-                    itemId: undefined,
-                    source: "stop-hook",
-                    decision: approval,
-                  });
-                  return next;
-                });
-                yield* emitEvent({
-                  kind: "request",
-                  threadId: options.threadId,
-                  method: "item/commandExecution/requestApproval",
-                  requestId,
-                  requestKind: "command",
-                  turnId,
-                  payload: {
-                    command: "T3 Stop hook confirmation",
-                    approvalSource: "hook",
-                    ...(decision.title ? { approvalTitle: decision.title } : {}),
-                    ...(decision.description ? { approvalDescription: decision.description } : {}),
-                    approvalReason: decision.reason,
-                  },
-                });
-                const response = yield* Deferred.await(approval).pipe(
-                  Effect.ensuring(
-                    Ref.update(pendingApprovalsRef, (current) => {
-                      const next = new Map(current);
-                      next.delete(requestId);
-                      return next;
-                    }),
-                  ),
-                );
-                if (yield* Ref.get(closedRef)) {
-                  return;
-                }
-                if (response === "accept" || response === "acceptForSession") {
-                  yield* updateSession(sessionRef, {
-                    status: "ready",
-                    activeTurnId: undefined,
-                  });
-                  return;
-                }
-                const message = "T3 project hook confirmation denied turn completion.";
-                yield* updateSession(sessionRef, {
-                  status: "error",
-                  activeTurnId: undefined,
-                  lastError: message,
-                });
-                yield* emitEvent({
-                  kind: "error",
-                  threadId: options.threadId,
-                  method: "t3/stopHook/denied",
-                  message,
-                });
-              }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logError("Failed to process Codex Stop hook.", { cause }),
-                ),
-                Effect.forkIn(runtimeScope),
-                Effect.asVoid,
-              );
-              return;
-            }
-            const lastError =
-              payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
-                ? payload.turn.error.message
-                : undefined;
-            yield* updateSession(sessionRef, {
-              status: payload.turn.status === "failed" ? "error" : "ready",
-              activeTurnId: undefined,
-              ...(lastError ? { lastError } : {}),
-            });
+          const lastError =
+            payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
+              ? payload.turn.error.message
+              : undefined;
+          return updateSession(sessionRef, {
+            status: payload.turn.status === "failed" ? "error" : "ready",
+            activeTurnId: undefined,
+            ...(lastError ? { lastError } : {}),
           });
         }),
       ),
@@ -1701,14 +1918,6 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
-        const hookDecision = options.hookPlan
-          ? yield* evaluatePreToolUseHook("Bash", payload)
-          : undefined;
-        if (hookDecision && hookDecision.decision !== "ask") {
-          return {
-            decision: hookDecision.decision === "allow" ? "accept" : "decline",
-          } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
-        }
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4("command-approval-request"));
         const turnId = TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
@@ -1722,7 +1931,6 @@ export const makeCodexSessionRuntime = (
             requestKind: "command",
             turnId,
             itemId,
-            ...(hookDecision ? { source: "hook" } : {}),
             decision,
           });
           return next;
@@ -1746,18 +1954,7 @@ export const makeCodexSessionRuntime = (
           requestKind: "command",
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
-          payload:
-            hookDecision?.decision === "ask"
-              ? {
-                  ...payload,
-                  approvalSource: "hook",
-                  ...(hookDecision.title ? { approvalTitle: hookDecision.title } : {}),
-                  ...(hookDecision.description
-                    ? { approvalDescription: hookDecision.description }
-                    : {}),
-                  approvalReason: hookDecision.reason,
-                }
-              : payload,
+          payload,
         });
 
         const resolved = yield* Deferred.await(decision).pipe(
@@ -1770,21 +1967,13 @@ export const makeCodexSessionRuntime = (
           ),
         );
         return {
-          decision: resolved,
+          decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
         } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
       }),
     );
 
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
-        const hookDecision = options.hookPlan
-          ? yield* evaluatePreToolUseHook("Edit", payload)
-          : undefined;
-        if (hookDecision && hookDecision.decision !== "ask") {
-          return {
-            decision: hookDecision.decision === "allow" ? "accept" : "decline",
-          } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
-        }
         const requestId = ApprovalRequestId.make(
           yield* randomUUIDv4("file-change-approval-request"),
         );
@@ -1800,7 +1989,6 @@ export const makeCodexSessionRuntime = (
             requestKind: "file-change",
             turnId,
             itemId,
-            ...(hookDecision ? { source: "hook" } : {}),
             decision,
           });
           return next;
@@ -1824,18 +2012,7 @@ export const makeCodexSessionRuntime = (
           requestKind: "file-change",
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
-          payload:
-            hookDecision?.decision === "ask"
-              ? {
-                  ...payload,
-                  approvalSource: "hook",
-                  ...(hookDecision.title ? { approvalTitle: hookDecision.title } : {}),
-                  ...(hookDecision.description
-                    ? { approvalDescription: hookDecision.description }
-                    : {}),
-                  approvalReason: hookDecision.reason,
-                }
-              : payload,
+          payload,
         });
 
         const resolved = yield* Deferred.await(decision).pipe(
@@ -1848,8 +2025,73 @@ export const makeCodexSessionRuntime = (
           ),
         );
         return {
-          decision: resolved,
+          decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
         } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+      }),
+    );
+
+    yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+      Effect.gen(function* () {
+        if (toMcpElicitationResponse(payload, "accept").action !== "accept") {
+          yield* Effect.logWarning("Declined an unsupported MCP elicitation.", {
+            serverName: payload.serverName,
+            mode: payload.mode,
+          });
+          return {
+            action: "decline",
+          } satisfies EffectCodexSchema.McpServerElicitationRequestResponse;
+        }
+
+        const requestId = ApprovalRequestId.make(yield* randomUUIDv4("mcp-elicitation-request"));
+        const turnId = payload.turnId
+          ? TurnId.make(payload.turnId)
+          : (yield* Ref.get(sessionRef)).activeTurnId;
+        const jsonRpcId = payload.mode === "url" ? payload.elicitationId : requestId;
+        const decision = yield* Deferred.make<ProviderApprovalDecision>();
+
+        yield* Ref.update(pendingApprovalsRef, (current) => {
+          const next = new Map(current);
+          next.set(requestId, {
+            requestId,
+            jsonRpcId,
+            requestKind: "mcp-elicitation",
+            turnId,
+            itemId: undefined,
+            decision,
+          });
+          return next;
+        });
+        yield* Ref.update(approvalCorrelationsRef, (current) => {
+          const next = new Map(current);
+          next.set(jsonRpcId, {
+            requestId,
+            requestKind: "mcp-elicitation",
+            turnId,
+            itemId: undefined,
+          });
+          return next;
+        });
+
+        yield* emitEvent({
+          kind: "request",
+          threadId: options.threadId,
+          method: "mcpServer/elicitation/request",
+          requestId,
+          requestKind: "mcp-elicitation",
+          ...(turnId ? { turnId } : {}),
+          payload,
+        });
+
+        const resolved = yield* Deferred.await(decision).pipe(
+          Effect.ensuring(
+            Ref.update(pendingApprovalsRef, (current) => {
+              const next = new Map(current);
+              next.delete(requestId);
+              return next;
+            }),
+          ),
+        );
+        return toMcpElicitationResponse(payload, resolved);
       }),
     );
 
@@ -2002,7 +2244,6 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
-        interceptApprovals: interceptApprovalsAtStart,
       });
 
       const providerThreadId = opened.thread.id;
@@ -2053,6 +2294,10 @@ export const makeCodexSessionRuntime = (
     return {
       start,
       getSession: Ref.get(sessionRef),
+      compactThread: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        yield* client.request("thread/compact/start", { threadId: providerThreadId });
+      }),
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
@@ -2068,9 +2313,6 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
-          const interceptApprovals = options.hookPlan
-            ? yield* options.hookPlan.hasPreToolUseHooksNow
-            : false;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
@@ -2084,7 +2326,6 @@ export const makeCodexSessionRuntime = (
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.
             browserToolsAvailable: hasConfiguredMcpServer(options.appServerArgs),
-            interceptApprovals,
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
@@ -2191,9 +2432,6 @@ export const makeCodexSessionRuntime = (
             next.delete(requestId);
             return next;
           });
-          if (decision === "acceptForSession" && pending.source === "hook") {
-            yield* Ref.set(allowHookApprovalsForSessionRef, true);
-          }
           yield* Deferred.succeed(pending.decision, decision);
           yield* emitEvent({
             kind: "notification",
