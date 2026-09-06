@@ -195,6 +195,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           state: "merged",
           closedAt: "2026-08-23T10:00:00Z",
           mergedAt: "2026-08-23T10:00:00Z",
+          completedAt: "2026-08-23T10:00:00Z",
           updatedAt: "2026-08-24T12:34:56.000Z",
         }),
       );

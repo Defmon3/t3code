@@ -5561,6 +5561,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         workspaceRoot,
         defaultModelSelection: null,
         scripts: [],
+        skillShortcuts: [],
         createdAt: "2026-08-31T12:00:00.000Z",
         updatedAt: "2026-08-31T12:00:00.000Z",
       } as const;

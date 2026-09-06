@@ -48,7 +48,7 @@ export function isThreadPullRequestCurrent(
   threadCreatedAt: string,
   pullRequest: Pick<GitManager.GitBranchPullRequest, "state" | "completedAt">,
 ): boolean {
-  if (pullRequest.state === "open" || pullRequest.completedAt === null) return true;
+  if (pullRequest.state === "open" || pullRequest.completedAt == null) return true;
   const threadCreatedAtMs = Date.parse(threadCreatedAt);
   const completedAtMs = Date.parse(pullRequest.completedAt);
   return (

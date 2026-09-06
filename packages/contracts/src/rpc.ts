@@ -55,9 +55,20 @@ import {
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
   VcsCreateWorktreeResult,
+  VcsGetCommitDetailsInput,
+  VcsGetCommitDetailsResult,
+  VcsGetCommitDiffInput,
+  VcsGetCommitDiffResult,
+  VcsGetHistoryInput,
+  VcsGetHistoryResult,
   VcsInitInput,
+  VcsListCommitFilesInput,
+  VcsListCommitFilesResult,
+  VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
   VcsListRefsInput,
   VcsListRefsResult,
+  VcsSnapshotExpiredError,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -93,6 +104,46 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
+import {
+  IssueActionInput,
+  IssueActivity,
+  IssueAssigneeCandidateList,
+  IssueAssigneesInput,
+  IssueCommentInput,
+  IssueCommentUpdateInput,
+  IssueCommentsPageInput,
+  IssueCommentsPageResult,
+  IssueCreateInput,
+  IssueCreateResult,
+  IssueDetail,
+  IssueInvalidateInput,
+  IssueLabelCandidateList,
+  IssueLabelsInput,
+  IssueListInput,
+  IssueListResult,
+  IssueOperationError,
+  IssueReactionInput,
+  IssueRef,
+  IssueRepositoryRef,
+  IssueTemplateList,
+  IssueUnavailableError,
+  IssueUpdateInput,
+} from "./issue.ts";
+import {
+  IssueTrackingError,
+  LinearConnectInput,
+  LinearConnection,
+  LinearDisconnectInput,
+  LinearSetProjectBindingInput,
+} from "./issueTracking.ts";
+import {
+  WorkItemMatchError,
+  WorkItemMatchInput,
+  WorkItemMatchResult,
+  WorkItemTaskError,
+  WorkItemTaskInput,
+  WorkItemTaskResult,
+} from "./workItem.ts";
 import {
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
@@ -204,6 +255,8 @@ import {
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
+  ServerProviderListSkillsInput,
+  ServerProviderListSkillsResult,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
   ServerUpsertKeybindingInput,
@@ -273,6 +326,11 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
+  vcsListHistoryRefs: "vcs.listHistoryRefs",
+  vcsGetHistory: "vcs.getHistory",
+  vcsGetCommitDetails: "vcs.getCommitDetails",
+  vcsListCommitFiles: "vcs.listCommitFiles",
+  vcsGetCommitDiff: "vcs.getCommitDiff",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
@@ -313,6 +371,7 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverListProviderSkills: "server.listProviderSkills",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -361,6 +420,32 @@ export const WS_METHODS = {
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
   pullRequestsLabelCandidates: "pullRequests.labelCandidates",
   pullRequestsSetLabels: "pullRequests.setLabels",
+
+  // Issue methods
+  issuesList: "issues.list",
+  issuesDetail: "issues.detail",
+  issuesActivity: "issues.activity",
+  issuesCommentsPage: "issues.commentsPage",
+  issuesRunAction: "issues.runAction",
+  issuesComment: "issues.comment",
+  issuesUpdateComment: "issues.updateComment",
+  issuesSetReaction: "issues.setReaction",
+  issuesCreate: "issues.create",
+  issuesUpdate: "issues.update",
+  issuesSetLabels: "issues.setLabels",
+  issuesSetAssignees: "issues.setAssignees",
+  issuesLabelCandidates: "issues.labelCandidates",
+  issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesTemplates: "issues.templates",
+  issuesInvalidate: "issues.invalidate",
+
+  // Issue tracking connection methods
+  linearConnectionStatus: "linear.connectionStatus",
+  linearConnect: "linear.connect",
+  linearDisconnect: "linear.disconnect",
+  linearSetProjectBinding: "linear.setProjectBinding",
+  workItemsGenerateTask: "workItems.generateTask",
+  workItemsFindMatches: "workItems.findMatches",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -419,6 +504,12 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
   }),
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([EnvironmentAuthorizationError, ProviderSetupError]),
+});
+
+const WsServerListProviderSkillsRpc = Rpc.make(WS_METHODS.serverListProviderSkills, {
+  payload: ServerProviderListSkillsInput,
+  success: ServerProviderListSkillsResult,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
@@ -535,7 +626,9 @@ const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnos
 });
 
 const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    scope: Schema.optionalKey(Schema.Literal("registered-project-tests")),
+  }),
   success: ServerProcessDiagnosticsResult,
   error: EnvironmentAuthorizationError,
 });
@@ -762,6 +855,143 @@ const WsPullRequestsSetLabelsRpc = Rpc.make(WS_METHODS.pullRequestsSetLabels, {
   error: PullRequestRpcError,
 });
 
+const IssueRpcError = Schema.Union([
+  IssueUnavailableError,
+  IssueOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
+  payload: IssueListInput,
+  success: IssueListResult,
+  error: IssueRpcError,
+});
+
+const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
+  payload: IssueRef,
+  success: IssueDetail,
+  error: IssueRpcError,
+});
+
+const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
+  payload: IssueRef,
+  success: IssueActivity,
+  error: IssueRpcError,
+});
+
+const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+  payload: IssueCommentsPageInput,
+  success: IssueCommentsPageResult,
+  error: IssueRpcError,
+});
+
+const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
+  payload: IssueActionInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
+  payload: IssueCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
+  payload: IssueCommentUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
+  payload: IssueReactionInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
+  payload: IssueCreateInput,
+  success: IssueCreateResult,
+  error: IssueRpcError,
+});
+
+const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
+  payload: IssueUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
+  payload: IssueLabelsInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
+  payload: IssueAssigneesInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
+  payload: IssueRef,
+  success: IssueLabelCandidateList,
+  error: IssueRpcError,
+});
+
+const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
+  payload: IssueRef,
+  success: IssueAssigneeCandidateList,
+  error: IssueRpcError,
+});
+
+const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
+  payload: IssueRepositoryRef,
+  success: IssueTemplateList,
+  error: IssueRpcError,
+});
+
+const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
+  payload: IssueInvalidateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
+  success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
+  payload: LinearConnectInput,
+  success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
+  payload: LinearDisconnectInput,
+  success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+const WsLinearSetProjectBindingRpc = Rpc.make(WS_METHODS.linearSetProjectBinding, {
+  payload: LinearSetProjectBindingInput,
+  success: Schema.Void,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkItemsGenerateTaskRpc = Rpc.make(WS_METHODS.workItemsGenerateTask, {
+  payload: WorkItemTaskInput,
+  success: WorkItemTaskResult,
+  error: Schema.Union([WorkItemTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
+  payload: WorkItemMatchInput,
+  success: WorkItemMatchResult,
+  error: Schema.Union([WorkItemMatchError, EnvironmentAuthorizationError]),
+});
+
 const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLookupRepository, {
   payload: SourceControlRepositoryLookupInput,
   success: SourceControlRepositoryInfo,
@@ -902,6 +1132,36 @@ const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullReque
 const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsListHistoryRefsRpc = Rpc.make(WS_METHODS.vcsListHistoryRefs, {
+  payload: VcsListHistoryRefsInput,
+  success: VcsListHistoryRefsResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetHistoryRpc = Rpc.make(WS_METHODS.vcsGetHistory, {
+  payload: VcsGetHistoryInput,
+  success: VcsGetHistoryResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetCommitDetailsRpc = Rpc.make(WS_METHODS.vcsGetCommitDetails, {
+  payload: VcsGetCommitDetailsInput,
+  success: VcsGetCommitDetailsResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsListCommitFilesRpc = Rpc.make(WS_METHODS.vcsListCommitFiles, {
+  payload: VcsListCommitFilesInput,
+  success: VcsListCommitFilesResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetCommitDiffRpc = Rpc.make(WS_METHODS.vcsGetCommitDiff, {
+  payload: VcsGetCommitDiffInput,
+  success: VcsGetCommitDiffResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
@@ -1184,6 +1444,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerListProviderSkillsRpc,
   WsServerUpdateProviderRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
@@ -1238,6 +1499,28 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsRequestReviewersRpc,
   WsPullRequestsLabelCandidatesRpc,
   WsPullRequestsSetLabelsRpc,
+  WsIssuesListRpc,
+  WsIssuesDetailRpc,
+  WsIssuesActivityRpc,
+  WsIssuesCommentsPageRpc,
+  WsIssuesRunActionRpc,
+  WsIssuesCommentRpc,
+  WsIssuesUpdateCommentRpc,
+  WsIssuesSetReactionRpc,
+  WsIssuesCreateRpc,
+  WsIssuesUpdateRpc,
+  WsIssuesSetLabelsRpc,
+  WsIssuesSetAssigneesRpc,
+  WsIssuesLabelCandidatesRpc,
+  WsIssuesAssigneeCandidatesRpc,
+  WsIssuesTemplatesRpc,
+  WsIssuesInvalidateRpc,
+  WsLinearConnectionStatusRpc,
+  WsLinearConnectRpc,
+  WsLinearDisconnectRpc,
+  WsLinearSetProjectBindingRpc,
+  WsWorkItemsGenerateTaskRpc,
+  WsWorkItemsFindMatchesRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
@@ -1261,6 +1544,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
+  WsVcsListHistoryRefsRpc,
+  WsVcsGetHistoryRpc,
+  WsVcsGetCommitDetailsRpc,
+  WsVcsListCommitFilesRpc,
+  WsVcsGetCommitDiffRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,

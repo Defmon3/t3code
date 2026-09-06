@@ -122,6 +122,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const isWideLayout = useWideHistoryLayout(panelRef);
   const interfaceFontSize = useClientSettings((settings) => settings.fontSizeInterface);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const rowHeight = gitHistoryRowHeight(interfaceFontSize);
   const baseTargetKey = `${props.environmentId}:${props.cwd}`;
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
@@ -697,6 +698,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                       laneCount={laneCount}
                       rowHeight={rowHeight}
                       refKinds={commitRefKinds}
+                      timestampFormat={timestampFormat}
                       {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
                       selected={item.commit.hash === selectedHash}
                       onSelect={setSelectedHash}
@@ -751,6 +753,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                 flexBasis: detailsPaneWidth,
               }}
               details={selectedCommitDetails}
+              timestampFormat={timestampFormat}
               files={selectedCommitFiles}
               filesCapped={commitFilesCapped}
               filesHasMore={commitFilesHasMore}
@@ -767,53 +770,51 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               }
             />
           ) : null}
-          {!isWideLayout && mobilePane === "refs" ? (
-            <Sheet
-              open={mobilePane === "refs"}
-              onOpenChange={(open) => !open && setMobilePane(null)}
-            >
-              <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none p-0">
-                <SheetTitle className="sr-only">Branches and tags</SheetTitle>
-                <GitRefsPane
-                  id="git-history-refs-panel"
-                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
-                  {...refPaneProps}
-                  onClose={() => setMobilePane(null)}
-                />
-              </SheetPopup>
-            </Sheet>
-          ) : null}
-          {!isWideLayout && mobilePane === "details" ? (
-            <Sheet
-              open={mobilePane === "details"}
-              onOpenChange={(open) => !open && setMobilePane(null)}
-            >
-              <SheetPopup side="right" showCloseButton className="w-full max-w-none p-0">
-                <SheetTitle className="sr-only">Commit details</SheetTitle>
-                <CommitDetailsPane
-                  id="git-history-details-panel"
-                  className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
-                  details={selectedCommitDetails}
-                  files={selectedCommitFiles}
-                  filesCapped={commitFilesCapped}
-                  filesHasMore={commitFilesHasMore}
-                  filesError={commitFilesQuery.error !== null}
-                  filesLoading={commitFilesQuery.isPending}
-                  onLoadMoreFiles={loadMoreCommitFiles}
-                  onRetryFiles={() => void commitFilesQuery.refresh()}
-                  isPending={commitDetailsQuery.isPending}
-                  hasError={commitDetailsQuery.error !== null}
-                  hasSelection={selectedHash !== null}
-                  onRetry={commitDetailsQuery.refresh}
-                  onShowDiff={(hash, filePath) =>
-                    setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
-                  }
-                />
-              </SheetPopup>
-            </Sheet>
-          ) : null}
         </div>
       )}
+      {!isWideLayout && mobilePane === "refs" ? (
+        <Sheet open={mobilePane === "refs"} onOpenChange={(open) => !open && setMobilePane(null)}>
+          <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none p-0">
+            <SheetTitle className="sr-only">Branches and tags</SheetTitle>
+            <GitRefsPane
+              id="git-history-refs-panel"
+              className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
+              {...refPaneProps}
+              onClose={() => setMobilePane(null)}
+            />
+          </SheetPopup>
+        </Sheet>
+      ) : null}
+      {!isWideLayout && mobilePane === "details" ? (
+        <Sheet
+          open={mobilePane === "details"}
+          onOpenChange={(open) => !open && setMobilePane(null)}
+        >
+          <SheetPopup side="right" showCloseButton className="w-full max-w-none p-0">
+            <SheetTitle className="sr-only">Commit details</SheetTitle>
+            <CommitDetailsPane
+              id="git-history-details-panel"
+              className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
+              details={selectedCommitDetails}
+              timestampFormat={timestampFormat}
+              files={selectedCommitFiles}
+              filesCapped={commitFilesCapped}
+              filesHasMore={commitFilesHasMore}
+              filesError={commitFilesQuery.error !== null}
+              filesLoading={commitFilesQuery.isPending}
+              onLoadMoreFiles={loadMoreCommitFiles}
+              onRetryFiles={() => void commitFilesQuery.refresh()}
+              isPending={commitDetailsQuery.isPending}
+              hasError={commitDetailsQuery.error !== null}
+              hasSelection={selectedHash !== null}
+              onRetry={commitDetailsQuery.refresh}
+              onShowDiff={(hash, filePath) =>
+                setCommitDiffRequest(filePath ? { hash, filePath } : { hash })
+              }
+            />
+          </SheetPopup>
+        </Sheet>
+      ) : null}
     </section>
   );
 }

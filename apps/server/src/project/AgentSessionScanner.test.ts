@@ -29,6 +29,7 @@ const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => (
   workspaceRoot,
   defaultModelSelection: null,
   scripts: [],
+  skillShortcuts: [],
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 });
@@ -775,11 +776,10 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const path = yield* Path.Path;
         const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
         const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const workspace = yield* makeTempDir("t3code-workspace-");
 
         yield* writeTranscript({
           filePath: path.join(claudeHomePath, "projects", "-relative", "session.jsonl"),
-          contents: claudeSessionLine(path.relative(path.resolve(), workspace)),
+          contents: claudeSessionLine("relative/workspace"),
           mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
         });
 

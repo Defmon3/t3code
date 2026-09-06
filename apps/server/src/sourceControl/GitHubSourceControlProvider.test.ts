@@ -41,6 +41,7 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
           baseRefName: "main",
           headRefName: "feature/source-control",
           state: "open",
+          completedAt: null,
           isCrossRepository: true,
           headRepositoryNameWithOwner: "fork/t3code",
           headRepositoryOwnerLogin: "fork",

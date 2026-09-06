@@ -3108,7 +3108,7 @@ describe("computeStableMessagesTimelineRows", () => {
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaries: [],
-      revertTurnCountByUserMessageId: new Map(),
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.id)).toEqual([
@@ -3144,7 +3144,7 @@ describe("computeStableMessagesTimelineRows", () => {
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaries: [],
-      revertTurnCountByUserMessageId: new Map(),
+      supportsConversationRollback: false,
     });
 
     expect(rows).toContainEqual(
@@ -3196,7 +3196,7 @@ describe("computeStableMessagesTimelineRows", () => {
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaries: [],
-      revertTurnCountByUserMessageId: new Map(),
+      supportsConversationRollback: false,
     });
     const transitionedRows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -3250,7 +3250,7 @@ describe("computeStableMessagesTimelineRows", () => {
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:15Z",
       turnDiffSummaries: [],
-      revertTurnCountByUserMessageId: new Map(),
+      supportsConversationRollback: false,
     });
 
     expect(initialRows.map((row) => row.id)).toContain("assistant-final-entry");

@@ -7,6 +7,7 @@ import {
   migratePersistedRightPanelState,
   pullRequestSurface,
   pullRequestSurfaceId,
+  selectMergedActiveRightPanel,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
@@ -20,7 +21,11 @@ const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"))
 type IssueStatus = { state: string; stateReason: string | null };
 
 beforeEach(() => {
-  useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
+  useRightPanelStore.setState({
+    byThreadKey: {},
+    byEnvironmentId: {},
+    userActionRevisionByThreadKey: {},
+  });
 });
 
 describe("rightPanelStore", () => {
@@ -48,7 +53,9 @@ describe("rightPanelStore", () => {
     };
     const statuses = updateIssueTabStatus({}, surfaceId, open);
 
-    expect(surfaceId).toBe("issue:server%2Fa:project%2Fa:owner%2Frepo:42");
+    expect(surfaceId).toBe(
+      "issue:%5B%22server%2Fa%22%2Cnull%2C%22project%2Fa%22%2C%22owner%2Frepo%22%2C42%5D",
+    );
     expect(updateIssueTabStatus(statuses, surfaceId, open)).toBe(statuses);
     expect(updateIssueTabStatus(statuses, surfaceId, closed)).toEqual({ [surfaceId]: closed });
   });
@@ -827,6 +834,121 @@ describe("rightPanelStore", () => {
       activeSurfaceId: null,
       surfaces: [],
     });
+  });
+
+  it("initializes the environment panel state required by process hosts", () => {
+    expect(useRightPanelStore.getState().byEnvironmentId).toEqual({});
+
+    useRightPanelStore.getState().open(refA, "processes");
+
+    expect(
+      selectMergedActiveRightPanel(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refA,
+      ),
+    ).toBe("processes");
+  });
+
+  it("migrates a persisted thread process surface to its environment", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "processes",
+            surfaces: [{ id: "processes", kind: "processes" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": { isOpen: false, activeSurfaceId: null, surfaces: [] },
+      },
+      byEnvironmentId: {
+        "env-1": {
+          isActive: true,
+          isOpen: true,
+          surfaces: [{ id: "processes", kind: "processes" }],
+        },
+      },
+    });
+  });
+
+  it("ignores malformed persisted process state", () => {
+    expect(migratePersistedRightPanelState({ byThreadKey: { bad: {} } })).toEqual({
+      byThreadKey: { bad: { isOpen: false, activeSurfaceId: null, surfaces: [] } },
+    });
+  });
+
+  it("drops malformed persisted surfaces while preserving process panels", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "processes",
+            surfaces: [null, 1, "processes", { id: "processes", kind: "processes" }],
+          },
+        },
+        byEnvironmentId: {
+          "env-2": {
+            isActive: true,
+            isOpen: false,
+            surfaces: [null, { id: "processes", kind: "processes" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": { isOpen: false, activeSurfaceId: null, surfaces: [] },
+      },
+      byEnvironmentId: {
+        "env-1": {
+          isActive: true,
+          isOpen: true,
+          surfaces: [{ id: "processes", kind: "processes" }],
+        },
+        "env-2": {
+          isActive: true,
+          isOpen: false,
+          surfaces: [{ id: "processes", kind: "processes" }],
+        },
+      },
+    });
+  });
+
+  it("switches away from processes and rejects an earlier proactive request", () => {
+    const store = useRightPanelStore.getState();
+    const revision = store.getUserActionRevision(refA);
+
+    store.open(refA, "processes");
+    store.open(refA, "diff");
+
+    expect(
+      selectMergedActiveRightPanel(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refA,
+      ),
+    ).toBe("diff");
+    expect(store.openProactive(refA, completedDiff, revision)).toBe(false);
+  });
+
+  it("hides and restores an active processes panel", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "processes");
+    store.close(refA);
+    expect(useRightPanelStore.getState().byEnvironmentId["env-1"]?.isOpen).toBe(false);
+
+    store.toggleVisibility(refA);
+    expect(
+      selectMergedActiveRightPanel(
+        useRightPanelStore.getState().byThreadKey,
+        useRightPanelStore.getState().byEnvironmentId,
+        refA,
+      ),
+    ).toBe("processes");
   });
 
   it("reconciles browser surfaces without deleting other surface kinds", () => {

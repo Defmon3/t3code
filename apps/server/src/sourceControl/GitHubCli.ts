@@ -208,6 +208,7 @@ export interface GitHubPullRequestSummary {
   readonly isDraft?: boolean;
   readonly closedAt?: string | null;
   readonly mergedAt?: string | null;
+  readonly completedAt: string | null;
   readonly updatedAt?: string;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;

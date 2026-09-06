@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - reads source files directly for import assertions.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeURL from "node:url";
 

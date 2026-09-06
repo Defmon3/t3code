@@ -7,9 +7,10 @@ import {
   type VcsListCommitFilesResult,
   type VcsHistoryRef,
 } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import type { ReactElement } from "react";
+import { isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
@@ -59,6 +60,7 @@ const historyState = vi.hoisted(() => ({
 }));
 
 const fontState = vi.hoisted(() => ({ interfaceSize: 16 }));
+const settingsState = vi.hoisted(() => ({ timestampFormat: "24-hour" as TimestampFormat }));
 const localStorageState = vi.hoisted(() => ({ favoriteBranches: [] as ReadonlyArray<string> }));
 
 vi.mock("../hooks/useCopyToClipboard", () => ({
@@ -70,8 +72,15 @@ vi.mock("../hooks/useCopyToClipboard", () => ({
 
 vi.mock("../hooks/useSettings", () => ({
   useClientSettings: <Value,>(
-    selector: (settings: { readonly fontSizeInterface: number }) => Value,
-  ) => selector({ fontSizeInterface: fontState.interfaceSize }),
+    selector: (settings: {
+      readonly fontSizeInterface: number;
+      readonly timestampFormat: TimestampFormat;
+    }) => Value,
+  ) =>
+    selector({
+      fontSizeInterface: fontState.interfaceSize,
+      timestampFormat: settingsState.timestampFormat,
+    }),
 }));
 
 vi.mock("../hooks/useLocalStorage", () => ({
@@ -377,6 +386,31 @@ function loadMoreHistory(panel: ReactElement<Record<string, unknown>>): void {
   (loadMore?.props.onClick as (() => void) | undefined)?.();
 }
 
+type LayoutEntry = { readonly contentRect: { readonly width: number } };
+
+/** Drives the panel's ResizeObserver so the next render uses the narrow layout. */
+function applyNarrowLayout(panel: ReactElement<Record<string, unknown>>): void {
+  const panelRef = panel.props.ref as { current: HTMLElement | null };
+  panelRef.current = {} as HTMLElement;
+  const callbacks: Array<(entries: ReadonlyArray<LayoutEntry>) => void> = [];
+  class LayoutObserver {
+    constructor(callback: (entries: ReadonlyArray<LayoutEntry>) => void) {
+      callbacks.push(callback);
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Reflect.set(globalThis, "ResizeObserver", LayoutObserver);
+  try {
+    flushEffects();
+  } finally {
+    Reflect.deleteProperty(globalThis, "ResizeObserver");
+  }
+  expect(callbacks).toHaveLength(1);
+  callbacks[0]?.([{ contentRect: { width: 640 } }]);
+}
+
 function renderComponent(
   element: ReactElement<Record<string, unknown>>,
 ): ReactElement<Record<string, unknown>> {
@@ -414,10 +448,17 @@ function componentElement(
   return component as ReactElement<Record<string, unknown>>;
 }
 
+function hasTextChild(value: unknown, text: string): boolean {
+  if (typeof value === "string") return value.includes(text);
+  if (Array.isArray(value)) return value.some((child) => hasTextChild(child, text));
+  return isValidElement(value) && hasTextChild(value.props.children, text);
+}
+
 describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
     fontState.interfaceSize = 16;
+    settingsState.timestampFormat = "24-hour";
     localStorageState.favoriteBranches = [];
     effectQueue.cursor = 0;
     effectQueue.dependencies.length = 0;
@@ -547,6 +588,46 @@ describe("GitHistoryPanel", () => {
     expect(cacheKeys.at(-1)).toBe("0:2");
   });
 
+  it("renders commit dates in the configured timestamp format", () => {
+    const authoredAt = new Date(2026, 0, 15, 13, 5).toISOString();
+    const historyCommit = {
+      ...commit("aaaaaaaa11111111111111111111111111111111", "Add panel"),
+      authoredAt,
+    };
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const readRowDate = () => {
+      const list = historyList(renderPanel());
+      const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+      const rowButton = visitElements(
+        historyRow,
+        (element) => element.props["data-commit-hash"] === historyCommit.hash,
+      );
+      const dateCell = visitElements(
+        historyRow,
+        (element) =>
+          typeof element.props.children === "string" && element.props.children.includes(":05"),
+      );
+      return {
+        ariaLabel: rowButton?.props["aria-label"] as string,
+        visible: dateCell?.props.children as string,
+      };
+    };
+
+    settingsState.timestampFormat = "24-hour";
+    const twentyFourHour = readRowDate();
+    expect(twentyFourHour.visible).toContain("13:05");
+    expect(twentyFourHour.ariaLabel).toContain("13:05");
+
+    hooks.reset();
+    settingsState.timestampFormat = "12-hour";
+    const twelveHour = readRowDate();
+    expect(twelveHour.visible).toContain("1:05");
+    expect(twelveHour.visible).not.toContain("13:05");
+    expect(twelveHour.ariaLabel).toContain("1:05");
+    expect(twelveHour.ariaLabel).not.toContain("13:05");
+  });
+
   it("rekeys open history reads when the shared VCS history revision changes", () => {
     const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
@@ -565,7 +646,7 @@ describe("GitHistoryPanel", () => {
       detailsPane,
       (element) =>
         typeof element.props.onClick === "function" &&
-        JSON.stringify(element.props.children).includes("View all changes"),
+        hasTextChild(element.props.children, "View all changes"),
     );
     (showDiff?.props.onClick as (() => void) | undefined)?.();
     renderPanel();
@@ -787,6 +868,34 @@ describe("GitHistoryPanel", () => {
   it("keeps the desktop refs and details workflow available at ordinary desktop widths", () => {
     expect(isWideHistoryLayout(1119)).toBe(false);
     expect(isWideHistoryLayout(1120)).toBe(true);
+  });
+
+  it("opens the narrow-layout branches sheet after a failed history load", () => {
+    historyState.pages.set(undefined, {
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Could not read Git history.")),
+    });
+
+    applyNarrowLayout(renderPanel());
+    const narrowPanel = renderPanel();
+    const branches = visitElements(
+      narrowPanel,
+      (element) => element.props["aria-controls"] === "git-history-refs-panel",
+    );
+    expect(branches).not.toBeNull();
+    (branches?.props.onClick as (() => void) | undefined)?.();
+
+    const openedPanel = renderPanel();
+    const refsPane = visitElements(
+      openedPanel,
+      (element) => element.props.id === "git-history-refs-panel",
+    );
+    expect(refsPane).not.toBeNull();
+
+    (refsPane?.props.onClose as (() => void) | undefined)?.();
+    const closedPanel = renderPanel();
+    const header = visitElements(closedPanel, (element) => element.type === "header");
+    expect(header?.props.inert).toBeUndefined();
   });
 
   it("filters history by commit message", () => {
@@ -1147,7 +1256,7 @@ describe("GitHistoryPanel", () => {
       detailsPane,
       (element) =>
         typeof element.props.onClick === "function" &&
-        JSON.stringify(element.props.children).includes("View all changes"),
+        hasTextChild(element.props.children, "View all changes"),
     );
     expect(showDiff).not.toBeNull();
     (showDiff?.props.onClick as (() => void) | undefined)?.();
@@ -1166,11 +1275,21 @@ describe("GitHistoryPanel", () => {
 
     const list = historyList(renderPanel());
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
-    const shortHash = visitElements(historyRow, (element) => element.props.children === "aaaaaaaa");
+    const shortHash = visitElements(
+      historyRow,
+      (element) => element.props["aria-label"] === `Copy commit hash ${historyCommit.hash}`,
+    );
+    const tooltip = visitElements(
+      historyRow,
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "TooltipPopup" &&
+        element.props.children === `Copy full commit hash ${historyCommit.hash}`,
+    );
 
     expect(shortHash).not.toBeNull();
-    expect(shortHash?.props.title).toBe(`Copy full commit hash ${historyCommit.hash}`);
     expect(shortHash?.props["aria-label"]).toBe(`Copy commit hash ${historyCommit.hash}`);
+    expect(tooltip).not.toBeNull();
   });
 
   it("shows an error toast when copying a history hash is rejected", () => {
@@ -1237,7 +1356,12 @@ describe("GitHistoryPanel", () => {
     const list = historyList(renderPanel("https://github.com/VladsCoffeApp1/Argus/issues/"));
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
     const subject = componentTree(historyRow, "CommitSubject");
-    const issueLink = visitElements(subject, (element) => element.props.children === "#602");
+    const issueLink = visitElements(
+      subject,
+      (element) =>
+        element.type === "a" &&
+        element.props.href === "https://github.com/VladsCoffeApp1/Argus/issues/602",
+    );
 
     expect(issueLink?.type).toBe("a");
     expect(issueLink?.props.href).toBe("https://github.com/VladsCoffeApp1/Argus/issues/602");

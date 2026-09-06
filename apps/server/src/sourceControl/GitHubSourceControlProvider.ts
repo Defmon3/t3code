@@ -170,7 +170,7 @@ export const make = Effect.gen(function* () {
                 Result.isSuccess(decoded)
                   ? Effect.succeed(
                       decoded.success.map((item) => {
-                        const { updatedAt, completedAt, ...summary } = item;
+                        const { updatedAt, ...summary } = item;
                         return {
                           ...toChangeRequest({
                             ...summary,
@@ -179,7 +179,7 @@ export const make = Effect.gen(function* () {
                               : {}),
                           }),
                           updatedAt,
-                          completedAt,
+                          completedAt: item.completedAt,
                         };
                       }),
                     )

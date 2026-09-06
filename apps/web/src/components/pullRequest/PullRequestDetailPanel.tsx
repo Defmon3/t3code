@@ -3,11 +3,13 @@ import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/enviro
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   type EnvironmentId,
+  type IssueLink,
   type PullRequestAction,
   type PullRequestMergeMethod,
   type PullRequestListEntry,
   type PullRequestUpdateMethod,
   type PullRequestRef,
+  type PullRequestState,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -453,7 +455,10 @@ export function PullRequestDetailPanel({
   refreshToken: forcedRefreshToken = 0,
   onActed,
   onClose,
+  onStateChange,
+  onOpenLinkedIssue,
   context = "page",
+  chromeVariant = "full",
   composerDraftTarget,
 }: {
   environmentId: EnvironmentId;
@@ -480,12 +485,21 @@ export function PullRequestDetailPanel({
   onActed?: () => void;
   /** Page-owned detail columns use this to clear the selected pull request. */
   onClose?: () => void;
+  onStateChange?: (status: {
+    projectId: string;
+    repository: string;
+    number: number;
+    state: PullRequestState;
+    isDraft: boolean;
+  }) => void;
+  onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   /**
    * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
    * own pull request, so the branch is already under the reader's feet — and checking it out
    * again is at best a no-op and at worst git refusing a branch two checkouts.
    */
   context?: "page" | "thread";
+  chromeVariant?: "full" | "collapse";
   /**
    * The open thread's composer. Beside the thread whose own pull request this is, hand-offs
    * land here instead of opening a new thread — the branch is already under the reader's feet.
@@ -540,7 +554,7 @@ export function PullRequestDetailPanel({
   useEffect(() => {
     setChromeCondensed(chromeStateByTab.current[tab] ?? false);
   }, [tab]);
-  const condensed = chromeCondensed;
+  const condensed = chromeVariant === "collapse" && chromeCondensed;
   const scrollerRef = useRef<HTMLElement | null>(null);
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
@@ -681,8 +695,8 @@ export function PullRequestDetailPanel({
           environmentId,
           input: {
             cwd: detail.workspaceRoot,
-            includeMatchingRemoteRefs: true,
-            // listRefs keeps the current ref first and a known default second.
+            namespace: "remote",
+            prefix: detail.baseBranch,
             limit: 2,
           },
         }),
@@ -701,6 +715,16 @@ export function PullRequestDetailPanel({
   const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
     null,
   );
+  useLayoutEffect(() => {
+    if (!resolvedCoreDetail) return;
+    onStateChange?.({
+      projectId: resolvedCoreDetail.projectId,
+      repository: resolvedCoreDetail.repository,
+      number: resolvedCoreDetail.number,
+      state: resolvedCoreDetail.state,
+      isDraft: resolvedCoreDetail.isDraft,
+    });
+  }, [onStateChange, resolvedCoreDetail]);
   useEffect(() => {
     if (!coreDetail) return;
     const next = { key: tabScopeKey, updatedAt: coreDetail.updatedAt };
@@ -2322,6 +2346,7 @@ export function PullRequestDetailPanel({
       >
         {detailQuery.error && !detail ? (
           <PullRequestsUnavailableState
+            title="Could not load pull request"
             error={detailQuery.error}
             refreshing={detailQuery.isPending}
             onRetry={refreshDetail}
@@ -2342,6 +2367,7 @@ export function PullRequestDetailPanel({
                   fixFindingLabel={handoffLabels.fixFinding}
                   fixCheckLabel={handoffLabels.fixCheck}
                   onFixFinding={startFixFinding}
+                  {...(onOpenLinkedIssue ? { onOpenLinkedIssue } : {})}
                   actionPending={actionPending}
                   onCommentAction={performCommentAction}
                   onRefresh={refreshDetail}
@@ -2354,6 +2380,7 @@ export function PullRequestDetailPanel({
                   <TimelineGhost />
                 ) : activityError ? (
                   <ActivityUnavailableState
+                    title="Could not load pull request activity"
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />

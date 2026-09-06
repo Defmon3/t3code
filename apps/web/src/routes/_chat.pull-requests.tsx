@@ -1621,8 +1621,6 @@ function PullRequestsRouteView() {
                 return (
                   <PullRequestRow
                     key={entryKey}
-                    statsKey={entryKey}
-                    statsRef={registerStatsRow}
                     entry={entry}
                     showProjectTitle
                     showProvider={showProvider}
@@ -1912,14 +1910,18 @@ function PullRequestsRouteView() {
             onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
+            onAddGitHistory={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
+            onAddIssue={() => undefined}
             onAddAgents={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
+            gitHistoryAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
+            issueAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}
             pullRequestStatusSeeds={listedPullRequestTabStatuses}

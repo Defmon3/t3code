@@ -162,10 +162,13 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   pullRequestSurface,
-  selectActiveRightPanel,
-  selectActiveRightPanelSurface,
+  issueSurfaceId,
+  mergeThreadRightPanelState,
+  selectMergedActiveRightPanelSurface,
   selectThreadRightPanelState,
   type RightPanelSurface,
+  updateIssueTabStatus,
+  updatePullRequestTabStatus,
   useRightPanelStore,
 } from "../rightPanelStore";
 import {
@@ -187,10 +190,15 @@ import {
 } from "../previewMiniPlayerStore";
 import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
+import { IssueDetailPanel } from "./issue/IssueDetailPanel";
+import { IssuesPanel } from "./issue/IssuesPanel";
+import { IssuesUnavailableState } from "./issue/IssuesUnavailableState";
+import { DetailGhost } from "./sourceControl/ListGhosts";
 import { PullRequestDetailGhost } from "./sourceControl/ListGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs } from "./RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
+import { ProcessPanelSurfaceSlot } from "./ProcessPanelSurface";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -210,6 +218,11 @@ import {
 import { cn, randomHex } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
+import {
+  findProjectForLink,
+  openLinkInBrowser,
+  repositoryForProjectLink,
+} from "../lib/openIssueLink";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
   buildProjectScript,
@@ -303,6 +316,7 @@ import {
   useThread,
   useThreadRefs,
   useThreadShell,
+  useThreadShells,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
@@ -343,7 +357,8 @@ import { ComposerSurface } from "./chat/ComposerSurface";
 import {
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
-  shouldOfferResumeCompaction,
+  resolveClaudeCompactionOffer,
+  shouldShowClaudeCompactionOffer,
 } from "./chat/ContextWindowMeter.logic";
 import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
 import {
@@ -453,6 +468,7 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { hasGitHistoryCapability } from "../gitHistoryCapability";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "./chat/composerPromptHistory";
 
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
@@ -536,6 +552,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
+const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -1688,6 +1705,7 @@ export default function ChatView(props: ChatViewProps) {
   const storeSetActiveTerminal = useTerminalUiStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
   const serverThreadRefs = useThreadRefs();
+  const serverThreadShells = useThreadShells();
   const serverThreadKeys = useMemo(() => serverThreadRefs.map(scopedThreadKey), [serverThreadRefs]);
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftThreadKeys = useMemo(
@@ -1850,15 +1868,49 @@ export default function ChatView(props: ChatViewProps) {
     setTimelineAnchor({ threadKey: activeThreadKey, messageId: null });
   }
   const timelineAnchorMessageId = timelineAnchor.messageId;
-  const activeRightPanelKind = useRightPanelStore((state) =>
-    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
-  );
-  const diffOpen = activeRightPanelKind === "diff";
-  const rightPanelState = useRightPanelStore((state) =>
+  const activeThreadRightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
-  const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
+  const activeEnvironmentRightPanelState = useRightPanelStore((state) =>
+    activeThreadRef ? state.byEnvironmentId[activeThreadRef.environmentId] : undefined,
+  );
+  const rightPanelState = useMemo(
+    () => mergeThreadRightPanelState(activeThreadRightPanelState, activeEnvironmentRightPanelState),
+    [activeEnvironmentRightPanelState, activeThreadRightPanelState],
+  );
+  const activeRightPanelSurface = rightPanelState.isOpen
+    ? (rightPanelState.surfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId) ??
+      null)
+    : null;
+  const activeRightPanelKind = activeRightPanelSurface?.kind ?? null;
+  const diffOpen = activeRightPanelKind === "diff";
+  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
+  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
+    Record<string, PullRequestTabStatus>
+  >({});
+  const activeIssueSurfaceId =
+    activeRightPanelSurface?.kind === "issue"
+      ? activeRightPanelSurface.id
+      : activeRightPanelSurface?.kind === "issues" && activeRightPanelSurface.selected
+        ? issueSurfaceId(activeRightPanelSurface.selected)
+        : undefined;
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      if (activeIssueSurfaceId === undefined) return;
+      setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
+    },
+    [activeIssueSurfaceId],
+  );
+  const activePullRequestSurfaceId =
+    activeRightPanelSurface?.kind === "pull-request" ? activeRightPanelSurface.id : undefined;
+  const handlePullRequestTabStatusChange = useCallback(
+    (status: PullRequestTabStatus) => {
+      if (activePullRequestSurfaceId === undefined) return;
+      setPullRequestTabStatuses((current) =>
+        updatePullRequestTabStatus(current, activePullRequestSurfaceId, status),
+      );
+    },
+    [activePullRequestSurfaceId],
   );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
@@ -2300,6 +2352,8 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsAttachmentUploads =
     attachmentEnvironmentConfig?.environment.capabilities.attachmentUploads === true;
+  const supportsGitHistory = hasGitHistoryCapability(serverConfig?.environment.capabilities);
+  const supportsIssues = serverConfig?.environment.capabilities.issues === true;
   const advertisedFileAttachmentBytes =
     attachmentEnvironmentConfig?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null;
   const maxFileAttachmentBytes =
@@ -3094,6 +3148,12 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const gitHistoryIssueUrlPrefix =
+    activeProject?.repositoryIdentity?.provider === "github" &&
+    activeProject.repositoryIdentity.owner &&
+    activeProject.repositoryIdentity.name
+      ? `https://github.com/${activeProject.repositoryIdentity.owner}/${activeProject.repositoryIdentity.name}/issues/`
+      : undefined;
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -3947,6 +4007,10 @@ export default function ChatView(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const addGitHistorySurface = useCallback(() => {
+    if (!activeThreadRef || !supportsGitHistory || !isGitRepo || gitCwd === null) return;
+    useRightPanelStore.getState().open(activeThreadRef, "git-history");
+  }, [activeThreadRef, gitCwd, isGitRepo, supportsGitHistory]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -3955,6 +4019,46 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
+  const addProcessesSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "processes");
+  }, [activeThreadRef]);
+  const addIssueSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().openIssues(activeThreadRef);
+  }, [activeThreadRef]);
+  const selectIssueInPanel = useCallback(
+    (
+      target: { projectId: string; provider?: string; repository: string; number: number } | null,
+    ) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().selectIssueInPanel(activeThreadRef, target);
+    },
+    [activeThreadRef],
+  );
+  const openLinkedIssue = useCallback(
+    (link: { provider?: string; repository: string; number: number; url: string }) => {
+      const project = activeThreadRef
+        ? findProjectForLink(
+            allProjects.filter(
+              (candidate) => candidate.environmentId === activeThreadRef.environmentId,
+            ),
+            link,
+          )
+        : undefined;
+      if (!supportsIssues || !activeThreadRef || project === undefined) {
+        openLinkInBrowser(link.url);
+        return;
+      }
+      useRightPanelStore.getState().openIssue(activeThreadRef, {
+        projectId: project.id,
+        ...(link.provider === undefined ? {} : { provider: link.provider }),
+        repository: repositoryForProjectLink(project, link.repository),
+        number: link.number,
+      });
+    },
+    [activeThreadRef, allProjects, supportsIssues],
+  );
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -4018,7 +4122,11 @@ export default function ChatView(props: ChatViewProps) {
       targetKey: previousTargetKey,
       userActionRevision,
     } = observation;
-    const openSurface = selectActiveRightPanelSurface(panels.byThreadKey, activeThreadRef);
+    const openSurface = selectMergedActiveRightPanelSurface(
+      panels.byThreadKey,
+      panels.byEnvironmentId,
+      activeThreadRef,
+    );
     const previousPullRequest = observedThreadPullRequestRef.current;
     observedThreadPullRequestRef.current = {
       threadKey: activeThreadKey,
@@ -4330,8 +4438,10 @@ export default function ChatView(props: ChatViewProps) {
   );
   const syncActivePreviewSurface = useCallback(() => {
     if (!activeThreadRef) return;
-    const nextActiveSurface = selectActiveRightPanelSurface(
-      useRightPanelStore.getState().byThreadKey,
+    const panels = useRightPanelStore.getState();
+    const nextActiveSurface = selectMergedActiveRightPanelSurface(
+      panels.byThreadKey,
+      panels.byEnvironmentId,
       activeThreadRef,
     );
     if (nextActiveSurface?.kind === "preview" && nextActiveSurface.resourceId) {
@@ -5515,12 +5625,23 @@ export default function ChatView(props: ChatViewProps) {
   // Session-scoped dismissals, one key per (thread, snapshot). A set rather
   // than a single slot so dismissing the banner on one thread does not
   // resurface it on another thread dismissed earlier.
-  const [dismissedResumeCompactionKeys, setDismissedResumeCompactionKeys] = useState<
+  const [dismissedClaudeCompactionOfferKeys, setDismissedClaudeCompactionOfferKeys] = useState<
     ReadonlySet<string>
   >(new Set());
-  const resumeCompactionKey =
+  const claudeCompactionOffer =
     activeThread && activeContextWindow
-      ? `${activeThread.id}:${activeContextWindow.updatedAt}`
+      ? resolveClaudeCompactionOffer({
+          provider: selectedProvider,
+          model: activeThread.modelSelection.model,
+          usedTokens: activeContextWindow.usedTokens,
+          updatedAt: activeContextWindow.updatedAt,
+          now: `${nowMinute}:00.000Z`,
+          activeSession: phase === "ready" || phase === "running",
+        })
+      : null;
+  const claudeCompactionOfferKey =
+    activeThread && activeContextWindow
+      ? `${claudeCompactionOffer}:${activeThread.id}:${activeContextWindow.updatedAt}`
       : null;
   const activeThreadHasCompactableConversation =
     activeThread?.messages.some(
@@ -5550,28 +5671,25 @@ export default function ChatView(props: ChatViewProps) {
           ? "Compaction is unavailable for this provider"
           : "Compacting is unavailable right now"
     : null;
-  const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+  const claudeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (
       !activeThread ||
       !activeContextWindow ||
-      resumeCompactionKey === null ||
-      dismissedResumeCompactionKeys.has(resumeCompactionKey) ||
-      resumeCompactionPermanentlyDismissed ||
-      nativeResumeCompactionDismissed ||
+      claudeCompactionOfferKey === null ||
+      !shouldShowClaudeCompactionOffer({
+        offer: claudeCompactionOffer,
+        resumePermanentlyDismissed: resumeCompactionPermanentlyDismissed,
+        nativeResumeDismissed: nativeResumeCompactionDismissed,
+      }) ||
+      dismissedClaudeCompactionOfferKeys.has(claudeCompactionOfferKey) ||
       pendingUserInputs.length > 0 ||
-      phase === "running" ||
-      !shouldOfferResumeCompaction({
-        provider: selectedProvider,
-        usedTokens: activeContextWindow.usedTokens,
-        updatedAt: activeContextWindow.updatedAt,
-        now: `${nowMinute}:00.000Z`,
-      })
+      phase === "running"
     ) {
       return null;
     }
 
     const dismiss = () =>
-      setDismissedResumeCompactionKeys((keys) => new Set(keys).add(resumeCompactionKey));
+      setDismissedClaudeCompactionOfferKeys((keys) => new Set(keys).add(claudeCompactionOfferKey));
     const compactAction = (
       <Button
         size="xs"
@@ -5586,11 +5704,17 @@ export default function ChatView(props: ChatViewProps) {
       </Button>
     );
     return {
-      id: `resume-compaction:${resumeCompactionKey}`,
+      id: `claude-compaction:${claudeCompactionOfferKey}`,
       variant: "info",
       icon: <Minimize2Icon />,
-      title: "Resume with less context",
-      description: `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from earlier`,
+      title:
+        claudeCompactionOffer === "active"
+          ? "Compact context before your next turn"
+          : "Resume with less context",
+      description:
+        claudeCompactionOffer === "active"
+          ? `${formatContextWindowTokens(activeContextWindow.usedTokens)} active tokens`
+          : `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from earlier`,
       actions: compactDisabledReason ? (
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex">{compactAction}</span>} />
@@ -5599,7 +5723,7 @@ export default function ChatView(props: ChatViewProps) {
       ) : (
         compactAction
       ),
-      dismissLabel: "Keep full history",
+      dismissLabel: claudeCompactionOffer === "active" ? "Keep full context" : "Keep full history",
       onDismiss: dismiss,
     };
   }, [
@@ -5608,14 +5732,13 @@ export default function ChatView(props: ChatViewProps) {
     compactDisabled,
     compactDisabledReason,
     composerRef,
-    dismissedResumeCompactionKeys,
+    claudeCompactionOffer,
+    claudeCompactionOfferKey,
+    dismissedClaudeCompactionOfferKeys,
     nativeResumeCompactionDismissed,
-    nowMinute,
     pendingUserInputs.length,
     phase,
-    resumeCompactionKey,
     resumeCompactionPermanentlyDismissed,
-    selectedProvider,
   ]);
   const handleRestoreThreadBranch = useCallback(() => {
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {
@@ -5627,8 +5750,8 @@ export default function ChatView(props: ChatViewProps) {
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
-    const resumeCompactionItems =
-      resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
+    const claudeCompactionItems =
+      claudeCompactionBannerItem === null ? [] : [claudeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
@@ -5638,7 +5761,7 @@ export default function ChatView(props: ChatViewProps) {
         ...usageLimitsItems,
         ...systemComposerBannerItems,
         ...backgroundLivenessItems,
-        ...resumeCompactionItems,
+        ...claudeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
       ];
@@ -5647,7 +5770,7 @@ export default function ChatView(props: ChatViewProps) {
       ...usageLimitsItems,
       ...systemComposerBannerItems,
       ...backgroundLivenessItems,
-      ...resumeCompactionItems,
+      ...claudeCompactionItems,
       ...wokeThreadItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -5696,7 +5819,7 @@ export default function ChatView(props: ChatViewProps) {
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
-    resumeCompactionBannerItem,
+    claudeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
     usageLimitsBanner,
@@ -7624,6 +7747,15 @@ export default function ChatView(props: ChatViewProps) {
       <div className="pointer-events-auto flex h-full items-center">{panelToggleControls}</div>
     </div>
   );
+  const processPanelProjects = useMemo(
+    () => allProjects.filter((project) => project.environmentId === activeThread.environmentId),
+    [activeThread.environmentId, allProjects],
+  );
+  const processPanelThreads = useMemo(
+    () =>
+      serverThreadShells.filter((thread) => thread.environmentId === activeThread.environmentId),
+    [activeThread.environmentId, serverThreadShells],
+  );
   const rightPanelContent = activeThreadRef ? (
     renderedRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
@@ -7667,6 +7799,33 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
+    ) : renderedRightPanelSurface?.kind === "git-history" && activeProject ? (
+      <Suspense fallback={null}>
+        <RepositoryPanel
+          environmentId={environmentId}
+          cwd={gitCwd ?? activeProject.workspaceRoot}
+          gitHistoryCapabilityState={
+            supportsGitHistory && isGitRepo && gitCwd !== null ? "ready" : "unavailable"
+          }
+          issuesCapabilityState={supportsIssues ? "ready" : "unavailable"}
+          pullRequestsCapabilityState={supportsPullRequests ? "ready" : "unavailable"}
+          projectId={activeProject.id}
+          handoffTarget={{
+            kind: "existing-thread",
+            projectRef: activeProjectRef!,
+            draftId: composerDraftTarget,
+          }}
+          composerDraftTarget={composerDraftTarget}
+          view={renderedRightPanelSurface.view}
+          onViewChange={(view) => {
+            if (activeThreadRef)
+              useRightPanelStore.getState().selectRepositoryView(activeThreadRef, view);
+          }}
+          onIssueStateChange={handleIssueTabStatusChange}
+          onPullRequestStateChange={handlePullRequestTabStatusChange}
+          onOpenLinkedIssue={openLinkedIssue}
+        />
+      </Suspense>
     ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <PullRequestDetailGhost />
     ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
@@ -7706,6 +7865,58 @@ export default function ChatView(props: ChatViewProps) {
             : "page"
         }
         composerDraftTarget={composerDraftTarget}
+        onStateChange={handlePullRequestTabStatusChange}
+        onOpenLinkedIssue={openLinkedIssue}
+      />
+    ) : (renderedRightPanelSurface?.kind === "issue" ||
+        renderedRightPanelSurface?.kind === "issues") &&
+      !supportsIssues ? (
+      <IssuesUnavailableState
+        title="Issues unavailable"
+        error="Update this environment's T3 Code server to browse issues."
+      />
+    ) : renderedRightPanelSurface?.kind === "issue" && activeProjectRef ? (
+      <IssueDetailPanel
+        key={renderedRightPanelSurface.id}
+        environmentId={activeThread.environmentId}
+        reference={{
+          projectId: renderedRightPanelSurface.projectId as ProjectId,
+          ...(renderedRightPanelSurface.provider === undefined
+            ? {}
+            : { provider: renderedRightPanelSurface.provider }),
+          repository: renderedRightPanelSurface.repository,
+          number: renderedRightPanelSurface.number,
+        }}
+        chromeVariant="collapse"
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
+      />
+    ) : renderedRightPanelSurface?.kind === "issues" && activeProject && activeProjectRef ? (
+      <IssuesPanel
+        environmentId={activeThread.environmentId}
+        projectId={activeProject.id}
+        selected={renderedRightPanelSurface.selected}
+        onSelect={selectIssueInPanel}
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
+      />
+    ) : renderedRightPanelSurface?.kind === "processes" ? (
+      <ProcessPanelSurfaceSlot
+        input={{
+          environmentId: activeThread.environmentId,
+          environmentConnectionPhase: activeEnvironmentConnectionPhase,
+          projects: processPanelProjects,
+          threads: processPanelThreads,
+        }}
+        visible={rightPanelOpen}
       />
     ) : renderedRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
@@ -8262,15 +8473,28 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
+          onAddGitHistory={addGitHistorySurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
+          onAddIssue={addIssueSurface}
           onAddAgents={addAgentsSurface}
+          onAddProcesses={addProcessesSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
+          gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
+          issueAvailable={supportsIssues && activeProject !== null}
           agentsAvailable
+          processesAvailable={activeThread !== undefined}
+          issueStatuses={issueTabStatuses}
+          pullRequestStatusSeeds={Object.fromEntries(
+            Object.entries(pullRequestTabStatuses).map(([id, status]) => [
+              id,
+              { state: status.state, isDraft: status.isDraft },
+            ]),
+          )}
           liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
@@ -8312,15 +8536,28 @@ export default function ChatView(props: ChatViewProps) {
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
+            onAddGitHistory={addGitHistorySurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
+            onAddIssue={addIssueSurface}
             onAddAgents={addAgentsSurface}
+            onAddProcesses={addProcessesSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
+            gitHistoryAvailable={supportsGitHistory && isGitRepo && gitCwd !== null}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
+            issueAvailable={supportsIssues && activeProject !== null}
             agentsAvailable
+            processesAvailable={activeThread !== undefined}
+            issueStatuses={issueTabStatuses}
+            pullRequestStatusSeeds={Object.fromEntries(
+              Object.entries(pullRequestTabStatuses).map(([id, status]) => [
+                id,
+                { state: status.state, isDraft: status.isDraft },
+              ]),
+            )}
             liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}

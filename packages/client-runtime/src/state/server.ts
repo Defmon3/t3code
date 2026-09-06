@@ -1019,6 +1019,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
     }),
+    processDiscovery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:process-discovery",
+      tag: WS_METHODS.serverGetProcessDiagnostics,
+      refreshAfterSettledIntervalMs: 2_000,
+    }),
     hostResources: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-resources",
       staleTimeMs: 5_000,

@@ -131,9 +131,8 @@ describe("ProcessDiagnostics", () => {
             discoveryCalls += 1;
             if (discoveryCalls === 2) {
               return Effect.fail(
-                new NativeTelemetryClient.NativeTelemetryRequestTimedOut({
-                  operation: "discoverProcesses",
-                  timeoutMs: 10_000,
+                new NativeTelemetryClient.NativeTelemetryUnavailable({
+                  reason: "Process discovery request timed out after 10000ms.",
                 }),
               );
             }
@@ -188,7 +187,8 @@ describe("ProcessDiagnostics", () => {
             hostMemoryTotalBytes: 1_024,
             processes: [{ pid: 4_001 }],
             error: Option.some({
-              message: "Resource monitor 'discoverProcesses' request timed out after 10000ms.",
+              message:
+                "Resource monitor is unavailable: Process discovery request timed out after 10000ms.",
             }),
           });
           expect(recovered).toMatchObject({

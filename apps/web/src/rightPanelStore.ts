@@ -14,16 +14,22 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-const RIGHT_PANEL_KINDS = [
+export const RIGHT_PANEL_KINDS = [
   "diff",
+  "git-history",
   "files",
   "file",
   "preview",
   "terminal",
   "pull-request",
+  "issue",
+  "issues",
   "agents",
+  "processes",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
+
+export type RepositoryView = "history" | "issues" | "pull-requests";
 
 export type RightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
@@ -37,6 +43,7 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
+  | { id: "git-history"; kind: "git-history"; view: RepositoryView }
   | { id: "files"; kind: "files" }
   | {
       id: `file:${string}` | `attachment:${string}`;
@@ -66,19 +73,35 @@ export type RightPanelSurface =
       repository: string;
       number: number;
     }
-  | { id: "agents"; kind: "agents" };
+  | {
+      id: `issue:${string}`;
+      kind: "issue";
+      environmentId?: string;
+      projectId: string;
+      provider?: string;
+      repository: string;
+      number: number;
+    }
+  | {
+      id: "issues";
+      kind: "issues";
+      selected: { projectId: string; provider?: string; repository: string; number: number } | null;
+    }
+  | { id: "agents"; kind: "agents" }
+  | { id: "processes"; kind: "processes" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
-const RIGHT_PANEL_STORAGE_VERSION = 11;
+const RIGHT_PANEL_STORAGE_VERSION = 16;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
  * state: reopening the app should show the list, not last session's tabs and detail fetches.
  */
 const isPullRequestsPanelKey = (threadKey: string) => threadKey.endsWith(":pull-requests-panel");
+const isIssuesPanelKey = (threadKey: string) => threadKey.endsWith(":issues-panel");
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -86,8 +109,15 @@ export interface ThreadRightPanelState {
   surfaces: RightPanelSurface[];
 }
 
+export interface EnvironmentRightPanelState {
+  isActive: boolean;
+  isOpen: boolean;
+  surfaces: Extract<RightPanelSurface, { kind: "processes" }>[];
+}
+
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>;
   /** Session-only count of user panel choices per thread. Automatic updates do not advance it. */
   userActionRevisionByThreadKey: Record<string, number>;
   getUserActionRevision: (ref: ScopedThreadRef) => number;
@@ -102,7 +132,7 @@ interface RightPanelStoreState {
   ) => boolean;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue" | "issues">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
@@ -110,6 +140,23 @@ interface RightPanelStoreState {
   openPullRequest: (
     ref: ScopedThreadRef,
     target: { environmentId?: string; projectId: string; repository: string; number: number },
+  ) => void;
+  openIssue: (
+    ref: ScopedThreadRef,
+    target: {
+      environmentId?: string;
+      projectId: string;
+      provider?: string;
+      repository: string;
+      number: number;
+    },
+  ) => void;
+  openIssues: (ref: ScopedThreadRef) => void;
+  openRepository: (ref: ScopedThreadRef, view: RepositoryView) => void;
+  selectRepositoryView: (ref: ScopedThreadRef, view: RepositoryView) => void;
+  selectIssueInPanel: (
+    ref: ScopedThreadRef,
+    target: { projectId: string; provider?: string; repository: string; number: number } | null,
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -132,7 +179,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue" | "issues">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -143,16 +190,52 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
   surfaces: [],
 };
 
+const PROCESSES_SURFACE: Extract<RightPanelSurface, { kind: "processes" }> = {
+  id: "processes",
+  kind: "processes",
+};
+const EMPTY_ENVIRONMENT_STATE: EnvironmentRightPanelState = {
+  isActive: false,
+  isOpen: false,
+  surfaces: [],
+};
+const environmentIdFromThreadKey = (threadKey: string): string => threadKey.split(":", 1)[0]!;
+
+const deactivateEnvironmentProcesses = (
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  environmentId: string,
+): Record<string, EnvironmentRightPanelState> => {
+  const current = byEnvironmentId[environmentId];
+  if (!current?.isActive && !current?.isOpen) return byEnvironmentId;
+  return { ...byEnvironmentId, [environmentId]: { ...current, isActive: false, isOpen: false } };
+};
+
+const removeEnvironmentProcesses = (
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  environmentId: string,
+): Record<string, EnvironmentRightPanelState> => {
+  if (!(environmentId in byEnvironmentId)) return byEnvironmentId;
+  const { [environmentId]: _removed, ...remaining } = byEnvironmentId;
+  return remaining;
+};
+
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
+  kind: Exclude<
+    RightPanelKind,
+    "file" | "preview" | "terminal" | "pull-request" | "issue" | "issues"
+  >,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
       return { id: "diff", kind };
+    case "git-history":
+      return { id: "git-history", kind, view: "history" };
     case "files":
       return { id: "files", kind };
     case "agents":
       return { id: "agents", kind };
+    case "processes":
+      return PROCESSES_SURFACE;
   }
 };
 
@@ -224,12 +307,51 @@ export function pullRequestSurface(target: {
 export function issueSurfaceId(target: {
   environmentId?: string;
   projectId: string;
+  provider?: string;
   repository: string;
   number: number;
 }): `issue:${string}` {
-  const scope =
-    target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
-  return `issue:${scope}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  return `issue:${encodeURIComponent(
+    JSON.stringify([
+      target.environmentId ?? null,
+      target.provider ?? null,
+      target.projectId,
+      target.repository,
+      target.number,
+    ]),
+  )}`;
+}
+
+export type IssueSurface = Extract<RightPanelSurface, { kind: "issue" }>;
+export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
+
+export function issueSurface(target: {
+  environmentId?: string;
+  projectId: string;
+  provider?: string;
+  repository: string;
+  number: number;
+}): IssueSurface {
+  return {
+    id: issueSurfaceId(target),
+    kind: "issue",
+    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
+    ...(target.provider === undefined ? {} : { provider: target.provider }),
+    projectId: target.projectId,
+    repository: target.repository,
+    number: target.number,
+  };
+}
+
+export function updatePullRequestTabStatus<Status extends { state: unknown; isDraft: boolean }>(
+  statuses: Readonly<Record<string, Status>>,
+  surfaceId: string,
+  status: Status,
+): Readonly<Record<string, Status>> {
+  return statuses[surfaceId]?.state === status.state &&
+    statuses[surfaceId]?.isDraft === status.isDraft
+    ? statuses
+    : { ...statuses, [surfaceId]: status };
 }
 
 export function updateIssueTabStatus<Status extends { state: unknown; stateReason: unknown }>(
@@ -288,19 +410,51 @@ const userAction = (
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
 ): Partial<RightPanelStoreState> => ({
   byThreadKey: updateThread(state.byThreadKey, threadKey, updater),
+  byEnvironmentId: deactivateEnvironmentProcesses(
+    state.byEnvironmentId,
+    environmentIdFromThreadKey(threadKey),
+  ),
   userActionRevisionByThreadKey: {
     ...state.userActionRevisionByThreadKey,
     [threadKey]: (state.userActionRevisionByThreadKey[threadKey] ?? 0) + 1,
   },
 });
 
+const processAction = (
+  state: RightPanelStoreState,
+  ref: ScopedThreadRef,
+  isOpen: boolean,
+): Partial<RightPanelStoreState> => {
+  const threadKey = scopedThreadKey(ref);
+  return {
+    byEnvironmentId: {
+      ...state.byEnvironmentId,
+      [ref.environmentId]: { isActive: true, isOpen, surfaces: [PROCESSES_SURFACE] },
+    },
+    userActionRevisionByThreadKey: {
+      ...state.userActionRevisionByThreadKey,
+      [threadKey]: (state.userActionRevisionByThreadKey[threadKey] ?? 0) + 1,
+    },
+  };
+};
+
 function normalizeRevealLine(line: number | undefined): number | null {
   if (line === undefined || !Number.isFinite(line)) return null;
   return Math.max(1, Math.trunc(line));
 }
 
+function hasPersistedSurfaceKind(surface: unknown): surface is { readonly kind: string } {
+  return (
+    surface !== null &&
+    typeof surface === "object" &&
+    "kind" in surface &&
+    typeof surface.kind === "string"
+  );
+}
+
 export function migratePersistedRightPanelState(persistedState: unknown): {
   byThreadKey: Record<string, ThreadRightPanelState>;
+  byEnvironmentId?: Record<string, EnvironmentRightPanelState>;
 } {
   if (!persistedState || typeof persistedState !== "object") {
     return { byThreadKey: {} };
@@ -311,15 +465,19 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
     typeof persistedState.byThreadKey === "object"
       ? Object.fromEntries(
           Object.entries(persistedState.byThreadKey as Record<string, ThreadRightPanelState>)
-            .filter(([threadKey]) => !isPullRequestsPanelKey(threadKey))
+            .filter(
+              ([threadKey]) => !isPullRequestsPanelKey(threadKey) && !isIssuesPanelKey(threadKey),
+            )
             .map(([threadKey, threadState]) => {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
+                    if (!hasPersistedSurfaceKind(surface)) return [];
                     // Dropped surface kind: plans now render inline in the
                     // transcript (v9).
                     if ((surface as { kind?: string }).kind === "plan") return [];
+                    if (surface.kind === "processes") return [];
                     if (surface.kind === "file") {
                       const revealLine =
                         typeof surface.revealLine === "number" &&
@@ -411,13 +569,67 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
             }),
         )
       : {};
-  return { byThreadKey };
+  const persistedThreads =
+    "byThreadKey" in persistedState &&
+    persistedState.byThreadKey &&
+    typeof persistedState.byThreadKey === "object"
+      ? (persistedState.byThreadKey as Record<string, ThreadRightPanelState>)
+      : {};
+  const persistedEnvironmentStates =
+    "byEnvironmentId" in persistedState &&
+    persistedState.byEnvironmentId &&
+    typeof persistedState.byEnvironmentId === "object"
+      ? (persistedState.byEnvironmentId as Record<string, EnvironmentRightPanelState>)
+      : {};
+  const migratedEnvironmentStates = Object.entries(persistedEnvironmentStates).reduce<
+    Record<string, EnvironmentRightPanelState>
+  >((current, [environmentId, environmentState]) => {
+    if (
+      !Array.isArray(environmentState?.surfaces) ||
+      !environmentState.surfaces.some(
+        (surface) => hasPersistedSurfaceKind(surface) && surface.kind === "processes",
+      )
+    ) {
+      return current;
+    }
+    current[environmentId] = {
+      isActive: environmentState.isActive === true,
+      isOpen: environmentState.isOpen === true,
+      surfaces: [PROCESSES_SURFACE],
+    };
+    return current;
+  }, {});
+  const byEnvironmentId = Object.entries(persistedThreads).reduce<
+    Record<string, EnvironmentRightPanelState>
+  >((current, [threadKey, threadState]) => {
+    if (
+      !Array.isArray(threadState?.surfaces) ||
+      !threadState.surfaces.some(
+        (surface) => hasPersistedSurfaceKind(surface) && surface.kind === "processes",
+      )
+    ) {
+      return current;
+    }
+    const environmentId = environmentIdFromThreadKey(threadKey);
+    const previous = current[environmentId] ?? EMPTY_ENVIRONMENT_STATE;
+    current[environmentId] = {
+      isActive: previous.isActive || threadState.activeSurfaceId === "processes",
+      isOpen:
+        previous.isOpen || (threadState.isOpen && threadState.activeSurfaceId === "processes"),
+      surfaces: [PROCESSES_SURFACE],
+    };
+    return current;
+  }, migratedEnvironmentStates);
+  return Object.keys(byEnvironmentId).length === 0
+    ? { byThreadKey }
+    : { byThreadKey, byEnvironmentId };
 }
 
 export const useRightPanelStore = create<RightPanelStoreState>()(
   persist(
     (set, get) => ({
       byThreadKey: {},
+      byEnvironmentId: {},
       userActionRevisionByThreadKey: {},
       getUserActionRevision: (ref) =>
         get().userActionRevisionByThreadKey[scopedThreadKey(ref)] ?? 0,
@@ -444,15 +656,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         return opened;
       },
       open: (ref, kind) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
+        set((state) => {
+          if (kind === "processes") {
+            return processAction(state, ref, true);
+          }
+          return userAction(state, scopedThreadKey(ref), (current) => {
             if (kind === "preview") {
               const existing = current.surfaces.find((surface) => surface.kind === "preview");
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
-          }),
-        ),
+          });
+        }),
       openBrowser: (ref, tabId) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
@@ -468,6 +683,42 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           userAction(state, scopedThreadKey(ref), (current) => {
             return upsertSurface(current, pullRequestSurface(target));
           }),
+        ),
+      openIssue: (ref, target) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, issueSurface(target)),
+          ),
+        ),
+      openIssues: (ref) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, { id: "issues", kind: "issues", selected: null }),
+          ),
+        ),
+      openRepository: (ref, view) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, { id: "git-history", kind: "git-history", view }),
+          ),
+        ),
+      selectRepositoryView: (ref, view) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.kind === "git-history" ? { ...surface, view } : surface,
+            ),
+          })),
+        ),
+      selectIssueInPanel: (ref, selected) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.kind === "issues" ? { ...surface, selected } : surface,
+            ),
+          })),
         ),
       openFile: (ref, relativePath, line) =>
         set((state) =>
@@ -589,29 +840,39 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       activateSurface: (ref, surfaceId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            current.surfaces.some((surface) => surface.id === surfaceId)
-              ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
-              : current,
-          ),
+          surfaceId === "processes"
+            ? processAction(state, ref, true)
+            : userAction(state, scopedThreadKey(ref), (current) =>
+                current.surfaces.some((surface) => surface.id === surfaceId)
+                  ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
+                  : current,
+              ),
         ),
       closeSurface: (ref, surfaceId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
-            if (index < 0) return current;
-            const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
-            if (current.activeSurfaceId !== surfaceId) {
-              return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
-            }
-            const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
-            return {
-              ...current,
-              isOpen: surfaces.length > 0 && current.isOpen,
-              surfaces,
-              activeSurfaceId: fallback?.id ?? null,
-            };
-          }),
+          surfaceId === "processes"
+            ? {
+                ...userAction(state, scopedThreadKey(ref), (current) => current),
+                byEnvironmentId: removeEnvironmentProcesses(
+                  state.byEnvironmentId,
+                  ref.environmentId,
+                ),
+              }
+            : userAction(state, scopedThreadKey(ref), (current) => {
+                const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+                if (index < 0) return current;
+                const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
+                if (current.activeSurfaceId !== surfaceId) {
+                  return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
+                }
+                const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
+                return {
+                  ...current,
+                  isOpen: surfaces.length > 0 && current.isOpen,
+                  surfaces,
+                  activeSurfaceId: fallback?.id ?? null,
+                };
+              }),
         ),
       closeOtherSurfaces: (ref, surfaceId) =>
         set((state) =>
@@ -643,13 +904,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           }),
         ),
       closeAllSurfaces: (ref) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
+        set((state) => ({
+          ...userAction(state, scopedThreadKey(ref), (current) =>
             current.surfaces.length === 0
               ? current
               : { ...current, isOpen: false, surfaces: [], activeSurfaceId: null },
           ),
-        ),
+          byEnvironmentId: removeEnvironmentProcesses(state.byEnvironmentId, ref.environmentId),
+        })),
       reconcileBrowserSurfaces: (ref, tabIds) =>
         set((state) =>
           automaticUpdate(state, scopedThreadKey(ref), (current) => {
@@ -703,27 +965,61 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           }),
         ),
       show: (ref) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
+        set((state) => {
+          const environmentState = state.byEnvironmentId[ref.environmentId];
+          if (environmentState?.isActive) {
+            return {
+              ...state,
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: { ...environmentState, isOpen: true },
+              },
+            };
+          }
+          return userAction(state, scopedThreadKey(ref), (current) =>
             current.isOpen ? current : { ...current, isOpen: true },
-          ),
-        ),
+          );
+        }),
       close: (ref) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
+        set((state) => {
+          const environmentState = state.byEnvironmentId[ref.environmentId];
+          if (environmentState?.isActive && environmentState.isOpen) {
+            return {
+              ...state,
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: { ...environmentState, isOpen: false },
+              },
+            };
+          }
+          return userAction(state, scopedThreadKey(ref), (current) =>
             current.isOpen ? { ...current, isOpen: false } : current,
-          ),
-        ),
+          );
+        }),
       toggleVisibility: (ref) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
+        set((state) => {
+          const environmentState = state.byEnvironmentId[ref.environmentId];
+          if (environmentState?.isActive) {
+            return {
+              ...state,
+              byEnvironmentId: {
+                ...state.byEnvironmentId,
+                [ref.environmentId]: { ...environmentState, isOpen: !environmentState.isOpen },
+              },
+            };
+          }
+          return userAction(state, scopedThreadKey(ref), (current) => ({
             ...current,
             isOpen: !current.isOpen,
-          })),
-        ),
+          }));
+        }),
       toggle: (ref, kind) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
+        set((state) => {
+          if (kind === "processes") {
+            const current = state.byEnvironmentId[ref.environmentId];
+            return processAction(state, ref, !(current?.isActive && current.isOpen));
+          }
+          return userAction(state, scopedThreadKey(ref), (current) => {
             const active = current.surfaces.find(
               (surface) => surface.id === current.activeSurfaceId,
             );
@@ -735,8 +1031,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
-          }),
-        ),
+          });
+        }),
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
@@ -761,9 +1057,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       partialize: (state) => ({
         byThreadKey: Object.fromEntries(
           Object.entries(state.byThreadKey).filter(
-            ([threadKey]) => !isPullRequestsPanelKey(threadKey),
+            ([threadKey]) => !isPullRequestsPanelKey(threadKey) && !isIssuesPanelKey(threadKey),
           ),
         ),
+        byEnvironmentId: state.byEnvironmentId,
       }),
       migrate: migratePersistedRightPanelState,
     },
@@ -776,6 +1073,50 @@ export function selectThreadRightPanelState(
 ): ThreadRightPanelState {
   if (!ref) return EMPTY_THREAD_STATE;
   return byThreadKey[scopedThreadKey(ref)] ?? EMPTY_THREAD_STATE;
+}
+
+export function selectMergedThreadRightPanelState(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): ThreadRightPanelState {
+  const threadState = selectThreadRightPanelState(byThreadKey, ref);
+  const environmentState = ref ? byEnvironmentId[ref.environmentId] : undefined;
+  return mergeThreadRightPanelState(threadState, environmentState);
+}
+
+export function mergeThreadRightPanelState(
+  threadState: ThreadRightPanelState,
+  environmentState: EnvironmentRightPanelState | undefined,
+): ThreadRightPanelState {
+  if (!environmentState || environmentState.surfaces.length === 0) return threadState;
+  return {
+    isOpen: environmentState.isActive ? environmentState.isOpen : threadState.isOpen,
+    activeSurfaceId: environmentState.isActive ? "processes" : threadState.activeSurfaceId,
+    surfaces: [...threadState.surfaces, ...environmentState.surfaces],
+  };
+}
+
+export function selectMergedActiveRightPanel(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): RightPanelKind | null {
+  const state = selectMergedThreadRightPanelState(byThreadKey, byEnvironmentId, ref);
+  return state.isOpen
+    ? (state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null)
+    : null;
+}
+
+export function selectMergedActiveRightPanelSurface(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  byEnvironmentId: Record<string, EnvironmentRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): RightPanelSurface | null {
+  const state = selectMergedThreadRightPanelState(byThreadKey, byEnvironmentId, ref);
+  return state.isOpen
+    ? (state.surfaces.find((surface) => surface.id === state.activeSurfaceId) ?? null)
+    : null;
 }
 
 export function selectActiveRightPanel(

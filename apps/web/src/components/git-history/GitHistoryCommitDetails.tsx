@@ -1,4 +1,5 @@
 import type { GitCommitChangedFile, GitCommitDetails } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { LegendList } from "@legendapp/list/react";
 import { CheckIcon, FileDiffIcon, RefreshCwIcon } from "lucide-react";
 import { type CSSProperties } from "react";
@@ -90,6 +91,7 @@ export function CommitDetailsPane(props: {
   style?: CSSProperties;
   id?: string;
   details: GitCommitDetails | null;
+  timestampFormat: TimestampFormat;
   files: ReadonlyArray<GitCommitChangedFile>;
   filesCapped: boolean;
   filesHasMore: boolean;
@@ -150,6 +152,7 @@ export function CommitDetailsPane(props: {
       </aside>
     );
   const details = props.details;
+  const authoredAtLabel = formatCommitDate(details.authoredAt, props.timestampFormat);
   return (
     <aside
       id={props.id}
@@ -163,7 +166,7 @@ export function CommitDetailsPane(props: {
         <h2 className="text-sm font-semibold leading-5 text-foreground">{details.subject}</h2>
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
           <span>{details.authorName}</span>
-          <span>{formatCommitDate(details.authoredAt)}</span>
+          <span>{authoredAtLabel}</span>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -255,7 +258,7 @@ export function CommitDetailsPane(props: {
           <dt>Email</dt>
           <dd className="truncate text-foreground">{details.authorEmail}</dd>
           <dt>Date</dt>
-          <dd className="text-foreground">{formatCommitDate(details.authoredAt)}</dd>
+          <dd className="text-foreground">{authoredAtLabel}</dd>
           <dt>Parents</dt>
           <dd className="truncate font-mono text-foreground">
             {details.parentHashes.map((hash) => hash.slice(0, 8)).join(", ") || "None"}

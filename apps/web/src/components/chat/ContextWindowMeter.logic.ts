@@ -9,8 +9,13 @@ import {
 } from "../../providerInstances";
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
-const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
-const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
+export const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
+export const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
+export const CLAUDE_ACTIVE_COMPACTION_TOKENS = 350_000;
+
+export type ClaudeCompactionOffer = "active" | "resume";
+
+const HIGH_CONTEXT_CLAUDE_MODEL_PATTERN = /^(?:claude-)?(?:opus|fable)(?:[-.]\d+)*$/;
 
 export function providerSupportsManualCompaction(
   provider: ProviderInstanceEntry | null | undefined,
@@ -79,6 +84,41 @@ export function shouldOfferResumeCompaction(input: {
     Number.isFinite(updatedAt) &&
     Number.isFinite(now) &&
     now - updatedAt >= CLAUDE_RESUME_COMPACTION_MINUTES * 60_000
+  );
+}
+
+export function resolveClaudeCompactionOffer(input: {
+  readonly provider: string | null | undefined;
+  readonly model: string | null | undefined;
+  readonly usedTokens: number | null | undefined;
+  readonly updatedAt: string | null | undefined;
+  readonly now: string;
+  readonly activeSession: boolean;
+}): ClaudeCompactionOffer | null {
+  if (input.provider !== "claudeAgent") {
+    return null;
+  }
+
+  if (
+    input.activeSession &&
+    (input.usedTokens ?? 0) >= CLAUDE_ACTIVE_COMPACTION_TOKENS &&
+    HIGH_CONTEXT_CLAUDE_MODEL_PATTERN.test(input.model?.trim().toLowerCase() ?? "")
+  ) {
+    return "active";
+  }
+
+  return shouldOfferResumeCompaction(input) ? "resume" : null;
+}
+
+export function shouldShowClaudeCompactionOffer(input: {
+  readonly offer: ClaudeCompactionOffer | null;
+  readonly resumePermanentlyDismissed: boolean;
+  readonly nativeResumeDismissed: boolean;
+}): boolean {
+  return (
+    input.offer !== null &&
+    (input.offer !== "resume" ||
+      (!input.resumePermanentlyDismissed && !input.nativeResumeDismissed))
   );
 }
 

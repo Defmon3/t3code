@@ -81,6 +81,17 @@ supports approving waiting fork workflows and opening a revert pull request for 
 For Azure DevOps, use the host website to view diffs or change comments. Bitbucket does not support
 reopening a declined pull request.
 
+## Browse Git History
+
+Open the right-panel menu and choose **Git History** to explore commits, branches, remotes, and
+tags. Select a ref to focus the graph, or choose **All refs** to inspect the wider repository.
+
+Select a commit to view its metadata and changed files, then open its diff. Search by commit
+subject, author, ref, or hash; use the clear control or `Escape` to reset the search.
+
+Git History is available in web and desktop project views. Mobile keeps its existing Git status and
+actions but does not include this history workspace.
+
 ## Troubleshooting
 
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,

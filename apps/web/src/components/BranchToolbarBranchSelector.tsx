@@ -221,8 +221,8 @@ export function BranchToolbarBranchSelector({
   );
   const trimmedBranchQuery = branchQuery.trim();
   const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
-  // The server filters refs by substring, so it has to be given the sanitized
-  // name as well: querying the raw "new branch" drops an existing new-branch
+  // The server filters refs by prefix, so it has to be given the sanitized
+  // name as well: prefixing the raw "new branch" drops an existing new-branch
   // from the response entirely, which would defeat the collision check below.
   // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
   const branchRefQuery = sanitizeNewRefName(deferredTrimmedBranchQuery);
@@ -230,7 +230,7 @@ export function BranchToolbarBranchSelector({
     () => ({
       environmentId,
       cwd: branchCwd,
-      query: branchRefQuery,
+      prefix: branchRefQuery,
     }),
     [branchCwd, branchRefQuery, environmentId],
   );
@@ -314,7 +314,7 @@ export function BranchToolbarBranchSelector({
           environmentId,
           input: {
             cwd: branchCwd,
-            query: resolvedActiveBranch,
+            prefix: resolvedActiveBranch,
             limit: 10,
           },
         })
@@ -330,13 +330,12 @@ export function BranchToolbarBranchSelector({
         ? queriedActiveBranch.isRemote === true
         : null;
   const [isBranchActionPending, startBranchActionTransition] = useTransition();
-  const totalBranchCount = branchRefState.data?.totalCount ?? 0;
   const branchStatusText = isInitialBranchesLoadPending
     ? "Loading refs..."
     : isFetchingNextPage
       ? "Loading more refs..."
       : hasNextPage
-        ? `Showing ${refs.length} of ${totalBranchCount} refs`
+        ? `Showing ${refs.length} refs`
         : null;
 
   // ---------------------------------------------------------------------------

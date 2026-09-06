@@ -143,6 +143,7 @@ const project = {
     },
   },
   defaultModelSelection: null,
+  skillShortcuts: [],
   scripts: [],
   createdAt: NOW,
   updatedAt: NOW,

@@ -74,18 +74,18 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     expandedRefKeys.has("section:tags") ||
     selectedRevision?.startsWith("refs/tags/") === true;
   const refs = usePaginatedHistoryRefs(
-    { environmentId, cwd, query: debouncedRefFilter },
+    { environmentId, cwd, prefix: debouncedRefFilter },
     { limit: 200, namespace: "local", revision },
   );
   const remote = usePaginatedHistoryRefs(
     shouldLoadRemote
-      ? { environmentId, cwd, query: debouncedRefFilter }
+      ? { environmentId, cwd, prefix: debouncedRefFilter }
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "remote", revision },
   );
   const tags = usePaginatedHistoryRefs(
     shouldLoadTags
-      ? { environmentId, cwd, query: debouncedRefFilter }
+      ? { environmentId, cwd, prefix: debouncedRefFilter }
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "tag", revision },
   );
@@ -136,7 +136,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     validationTarget !== null && debouncedRefFilter.length === 0 && !selectedRefKnown;
   const selectedRefValidation = usePaginatedHistoryRefs(
     shouldValidateSelectedRef
-      ? { environmentId, cwd, query: validationTarget?.name ?? "" }
+      ? { environmentId, cwd, prefix: validationTarget?.name ?? "" }
       : { environmentId: null, cwd: null },
     {
       limit: 200,
