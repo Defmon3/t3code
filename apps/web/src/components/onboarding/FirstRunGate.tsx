@@ -34,8 +34,8 @@ import { Button } from "../ui/button";
 /**
  * Holds back authenticated and hosted app trees until the first-run decision
  * is known, so a fresh install never flashes the main screen before the wizard.
- * Nothing renders while pending — no shell, no EventRouter (whose welcome
- * payload would otherwise navigate into a thread), no dialogs.
+ * The startup status renders while pending, but not the shell, EventRouter
+ * (whose welcome payload would otherwise navigate into a thread), or dialogs.
  *
  * Decision order: a set `onboardingCompletedAt` resolves to the app as soon as
  * settings hydrate (the common case, no server round-trip). A `null` flag also
@@ -198,9 +198,22 @@ export function FirstRunGate({
     return <FirstRunRecovery reason="settings" retrying={hydrationStatus === "retrying"} />;
   }
   if (decision !== "app") {
-    return stalled ? <FirstRunRecovery reason="connection" /> : null;
+    return stalled ? <FirstRunRecovery reason="connection" /> : <FirstRunLoading />;
   }
   return children;
+}
+
+function FirstRunLoading() {
+  return (
+    <main
+      aria-busy="true"
+      aria-label="Loading T3 Code"
+      className="flex h-dvh min-h-0 items-center justify-center bg-background px-6 text-foreground"
+      role="status"
+    >
+      <p className="text-sm text-muted-foreground">Loading T3 Code</p>
+    </main>
+  );
 }
 
 function FirstRunRecovery({
