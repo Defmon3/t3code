@@ -16,6 +16,10 @@ export interface PendingApproval {
   readonly detail?: string;
   readonly appName?: string;
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
+  readonly source?: "hook" | "engine";
+  readonly title?: string;
+  readonly description?: string;
+  readonly reason?: string;
 }
 
 export interface PendingUserInput {
@@ -155,6 +159,18 @@ export function derivePendingRequests(activities: ReadonlyArray<OrchestrationThr
           ? { appName: payload.appName }
           : {}),
         ...(options.length > 0 ? { options } : {}),
+        ...(payload.approvalSource === "hook" || payload.approvalSource === "engine"
+          ? { source: payload.approvalSource }
+          : {}),
+        ...(typeof payload.approvalTitle === "string" && payload.approvalTitle
+          ? { title: payload.approvalTitle }
+          : {}),
+        ...(typeof payload.approvalDescription === "string" && payload.approvalDescription
+          ? { description: payload.approvalDescription }
+          : {}),
+        ...(typeof payload.approvalReason === "string" && payload.approvalReason
+          ? { reason: payload.approvalReason }
+          : {}),
       });
     } else if (activity.kind === "user-input.requested") {
       if (closedUserInputs.has(requestId)) continue;

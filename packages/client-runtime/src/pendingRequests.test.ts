@@ -185,6 +185,34 @@ describe("pending approvals", () => {
     ]);
   });
 
+  it("preserves hook context alongside file-read approvals", () => {
+    const activity = makeActivity({
+      kind: "approval.requested",
+      payload: {
+        requestId: "req-hook-read",
+        requestKind: "file-read",
+        detail: "C:\\Users\\defmon3\\.claude\\house-rules.md",
+        approvalSource: "hook",
+        approvalTitle: "Read project instructions?",
+        approvalDescription: "The rule requires confirmation.",
+        approvalReason: "Outside the workspace.",
+      },
+    });
+
+    expect(derivePendingRequests([activity]).approvals).toEqual([
+      {
+        requestId: "req-hook-read",
+        requestKind: "file-read",
+        createdAt: activity.createdAt,
+        detail: "C:\\Users\\defmon3\\.claude\\house-rules.md",
+        source: "hook",
+        title: "Read project instructions?",
+        description: "The rule requires confirmation.",
+        reason: "Outside the workspace.",
+      },
+    ]);
+  });
+
   it("clears stale pending approvals when provider reports unknown pending request", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -303,6 +303,22 @@ function requestKindFromCanonicalRequestType(
   }
 }
 
+function approvalActivityFields(args: unknown): Record<string, string> {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return {};
+  const record = args as Record<string, unknown>;
+  const fields: Record<string, string> = {};
+  for (const key of [
+    "approvalSource",
+    "approvalTitle",
+    "approvalDescription",
+    "approvalReason",
+  ] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) fields[key] = value;
+  }
+  return fields;
+}
+
 /**
  * Copies the optional TaskAgentLinkage bundle from a task.* runtime payload
  * into the persisted activity payload. Identity fields ride on every row so
@@ -386,6 +402,7 @@ export function runtimeEventToActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: event.payload.detail } : {}),
+            ...approvalActivityFields(event.payload.args),
             ...(event.payload.appName ? { appName: event.payload.appName } : {}),
             ...(event.payload.options ? { options: event.payload.options } : {}),
           },

@@ -51,6 +51,29 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain("File read approval");
   });
 
+  it("renders hook approval context without losing a file-read request", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerPendingApprovalPanel
+        approval={{
+          requestId: ApprovalRequestId.make("approval-hook-read"),
+          requestKind: "file-read",
+          createdAt: "2026-09-07T00:00:00.000Z",
+          detail: "C:\\Users\\defmon3\\.claude\\house-rules.md",
+          source: "hook",
+          title: "Read project instructions?",
+          reason: "Outside the workspace.",
+        }}
+        pendingCount={1}
+      />,
+    );
+
+    expect(markup).toContain("Read project instructions?");
+    expect(markup).toContain("Hook");
+    expect(markup).toContain("Outside the workspace.");
+    expect(markup).toContain('aria-label="Requested action"');
+    expect(markup).toContain("C:\\Users\\defmon3\\.claude\\house-rules.md");
+  });
+
   it("shows the app name and message for an MCP access request", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
