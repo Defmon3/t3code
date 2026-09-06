@@ -12,15 +12,24 @@ export default Effect.gen(function* () {
       FROM orchestration_events AS created
       WHERE created.aggregate_kind = 'project'
         AND created.event_type = 'project.created'
-        AND json_type(created.payload_json, '$.defaultModelSelection') IS NOT NULL
-        AND json_type(created.payload_json, '$.defaultModelSelection') <> 'null'
+        AND json_type(
+          CASE WHEN json_valid(created.payload_json) THEN created.payload_json END,
+          '$.defaultModelSelection'
+        ) IS NOT NULL
+        AND json_type(
+          CASE WHEN json_valid(created.payload_json) THEN created.payload_json END,
+          '$.defaultModelSelection'
+        ) <> 'null'
         AND NOT EXISTS (
           SELECT 1
           FROM orchestration_events AS configured
           WHERE configured.aggregate_kind = 'project'
             AND configured.stream_id = created.stream_id
             AND configured.event_type = 'project.meta-updated'
-            AND json_type(configured.payload_json, '$.defaultModelSelection') IS NOT NULL
+            AND json_type(
+              CASE WHEN json_valid(configured.payload_json) THEN configured.payload_json END,
+              '$.defaultModelSelection'
+            ) IS NOT NULL
         )
     )
     UPDATE projection_projects
@@ -37,15 +46,24 @@ export default Effect.gen(function* () {
     )
     WHERE created.aggregate_kind = 'project'
       AND created.event_type = 'project.created'
-      AND json_type(created.payload_json, '$.defaultModelSelection') IS NOT NULL
-      AND json_type(created.payload_json, '$.defaultModelSelection') <> 'null'
+      AND json_type(
+        CASE WHEN json_valid(created.payload_json) THEN created.payload_json END,
+        '$.defaultModelSelection'
+      ) IS NOT NULL
+      AND json_type(
+        CASE WHEN json_valid(created.payload_json) THEN created.payload_json END,
+        '$.defaultModelSelection'
+      ) <> 'null'
       AND NOT EXISTS (
         SELECT 1
         FROM orchestration_events AS configured
         WHERE configured.aggregate_kind = 'project'
           AND configured.stream_id = created.stream_id
           AND configured.event_type = 'project.meta-updated'
-          AND json_type(configured.payload_json, '$.defaultModelSelection') IS NOT NULL
+          AND json_type(
+            CASE WHEN json_valid(configured.payload_json) THEN configured.payload_json END,
+            '$.defaultModelSelection'
+          ) IS NOT NULL
       )
   `;
 });
