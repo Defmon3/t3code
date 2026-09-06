@@ -98,8 +98,8 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
-import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { PullRequestDetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
@@ -2351,9 +2351,9 @@ export function PullRequestDetailPanel({
             {mountedTabs.has("timeline") ? (
               <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
                 {activityPending ? (
-                  <PullRequestTimelineGhost />
+                  <TimelineGhost />
                 ) : activityError ? (
-                  <PullRequestActivityUnavailableState
+                  <ActivityUnavailableState
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />
