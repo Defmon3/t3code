@@ -132,6 +132,16 @@ export function resourceMonitorExecutableName(platform: typeof BuildPlatform.Typ
   return platform === "win" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
 }
 
+export function resourceMonitorPlatformKeys(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): ReadonlyArray<string> {
+  if (platform === "mac") {
+    return arch === "universal" ? ["darwin-arm64", "darwin-x64"] : [`darwin-${arch}`];
+  }
+  return [`${platform === "win" ? "win32" : "linux"}-${arch}`];
+}
+
 const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
   mac: {
     cliFlag: "--mac",
@@ -1738,7 +1748,40 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   if (input.platform !== "win") {
     yield* fs.chmod(destinationPath, 0o755);
   }
+
+  return destinationPath;
 });
+
+export const stageServerResourceMonitor = Effect.fn("stageServerResourceMonitor")(
+  function* (input: {
+    readonly serverDistDir: string;
+    readonly sourcePath: string;
+    readonly platform: typeof BuildPlatform.Type;
+    readonly arch: typeof BuildArch.Type;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const executableName = resourceMonitorExecutableName(input.platform);
+
+    yield* Effect.forEach(
+      resourceMonitorPlatformKeys(input.platform, input.arch),
+      (platformKey) => {
+        const destinationDirectory = path.join(
+          input.serverDistDir,
+          "resource-monitor",
+          platformKey,
+        );
+        return fs
+          .makeDirectory(destinationDirectory, { recursive: true })
+          .pipe(
+            Effect.andThen(
+              fs.copyFile(input.sourcePath, path.join(destinationDirectory, executableName)),
+            ),
+          );
+      },
+    );
+  },
+);
 
 function generateMacIconSet(
   sourcePng: string,
@@ -2307,6 +2350,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   readonly patchedDependencies: Record<string, string>;
   readonly overrides: Record<string, string>;
   readonly wslPrebuildPath: string | undefined;
+  readonly resourceMonitorPath: string;
   readonly asarPath: string;
   readonly verbose: boolean;
 }) {
@@ -2316,6 +2360,12 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   const serverStageDir = path.join(input.stageRoot, "server");
   yield* fs.makeDirectory(path.join(serverStageDir, "apps/server"), { recursive: true });
   yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
+  yield* stageServerResourceMonitor({
+    serverDistDir: path.join(serverStageDir, "apps/server/dist"),
+    sourcePath: input.resourceMonitorPath,
+    platform: "win",
+    arch: input.arch,
+  });
 
   const sidecarDependencies = {
     ...input.runtimeExternalDependencies,
@@ -2849,13 +2899,22 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform !== "win") {
     yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
   }
-  yield* stageResourceMonitor({
+  const resourceMonitorPath = yield* stageResourceMonitor({
     repoRoot,
     stageResourcesDir,
     platform: options.platform,
     arch: options.arch,
     verbose: options.verbose,
   });
+
+  if (options.platform !== "win") {
+    yield* stageServerResourceMonitor({
+      serverDistDir: path.join(stageAppDir, "apps/server/dist"),
+      sourcePath: resourceMonitorPath,
+      platform: options.platform,
+      arch: options.arch,
+    });
+  }
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -3001,6 +3060,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       patchedDependencies: workspacePatchedDependencies,
       overrides: resolvedOverrides,
       wslPrebuildPath: options.wslPrebuild,
+      resourceMonitorPath,
       asarPath: windowsServerAsarPath,
       verbose: options.verbose,
     });
