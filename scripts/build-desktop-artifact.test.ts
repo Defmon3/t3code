@@ -53,6 +53,7 @@ import {
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
+  resourceMonitorPlatformKeys,
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
   resolveGitHubPublishConfig,
@@ -60,6 +61,7 @@ import {
   resolveMockUpdateServerUrl,
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
+  stageServerResourceMonitor,
   stageDesktopDmgBackground,
   stageResourceMonitor,
   stageWslRuntimeArchive,
@@ -1777,7 +1779,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+    assert.deepStrictEqual(resourceMonitorPlatformKeys("win", "x64"), ["win32-x64"]);
+    assert.deepStrictEqual(resourceMonitorPlatformKeys("linux", "x64"), ["linux-x64"]);
+    assert.deepStrictEqual(resourceMonitorPlatformKeys("mac", "universal"), [
+      "darwin-arm64",
+      "darwin-x64",
+    ]);
   });
+
+  it.effect("embeds the resource monitor in the portable server distribution", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-server-resource-monitor-test-",
+      });
+      const sourcePath = path.join(tempDir, "t3-resource-monitor");
+      const serverDistDir = path.join(tempDir, "dist");
+      yield* fs.writeFileString(sourcePath, "linux-monitor");
+
+      yield* stageServerResourceMonitor({
+        serverDistDir,
+        sourcePath,
+        platform: "linux",
+        arch: "x64",
+      });
+
+      assert.equal(
+        yield* fs.readFileString(
+          path.join(serverDistDir, "resource-monitor/linux-x64/t3-resource-monitor"),
+        ),
+        "linux-monitor",
+      );
+    }),
+  );
 
   it("packages the WSL server and production dependencies as one compressed runtime", () => {
     assert.equal(WSL_RUNTIME_ARCHIVE_NAME, "wsl-runtime.tar.gz");
