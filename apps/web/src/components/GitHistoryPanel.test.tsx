@@ -10,7 +10,7 @@ import {
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import type { ReactElement } from "react";
+import { isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
@@ -448,6 +448,13 @@ function componentElement(
   return component as ReactElement<Record<string, unknown>>;
 }
 
+function hasTextChild(value: unknown, text: string): boolean {
+  if (typeof value === "string") return value.includes(text);
+  if (Array.isArray(value)) return value.some((child) => hasTextChild(child, text));
+  if (!isValidElement<{ readonly children?: unknown }>(value)) return false;
+  return hasTextChild(value.props.children, text);
+}
+
 describe("GitHistoryPanel", () => {
   beforeEach(() => {
     hooks.reset();
@@ -634,7 +641,7 @@ describe("GitHistoryPanel", () => {
       detailsPane,
       (element) =>
         typeof element.props.onClick === "function" &&
-        JSON.stringify(element.props.children).includes("View all changes"),
+        hasTextChild(element.props.children, "View all changes"),
     );
     (showDiff?.props.onClick as (() => void) | undefined)?.();
     renderPanel();
@@ -1237,7 +1244,7 @@ describe("GitHistoryPanel", () => {
       detailsPane,
       (element) =>
         typeof element.props.onClick === "function" &&
-        JSON.stringify(element.props.children).includes("View all changes"),
+        hasTextChild(element.props.children, "View all changes"),
     );
     expect(showDiff).not.toBeNull();
     (showDiff?.props.onClick as (() => void) | undefined)?.();
