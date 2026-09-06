@@ -3,6 +3,7 @@ import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  issueSurfaceId,
   migratePersistedRightPanelState,
   pullRequestSurface,
   pullRequestSurfaceId,
@@ -10,11 +11,13 @@ import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
+  updateIssueTabStatus,
   useRightPanelStore,
 } from "./rightPanelStore";
 
 const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
+type IssueStatus = { state: string; stateReason: string | null };
 
 beforeEach(() => {
   useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
@@ -26,6 +29,28 @@ describe("rightPanelStore", () => {
     projectId: "project-a",
     repository: "pingdotgg/t3code",
     number: 42,
+  });
+
+  it("keys and updates issue tab status by its surface", () => {
+    const surfaceId = issueSurfaceId({
+      environmentId: "server/a",
+      projectId: "project/a",
+      repository: "owner/repo",
+      number: 42,
+    });
+    const open: IssueStatus = {
+      state: "open",
+      stateReason: null,
+    };
+    const closed: IssueStatus = {
+      state: "closed",
+      stateReason: "completed",
+    };
+    const statuses = updateIssueTabStatus({}, surfaceId, open);
+
+    expect(surfaceId).toBe("issue:server%2Fa:project%2Fa:owner%2Frepo:42");
+    expect(updateIssueTabStatus(statuses, surfaceId, open)).toBe(statuses);
+    expect(updateIssueTabStatus(statuses, surfaceId, closed)).toEqual({ [surfaceId]: closed });
   });
 
   it.each(["diff-first", "pull-request-first"])(
