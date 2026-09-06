@@ -451,7 +451,8 @@ function componentElement(
 function hasTextChild(value: unknown, text: string): boolean {
   if (typeof value === "string") return value.includes(text);
   if (Array.isArray(value)) return value.some((child) => hasTextChild(child, text));
-  return isValidElement(value) && hasTextChild(value.props.children, text);
+  if (!isValidElement<{ readonly children?: unknown }>(value)) return false;
+  return hasTextChild(value.props.children, text);
 }
 
 describe("GitHistoryPanel", () => {
