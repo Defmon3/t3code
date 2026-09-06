@@ -6,6 +6,7 @@ import {
   clearProjectFileQueryData,
   confirmProjectFileQueryData,
   getOptimisticProjectFileQueryData,
+  getProjectEntriesQueryAtom,
   resolveProjectFileQueryData,
   setProjectFileQueryData,
 } from "./projectFilesQueryState";
@@ -16,6 +17,10 @@ describe("project files queries", () => {
   afterEach(() => {
     clearProjectFileQueryData(environmentId, "/repo", "convex.json");
     vi.unstubAllGlobals();
+  });
+
+  it("exports the entries query atom used to refresh file explorer checkpoints", () => {
+    expect(getProjectEntriesQueryAtom(environmentId, "/repo")).toBeDefined();
   });
 
   it("keeps the latest optimistic draft when an older write finishes", () => {
