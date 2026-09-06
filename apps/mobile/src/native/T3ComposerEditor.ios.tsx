@@ -14,7 +14,7 @@ import { Image, StyleSheet } from "react-native";
 
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
 import { resolveMarkdownFileIcon } from "@t3tools/mobile-markdown-text/links";
-import { useUniwindTheme } from "../lib/useUniwindTheme";
+import { useThemeColor } from "../lib/useThemeColor";
 import { useFontFamily } from "../lib/useFontFamily";
 import { useScaledTextRole } from "../features/settings/appearance/useScaledTextRole";
 import {
@@ -62,7 +62,6 @@ interface NativeComposerEditorProps extends ViewProps {
   readonly lineHeight: number;
   readonly contentInsetVertical: number;
   readonly editable: boolean;
-  readonly readOnly: boolean;
   readonly scrollEnabled: boolean;
   readonly autoFocus: boolean;
   readonly autoCorrect: boolean;
@@ -111,7 +110,15 @@ export function ComposerEditor({
   const nativeEventSnapshotsRef = useRef<ComposerNativeEventSnapshot[]>([]);
   const confirmedTokensRef = useRef(collectComposerInlineTokens(props.value));
   const bodyText = useScaledTextRole("body");
-  const theme = useUniwindTheme();
+  const textColor = useThemeColor("--color-foreground");
+  const placeholderColor = useThemeColor("--color-placeholder");
+  const chipBackground = useThemeColor("--color-subtle");
+  const chipBorder = useThemeColor("--color-border");
+  const chipText = useThemeColor("--color-foreground");
+  const skillBackground = useThemeColor("--color-inline-skill-background");
+  const skillBorder = useThemeColor("--color-inline-skill-border");
+  const skillText = useThemeColor("--color-inline-skill-foreground");
+  const fileTint = useThemeColor("--color-icon-muted");
   const fontFamily = useFontFamily("regular");
 
   useImperativeHandle(
@@ -212,15 +219,15 @@ export function ComposerEditor({
     [],
   );
   const themeJson = JSON.stringify({
-    text: theme["--color-foreground"],
-    placeholder: theme["--color-placeholder"],
-    chipBackground: theme["--color-subtle"],
-    chipBorder: theme["--color-border"],
-    chipText: theme["--color-foreground"],
-    skillBackground: theme["--color-inline-skill-background"],
-    skillBorder: theme["--color-inline-skill-border"],
-    skillText: theme["--color-inline-skill-foreground"],
-    fileTint: theme["--color-icon-muted"],
+    text: String(textColor),
+    placeholder: String(placeholderColor),
+    chipBackground: String(chipBackground),
+    chipBorder: String(chipBorder),
+    chipText: String(chipText),
+    skillBackground: String(skillBackground),
+    skillBorder: String(skillBorder),
+    skillText: String(skillText),
+    fileTint: String(fileTint),
   });
   const resolvedTextStyle = StyleSheet.flatten(textStyle) ?? {};
   return (
@@ -244,7 +251,6 @@ export function ComposerEditor({
       }
       contentInsetVertical={contentInsetVertical}
       editable={props.editable ?? true}
-      readOnly={props.readOnly ?? false}
       scrollEnabled={props.scrollEnabled ?? true}
       autoFocus={props.autoFocus ?? false}
       autoCorrect={props.autoCorrect ?? true}

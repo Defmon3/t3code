@@ -2,34 +2,29 @@ import { useEffect, useState } from "react";
 
 import { isMacPlatform } from "../lib/utils";
 
-// A released hold hint lingers for the original hold duration. Double-press
-// hints disappear as soon as their acceptance window closes.
-const HOLD_HINT_LINGER_MS = 1200;
+// Matches the hold duration in apps/desktop/src/window/QuitHold.ts: the hint
+// from a quick tap lingers for as long as a full hold would have taken.
+const HIDE_AFTER_RELEASE_MS = 1200;
 
 /**
- * The desktop main process intercepts the quit accelerator and pushes
- * press/release states while it waits for a hold or second press.
+ * Chrome-style "Hold ⌘Q to Quit" hint. The desktop main process intercepts
+ * the quit accelerator and pushes press/release states; a quick tap shows
+ * this pill while a full hold quits the app.
  */
 export function QuitHoldOverlay() {
-  const [visibleMode, setVisibleMode] = useState<"hold" | "double-click" | null>(null);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const subscribe = window.desktopBridge?.onQuitShortcut;
     if (!subscribe) return;
     let hideTimer: number | undefined;
-    let pressedMode: "hold" | "double-click" = "hold";
-    const unsubscribe = subscribe((hint) => {
+    const unsubscribe = subscribe((state) => {
       window.clearTimeout(hideTimer);
-      if (hint.state === "down") {
-        pressedMode = hint.mode;
-        setVisibleMode(hint.mode);
+      if (state === "down") {
+        setVisible(true);
         return;
       }
-      if (pressedMode === "double-click") {
-        setVisibleMode(null);
-        return;
-      }
-      hideTimer = window.setTimeout(() => setVisibleMode(null), HOLD_HINT_LINGER_MS);
+      hideTimer = window.setTimeout(() => setVisible(false), HIDE_AFTER_RELEASE_MS);
     });
     return () => {
       window.clearTimeout(hideTimer);
@@ -37,19 +32,15 @@ export function QuitHoldOverlay() {
     };
   }, []);
 
-  if (!visibleMode) return null;
+  if (!visible) return null;
   const shortcut = isMacPlatform(navigator.platform) ? "⌘Q" : "Ctrl+Q";
-  const message =
-    visibleMode === "hold"
-      ? `Hold ${shortcut} or press twice to quit`
-      : `Press ${shortcut} again to quit`;
   return (
     <div
       role="status"
       className="pointer-events-none fixed inset-x-0 top-[22%] z-100 flex justify-center"
     >
       <div className="rounded-full bg-neutral-700/95 px-8 py-4 text-2xl font-bold text-white shadow-xl">
-        {message}
+        Hold {shortcut} to Quit
       </div>
     </div>
   );

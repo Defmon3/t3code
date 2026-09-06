@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { Image, Platform, ScrollView, Text, useColorScheme, View } from "react-native";
+import { Image, ScrollView, Text, useColorScheme, View } from "react-native";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 import { CopyTextButton } from "./CopyTextButton";
@@ -22,11 +22,6 @@ type HighlightedCode = ReadonlyArray<ReadonlyArray<MarkdownHighlightedToken>>;
 const highlightedCodeCache = new Map<string, HighlightedCode>();
 const highlightedCodePromiseCache = new Map<string, Promise<HighlightedCode>>();
 const HIGHLIGHTED_CODE_CACHE_LIMIT = 64;
-const MONO_FONT_FAMILY = Platform.select({
-  ios: "ui-monospace",
-  android: "monospace",
-  default: "monospace",
-});
 
 function nodeKey(node: MarkdownNode, index: number): string {
   return `${node.type}:${node.beg ?? index}:${node.end ?? index}`;
@@ -176,7 +171,7 @@ function HighlightedCodeText(props: {
         selectable
         style={{
           color: props.textStyle.codeColor,
-          fontFamily: MONO_FONT_FAMILY,
+          fontFamily: "ui-monospace",
           fontSize: codeBlockFontSize(props.textStyle),
           lineHeight: codeBlockLineHeight(props.textStyle),
         }}
@@ -211,7 +206,7 @@ function HighlightedCodeText(props: {
       selectable
       style={{
         color: props.textStyle.codeColor,
-        fontFamily: MONO_FONT_FAMILY,
+        fontFamily: "ui-monospace",
         fontSize: codeBlockFontSize(props.textStyle),
         lineHeight: codeBlockLineHeight(props.textStyle),
       }}
@@ -223,7 +218,7 @@ function HighlightedCodeText(props: {
               key={key}
               style={{
                 color: token.color ?? props.textStyle.codeColor,
-                fontFamily: MONO_FONT_FAMILY,
+                fontFamily: "ui-monospace",
                 fontStyle:
                   token.fontStyle !== null && (token.fontStyle & 1) === 1 ? "italic" : "normal",
                 fontWeight: token.fontStyle !== null && (token.fontStyle & 2) === 2 ? "700" : "400",
@@ -279,7 +274,7 @@ function NativeCodeBlock(props: {
           style={{
             flex: 1,
             color: props.textStyle.mutedColor,
-            fontFamily: MONO_FONT_FAMILY,
+            fontFamily: "ui-monospace",
             fontSize: codeBlockFontSize(props.textStyle),
           }}
         >
@@ -299,7 +294,6 @@ function NativeCodeBlock(props: {
       <ScrollView
         horizontal
         bounces={false}
-        nestedScrollEnabled={Platform.OS === "android"}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 12 }}
       >
@@ -336,12 +330,7 @@ function NativeTable(props: {
 }) {
   const rows = collectTableRows(props.node);
   return (
-    <ScrollView
-      horizontal
-      bounces={false}
-      nestedScrollEnabled={Platform.OS === "android"}
-      showsHorizontalScrollIndicator={false}
-    >
+    <ScrollView horizontal bounces={false} showsHorizontalScrollIndicator={false}>
       <View
         style={{
           borderColor: props.textStyle.dividerColor,

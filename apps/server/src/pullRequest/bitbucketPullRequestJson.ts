@@ -52,7 +52,6 @@ const RawUserSchema = Schema.Struct({
  */
 const RawBranchSchema = Schema.Struct({
   branch: Schema.Struct({ name: TrimmedNonEmptyString }),
-  repository: Schema.optional(Schema.NullOr(Schema.Struct({ full_name: TrimmedNonEmptyString }))),
 });
 
 const RawLinkSchema = Schema.Struct({ href: Schema.optional(Schema.String) });
@@ -178,7 +177,6 @@ export interface BitbucketPullRequest {
   readonly url: string;
   readonly author: PullRequestActor | null;
   readonly headBranch: string;
-  readonly headRepositoryNameWithOwner: string | null;
   readonly baseBranch: string;
   readonly state: PullRequestState;
   readonly isDraft: boolean;
@@ -293,7 +291,6 @@ function toPullRequest(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): Bi
     url: raw.links.html.href,
     author: toActor(raw.author),
     headBranch: raw.source.branch.name,
-    headRepositoryNameWithOwner: raw.source.repository?.full_name ?? null,
     baseBranch: raw.destination.branch.name,
     state: toState(raw),
     isDraft: raw.draft ?? false,

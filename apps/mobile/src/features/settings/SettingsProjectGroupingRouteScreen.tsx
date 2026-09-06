@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
+import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
   mobileProjectGroupingModePatch,
@@ -41,6 +42,7 @@ const GROUPING_OPTIONS: ReadonlyArray<{
 export function SettingsProjectGroupingRouteScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const checkmarkColor = useThemeColor("--color-icon");
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferencesReady = AsyncResult.isSuccess(preferencesResult) && !preferencesResult.waiting;
@@ -90,7 +92,7 @@ export function SettingsProjectGroupingRouteScreen() {
                 <SymbolView
                   name="checkmark"
                   size={18}
-                  tintColorClassName={"accent-icon"}
+                  tintColor={checkmarkColor}
                   type="monochrome"
                   weight="semibold"
                 />

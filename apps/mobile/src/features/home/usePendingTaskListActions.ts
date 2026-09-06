@@ -2,7 +2,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useCallback } from "react";
 import { Alert } from "react-native";
 
-import { removeThreadOutboxMessage } from "../../state/thread-outbox-removal";
+import { removeThreadOutboxMessage } from "../../state/thread-outbox";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { releaseEditingQueuedMessage } from "../../state/use-thread-outbox";
 

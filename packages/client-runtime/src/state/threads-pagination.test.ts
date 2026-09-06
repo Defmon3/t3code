@@ -156,7 +156,6 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     initialConfig: Effect.succeed({
       threadSnapshotPagination: options?.paginationCapability !== false,
     } as never),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,

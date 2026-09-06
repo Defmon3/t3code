@@ -3,7 +3,6 @@ import {
   getThemeColorsForAppearance,
   MOBILE_DEFAULT_THEME_ID,
   MOBILE_THEME_IDS as SHARED_MOBILE_THEME_IDS,
-  type BuiltInThemeId,
   type MobileThemeId as SharedMobileThemeId,
   type ThemeAppearance,
   type ThemeColors,
@@ -12,6 +11,7 @@ import {
   STANDARD_THEME_PREVIEW_COLORS,
   type ThemePreviewColors,
 } from "@t3tools/shared/themePreview";
+import { DEFAULT_MOBILE_THEME_VARIABLES } from "./mobileDefaultTheme";
 
 export const DEFAULT_MOBILE_THEME_ID = MOBILE_DEFAULT_THEME_ID;
 export const MOBILE_THEME_IDS = SHARED_MOBILE_THEME_IDS;
@@ -28,7 +28,7 @@ export const MOBILE_THEME_OPTIONS: ReadonlyArray<{
   ...BUILT_IN_THEMES.map((theme) => ({ id: theme.id as MobileThemeId, label: theme.label })),
 ];
 
-export type MobileThemeVariable = `--color-${string}`;
+type MobileThemeVariable = `--color-${string}`;
 export type MobileThemeVariables = Readonly<Record<MobileThemeVariable, string>>;
 
 export function normalizeMobileThemeId(value: unknown): MobileThemeId {
@@ -239,9 +239,6 @@ export function createMobileThemeVariables(
     "--color-switch-active-thumb": c.accentForeground,
     "--color-switch-inactive-track": c.secondary,
     "--color-switch-inactive-thumb": c.mutedForeground,
-    "--color-warning": c.warningSurface,
-    "--color-warning-border": withAlpha(c.warning, 0.32),
-    "--color-warning-foreground": c.warningForeground,
     "--color-danger": c.errorSurface,
     "--color-danger-border": withAlpha(c.error, 0.32),
     "--color-danger-foreground": c.errorForeground,
@@ -285,18 +282,18 @@ export function createMobileThemeVariables(
   };
 }
 
-export const MOBILE_THEME_VARIABLE_NAMES = Object.keys(
-  createMobileThemeVariables(BUILT_IN_THEMES[0].colors, "light"),
-) as ReadonlyArray<MobileThemeVariable>;
-
 export function getMobileThemeVariables(
-  themeId: BuiltInThemeId,
+  themeId: MobileThemeId,
   appearance: MobileThemeAppearance,
   overrides: Partial<MobileThemeVariables> | null = null,
 ): MobileThemeVariables {
-  const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId) ?? BUILT_IN_THEMES[0];
-  const colors = getThemeColorsForAppearance(theme, appearance) ?? theme.colors;
-  const baseVariables = createMobileThemeVariables(colors, appearance);
+  const baseVariables = (() => {
+    if (themeId === DEFAULT_MOBILE_THEME_ID) return DEFAULT_MOBILE_THEME_VARIABLES[appearance];
+    const theme =
+      BUILT_IN_THEMES.find((candidate) => candidate.id === themeId) ?? BUILT_IN_THEMES[0];
+    const colors = getThemeColorsForAppearance(theme, appearance) ?? theme.colors;
+    return createMobileThemeVariables(colors, appearance);
+  })();
 
   // The complete base record guarantees that optional overrides cannot leave a token undefined.
   return overrides ? ({ ...baseVariables, ...overrides } as MobileThemeVariables) : baseVariables;

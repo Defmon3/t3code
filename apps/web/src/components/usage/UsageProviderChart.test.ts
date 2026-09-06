@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildPeriodColumns, niceScale } from "./UsageProviderChart";
+import { buildDayColumns, niceScale } from "./UsageProviderChart";
 import { providersWithUsage } from "./usageProviders";
 
 describe("niceScale", () => {
@@ -41,7 +41,7 @@ describe("niceScale", () => {
   });
 });
 
-describe("buildPeriodColumns", () => {
+describe("buildDayColumns", () => {
   const days = ["2026-08-01", "2026-08-02", "2026-08-03"];
   const byDay = new Map([
     [
@@ -69,13 +69,11 @@ describe("buildPeriodColumns", () => {
   ]);
 
   it("plots each day on its own", () => {
-    expect(buildPeriodColumns(days, byDay, "cost").map((column) => column.total)).toEqual([
-      30, 0, 5,
-    ]);
+    expect(buildDayColumns(days, byDay, "cost").map((column) => column.total)).toEqual([30, 0, 5]);
   });
 
   it("reads the requested metric", () => {
-    expect(buildPeriodColumns(days, byDay, "tokens").map((column) => column.total)).toEqual([
+    expect(buildDayColumns(days, byDay, "tokens").map((column) => column.total)).toEqual([
       300, 0, 50,
     ]);
   });
@@ -83,7 +81,7 @@ describe("buildPeriodColumns", () => {
   it("keeps band values absolute rather than cumulative", () => {
     // Regression: the bands were once stack offsets, which drew Claude Code
     // permanently above Codex regardless of which provider spent more.
-    const [first] = buildPeriodColumns(days, byDay, "cost");
+    const [first] = buildDayColumns(days, byDay, "cost");
 
     expect(first?.bands).toEqual([
       { provider: "codex", value: 10 },
@@ -93,7 +91,7 @@ describe("buildPeriodColumns", () => {
   });
 
   it("reports the total as the sum of its bands", () => {
-    for (const column of buildPeriodColumns(days, byDay, "cost")) {
+    for (const column of buildDayColumns(days, byDay, "cost")) {
       const sum = column.bands.reduce((running, band) => running + band.value, 0);
       expect(column.total).toBeCloseTo(sum, 9);
     }
@@ -127,7 +125,7 @@ describe("hourly chart columns", () => {
     ]);
 
     expect(
-      buildPeriodColumns(
+      buildDayColumns(
         ["2026-08-11T08:37:00.000Z", "2026-08-11T09:37:00.000Z", "2026-08-11T10:37:00.000Z"],
         byHour,
         "cost",

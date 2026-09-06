@@ -6,6 +6,13 @@ import { cn } from "~/lib/utils";
 
 import { BrowserMockup } from "./BrowserMockup";
 
+export function selectFaviconSource(
+  sources: ReadonlyArray<string>,
+  failed: ReadonlySet<string>,
+): string | null {
+  return sources.find((candidate) => !failed.has(candidate)) ?? null;
+}
+
 export function FaviconImage(props: {
   sources: ReadonlyArray<string | null | undefined>;
   fallback: ReactNode;
@@ -28,7 +35,7 @@ function FaviconImageAttempt(props: {
   className?: string | undefined;
 }) {
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
-  const source = props.sources.find((candidate) => !failed.has(candidate));
+  const source = selectFaviconSource(props.sources, failed);
   if (!source) return props.fallback;
   return (
     <img

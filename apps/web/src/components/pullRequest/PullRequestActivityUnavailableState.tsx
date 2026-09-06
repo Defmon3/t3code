@@ -1,4 +1,4 @@
-import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { RefreshCwIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 
@@ -23,7 +23,7 @@ export function PullRequestActivityUnavailableState({
       <p className="text-sm font-medium text-foreground">Could not load pull request activity</p>
       <p className="max-w-md text-xs text-muted-foreground">{error}</p>
       <Button size="sm" variant="outline" onClick={onRetry}>
-        <RefreshIcon aria-hidden className="size-3.5" />
+        <RefreshCwIcon aria-hidden className="size-3.5" />
         Retry
       </Button>
     </div>

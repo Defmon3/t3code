@@ -3,6 +3,7 @@ import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/AppSymbol";
+import { useThemeColor } from "../../lib/useThemeColor";
 
 /**
  * Android-only wrapper that overlays a bottom-right new-task FAB on a thread
@@ -24,6 +25,8 @@ function AndroidHomeFab(props: {
   readonly children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const primaryForegroundColor = useThemeColor("--color-primary-foreground");
+
   return (
     <View className="flex-1">
       {props.children}
@@ -39,7 +42,7 @@ function AndroidHomeFab(props: {
         <SymbolView
           name="square.and.pencil"
           size={22}
-          tintColorClassName={"accent-primary-foreground"}
+          tintColor={primaryForegroundColor}
           type="monochrome"
         />
       </Pressable>

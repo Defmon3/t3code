@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView, type AppSymbolName } from "./AppSymbol";
 import { AppText as Text } from "./AppText";
 import { cn } from "../lib/cn";
+import { useThemeColor } from "../lib/useThemeColor";
 
 export interface AndroidHeaderAction {
   readonly accessibilityLabel: string;
@@ -19,6 +20,9 @@ export function AndroidHeaderIconButton(props: {
   readonly onPress?: () => void;
   readonly disabled?: boolean;
 }) {
+  const foregroundColor = useThemeColor("--color-foreground");
+  const disabledColor = useThemeColor("--color-icon-subtle");
+
   return (
     <Pressable
       accessibilityLabel={props.accessibilityLabel}
@@ -34,7 +38,7 @@ export function AndroidHeaderIconButton(props: {
       <SymbolView
         name={props.icon}
         size={20}
-        tintColorClassName={props.disabled ? "accent-icon-subtle" : "accent-foreground"}
+        tintColor={props.disabled ? disabledColor : foregroundColor}
         type="monochrome"
       />
     </Pressable>
@@ -50,6 +54,7 @@ export function AndroidScreenHeader(props: {
   readonly embedded?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const foregroundColor = useThemeColor("--color-foreground");
 
   return (
     <View
@@ -70,7 +75,7 @@ export function AndroidScreenHeader(props: {
             <SymbolView
               name="chevron.left"
               size={24}
-              tintColorClassName={"accent-foreground"}
+              tintColor={foregroundColor}
               type="monochrome"
             />
           </Pressable>

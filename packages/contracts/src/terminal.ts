@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
  * Client-side id for the first shell opened on a thread. Ids are uniformly
@@ -44,9 +43,8 @@ export const TerminalOpenInput = Schema.Struct({
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
-  providerInstanceId: Schema.optional(ProviderInstanceId),
 });
-export type TerminalOpenInput = typeof TerminalOpenInput.Type;
+export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;
 
 export const TerminalAttachInput = Schema.Struct({
   ...TerminalSessionInput.fields,
@@ -55,10 +53,9 @@ export const TerminalAttachInput = Schema.Struct({
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
-  providerInstanceId: Schema.optional(ProviderInstanceId),
   restartIfNotRunning: Schema.optional(Schema.Boolean),
 });
-export type TerminalAttachInput = typeof TerminalAttachInput.Type;
+export type TerminalAttachInput = Schema.Codec.Encoded<typeof TerminalAttachInput>;
 
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
@@ -83,9 +80,8 @@ export const TerminalRestartInput = Schema.Struct({
   cols: TerminalColsSchema,
   rows: TerminalRowsSchema,
   env: Schema.optional(TerminalEnvSchema),
-  providerInstanceId: Schema.optional(ProviderInstanceId),
 });
-export type TerminalRestartInput = typeof TerminalRestartInput.Type;
+export type TerminalRestartInput = Schema.Codec.Encoded<typeof TerminalRestartInput>;
 
 export const TerminalCloseInput = Schema.Struct({
   ...TerminalThreadInput.fields,
@@ -303,29 +299,6 @@ export class TerminalSessionLookupError extends Schema.TaggedErrorClass<Terminal
   }
 }
 
-export class TerminalProviderInstanceNotFoundError extends Schema.TaggedErrorClass<TerminalProviderInstanceNotFoundError>()(
-  "TerminalProviderInstanceNotFoundError",
-  {
-    providerInstanceId: ProviderInstanceId,
-  },
-) {
-  override get message() {
-    return `Provider instance is not available: ${this.providerInstanceId}`;
-  }
-}
-
-export class TerminalProviderEnvironmentError extends Schema.TaggedErrorClass<TerminalProviderEnvironmentError>()(
-  "TerminalProviderEnvironmentError",
-  {
-    providerInstanceId: ProviderInstanceId,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `Could not prepare the terminal environment for provider instance: ${this.providerInstanceId}`;
-  }
-}
-
 export class TerminalNotRunningError extends Schema.TaggedErrorClass<TerminalNotRunningError>()(
   "TerminalNotRunningError",
   {
@@ -372,8 +345,6 @@ export const TerminalError = Schema.Union([
   TerminalCwdError,
   TerminalHistoryError,
   TerminalSessionLookupError,
-  TerminalProviderInstanceNotFoundError,
-  TerminalProviderEnvironmentError,
   TerminalNotRunningError,
   TerminalWriteError,
   TerminalResizeError,

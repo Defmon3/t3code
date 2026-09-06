@@ -13,6 +13,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@effect/platform-node": "catalog:",
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:"
   },

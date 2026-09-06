@@ -62,8 +62,7 @@ describe("updateMachine", () => {
       status: "downloaded" as const,
       availableVersion: "1.1.0",
       downloadedVersion: "1.1.0",
-      releaseNotes: [{ version: "1.1.0", items: ["fix: queued update"], totalItems: 1 }],
-      omittedReleaseCount: 2,
+      releaseNotes: [{ version: "1.1.0", items: ["fix: queued update"] }],
       downloadPercent: 100,
     };
     const checking = reduceDesktopUpdateStateOnCheckStart(
@@ -79,16 +78,14 @@ describe("updateMachine", () => {
     expect(checking.status).toBe("checking");
     expect(checking.downloadedVersion).toBe("1.1.0");
     expect(checking.releaseNotes).toEqual(downloadedState.releaseNotes);
-    expect(checking.omittedReleaseCount).toBe(2);
     expect(failed.status).toBe("downloaded");
     expect(failed.downloadedVersion).toBe("1.1.0");
     expect(failed.releaseNotes).toEqual(downloadedState.releaseNotes);
-    expect(failed.omittedReleaseCount).toBe(2);
     expect(failed.message).toBeNull();
   });
 
   it("keeps the installer when the feed still offers its version", () => {
-    const releaseNotes = [{ version: "1.1.0", items: ["fix: queued update"], totalItems: 1 }];
+    const releaseNotes = [{ version: "1.1.0", items: ["fix: queued update"] }];
     const state = reduceDesktopUpdateStateOnUpdateAvailable(
       {
         ...createInitialDesktopUpdateState("1.0.0", runtimeInfo, "latest"),
@@ -97,7 +94,6 @@ describe("updateMachine", () => {
         availableVersion: "1.1.0",
         downloadedVersion: "1.1.0",
         releaseNotes,
-        omittedReleaseCount: 2,
         downloadPercent: 100,
       },
       "1.1.0",
@@ -107,7 +103,6 @@ describe("updateMachine", () => {
     expect(state.status).toBe("downloaded");
     expect(state.downloadedVersion).toBe("1.1.0");
     expect(state.releaseNotes).toEqual(releaseNotes);
-    expect(state.omittedReleaseCount).toBe(2);
     expect(state.downloadPercent).toBe(100);
   });
 
@@ -152,7 +147,7 @@ describe("updateMachine", () => {
   });
 
   it("preserves a downloaded update when no update is available", () => {
-    const releaseNotes = [{ version: "1.1.0", items: ["fix: queued update"], totalItems: 1 }];
+    const releaseNotes = [{ version: "1.1.0", items: ["fix: queued update"] }];
     const state = reduceDesktopUpdateStateOnNoUpdate(
       {
         ...createInitialDesktopUpdateState("1.0.0", runtimeInfo, "latest"),
@@ -161,7 +156,6 @@ describe("updateMachine", () => {
         availableVersion: "1.1.0",
         downloadedVersion: "1.1.0",
         releaseNotes,
-        omittedReleaseCount: 2,
         message: "old failure",
         errorContext: "download",
         canRetry: true,
@@ -173,7 +167,6 @@ describe("updateMachine", () => {
     expect(state.availableVersion).toBe("1.1.0");
     expect(state.downloadedVersion).toBe("1.1.0");
     expect(state.releaseNotes).toBe(releaseNotes);
-    expect(state.omittedReleaseCount).toBe(2);
     expect(state.downloadPercent).toBe(100);
     expect(state.message).toBeNull();
     expect(state.errorContext).toBeNull();
@@ -187,8 +180,7 @@ describe("updateMachine", () => {
         enabled: true,
         status: "error",
         availableVersion: "1.1.0",
-        releaseNotes: [{ version: "1.1.0", items: ["fix: stale update"], totalItems: 1 }],
-        omittedReleaseCount: 2,
+        releaseNotes: [{ version: "1.1.0", items: ["fix: stale update"] }],
         message: "old failure",
         errorContext: "download",
         canRetry: true,
@@ -200,7 +192,6 @@ describe("updateMachine", () => {
     expect(state.availableVersion).toBeNull();
     expect(state.downloadedVersion).toBeNull();
     expect(state.releaseNotes).toEqual([]);
-    expect(state.omittedReleaseCount).toBe(0);
     expect(state.message).toBeNull();
     expect(state.errorContext).toBeNull();
   });
@@ -210,7 +201,6 @@ describe("updateMachine", () => {
       {
         version: "1.1.0",
         items: ["feat: add update release notes"],
-        totalItems: 1,
       },
     ];
     const available = reduceDesktopUpdateStateOnUpdateAvailable(
@@ -222,7 +212,6 @@ describe("updateMachine", () => {
       "1.1.0",
       "2026-03-04T00:00:00.000Z",
       releaseNotes,
-      2,
     );
     const downloading = reduceDesktopUpdateStateOnDownloadStart(available);
     const progress = reduceDesktopUpdateStateOnDownloadProgress(downloading, 55.5);
@@ -230,7 +219,6 @@ describe("updateMachine", () => {
     expect(available.status).toBe("available");
     expect(available.channel).toBe("latest");
     expect(available.releaseNotes).toBe(releaseNotes);
-    expect(available.omittedReleaseCount).toBe(2);
     expect(downloading.releaseNotes).toBe(releaseNotes);
     expect(downloading.status).toBe("downloading");
     expect(downloading.downloadPercent).toBe(0);
@@ -245,13 +233,11 @@ describe("updateMachine", () => {
         enabled: true,
         status: "available",
         availableVersion: "1.1.0-nightly.1",
-        releaseNotes: [{ version: "1.1.0-nightly.1", items: ["feat: old note"], totalItems: 1 }],
-        omittedReleaseCount: 2,
+        releaseNotes: [{ version: "1.1.0-nightly.1", items: ["feat: old note"] }],
       },
       "2026-03-04T00:00:00.000Z",
     );
 
     expect(state.releaseNotes).toEqual([]);
-    expect(state.omittedReleaseCount).toBe(0);
   });
 });

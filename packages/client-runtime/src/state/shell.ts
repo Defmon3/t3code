@@ -269,7 +269,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   return state;
 });
 
-function shellStateChanges(environmentId: EnvironmentId) {
+export function shellStateChanges(environmentId: EnvironmentId) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(makeEnvironmentShellState().pipe(Effect.map(SubscriptionRef.changes))),

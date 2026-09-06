@@ -44,7 +44,6 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import type * as HttpMethod from "effect/unstable/http/HttpMethod";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
-import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 
 export interface ManagedRelayDpopProofInput {
   readonly method: HttpMethod.HttpMethod;
@@ -127,7 +126,7 @@ export class ManagedRelayRequestTimeoutError extends Schema.TaggedErrorClass<Man
   },
 ) {
   override get message(): string {
-    return `${this.activity} timed out. ${NETWORK_BLOCKING_HINT}`;
+    return `${this.activity} timed out.`;
   }
 }
 
@@ -146,15 +145,13 @@ export class ManagedRelayRequestFailedError extends Schema.TaggedErrorClass<Mana
   "ManagedRelayRequestFailedError",
   {
     action: ManagedRelayRequestAction,
-    transportFailed: Schema.optionalKey(Schema.Boolean),
     cause: Schema.Defect(),
     relayError: Schema.optional(RelayProtectedError),
     traceId: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
-    const message = `Could not ${this.action}.`;
-    return this.transportFailed ? `${message} ${NETWORK_BLOCKING_HINT}` : message;
+    return `Could not ${this.action}.`;
   }
 }
 
@@ -310,8 +307,6 @@ function relayRequestError(action: ManagedRelayRequestAction) {
   return (cause: RelayHttpRequestError): ManagedRelayClientError =>
     new ManagedRelayRequestFailedError({
       action,
-      transportFailed:
-        HttpClientError.isHttpClientError(cause) && cause.reason._tag === "TransportError",
       cause,
       ...(isRelayProtectedError(cause) ? { relayError: cause, traceId: cause.traceId } : {}),
     });
@@ -429,7 +424,6 @@ function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Servi
   });
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("ManagedRelayClient.make")(function* (
   options: ManagedRelayClientLayerOptions,
 ) {
@@ -552,32 +546,18 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
           expiresAtMillis: nowMillis + response.expires_in * 1_000,
         } satisfies ManagedRelayAccessTokenCacheEntry;
       }
-      const match = {
-        accountId: accountId.value,
-        clientId: options.clientId,
-        relayUrl,
-        thumbprint: input.thumbprint,
-        scopes: input.scopes,
-        nowMillis,
-      };
-      // Cache hits do not need to wait for an unrelated exchange or store write.
-      const cached = (yield* SynchronizedRef.get(cachedTokens)).find((token) =>
-        tokenMatches(token, match),
-      );
-      if (cached) {
-        yield* Effect.annotateCurrentSpan({
-          "relay.token_cache.result": "hit",
-        });
-        return cached;
-      }
       return yield* SynchronizedRef.modifyEffect(cachedTokens, (tokens) =>
         Effect.gen(function* () {
-          const lookupMillis = yield* Clock.currentTimeMillis;
-          const activeTokens = tokens.filter(
-            (token) => token.expiresAtMillis > lookupMillis + 5_000,
-          );
+          const activeTokens = tokens.filter((token) => token.expiresAtMillis > nowMillis + 5_000);
           const cached = activeTokens.find((token) =>
-            tokenMatches(token, { ...match, nowMillis: lookupMillis }),
+            tokenMatches(token, {
+              accountId: accountId.value,
+              clientId: options.clientId,
+              relayUrl,
+              thumbprint: input.thumbprint,
+              scopes: input.scopes,
+              nowMillis,
+            }),
           );
           if (cached) {
             yield* Effect.annotateCurrentSpan({
@@ -596,7 +576,7 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
             thumbprint: input.thumbprint,
             scopes: input.scopes,
             accessToken: response.access_token,
-            expiresAtMillis: lookupMillis + response.expires_in * 1_000,
+            expiresAtMillis: nowMillis + response.expires_in * 1_000,
           };
           const nextTokens = [...activeTokens, next];
           if (options.accessTokenStore) {

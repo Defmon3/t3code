@@ -6,19 +6,15 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import {
-  buildExplicitProviderOptionSelectionsFromDescriptors,
+  buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
-  normalizeModelSlug,
 } from "@t3tools/shared/model";
-import type { VariantProps } from "class-variance-authority";
 import type { ReactNode } from "react";
 
-import type { buttonVariants } from "../ui/button";
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
-import type { ComposerControlSize } from "./ComposerControl";
 import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
@@ -52,11 +48,6 @@ type TraitsRenderInput = {
   prompt: string;
   onPromptChange: (prompt: string) => void;
   planModeEnabled: boolean;
-  size?: ComposerControlSize;
-  hidden?: boolean;
-  triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
-  triggerClassName?: string;
-  isComposerOwned?: boolean;
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -72,21 +63,6 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     promptInjectionState = "none",
     planModeEnabled,
   } = input;
-  if (provider === "opencode") {
-    const normalizedModel = normalizeModelSlug(model, provider);
-    const modelIsInCatalog = models.some((candidate) => candidate.slug === normalizedModel);
-    if (!modelIsInCatalog) {
-      const preservedOptions = modelOptions?.filter(
-        (option) => planModeEnabled || option.id !== "agent" || option.value !== "plan",
-      );
-      return {
-        provider,
-        promptEffort: null,
-        modelOptionsForDispatch:
-          preservedOptions && preservedOptions.length > 0 ? preservedOptions : undefined,
-      };
-    }
-  }
   const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
   const descriptors = getProviderOptionDescriptors({ caps, selections: modelOptions });
   const primarySelectDescriptor = descriptors.find(
@@ -102,10 +78,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   return {
     provider,
     promptEffort,
-    modelOptionsForDispatch: buildExplicitProviderOptionSelectionsFromDescriptors(
-      descriptors,
-      modelOptions,
-    ),
+    modelOptionsForDispatch: buildProviderOptionSelectionsFromDescriptors(descriptors),
     ...(ultrathinkActive
       ? {
           composerFrameClassName: "ultrathink-frame",
@@ -131,11 +104,6 @@ function renderTraitsControl(
     prompt,
     onPromptChange,
     planModeEnabled,
-    size,
-    hidden,
-    triggerVariant,
-    triggerClassName,
-    isComposerOwned,
   } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
   if (
@@ -163,11 +131,6 @@ function renderTraitsControl(
       prompt={prompt}
       onPromptChange={onPromptChange}
       planModeEnabled={planModeEnabled}
-      {...(size !== undefined ? { size } : {})}
-      {...(hidden !== undefined ? { hidden } : {})}
-      {...(triggerVariant !== undefined ? { triggerVariant } : {})}
-      {...(triggerClassName !== undefined ? { triggerClassName } : {})}
-      {...(isComposerOwned ? { isComposerOwned } : {})}
     />
   );
 }

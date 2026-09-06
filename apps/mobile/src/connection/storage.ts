@@ -2,7 +2,6 @@ import {
   ConnectionPersistenceError,
   ConnectionRegistrationStore,
   ConnectionTargetStore,
-  putRemoteDpopTokenInCatalog,
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
   removeCatalogValue,
@@ -110,7 +109,15 @@ export const connectionStorageLayer = Layer.effectContext(
             ),
           ),
         ),
-      put: (token) => catalog.update((document) => putRemoteDpopTokenInCatalog(document, token)),
+      put: (token) =>
+        catalog.update((document) => ({
+          ...document,
+          remoteDpopTokens: replaceCatalogValue(
+            document.remoteDpopTokens,
+            (value) => value.environmentId,
+            token,
+          ),
+        })),
       remove: (environmentId) =>
         catalog.update((document) => ({
           ...document,

@@ -118,7 +118,7 @@ export const preparePairingRegistration = Effect.fn(
   });
 });
 
-const registerPairingConnection = Effect.fn(
+export const registerPairingConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerPairingConnection",
 )(function* (input: PairingConnectionInput) {
   const registration = yield* preparePairingRegistration(input);
@@ -130,7 +130,7 @@ const registerPairingConnection = Effect.fn(
 const isBearerCredential = Schema.is(BearerConnectionCredential);
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 
-const updateBearerConnection = Effect.fn(
+export const updateBearerConnection = Effect.fn(
   "clientRuntime.connection.onboarding.updateBearerConnection",
 )(function* (input: BearerConnectionUpdateInput) {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
@@ -233,7 +233,7 @@ export const prepareSshRegistration = Effect.fn(
   });
 });
 
-const registerSshConnection = Effect.fn(
+export const registerSshConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerSshConnection",
 )(function* (input: SshConnectionInput) {
   const registration = yield* prepareSshRegistration(input);
@@ -242,7 +242,6 @@ const registerSshConnection = Effect.fn(
   return registration.target.environmentId;
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   const presentation = yield* ClientCapabilities.ClientPresentation;

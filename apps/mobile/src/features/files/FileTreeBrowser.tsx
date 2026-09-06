@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "../../components/AppText";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { cn } from "../../lib/cn";
+import { useThemeColor } from "../../lib/useThemeColor";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import {
@@ -45,6 +46,7 @@ const FileTreeRow = memo(function FileTreeRow(props: {
   readonly item: VisibleFileTreeNode;
   readonly selected: boolean;
   readonly expanded: boolean;
+  readonly iconColor: string;
   readonly onPressDirectory: (path: string) => void;
   readonly onPreviewFile?: (path: string) => void;
   readonly onPressFile: (path: string) => void;
@@ -77,7 +79,7 @@ const FileTreeRow = memo(function FileTreeRow(props: {
         <SymbolView
           name={props.expanded ? "chevron.down" : "chevron.right"}
           size={12}
-          tintColorClassName="accent-icon-muted"
+          tintColor={props.iconColor}
           type="monochrome"
         />
       ) : (
@@ -123,6 +125,7 @@ export function FileTreeBrowser(props: {
   // Native transparent-header height ≈ safe-area top + nav bar (~44). Matches the
   // observed adjustedContentInset bottom (~102) seen in the native trace.
   const headerInset = NATIVE_LIQUID_GLASS_SUPPORTED ? insets.top + IOS_NAV_BAR_HEIGHT : 0;
+  const iconColor = String(useThemeColor("--color-icon-muted"));
   const { onPreviewFile, onSelectFile, selectedPath: controlledSelectedPath } = props;
   const controlledSelectedPathRef = useRef(controlledSelectedPath);
   const pendingSelectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -213,12 +216,13 @@ export function FileTreeBrowser(props: {
         item={item}
         selected={item.node.kind === "file" && item.node.path === selectedPath}
         expanded={expandedPaths.has(item.node.path)}
+        iconColor={iconColor}
         onPressDirectory={toggleDirectory}
         onPreviewFile={onPreviewFile}
         onPressFile={handleSelectFile}
       />
     ),
-    [expandedPaths, handleSelectFile, onPreviewFile, selectedPath, toggleDirectory],
+    [expandedPaths, handleSelectFile, iconColor, onPreviewFile, selectedPath, toggleDirectory],
   );
 
   if (props.error && props.entries.length === 0) {

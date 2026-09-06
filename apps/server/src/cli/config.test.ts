@@ -60,16 +60,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     yield* fs.writeFileString(filePath, `${encoded}\n`);
     return yield* Effect.acquireRelease(
       Effect.sync(() => NodeFS.openSync(filePath, "r")),
-      // Without a /proc or /dev/fd path to reopen, the reader consumes the fd
-      // itself (autoClose), so on Windows it is already closed here.
-      (fd) =>
-        Effect.sync(() => {
-          try {
-            NodeFS.closeSync(fd);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "EBADF") throw error;
-          }
-        }),
+      (fd) => Effect.sync(() => NodeFS.closeSync(fd)),
     );
   });
 
@@ -290,15 +281,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
-      const { join, resolve } = yield* Path.Path;
-      // The resolver absolutises the configured home, so the expectation must
-      // carry the host's drive on Windows.
-      const baseDir = resolve("/tmp/t3-bootstrap-home");
+      const { join } = yield* Path.Path;
+      const baseDir = "/tmp/t3-bootstrap-home";
       const fd = yield* openBootstrapFd(
         makeDesktopBootstrap({
           port: 4888,
           host: "127.0.0.2",
-          t3Home: "/tmp/t3-bootstrap-home",
+          t3Home: baseDir,
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
           desktopTelemetryFd: 4,

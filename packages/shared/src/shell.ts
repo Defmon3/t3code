@@ -12,6 +12,8 @@ import * as Path from "effect/Path";
 import { HostProcessEnvironment, HostProcessPlatform } from "./hostProcess.ts";
 import * as Context from "effect/Context";
 
+const PATH_CAPTURE_START = "__T3CODE_PATH_START__";
+const PATH_CAPTURE_END = "__T3CODE_PATH_END__";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 const WINDOWS_PATH_DELIMITER = ";";
 const POSIX_PATH_DELIMITER = ":";
@@ -175,6 +177,18 @@ export function listLoginShellCandidates(
   }
 
   return candidates;
+}
+
+export function extractPathFromShellOutput(output: string): string | null {
+  const startIndex = output.indexOf(PATH_CAPTURE_START);
+  if (startIndex === -1) return null;
+
+  const valueStartIndex = startIndex + PATH_CAPTURE_START.length;
+  const endIndex = output.indexOf(PATH_CAPTURE_END, valueStartIndex);
+  if (endIndex === -1) return null;
+
+  const pathValue = output.slice(valueStartIndex, endIndex).trim();
+  return pathValue.length > 0 ? pathValue : null;
 }
 
 export function readPathFromLoginShell(
@@ -400,10 +414,6 @@ function normalizePathEntryForComparison(entry: string, platform: NodeJS.Platfor
   return platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-function sanitizePathEntry(entry: string, platform: NodeJS.Platform): string {
-  return platform === "win32" ? entry.replaceAll('"', "") : entry;
-}
-
 export function mergePathValues(
   preferredPath: string | undefined,
   inheritedPath: string | undefined,
@@ -417,14 +427,14 @@ export function mergePathValues(
     if (!rawValue) continue;
 
     for (const entry of rawValue.split(delimiter)) {
-      const sanitized = sanitizePathEntry(entry.trim(), platform);
-      if (sanitized.length === 0) continue;
+      const trimmed = entry.trim();
+      if (trimmed.length === 0) continue;
 
-      const normalized = normalizePathEntryForComparison(sanitized, platform);
+      const normalized = normalizePathEntryForComparison(trimmed, platform);
       if (normalized.length === 0 || seen.has(normalized)) continue;
 
       seen.add(normalized);
-      merged.push(sanitized);
+      merged.push(trimmed);
     }
   }
 
@@ -530,8 +540,7 @@ function cacheCommandResolution(
   });
 }
 
-// Trace each command lookup, not every candidate file it probes.
-const isExecutableFile = Effect.fnUntraced(function* (
+const isExecutableFile = Effect.fn("shell.isExecutableFile")(function* (
   filePath: string,
   platform: NodeJS.Platform,
   windowsPathExtensions: ReadonlyArray<string>,
@@ -592,15 +601,12 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     return cached.resolvedPath;
   }
 
-  // Keep case variants: Windows can make PATH directories case-sensitive.
   const pathEntries: string[] = [];
-  const seenPathEntries = new Set<string>();
   for (const entry of pathValue.split(pathDelimiterForPlatform(platform))) {
     const pathEntry = stripWrappingQuotes(entry.trim());
-    if (pathEntry.length === 0 || seenPathEntries.has(pathEntry)) continue;
-
-    seenPathEntries.add(pathEntry);
-    pathEntries.push(pathEntry);
+    if (pathEntry.length > 0) {
+      pathEntries.push(pathEntry);
+    }
   }
 
   for (const pathEntry of pathEntries) {
@@ -718,9 +724,7 @@ export const resolveWindowsEnvironment = Effect.fn("shell.resolveWindowsEnvironm
   }).PATH;
   const mergedPath = mergePathValues(shellPath, inheritedPath, "win32");
   const knownCliPath = resolveKnownWindowsCliDirs(env).join(WINDOWS_PATH_DELIMITER);
-  // Preserve the order a user's shell uses. These directories fill gaps when
-  // desktop apps launch without the full interactive-shell PATH.
-  const baselinePath = mergePathValues(mergedPath, knownCliPath, "win32");
+  const baselinePath = mergePathValues(knownCliPath, mergedPath, "win32");
   const baselinePatch: Partial<NodeJS.ProcessEnv> = baselinePath ? { PATH: baselinePath } : {};
   const baselineEnv = mergeWindowsEnv(env, baselinePatch);
 

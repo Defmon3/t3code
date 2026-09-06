@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ProjectEntry } from "@t3tools/contracts";
 
-import { buildFileTree, defaultExpandedTreePaths, flattenFileTree } from "./fileTree";
+import {
+  buildFileTree,
+  countFileNodes,
+  defaultExpandedTreePaths,
+  firstFilePath,
+  flattenFileTree,
+} from "./fileTree";
 
 const entries = [
   { kind: "file", path: "README.md" },
@@ -24,6 +30,8 @@ describe("mobile file tree helpers", () => {
       "directory:src/components",
       "file:src/index.ts",
     ]);
+    expect(countFileNodes(tree)).toBe(4);
+    expect(firstFilePath(tree)).toBe("src/components/App.tsx");
   });
 
   it("flattens expanded directories and hides collapsed descendants", () => {

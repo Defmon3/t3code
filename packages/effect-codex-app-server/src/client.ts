@@ -84,7 +84,7 @@ type ServerNotificationHandler = (
   payload: unknown,
 ) => Effect.Effect<void, CodexError.CodexAppServerError>;
 
-const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
+export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
   stdio: Stdio.Stdio,
   options: CodexAppServerClientOptions = {},
   terminationError?: Effect.Effect<CodexError.CodexAppServerError>,
@@ -249,6 +249,11 @@ const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(func
       }),
   });
 });
+
+export const layer = (
+  stdio: Stdio.Stdio,
+  options: CodexAppServerClientOptions = {},
+): Layer.Layer<CodexAppServerClient> => Layer.effect(CodexAppServerClient, make(stdio, options));
 
 export const layerChildProcess = (
   handle: ChildProcessSpawner.ChildProcessHandle,

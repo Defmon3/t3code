@@ -58,9 +58,7 @@ export const make = Effect.gen(function* () {
     readonly state: RelayAgentActivityState | null;
     readonly nowMs: number;
   }) {
-    const activeStates = input.deliveryUser.liveActivitiesEnabled
-      ? yield* rows.listForUser({ userId: input.deliveryUser.userId })
-      : [];
+    const activeStates = yield* rows.listForUser({ userId: input.deliveryUser.userId });
     const liveActivityAggregate = input.deliveryUser.liveActivitiesEnabled
       ? makeAggregateState({
           activeStates,

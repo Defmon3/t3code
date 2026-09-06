@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalDate:off
 // @effect-diagnostics globalTimers:off
 // This file is shipped as a standalone bundle and copied to a stable path by
 // `t3 service update`. Keep runtime imports limited to Node built-ins.
@@ -70,9 +71,8 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-// Opened read-write: Windows refuses to flush a handle without write access.
 async function syncFile(filePath: string): Promise<void> {
-  const handle = await NodeFSP.open(filePath, "r+");
+  const handle = await NodeFSP.open(filePath, "r");
   try {
     await handle.sync();
   } finally {
@@ -80,15 +80,10 @@ async function syncFile(filePath: string): Promise<void> {
   }
 }
 
-// Flushes a directory entry so a rename into it survives power loss. Windows
-// has no directory fsync: the handle opens but sync fails with EPERM, and
-// NTFS journals the rename on its own.
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await NodeFSP.open(directory, "r");
   try {
     await handle.sync();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
   } finally {
     await handle.close();
   }
@@ -194,7 +189,12 @@ export async function writeServiceState(filePath: string, state: ServiceState): 
     await handle.close();
     handle = undefined;
     await NodeFSP.rename(tempPath, filePath);
-    await syncDirectory(directory);
+    const directoryHandle = await NodeFSP.open(directory, "r");
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
+    }
   } finally {
     await handle?.close().catch(() => undefined);
     await NodeFSP.rm(tempPath, { force: true }).catch(() => undefined);

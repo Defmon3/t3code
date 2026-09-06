@@ -19,8 +19,6 @@ import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
-const SETTLE_BLOCKED_MESSAGE =
-  "This thread still needs attention. Resolve or interrupt it first, then try again.";
 
 function makeReadModel(
   settledOverride: OrchestrationThread["settledOverride"],
@@ -81,44 +79,6 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
 }
 
 it.layer(NodeServices.layer)("settled thread decider", (it) => {
-  it.effect("preserves the activity stamp when automatically settling", () =>
-    Effect.gen(function* () {
-      const result = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.auto-settle",
-          commandId: CommandId.make("cmd-auto-settle-inactive"),
-          threadId: ThreadId.make("thread-1"),
-          snapshotSequence: 0,
-          settledAt: SETTLED_AT,
-        },
-        readModel: makeReadModel(null),
-      });
-      const events = Array.isArray(result) ? result : [result];
-      const settled = events.find((event) => event.type === "thread.settled");
-      expect(settled?.payload.settledAt).toBe(SETTLED_AT);
-      // updatedAt stays the command time so the row still moves on settle.
-      expect(settled?.payload.updatedAt).toBe(settled?.occurredAt);
-      expect(settled?.payload.updatedAt).not.toBe(SETTLED_AT);
-    }),
-  );
-
-  it.effect("rejects an automatic settle when the thread is pinned active", () =>
-    Effect.gen(function* () {
-      const command = {
-        type: "thread.auto-settle" as const,
-        commandId: CommandId.make("cmd-auto-settle"),
-        threadId: ThreadId.make("thread-1"),
-        snapshotSequence: 0,
-        settledAt: SETTLED_AT,
-      };
-      const pinnedActive = yield* decideOrchestrationCommand({
-        command,
-        readModel: makeReadModel("active"),
-      }).pipe(Effect.flip);
-      expect(pinnedActive._tag).toBe("OrchestrationCommandInvariantError");
-    }),
-  );
-
   it.effect("settles awake threads without a redundant wake and re-emits idempotently", () =>
     Effect.gen(function* () {
       const event = yield* decideOrchestrationCommand({
@@ -238,11 +198,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           },
           readModel: makeReadModel(null, null, makeSession(status)),
         }).pipe(Effect.flip);
-        expect(error).toMatchObject({
-          _tag: "OrchestrationThreadSettleBlockedError",
-          threadId: ThreadId.make("thread-1"),
-          message: SETTLE_BLOCKED_MESSAGE,
-        });
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
       }
       // Stopped/error sessions are settleable — only live work is protected.
       const settled = yield* decideOrchestrationCommand({
@@ -282,11 +238,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           requestActivity("approval.requested", "req-1", NOW),
         ]),
       }).pipe(Effect.flip);
-      expect(openError).toMatchObject({
-        _tag: "OrchestrationThreadSettleBlockedError",
-        threadId: ThreadId.make("thread-1"),
-        message: SETTLE_BLOCKED_MESSAGE,
-      });
+      expect(openError._tag).toBe("OrchestrationCommandInvariantError");
 
       // Same request later resolved: settleable again.
       const settled = yield* decideOrchestrationCommand({
@@ -314,11 +266,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           requestActivity("user-input.requested", "req-2", NOW),
         ]),
       }).pipe(Effect.flip);
-      expect(inputError).toMatchObject({
-        _tag: "OrchestrationThreadSettleBlockedError",
-        threadId: ThreadId.make("thread-1"),
-        message: SETTLE_BLOCKED_MESSAGE,
-      });
+      expect(inputError._tag).toBe("OrchestrationCommandInvariantError");
     }),
   );
 
@@ -339,7 +287,8 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           createdAt: NOW,
         }) as OrchestrationThread["activities"][number];
 
-      // Stale-failure details clear the request, matching the projection flags.
+      // Stale-failure detail clears the request — mirrors the projection's
+      // pending accounting, which is what the client's canSettle sees.
       const settled = yield* decideOrchestrationCommand({
         command: {
           type: "thread.settle",
@@ -375,11 +324,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           }),
         ]),
       }).pipe(Effect.flip);
-      expect(stillOpen).toMatchObject({
-        _tag: "OrchestrationThreadSettleBlockedError",
-        threadId: ThreadId.make("thread-1"),
-        message: SETTLE_BLOCKED_MESSAGE,
-      });
+      expect(stillOpen._tag).toBe("OrchestrationCommandInvariantError");
     }),
   );
 
@@ -407,11 +352,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         },
         readModel: makeReadModel(null, null, null, [], [userMessage("1969-12-31T23:59:30.000Z")]),
       }).pipe(Effect.flip);
-      expect(queuedError).toMatchObject({
-        _tag: "OrchestrationThreadSettleBlockedError",
-        threadId: ThreadId.make("thread-1"),
-        message: SETTLE_BLOCKED_MESSAGE,
-      });
+      expect(queuedError._tag).toBe("OrchestrationCommandInvariantError");
 
       // Message timestamp far in the FUTURE (client clock ahead of server):
       // a negative age must not read as queued forever — past the grace

@@ -3,11 +3,11 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
-import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
+import type { ConnectionAttemptError } from "../connection/model.ts";
 import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
 import {
   type EnvironmentRpcInput,
@@ -16,6 +16,7 @@ import {
   type EnvironmentStreamCommandRpcTag,
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
+  EnvironmentRpcUnavailableError,
   request,
   runStream,
   subscribe,
@@ -52,6 +53,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  readonly refreshAfterSettledIntervalMs?: number;
 }
 
 interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
@@ -484,7 +486,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
-  const rpcGenerationAtom = Atom.family((environmentId: EnvironmentIdType) =>
+  const connectionAtom = Atom.family((environmentId: EnvironmentIdType) =>
     runtime.atom(
       followStreamInEnvironment(
         environmentId,
@@ -492,11 +494,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
           EnvironmentSupervisor.pipe(
             Effect.map((supervisor) =>
               SubscriptionRef.changes(supervisor.state).pipe(
-                Stream.filterMap((state) =>
-                  state.phase === "connected" ? Result.succeed(state.generation) : Result.failVoid,
-                ),
-                Stream.changes,
-                Stream.map<number, number | null>((generation) => generation),
+                Stream.zipLatest(SubscriptionRef.changes(supervisor.session)),
               ),
             ),
           ),
@@ -505,18 +503,61 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
       { initialValue: null },
     ),
   );
+  const connectionStateAtom = Atom.family((environmentId: EnvironmentIdType) =>
+    runtime.atom(
+      followStreamInEnvironment(
+        environmentId,
+        Stream.unwrap(
+          EnvironmentSupervisor.pipe(
+            Effect.map((supervisor) =>
+              SubscriptionRef.changes(supervisor.state).pipe(
+                Stream.map((state) => state.phase === "connected"),
+              ),
+            ),
+          ),
+        ),
+      ),
+      { initialValue: false },
+    ),
+  );
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
     const queryAtom = runtime
-      .atom((get) => {
-        const generation = Option.getOrNull(
-          AsyncResult.value(get(rpcGenerationAtom(target.environmentId))),
+      .atom<
+        A,
+        E | ConnectionAttemptError | EnvironmentNotRegisteredError | EnvironmentRpcUnavailableError
+      >((get) => {
+        const connection = Option.getOrNull(
+          AsyncResult.value(get(connectionAtom(target.environmentId))),
         );
-        if (generation === null) {
+        if (connection === null) {
           return Effect.never;
         }
-        return runInEnvironment(target.environmentId, options.execute(target.input));
+        const [connectionState, session] = connection;
+        switch (connectionState.phase) {
+          case "connected":
+            return Option.isSome(session)
+              ? runInEnvironment(target.environmentId, options.execute(target.input))
+              : Effect.never;
+          case "connecting":
+          case "backoff":
+            return Effect.never;
+          case "available":
+          case "offline":
+          case "blocked":
+            if (connectionState.lastFailure !== null) {
+              return Effect.fail(connectionState.lastFailure);
+            }
+            return Effect.fail(
+              new EnvironmentRpcUnavailableError({
+                environmentId: target.environmentId,
+                message: `Environment ${target.environmentId} is ${
+                  connectionState.phase === "available" ? "not connected" : connectionState.phase
+                }.`,
+              }),
+            );
+        }
       })
       .pipe(
         Atom.swr({
@@ -525,13 +566,69 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         }),
         Atom.setIdleTTL(idleTtlMs),
       );
-    return (
-      options.refreshIntervalMs === undefined
-        ? queryAtom
-        : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs))
-    ).pipe(Atom.setIdleTTL(idleTtlMs), Atom.withLabel(`${options.label}:${key}`));
+    const refreshedQueryAtom =
+      options.refreshAfterSettledIntervalMs !== undefined
+        ? withSettledRefresh(
+            queryAtom,
+            options.refreshAfterSettledIntervalMs,
+            Atom.map(
+              connectionStateAtom(target.environmentId),
+              (state) => Option.getOrNull(AsyncResult.value(state)) === true,
+            ),
+          )
+        : options.refreshIntervalMs === undefined
+          ? queryAtom
+          : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
+    return refreshedQueryAtom.pipe(
+      Atom.setIdleTTL(options.refreshAfterSettledIntervalMs === undefined ? idleTtlMs : 0),
+      Atom.withLabel(`${options.label}:${key}`),
+    );
   });
   return (target) => family(environmentRpcKey(target));
+}
+
+export function withSettledRefresh<A, E>(
+  queryAtom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
+  refreshIntervalMs: number,
+  isRefreshEnabledAtom?: Atom.Atom<boolean>,
+): Atom.Atom<AsyncResult.AsyncResult<A, E>> {
+  let refreshDelayAtom: Atom.Atom<AsyncResult.AsyncResult<void, never>> | undefined;
+  return Atom.transform(
+    queryAtom,
+    (get, source) => {
+      const result = get(source);
+      if (
+        (isRefreshEnabledAtom !== undefined && !get(isRefreshEnabledAtom)) ||
+        result.waiting ||
+        AsyncResult.isInitial(result)
+      ) {
+        refreshDelayAtom = undefined;
+        return result;
+      }
+      if (refreshDelayAtom === undefined) {
+        let delayAtom: Atom.Atom<AsyncResult.AsyncResult<void, never>> | undefined;
+        delayAtom = Atom.make(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                if (refreshDelayAtom === delayAtom) {
+                  refreshDelayAtom = undefined;
+                }
+              }),
+            );
+            yield* Effect.sleep(refreshIntervalMs);
+          }),
+        ).pipe(Atom.setIdleTTL(0));
+        refreshDelayAtom = delayAtom;
+      }
+      if (AsyncResult.isSuccess(get(refreshDelayAtom))) {
+        refreshDelayAtom = undefined;
+        get.refresh(source);
+      }
+      return result;
+    },
+    { initialValueTarget: queryAtom },
+  );
 }
 
 export function createEnvironmentSubscriptionAtomFamily<R, ER, Input, A, E>(
@@ -598,6 +695,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    readonly refreshAfterSettledIntervalMs?: number;
   },
 ) {
   return createEnvironmentQueryAtomFamily(runtime, {
@@ -607,6 +705,9 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
+    ...(options.refreshAfterSettledIntervalMs === undefined
+      ? {}
+      : { refreshAfterSettledIntervalMs: options.refreshAfterSettledIntervalMs }),
     execute: (input: EnvironmentRpcInput<TTag>) => request(options.tag, input),
   });
 }

@@ -29,8 +29,6 @@ export function ElectronBrowserHost() {
                 previewState.serverEpoch,
                 snapshot.tabId,
               ),
-              pictureInPicture:
-                previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
               zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
             }))
           : [];
@@ -82,7 +80,7 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
-      {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
+      {sessions.map(({ threadRef, snapshot, runtimeTabId, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
           <HostedBrowserWebview
@@ -92,8 +90,6 @@ export function ElectronBrowserHost() {
             runtimeTabId={runtimeTabId}
             initialUrl={url}
             viewport={snapshot.viewport ?? FILL_PREVIEW_VIEWPORT}
-            pictureInPicture={pictureInPicture}
-            profileId={snapshot.profileId}
             zoomFactor={zoomFactor}
           />
         );

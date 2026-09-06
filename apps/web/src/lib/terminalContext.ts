@@ -65,7 +65,21 @@ export function filterTerminalContextsWithText<T extends { text: string }>(
   return contexts.filter((context) => hasTerminalContextText(context));
 }
 
-function normalizeTerminalContextSelection(
+function previewTerminalContextText(text: string): string {
+  const normalized = normalizeTerminalContextText(text);
+  if (normalized.length === 0) {
+    return "";
+  }
+  const lines = normalized.split("\n");
+  const visibleLines = lines.slice(0, 3);
+  if (lines.length > 3) {
+    visibleLines.push("...");
+  }
+  const preview = visibleLines.join("\n");
+  return preview.length > 180 ? `${preview.slice(0, 177)}...` : preview;
+}
+
+export function normalizeTerminalContextSelection(
   selection: TerminalContextSelection,
 ): TerminalContextSelection | null {
   const text = normalizeTerminalContextText(selection.text);
@@ -85,7 +99,10 @@ function normalizeTerminalContextSelection(
   };
 }
 
-function formatTerminalContextRange(selection: { lineStart: number; lineEnd: number }): string {
+export function formatTerminalContextRange(selection: {
+  lineStart: number;
+  lineEnd: number;
+}): string {
   return selection.lineStart === selection.lineEnd
     ? `line ${selection.lineStart}`
     : `lines ${selection.lineStart}-${selection.lineEnd}`;
@@ -110,6 +127,27 @@ export function formatInlineTerminalContextLabel(selection: {
       ? `${selection.lineStart}`
       : `${selection.lineStart}-${selection.lineEnd}`;
   return `@${terminalLabel}:${range}`;
+}
+
+export function buildTerminalContextPreviewTitle(
+  contexts: ReadonlyArray<TerminalContextSelection>,
+): string | null {
+  if (contexts.length === 0) {
+    return null;
+  }
+  const previewParts: string[] = [];
+  for (const context of contexts) {
+    const normalized = normalizeTerminalContextSelection(context);
+    if (!normalized) continue;
+    const preview = previewTerminalContextText(normalized.text);
+    previewParts.push(
+      preview.length > 0
+        ? `${formatTerminalContextLabel(normalized)}\n${preview}`
+        : formatTerminalContextLabel(normalized),
+    );
+  }
+  const previews = previewParts.join("\n\n");
+  return previews.length > 0 ? previews : null;
 }
 
 function buildTerminalContextBodyLines(selection: TerminalContextSelection): string[] {

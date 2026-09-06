@@ -23,7 +23,7 @@ type ConfirmationCopy = {
   readonly description: string | null;
 };
 
-function resolveConfirmDialogCopy(message: string): ConfirmationCopy {
+export function resolveConfirmDialogCopy(message: string): ConfirmationCopy {
   const normalizedMessage = message.trim();
   const lines = normalizedMessage.split("\n");
   const questionLineIndex = lines.findIndex((line) => line.trim().endsWith("?"));

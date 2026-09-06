@@ -1,4 +1,3 @@
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -30,13 +29,7 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     baseRefName: summary.baseRefName,
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
-    ...(summary.isDraft === true ? { isDraft: true } : {}),
-    closedAt: summary.closedAt ?? null,
-    mergedAt: summary.mergedAt ?? null,
-    updatedAt:
-      summary.updatedAt === undefined
-        ? Option.none()
-        : Option.some(DateTime.makeUnsafe(summary.updatedAt)),
+    updatedAt: Option.none(),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -156,7 +149,7 @@ export const make = Effect.gen(function* () {
             "--limit",
             String(input.limit ?? 20),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         })
         .pipe(
@@ -169,18 +162,10 @@ export const make = Effect.gen(function* () {
               Effect.flatMap((decoded) =>
                 Result.isSuccess(decoded)
                   ? Effect.succeed(
-                      decoded.success.map((item) => {
-                        const { updatedAt, ...summary } = item;
-                        return {
-                          ...toChangeRequest({
-                            ...summary,
-                            ...(Option.isSome(updatedAt)
-                              ? { updatedAt: DateTime.formatIso(updatedAt.value) }
-                              : {}),
-                          }),
-                          updatedAt,
-                        };
-                      }),
+                      decoded.success.map((item) => ({
+                        ...toChangeRequest(item),
+                        updatedAt: item.updatedAt,
+                      })),
                     )
                   : Effect.fail(
                       new GitHubCli.GitHubChangeRequestListDecodeError({

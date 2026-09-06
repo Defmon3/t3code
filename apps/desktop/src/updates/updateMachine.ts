@@ -31,7 +31,6 @@ export function createInitialDesktopUpdateState(
     availableVersion: null,
     downloadedVersion: null,
     releaseNotes: [],
-    omittedReleaseCount: 0,
     downloadPercent: null,
     checkedAt: null,
     message: null,
@@ -50,7 +49,6 @@ export function reduceDesktopUpdateStateOnCheckStart(
     status: "checking",
     checkedAt,
     releaseNotes: hasDownloadedUpdate ? state.releaseNotes : [],
-    omittedReleaseCount: hasDownloadedUpdate ? state.omittedReleaseCount : 0,
     message: null,
     downloadPercent: hasDownloadedUpdate ? 100 : null,
     errorContext: null,
@@ -91,17 +89,16 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   version: string,
   checkedAt: string,
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote> = [],
-  omittedReleaseCount = 0,
 ): DesktopUpdateState {
   const isDownloadedVersion = state.downloadedVersion === version;
-  const preserveReleaseNotes = isDownloadedVersion && releaseNotes.length === 0;
+  const nextReleaseNotes =
+    isDownloadedVersion && releaseNotes.length === 0 ? state.releaseNotes : releaseNotes;
   return {
     ...state,
     status: isDownloadedVersion ? "downloaded" : "available",
     availableVersion: version,
     downloadedVersion: isDownloadedVersion ? version : null,
-    releaseNotes: preserveReleaseNotes ? state.releaseNotes : releaseNotes,
-    omittedReleaseCount: preserveReleaseNotes ? state.omittedReleaseCount : omittedReleaseCount,
+    releaseNotes: nextReleaseNotes,
     downloadPercent: isDownloadedVersion ? 100 : null,
     checkedAt,
     message: null,
@@ -133,7 +130,6 @@ export function reduceDesktopUpdateStateOnNoUpdate(
     availableVersion: null,
     downloadedVersion: null,
     releaseNotes: [],
-    omittedReleaseCount: 0,
     downloadPercent: null,
     checkedAt,
     message: null,

@@ -19,6 +19,8 @@ export class ElectronThemeSetSourceError extends Schema.TaggedErrorClass<Electro
   }
 }
 
+export const isElectronThemeSetSourceError = Schema.is(ElectronThemeSetSourceError);
+
 export class ElectronTheme extends Context.Service<
   ElectronTheme,
   {

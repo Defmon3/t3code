@@ -4,11 +4,8 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ComponentProps } from "react";
 
-import { requestConfirmDialog } from "~/confirmDialog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
@@ -78,31 +75,15 @@ export function ServerUpdateAction({
   environmentId,
   serverLabel,
   selfUpdate,
-  desktopAppUpdate = false,
-  threadContinuation = false,
   targetVersion,
   label = "Update",
-  variant = "outline",
-  size = "xs",
 }: {
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
   readonly selfUpdate: ServerSelfUpdateCapability | null;
-  /** The desktop app supervising this server accepts remote update
-      requests (capabilities.desktopAppUpdate). */
-  readonly desktopAppUpdate?: boolean;
-  /** The server can durably continue running provider turns after updating. */
-  readonly threadContinuation?: boolean;
   readonly targetVersion: string;
   readonly label?: string;
-  readonly variant?: ComponentProps<typeof Button>["variant"];
-  readonly size?: ComponentProps<typeof Button>["size"];
 }) {
-  const isDesktopAppUpdate = selfUpdate === "desktop-managed";
-  const continueThreadsAfterServerUpdate = useEnvironmentSettings(
-    environmentId,
-    (settings) => settings.continueThreadsAfterServerUpdate,
-  );
   const updateServer = useAtomCommand(serverEnvironment.updateServer, {
     reportFailure: false,
   });
@@ -128,31 +109,11 @@ export function ServerUpdateAction({
     if (pendingUpdateEnvironmentIds.has(environmentId)) {
       return;
     }
-    if (isDesktopAppUpdate) {
-      // No themed host mounted (undefined) means proceed: the click itself
-      // was the request. This is the only confirmation in the flow; the
-      // remote machine installs without asking anyone there.
-      const confirmed =
-        (await requestConfirmDialog(
-          `Update the T3 Code desktop app that runs the ${serverLabel}? It will close and relaunch on that machine.`,
-        )) ?? true;
-      if (!confirmed) {
-        return;
-      }
-    }
-    if (pendingUpdateEnvironmentIds.has(environmentId)) {
-      return;
-    }
     pendingUpdateEnvironmentIds.add(environmentId);
     try {
       const result = await updateServer({
         environmentId,
-        input: {
-          targetVersion,
-          ...(threadContinuation && continueThreadsAfterServerUpdate
-            ? { continueRunningThreads: true }
-            : {}),
-        },
+        input: { targetVersion },
       });
       if (result._tag === "Failure") {
         if (isAtomCommandInterrupted(result)) {
@@ -168,16 +129,14 @@ export function ServerUpdateAction({
       toastManager.add({
         type: "success",
         title: `${serverLabel} updated`,
-        description: isDesktopAppUpdate
-          ? `Desktop app relaunched on ${result.value.targetVersion}.`
-          : `Reconnected on t3@${result.value.targetVersion}.`,
+        description: `Reconnected on t3@${result.value.targetVersion}.`,
       });
     } finally {
       pendingUpdateEnvironmentIds.delete(environmentId);
     }
   };
 
-  if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
+  if (selfUpdate === "desktop-managed") {
     return (
       <span className="text-muted-foreground text-xs">
         Update the desktop app on that machine to update this server.
@@ -188,14 +147,14 @@ export function ServerUpdateAction({
   if (selfUpdate === null) {
     const command = manualServerUpdateCommand(targetVersion);
     return (
-      <Button size={size} variant={variant} onClick={() => copyToClipboard(command, { command })}>
+      <Button size="xs" variant="outline" onClick={() => copyToClipboard(command, { command })}>
         Copy update command
       </Button>
     );
   }
 
   return (
-    <Button size={size} variant={variant} onClick={() => void handleUpdate()}>
+    <Button size="xs" onClick={() => void handleUpdate()}>
       {label}
     </Button>
   );

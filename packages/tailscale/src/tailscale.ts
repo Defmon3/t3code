@@ -9,8 +9,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(1_500);
-const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
-const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
+export const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
+export const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
 // tailscale is a real executable everywhere (`tailscale.exe` on Windows), so
 // it is always spawned directly rather than through cmd.exe shell mode.
@@ -47,7 +47,7 @@ const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
 ];
 
 /** Classifies stderr into a safe label, dropping the text itself. */
-const stderrDiagnosticOf = (stderr: string): TailscaleStderrDiagnostic | undefined => {
+export const stderrDiagnosticOf = (stderr: string): TailscaleStderrDiagnostic | undefined => {
   if (stderr.trim().length === 0) {
     return undefined;
   }
@@ -66,7 +66,7 @@ export class TailscaleCommandSpawnError extends Schema.TaggedErrorClass<Tailscal
   }
 }
 
-class TailscaleCommandOutputError extends Schema.TaggedErrorClass<TailscaleCommandOutputError>()(
+export class TailscaleCommandOutputError extends Schema.TaggedErrorClass<TailscaleCommandOutputError>()(
   "TailscaleCommandOutputError",
   {
     ...TailscaleCommandContext,
@@ -137,6 +137,7 @@ const TailscaleStatusJson = Schema.Struct({
   Self: Schema.optional(TailscaleStatusSelf),
 });
 
+export type TailscaleStatusSelf = typeof TailscaleStatusSelf.Type;
 export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
 
 export interface TailscaleStatus {
@@ -381,3 +382,23 @@ export const probeTailscaleHttpsEndpoint = (input: {
       onSome: (httpResponse) => httpResponse.status >= 200 && httpResponse.status < 300,
     });
   }).pipe(Effect.orElseSucceed(() => false));
+
+export const resolveTailscaleHttpsBaseUrl = (
+  input: {
+    readonly servePort?: number;
+  } = {},
+): Effect.Effect<
+  string | null,
+  TailscaleCommandError | TailscaleStatusParseError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  readTailscaleStatus.pipe(
+    Effect.map((status) =>
+      status.magicDnsName
+        ? buildTailscaleHttpsBaseUrl({
+            magicDnsName: status.magicDnsName,
+            ...(input.servePort === undefined ? {} : { servePort: input.servePort }),
+          })
+        : null,
+    ),
+  );

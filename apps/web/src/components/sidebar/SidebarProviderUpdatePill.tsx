@@ -1,8 +1,7 @@
-import { Spinner } from "~/components/ui/spinner";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerProvider } from "@t3tools/contracts";
-import { CircleCheckIcon, DownloadIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { CircleCheckIcon, DownloadIcon, LoaderIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
 import { primaryServerProvidersAtom } from "../../state/server";
@@ -15,9 +14,9 @@ import { Button } from "../ui/button";
 
 const PROVIDER_UPDATE_PILL_STYLES = {
   loading:
-    "bg-sidebar-control-surface text-sidebar-foreground group-has-[button.provider-update-main:hover]/provider-update:bg-sidebar-row-hover",
+    "bg-update-surface text-update-foreground group-has-[button.provider-update-main:hover]/provider-update:bg-update/22",
   success:
-    "bg-sidebar-control-surface text-sidebar-foreground group-has-[button.provider-update-main:hover]/provider-update:bg-sidebar-row-hover",
+    "bg-success/12 text-success group-has-[button.provider-update-main:hover]/provider-update:bg-success/18",
   warning:
     "bg-warning/12 text-warning group-has-[button.provider-update-main:hover]/provider-update:bg-warning/18",
   error:
@@ -25,7 +24,7 @@ const PROVIDER_UPDATE_PILL_STYLES = {
 } as const;
 
 const PROVIDER_UPDATE_PILL_PROGRESS_STYLES = {
-  success: "bg-foreground/8",
+  success: "bg-success/18",
   warning: "bg-warning/14",
   error: "bg-destructive/14",
 } as const;
@@ -174,7 +173,7 @@ export function SidebarProviderUpdatePill() {
               onClick={openProviderSettings}
             >
               {displayedView.tone === "loading" ? (
-                <Spinner className="size-3.5" />
+                <LoaderIcon className="size-3.5 animate-spin" />
               ) : displayedView.tone === "success" ? (
                 <CircleCheckIcon className="size-3.5" />
               ) : displayedView.tone === "error" ? (

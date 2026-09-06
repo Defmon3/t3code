@@ -118,23 +118,22 @@ export function buildSidebarProjectPickerEntries(input: {
   groups: ReadonlyArray<SidebarProjectSnapshot>;
   preferredProjectRef: ScopedProjectRef | null;
 }) {
-  const preferredProjectRef = input.preferredProjectRef;
   const entries = input.groups.flatMap((group): SidebarProjectPickerEntry[] => {
-    const isPreferred = preferredProjectRef
+    const isPreferred = input.preferredProjectRef
       ? group.memberProjectRefs.some(
           (projectRef) =>
-            projectRef.environmentId === preferredProjectRef.environmentId &&
-            projectRef.projectId === preferredProjectRef.projectId,
+            projectRef.environmentId === input.preferredProjectRef?.environmentId &&
+            projectRef.projectId === input.preferredProjectRef.projectId,
         )
       : false;
-    const preferredProject = preferredProjectRef
+    const preferredProject = isPreferred
       ? (group.memberProjects.find(
           (project) =>
-            project.environmentId === preferredProjectRef.environmentId &&
-            project.id === preferredProjectRef.projectId,
+            project.environmentId === input.preferredProjectRef?.environmentId &&
+            project.id === input.preferredProjectRef?.projectId,
         ) ??
         group.memberProjects.find(
-          (project) => project.environmentId === preferredProjectRef.environmentId,
+          (project) => project.environmentId === input.preferredProjectRef?.environmentId,
         ))
       : null;
     const targetProject =

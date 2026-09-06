@@ -18,7 +18,7 @@ export type CliRunner = "npx" | "pnpm dlx" | "bunx";
  * Global installs and repo checkouts match none of these and return null.
  * Detection is best-effort; callers must fail closed to a plain `t3` command.
  */
-function detectCliRunner(entryPath: string): CliRunner | null {
+export function detectCliRunner(entryPath: string): CliRunner | null {
   const path = entryPath.replaceAll("\\", "/");
   if (path.includes("/_npx/")) {
     return "npx";
@@ -42,7 +42,7 @@ function detectCliRunner(entryPath: string): CliRunner | null {
  * from the running version: nightly builds re-suggest the nightly channel,
  * anything else suggests the bare package.
  */
-function suggestedPackageSpec(version: string): string {
+export function suggestedPackageSpec(version: string): string {
   return version.includes("-nightly.") ? "t3@nightly" : "t3";
 }
 

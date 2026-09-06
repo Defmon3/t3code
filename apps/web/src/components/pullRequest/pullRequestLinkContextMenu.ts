@@ -8,7 +8,7 @@ import { toastManager } from "../ui/toast";
 export type PullRequestLinkContextMenuAction = "copy-link" | "open-external";
 
 /** Named for the host rather than "externally": the point is where you will land. */
-const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
+export const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
   github: "Open on GitHub",
   gitlab: "Open on GitLab",
   bitbucket: "Open on Bitbucket",
@@ -19,7 +19,7 @@ export const openOnHostLabel = (provider: string): string =>
   OPEN_ON_HOST_LABELS[provider] ?? "Open on host";
 
 /** Copy first: it is the reason to right-click a number rather than click it. */
-function pullRequestLinkContextMenuItems(
+export function pullRequestLinkContextMenuItems(
   openLabel: string,
 ): readonly ContextMenuItem<PullRequestLinkContextMenuAction>[] {
   return [

@@ -62,8 +62,6 @@ export interface HomeListLayout {
   readonly stickyHeaderIndices: ReadonlyArray<number>;
 }
 
-export const EMPTY_HOME_LIST_LAYOUT: HomeListLayout = { items: [], stickyHeaderIndices: [] };
-
 export type HomeGroupDisplayAction = "toggle-collapsed" | "show-more" | "show-less";
 
 export function nextGroupDisplayState(

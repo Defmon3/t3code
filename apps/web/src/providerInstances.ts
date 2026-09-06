@@ -233,10 +233,9 @@ export function deriveProviderEntriesByEnvironment(
  * settings write, so picker visibility must follow settings rather than waiting
  * for probe reconciliation.
  *
- * Only built-in default instances have a legacy `providers` entry. Every
- * other instance exists through `providerInstances`; if it is absent there,
- * its streamed snapshot is stale (for example immediately after deletion)
- * and is treated as disabled.
+ * Non-default instances only exist through `providerInstances`; if one is
+ * absent there, its streamed snapshot is stale (for example immediately after
+ * deletion) and is treated as disabled.
  */
 export function applyProviderInstanceSettings(
   entries: ReadonlyArray<ProviderInstanceEntry>,
@@ -247,16 +246,11 @@ export function applyProviderInstanceSettings(
   >;
 
   return entries.map((entry) => {
-    const explicitInstance = Object.hasOwn(settings.providerInstances, entry.instanceId)
-      ? settings.providerInstances[entry.instanceId]
-      : undefined;
-    const legacyProvider = Object.hasOwn(legacyProviders, entry.driverKind)
-      ? legacyProviders[entry.driverKind]
-      : undefined;
+    const explicitInstance = settings.providerInstances?.[entry.instanceId];
     const enabled = explicitInstance
       ? resolveProviderInstanceEnabled(explicitInstance)
-      : entry.isDefault && legacyProvider
-        ? (legacyProvider.enabled ?? entry.enabled)
+      : entry.isDefault
+        ? (legacyProviders[entry.driverKind]?.enabled ?? entry.enabled)
         : false;
     return enabled === entry.enabled ? entry : { ...entry, enabled };
   });
@@ -298,11 +292,22 @@ export function sortProviderInstanceEntries(
  * Look up a single instance entry by exact `instanceId`. Missing snapshots
  * are not inferred from driver kind in UI routing code.
  */
-function getProviderInstanceEntry(
+export function getProviderInstanceEntry(
   providers: ReadonlyArray<ServerProvider>,
   instanceId: ProviderInstanceId,
 ): ProviderInstanceEntry | undefined {
   return deriveProviderInstanceEntries(providers).find((entry) => entry.instanceId === instanceId);
+}
+
+/**
+ * Model list for a specific instance. Returns `[]` when the instance isn't
+ * present so callers don't have to thread optionality through render code.
+ */
+export function getProviderInstanceModels(
+  providers: ReadonlyArray<ServerProvider>,
+  instanceId: ProviderInstanceId,
+): ReadonlyArray<ServerProviderModel> {
+  return getProviderInstanceEntry(providers, instanceId)?.models ?? [];
 }
 
 /**

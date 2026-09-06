@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View, type AccessibilityActionEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
-import { cn } from "../../lib/cn";
+import { useThemeColor } from "../../lib/useThemeColor";
 
 const ACCESSIBILITY_RESIZE_STEP = 24;
 
@@ -22,6 +22,8 @@ export function WorkspacePaneDivider(props: WorkspacePaneDividerProps) {
   latestProps.current = props;
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const dividerColor = useThemeColor("--color-border");
+  const activeDividerColor = useThemeColor("--color-primary");
   const handleResizeStart = useCallback(() => {
     setDragging(true);
     latestProps.current.onResizeStart?.();
@@ -79,11 +81,11 @@ export function WorkspacePaneDivider(props: WorkspacePaneDividerProps) {
         onHoverOut={() => setHovered(false)}
       >
         <View
-          className={cn(
-            "h-full self-center bg-border opacity-70",
-            hovered || dragging ? "w-0.5 bg-primary opacity-100" : "w-px",
-          )}
-          style={[styles.line, (hovered || dragging) && styles.activeLine]}
+          style={[
+            styles.line,
+            { backgroundColor: dividerColor },
+            (hovered || dragging) && [styles.activeLine, { backgroundColor: activeDividerColor }],
+          ]}
         />
       </Pressable>
     </GestureDetector>
@@ -94,9 +96,11 @@ const styles = StyleSheet.create({
   line: {
     alignSelf: "center",
     height: "100%",
+    opacity: 0.7,
     width: StyleSheet.hairlineWidth,
   },
   activeLine: {
+    opacity: 1,
     width: 2,
   },
 });

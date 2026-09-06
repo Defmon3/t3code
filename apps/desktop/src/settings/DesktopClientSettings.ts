@@ -12,32 +12,24 @@ import * as Ref from "effect/Ref";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 
-const ClientSettingsJson = fromLenientJson(ClientSettingsSchema);
-const decodeClientSettingsDocument = Schema.decodeEffect(
-  fromLenientJson(Schema.Record(Schema.String, Schema.Unknown)),
-);
-const decodeClientSettingsValue = Schema.decodeUnknownEffect(ClientSettingsSchema);
-const decodeClientSettingsJson = Effect.fnUntraced(function* (raw: string) {
-  const document = yield* decodeClientSettingsDocument(raw);
-  // Select the shape before validation so invalid legacy settings cannot become defaults.
-  return yield* decodeClientSettingsValue(
-    Object.hasOwn(document, "settings") ? document.settings : document,
-  );
+const ClientSettingsDocumentSchema = Schema.Struct({
+  settings: ClientSettingsSchema,
 });
-const encodeClientSettingsJson = Schema.encodeEffect(ClientSettingsJson);
 
-export class DesktopClientSettingsReadError extends Schema.TaggedErrorClass<DesktopClientSettingsReadError>()(
-  "DesktopClientSettingsReadError",
-  {
-    operation: Schema.Literals(["read-file", "decode-document"]),
-    path: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Desktop client settings read failed during ${this.operation} at ${this.path}.`;
-  }
-}
+const ClientSettingsJson = fromLenientJson(ClientSettingsSchema);
+const LegacyClientSettingsDocumentJson = fromLenientJson(ClientSettingsDocumentSchema);
+const decodeLegacyClientSettingsDocumentJson = Schema.decodeEffect(
+  LegacyClientSettingsDocumentJson,
+);
+const decodeClientSettingsJsonValue = Schema.decodeEffect(ClientSettingsJson);
+const decodeClientSettingsJson = (raw: string): Effect.Effect<ClientSettings, Schema.SchemaError> =>
+  decodeLegacyClientSettingsDocumentJson(raw).pipe(
+    Effect.map((document) => document.settings),
+    Effect.catchTags({
+      SchemaError: () => decodeClientSettingsJsonValue(raw),
+    }),
+  );
+const encodeClientSettingsJson = Schema.encodeEffect(ClientSettingsJson);
 
 const DesktopClientSettingsWriteOperation = Schema.Literals([
   "create-temporary-file-name",
@@ -63,7 +55,7 @@ export class DesktopClientSettingsWriteError extends Schema.TaggedErrorClass<Des
 export class DesktopClientSettings extends Context.Service<
   DesktopClientSettings,
   {
-    readonly get: Effect.Effect<Option.Option<ClientSettings>, DesktopClientSettingsReadError>;
+    readonly get: Effect.Effect<Option.Option<ClientSettings>>;
     readonly set: (
       settings: ClientSettings,
     ) => Effect.Effect<void, DesktopClientSettingsWriteError>;
@@ -73,7 +65,7 @@ export class DesktopClientSettings extends Context.Service<
 const readClientSettings = (
   fileSystem: FileSystem.FileSystem,
   settingsPath: string,
-): Effect.Effect<Option.Option<ClientSettings>, DesktopClientSettingsReadError> =>
+): Effect.Effect<Option.Option<ClientSettings>> =>
   fileSystem.readFileString(settingsPath).pipe(
     Effect.map(Option.some),
     Effect.catchTags({
@@ -82,15 +74,7 @@ const readClientSettings = (
           ? Effect.succeed(Option.none<string>())
           : Effect.logWarning("Could not read desktop client settings.", cause).pipe(
               Effect.annotateLogs({ settingsPath }),
-              Effect.andThen(
-                Effect.fail(
-                  new DesktopClientSettingsReadError({
-                    operation: "read-file",
-                    path: settingsPath,
-                    cause,
-                  }),
-                ),
-              ),
+              Effect.as(Option.none<string>()),
             ),
     }),
     Effect.flatMap(
@@ -103,15 +87,7 @@ const readClientSettings = (
               SchemaError: (cause) =>
                 Effect.logWarning("Could not decode desktop client settings.", cause).pipe(
                   Effect.annotateLogs({ settingsPath }),
-                  Effect.andThen(
-                    Effect.fail(
-                      new DesktopClientSettingsReadError({
-                        operation: "decode-document",
-                        path: settingsPath,
-                        cause,
-                      }),
-                    ),
-                  ),
+                  Effect.as(Option.none<ClientSettings>()),
                 ),
             }),
           ),

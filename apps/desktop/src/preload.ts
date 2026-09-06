@@ -60,7 +60,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
-  resolveSshHost: (alias) => ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, alias),
   ensureSshEnvironment: async (target, options) =>
     unwrapEnsureSshEnvironmentResult(
       await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
@@ -116,8 +115,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ...(position === undefined ? {} : { position }),
     }),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
-  openSystemSettings: (pane: string) =>
-    ipcRenderer.invoke(IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL, pane),
   probeRemoteEditors: () => ipcRenderer.invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL, undefined),
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
@@ -131,19 +128,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     };
   },
   onQuitShortcut: (listener) => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, hint: unknown) => {
-      if (typeof hint !== "object" || hint === null || !("state" in hint)) return;
-      if (hint.state === "up") {
-        listener({ state: "up" });
-        return;
-      }
-      if (
-        hint.state === "down" &&
-        "mode" in hint &&
-        (hint.mode === "hold" || hint.mode === "double-click")
-      ) {
-        listener({ state: "down", mode: hint.mode });
-      }
+    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+      if (state !== "down" && state !== "up") return;
+      listener(state);
     };
 
     ipcRenderer.on(IpcChannels.QUIT_SHORTCUT_CHANNEL, wrappedListener);
@@ -181,25 +168,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
   },
-  appActivation: {
-    setReady: (ready) =>
-      ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_READY_CHANNEL, ready),
-    complete: (response) =>
-      ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL, response),
-    onRequest: (listener) => {
-      const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
-        if (typeof request !== "object" || request === null) return;
-        listener(request as Parameters<typeof listener>[0]);
-      };
-      ipcRenderer.on(IpcChannels.DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL, wrappedListener);
-      return () => {
-        ipcRenderer.removeListener(
-          IpcChannels.DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL,
-          wrappedListener,
-        );
-      };
-    },
-  },
   preview: {
     createTab: (tabId, defaults) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
@@ -225,15 +193,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
-    listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
-    importBrowserCookies: (input) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
-    clearCookies: (environmentId, profileId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL, { environmentId, profileId }),
-    clearCache: (environmentId, profileId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL, { environmentId, profileId }),
-    getPreviewConfig: (environmentId, profileId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId, profileId }),
+    clearCookies: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
+    clearCache: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL),
+    getPreviewConfig: (environmentId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId }),
     setAnnotationTheme: (theme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ANNOTATION_THEME_CHANNEL, { theme }),
     pickElement: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, { tabId }),

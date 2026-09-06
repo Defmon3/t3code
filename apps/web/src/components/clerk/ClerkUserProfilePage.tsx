@@ -1,5 +1,4 @@
-import { RefreshIcon } from "~/components/ui/refresh-icon";
-
+import { RefreshCwIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
@@ -56,7 +55,7 @@ export function ClerkUserProfileRefreshButton({
       disabled={disabled || isPending}
       onClick={onClick}
     >
-      <RefreshIcon aria-hidden="true" className="size-3.5" refreshing={isPending} />
+      <RefreshCwIcon aria-hidden="true" className={cn("size-3.5", isPending && "animate-spin")} />
       Refresh
     </Button>
   );

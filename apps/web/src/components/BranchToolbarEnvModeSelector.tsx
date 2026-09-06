@@ -7,7 +7,6 @@ import {
   resolveLockedWorkspaceLabel,
   type EnvMode,
 } from "./BranchToolbar.logic";
-import { composerFloatingLayerProps } from "./chat/composerEventScope";
 import {
   Select,
   SelectGroup,
@@ -18,7 +17,7 @@ import {
   SelectValue,
 } from "./ui/select";
 
-const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
+export const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
 interface BranchToolbarEnvModeSelectorProps {
   envLocked: boolean;
@@ -52,25 +51,20 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   if (envLocked) {
     return (
       <span
-        className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
+        className="inline-flex h-7 shrink-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
         data-composer-context-control
       >
         {activeWorktreePath ? (
-          <FolderGitIcon className="size-3 shrink-0" />
-        ) : (
-          <FolderIcon className="size-3 shrink-0" />
-        )}
-        <span
-          data-composer-label
-          className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
-        >
-          <span
-            data-composer-label-motion
-            className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
-          >
+          <>
+            <FolderGitIcon className="size-3" />
             {resolveLockedWorkspaceLabel(activeWorktreePath)}
-          </span>
-        </span>
+          </>
+        ) : (
+          <>
+            <FolderIcon className="size-3" />
+            {resolveLockedWorkspaceLabel(activeWorktreePath)}
+          </>
+        )}
       </span>
     );
   }
@@ -91,7 +85,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <SelectTrigger
         variant="ghost"
         size="xs"
-        className="min-w-0 shrink font-normal text-xs!"
+        className="min-w-0 shrink font-medium"
         aria-label="Workspace"
         data-composer-context-control
       >
@@ -114,7 +108,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           </span>
         </span>
       </SelectTrigger>
-      <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
+      <SelectPopup>
         <SelectGroup>
           <SelectGroupLabel>Workspace</SelectGroupLabel>
           <SelectItem value="local">

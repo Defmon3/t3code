@@ -216,7 +216,7 @@ export const PreviewAutomationHostError = Schema.Union([
 ]);
 export type PreviewAutomationHostError = typeof PreviewAutomationHostError.Type;
 
-const isPreviewAutomationHostError = Schema.is(PreviewAutomationHostError);
+export const isPreviewAutomationHostError = Schema.is(PreviewAutomationHostError);
 
 export function serializePreviewAutomationHostError(
   error: PreviewAutomationHostError,

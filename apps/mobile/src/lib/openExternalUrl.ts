@@ -1,12 +1,7 @@
 import * as Schema from "effect/Schema";
 import { Linking } from "react-native";
 
-const ExternalUrlTarget = Schema.Literals([
-  "file-preview",
-  "markdown-link",
-  "pull-request",
-  "provider-auth",
-]);
+const ExternalUrlTarget = Schema.Literals(["file-preview", "markdown-link", "pull-request"]);
 
 export type ExternalUrlTarget = typeof ExternalUrlTarget.Type;
 

@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
@@ -36,7 +35,6 @@ const makeEnvironmentAuthLayer = (
   EnvironmentAuth.layer.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
-    Layer.provide(ServerEnvironment.identityLayer),
     Layer.provide(makeServerConfigLayer(overrides)),
   );
 
@@ -59,7 +57,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth administrative operations", (it) =
       expect(listedBeforeRevoke).toHaveLength(1);
       expect(listedBeforeRevoke[0]?.id).toBe(created.id);
       expect(listedBeforeRevoke[0]?.label).toBe("CI phone");
-      expect(listedBeforeRevoke[0]).not.toHaveProperty("credential");
+      expect(listedBeforeRevoke[0]?.credential).toBe(created.credential);
       expect(revoked).toBe(true);
       expect(listedAfterRevoke).toHaveLength(0);
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),

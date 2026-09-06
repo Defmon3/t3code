@@ -27,7 +27,7 @@ import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import { makeQuitShortcutHandler } from "./QuitHold.ts";
+import { makeQuitHoldHandler } from "./QuitHold.ts";
 
 const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
@@ -205,21 +205,6 @@ export function isRetryableDevelopmentRendererLoadFailure(input: {
       navigationUrl: input.validatedUrl,
     })
   );
-}
-
-export function concealPendingQuitWindow(
-  window: Pick<
-    Electron.BrowserWindow,
-    "isDestroyed" | "isFullScreen" | "setFullScreen" | "setOpacity"
-  >,
-): void {
-  if (window.isDestroyed()) return;
-  if (window.isFullScreen()) {
-    window.setFullScreen(false);
-  }
-  // Electron implements window opacity on macOS and Windows. Linux keeps the
-  // release-gated quit behavior but cannot make the pending window disappear.
-  window.setOpacity(0);
 }
 
 function getWindowTitleBarOptions(
@@ -566,11 +551,12 @@ export const make = Effect.gen(function* () {
     // close-terminal shortcut can outlive the terminal that handled its first
     // press, so reject repeats before they reach the native window accelerator.
     // Deliberate presses still flow through the renderer or native menu.
-    // Intercept the quit accelerator before the native menu sees it and apply
-    // the configured direct, hold, or double-press behavior.
-    const quitShortcutHandler = makeQuitShortcutHandler({
+    // Chrome-style hold-to-quit: intercept the quit accelerator before the
+    // native menu sees it and only quit after the shortcut is held. The
+    // renderer shows the "Hold to Quit" hint via QUIT_SHORTCUT_CHANNEL.
+    const quitHoldHandler = makeQuitHoldHandler({
       platform: environment.platform,
-      getMode: () =>
+      isEnabled: () =>
         runPromise(
           Effect.map(
             clientSettings.get,
@@ -580,20 +566,17 @@ export const make = Effect.gen(function* () {
             }),
           ),
         ),
-      notify: (hint) => {
+      notify: (state) => {
         if (!window.isDestroyed()) {
-          window.webContents.send(QUIT_SHORTCUT_CHANNEL, hint);
+          window.webContents.send(QUIT_SHORTCUT_CHANNEL, state);
         }
       },
-      // Keep the transparent window focused until the physical shortcut is
-      // released so its remaining repeats cannot reach the next app.
-      concealWindow: () => concealPendingQuitWindow(window),
       quit: () => {
         void runPromise(electronApp.quit);
       },
     });
     window.webContents.on("before-input-event", (event, input) => {
-      quitShortcutHandler(event, input);
+      quitHoldHandler(event, input);
       if (input.type !== "keyDown" || !input.isAutoRepeat) return;
       const modifier = environment.platform === "darwin" ? input.meta : input.control;
       if (modifier && !input.alt && !input.shift && input.key.toLowerCase() === "w") {

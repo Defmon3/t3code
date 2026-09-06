@@ -25,7 +25,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
-import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 const decodeDesktopBackendBootstrap = Schema.decodeEffect(
   Schema.fromJsonString(DesktopBackendBootstrap),
@@ -133,7 +132,6 @@ interface MakeInstanceInput {
   readonly desktopTelemetryPublisher?: Partial<
     DesktopTelemetryPublisher.DesktopTelemetryPublisher["Service"]
   >;
-  readonly pruneRuntimes?: (distro: string | null, runtimeId: string) => Effect.Effect<void>;
 }
 
 // Helper that constructs a primary backend instance using the factory
@@ -167,15 +165,8 @@ function makeTestInstance(input: MakeInstanceInput) {
       handleControlForSource: (_sourceId, message) =>
         (input.desktopTelemetryPublisher?.handleControl ?? (() => Effect.void))(message),
       removeControlSource: () => Effect.void,
-      publishUpdateReport: () => Effect.void,
-      updateRequests: Stream.empty,
-      updateCommits: Stream.empty,
-      updateCancellations: Stream.empty,
       ...input.desktopTelemetryPublisher,
     }),
-    DesktopWslEnvironment.layerTest(
-      input.pruneRuntimes === undefined ? {} : { pruneRuntimes: input.pruneRuntimes },
-    ),
   );
 
   const instance = DesktopBackendManager.makeBackendInstance({
@@ -656,13 +647,10 @@ describe("DesktopBackendManager", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const requestUrls: Array<string> = [];
-        const prunedRuntimes: Array<[string | null, string]> = [];
         const statuses = [503, 200];
         let readyCount = 0;
         const firstRequest = yield* Deferred.make<void>();
-        const backendReady = yield* Deferred.make<void>();
-        const processExit = yield* Deferred.make<void>();
-        const pruneComplete = yield* Deferred.make<void>();
+        const ready = yield* Deferred.make<void>();
         const exited = yield* Queue.unbounded<void>();
 
         const spawnerLayer = Layer.succeed(
@@ -670,9 +658,7 @@ describe("DesktopBackendManager", () => {
           ChildProcessSpawner.make(() =>
             Effect.succeed(
               makeProcess({
-                exitCode: Deferred.await(processExit).pipe(
-                  Effect.as(ChildProcessSpawner.ExitCode(0)),
-                ),
+                exitCode: Deferred.await(ready).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
               }),
             ),
           ),
@@ -680,15 +666,6 @@ describe("DesktopBackendManager", () => {
 
         const instance = yield* makeTestInstance({
           spawnerLayer,
-          config: {
-            ...baseConfig,
-            runningDistro: "Ubuntu",
-            wslRuntimeId: "1.2.3-x64",
-          },
-          pruneRuntimes: (distro, runtimeId) =>
-            Effect.sync(() => {
-              prunedRuntimes.push([distro, runtimeId]);
-            }).pipe(Effect.andThen(Deferred.succeed(pruneComplete, void 0)), Effect.asVoid),
           httpClientLayer: httpClientLayer((request) =>
             Effect.gen(function* () {
               const status = statuses.shift();
@@ -700,7 +677,7 @@ describe("DesktopBackendManager", () => {
           ),
           onReady: Effect.sync(() => {
             readyCount += 1;
-          }).pipe(Effect.andThen(Deferred.succeed(backendReady, void 0)), Effect.asVoid),
+          }).pipe(Effect.andThen(Deferred.succeed(ready, void 0)), Effect.asVoid),
           backendOutputLog: {
             persistFailure: () => Queue.offer(exited, void 0).pipe(Effect.asVoid),
           },
@@ -710,17 +687,12 @@ describe("DesktopBackendManager", () => {
         yield* Deferred.await(firstRequest);
 
         assert.equal(readyCount, 0);
-        assert.deepEqual(prunedRuntimes, []);
         assert.deepEqual(requestUrls, ["http://127.0.0.1:3773/.well-known/t3/environment"]);
 
         yield* TestClock.adjust(Duration.millis(100));
-        yield* Deferred.await(backendReady);
-        yield* Deferred.await(pruneComplete);
-        yield* Deferred.succeed(processExit, void 0);
         yield* Queue.take(exited);
 
         assert.equal(readyCount, 1);
-        assert.deepEqual(prunedRuntimes, [["Ubuntu", "1.2.3-x64"]]);
         assert.deepEqual(requestUrls, [
           "http://127.0.0.1:3773/.well-known/t3/environment",
           "http://127.0.0.1:3773/.well-known/t3/environment",

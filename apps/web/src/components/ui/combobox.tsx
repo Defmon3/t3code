@@ -175,7 +175,7 @@ function ComboboxPopup({
           )}
         >
           <ComboboxPrimitive.Popup
-            className="flex min-w-0 max-h-[min(var(--available-height),23rem)] flex-1 flex-col overflow-hidden text-foreground"
+            className="flex max-h-[min(var(--available-height),23rem)] flex-1 flex-col text-foreground"
             data-slot="combobox-popup"
             {...props}
           >
@@ -352,37 +352,27 @@ function ComboboxChips({
 }
 
 function ComboboxChip({ children, ...props }: ComboboxPrimitive.Chip.Props) {
-  const labelId = React.useId();
-
   return (
     <ComboboxPrimitive.Chip
       className="flex items-center rounded-[calc(var(--radius-md)-1px)] bg-accent ps-2 font-medium text-accent-foreground text-sm outline-none sm:text-xs/(--text-xs--line-height) [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5"
       data-slot="combobox-chip"
       {...props}
     >
-      <span id={labelId}>{children}</span>
-      <ComboboxChipRemove labelId={labelId} />
+      {children}
+      <ComboboxChipRemove />
     </ComboboxPrimitive.Chip>
   );
 }
 
-function ComboboxChipRemove({
-  labelId,
-  ...props
-}: ComboboxPrimitive.ChipRemove.Props & { labelId: string }) {
-  const removeLabelId = `${labelId}-remove`;
-
+function ComboboxChipRemove(props: ComboboxPrimitive.ChipRemove.Props) {
   return (
     <ComboboxPrimitive.ChipRemove
-      aria-labelledby={`${removeLabelId} ${labelId}`}
+      aria-label="Remove"
       className="h-full shrink-0 cursor-pointer px-1.5 opacity-80 hover:opacity-100 [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5"
       data-slot="combobox-chip-remove"
       {...props}
     >
-      <span id={removeLabelId} className="sr-only">
-        Remove
-      </span>
-      <XIcon aria-hidden="true" />
+      <XIcon />
     </ComboboxPrimitive.ChipRemove>
   );
 }

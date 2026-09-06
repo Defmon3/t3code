@@ -20,7 +20,7 @@ export interface EnvironmentCatalogState {
   readonly entries: ReadonlyMap<EnvironmentIdType, ConnectionCatalogEntry>;
 }
 
-const EMPTY_ENVIRONMENT_CATALOG_STATE: EnvironmentCatalogState = Object.freeze({
+export const EMPTY_ENVIRONMENT_CATALOG_STATE: EnvironmentCatalogState = Object.freeze({
   isReady: false,
   entries: new Map(),
 });

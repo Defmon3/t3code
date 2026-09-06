@@ -37,16 +37,12 @@ import {
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import {
-  BUNDLED_CLAUDE_MODEL_CATALOG,
-  type ClaudeModelCatalog,
-  getClaudeCatalogModelCapabilities,
-  isClaudeCatalogUltracodeEffort,
-  normalizeClaudeCatalogEffort,
-  resolveClaudeCatalogApiModelId,
-  resolveClaudeCatalogEffort,
-  resolveClaudeModelSlug,
-  scopeClaudeModelCatalog,
-} from "../provider/ClaudeModelCatalog.ts";
+  getClaudeModelCapabilities,
+  isClaudeUltracodeEffort,
+  normalizeClaudeCliEffort,
+  resolveClaudeApiModelId,
+  resolveClaudeEffort,
+} from "../provider/Layers/ClaudeProvider.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
@@ -65,13 +61,9 @@ const decodeClaudeOutputEnvelope = Schema.decodeEffect(Schema.fromJsonString(Cla
 export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(function* (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
-  modelCatalog: Effect.Effect<ClaudeModelCatalog> = Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG),
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
-  const scopedModelCatalog = modelCatalog.pipe(
-    Effect.map((catalog) => scopeClaudeModelCatalog(catalog, claudeSettings.customModels)),
-  );
 
   const readStreamAsString = <E>(
     operation: string,
@@ -129,34 +121,21 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     outputSchemaJson: S;
     modelSelection: ModelSelection;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
-    const catalog = yield* scopedModelCatalog;
-    const resolvedModelSelection = {
-      ...modelSelection,
-      model: resolveClaudeModelSlug(catalog, modelSelection.model),
-    };
     const jsonSchemaStr = yield* encodeJsonForOperation(
       operation,
       toJsonSchemaObject(outputSchemaJson),
       "Failed to encode structured output schema.",
     );
-    const caps = getClaudeCatalogModelCapabilities(catalog, resolvedModelSelection.model);
+    const caps = getClaudeModelCapabilities(modelSelection.model);
     const descriptors = getProviderOptionDescriptors({
       caps,
-      selections: resolvedModelSelection.options,
+      selections: modelSelection.options,
     });
     const findDescriptor = (id: string) => descriptors.find((descriptor) => descriptor.id === id);
-    const rawEffortSelection = getModelSelectionStringOptionValue(resolvedModelSelection, "effort");
-    const resolvedEffort = resolveClaudeCatalogEffort(
-      catalog,
-      resolvedModelSelection.model,
-      rawEffortSelection,
-    );
-    const cliEffort = normalizeClaudeCatalogEffort(
-      catalog,
-      resolvedEffort,
-      resolvedModelSelection.model,
-    );
-    const ultracode = isClaudeCatalogUltracodeEffort(resolvedEffort);
+    const rawEffortSelection = getModelSelectionStringOptionValue(modelSelection, "effort");
+    const resolvedEffort = resolveClaudeEffort(caps, rawEffortSelection);
+    const cliEffort = normalizeClaudeCliEffort(resolvedEffort, modelSelection.model);
+    const ultracode = isClaudeUltracodeEffort(resolvedEffort);
     const thinkingDescriptor = findDescriptor("thinking");
     const fastModeDescriptor = findDescriptor("fastMode");
     const thinking =
@@ -187,7 +166,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           "--json-schema",
           jsonSchemaStr,
           "--model",
-          resolveClaudeCatalogApiModelId(catalog, resolvedModelSelection),
+          resolveClaudeApiModelId(modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
           "--dangerously-skip-permissions",

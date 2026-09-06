@@ -60,21 +60,10 @@ private final class ComposerTextAttachment: NSTextAttachment {
 private final class ComposerTextView: UITextView {
   private static let pastedImageDirectoryName = "t3-composer-paste"
   private static let stalePastedImageAge: TimeInterval = 60 * 60
-  private static let readOnlyActions = Set([
-    "cut:",
-    "delete:",
-    "paste:",
-    "redo:",
-    "toggleBoldface:",
-    "toggleItalics:",
-    "toggleUnderline:",
-    "undo:",
-  ])
 
   var onPasteImages: (([String]) -> Void)?
   var onAttributedMutation: (() -> Void)?
   var onSubmit: (() -> Void)?
-  var isReadOnly = false
 
   override var keyCommands: [UIKeyCommand]? {
     var commands = super.keyCommands ?? []
@@ -94,9 +83,6 @@ private final class ComposerTextView: UITextView {
   }
 
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-    if isReadOnly && Self.readOnlyActions.contains(NSStringFromSelector(action)) {
-      return false
-    }
     if action == #selector(paste(_:)) {
       let pasteboard = UIPasteboard.general
       if pasteboard.hasImages ||
@@ -110,9 +96,6 @@ private final class ComposerTextView: UITextView {
   }
 
   override func paste(_ sender: Any?) {
-    guard !isReadOnly else {
-      return
-    }
     let pasteboard = UIPasteboard.general
     let imageProviders = pasteboard.itemProviders.filter {
       $0.canLoadObject(ofClass: UIImage.self)
@@ -134,9 +117,6 @@ private final class ComposerTextView: UITextView {
   }
 
   override func deleteBackward() {
-    guard !isReadOnly else {
-      return
-    }
     guard selectedRange.length == 0, selectedRange.location > 0 else {
       super.deleteBackward()
       return
@@ -180,12 +160,9 @@ private final class ComposerTextView: UITextView {
     }
 
     group.notify(queue: .main) { [weak self] in
-      guard let self, !self.isReadOnly else {
-        return
-      }
       let urls = images.compactMap { $0 }.compactMap(Self.writeTemporaryImage)
       if !urls.isEmpty {
-        self.onPasteImages?(urls)
+        self?.onPasteImages?(urls)
       }
     }
   }
@@ -198,9 +175,6 @@ private final class ComposerTextView: UITextView {
   }
 
   override func cut(_ sender: Any?) {
-    guard !isReadOnly else {
-      return
-    }
     guard isEditable, selectedRange.length > 0 else {
       return super.cut(sender)
     }
@@ -332,7 +306,6 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   private var contentInsetVertical: CGFloat = 0
   private var shouldAutoFocus = false
   private var didAutoFocus = false
-  private var isReadOnly = false
   private var isApplyingControlledValue = false
   private var nativeEventCount = 0
   private var lastContentSize = CGSize.zero
@@ -478,11 +451,6 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     textView.isEditable = editable
   }
 
-  func setReadOnly(_ readOnly: Bool) {
-    isReadOnly = readOnly
-    textView.isReadOnly = readOnly
-  }
-
   func setScrollEnabled(_ scrollEnabled: Bool) {
     textView.isScrollEnabled = scrollEnabled
   }
@@ -536,16 +504,13 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     replacementText text: String
   ) -> Bool {
     restoreBaseTypingAttributes()
-    return !isReadOnly
+    return true
   }
 
   public func textDroppableView(
     _ textDroppableView: UIView & UITextDroppable,
     proposalForDrop drop: UITextDropRequest
   ) -> UITextDropProposal {
-    guard !isReadOnly else {
-      return UITextDropProposal(operation: .cancel)
-    }
     guard droppedImageProviders(in: drop) != nil else {
       return drop.suggestedProposal
     }
@@ -562,9 +527,6 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     _ textDroppableView: UIView & UITextDroppable,
     willPerformDrop drop: UITextDropRequest
   ) {
-    guard !isReadOnly else {
-      return
-    }
     guard let imageProviders = droppedImageProviders(in: drop) else {
       return
     }

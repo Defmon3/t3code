@@ -11,7 +11,12 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { listThreadsByProjectId, requireThread, requireThreadAbsent } from "./commandInvariants.ts";
+import {
+  findThreadById,
+  listThreadsByProjectId,
+  requireThread,
+  requireThreadAbsent,
+} from "./commandInvariants.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -116,7 +121,9 @@ const messageSendCommand: OrchestrationCommand = {
 };
 
 describe("commandInvariants", () => {
-  it("lists threads by project", () => {
+  it("finds threads by id and project", () => {
+    expect(findThreadById(readModel, ThreadId.make("thread-1"))?.projectId).toBe("project-a");
+    expect(findThreadById(readModel, ThreadId.make("missing"))).toBeUndefined();
     expect(
       listThreadsByProjectId(readModel, ProjectId.make("project-b")).map((thread) => thread.id),
     ).toEqual([ThreadId.make("thread-2")]);
@@ -191,35 +198,5 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
-  });
-
-  it("lets a draft retry re-create a thread id after its first attempt was deleted", async () => {
-    const threadId = ThreadId.make("thread-1");
-    const firstAttempt = readModel.threads.find((thread) => thread.id === threadId)!;
-    const afterRollback: OrchestrationReadModel = {
-      ...readModel,
-      threads: readModel.threads.map((thread) =>
-        thread.id === threadId ? { ...thread, deletedAt: now, updatedAt: now } : thread,
-      ),
-    };
-    const retry: OrchestrationCommand = {
-      type: "thread.create",
-      commandId: CommandId.make("cmd-retry"),
-      threadId,
-      projectId: firstAttempt.projectId,
-      title: firstAttempt.title,
-      modelSelection: firstAttempt.modelSelection,
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      runtimeMode: "approval-required",
-      branch: null,
-      worktreePath: null,
-      createdAt: now,
-    };
-
-    await expect(
-      Effect.runPromise(
-        requireThreadAbsent({ readModel: afterRollback, command: retry, threadId }),
-      ),
-    ).resolves.toBeUndefined();
   });
 });

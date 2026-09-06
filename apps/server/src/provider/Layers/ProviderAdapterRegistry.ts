@@ -15,7 +15,11 @@
  *
  * @module ProviderAdapterRegistryLive
  */
-import { ProviderInstanceId } from "@t3tools/contracts";
+import {
+  defaultInstanceIdForDriver,
+  ProviderInstanceId,
+  type ProviderDriverKind,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -67,10 +71,31 @@ const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(fun
       Effect.map((instances) => instances.map((instance) => instance.instanceId)),
     );
 
+  const listProviders: ProviderAdapterRegistryShape["listProviders"] = () =>
+    registry.listInstances.pipe(
+      Effect.map((instances) => {
+        const kinds = new Set<ProviderDriverKind>();
+        for (const instance of instances) {
+          const defaultId = defaultInstanceIdForDriver(instance.driverKind);
+          if (instance.instanceId === defaultId) {
+            // Only the default-instance rows show up through the legacy
+            // shim — custom instances like `codex_personal` have no
+            // `ProviderDriverKind` equivalent.
+            kinds.add(instance.driverKind);
+          }
+        }
+        return Array.from(kinds);
+      }),
+    );
+
   return {
     getByInstance,
     getInstanceInfo,
     listInstances,
+    listProviders,
+    // Proxy directly — the facade has no state of its own; the instance
+    // registry already coalesces adds/removes/rebuilds into one emission.
+    streamChanges: registry.streamChanges,
     subscribeChanges: registry.subscribeChanges,
   } satisfies ProviderAdapterRegistryShape;
 });

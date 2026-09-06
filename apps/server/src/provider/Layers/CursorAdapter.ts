@@ -42,7 +42,6 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -78,11 +77,6 @@ import {
 import { type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import {
-  discoverCursorSkills,
-  hasCursorSkillMention,
-  rewriteCursorSkillMentions,
-} from "../Drivers/CursorSkills.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("cursor");
@@ -139,7 +133,6 @@ interface CursorSessionContext {
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
-  cursorSkillNames: ReadonlySet<string> | undefined;
   /** Number of sendTurn prompts currently in flight or being prepared.
    * >0 means a turn is actively running, so a new sendTurn is a steer that
    * continues it, and only the last remaining prompt settles the turn. */
@@ -544,7 +537,6 @@ export function makeCursorAdapter(
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
             cwd,
-            runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
@@ -786,7 +778,6 @@ export function makeCursorAdapter(
             turns: [],
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
-            cursorSkillNames: undefined,
             promptsInFlight: 0,
             stopped: false,
           };
@@ -976,28 +967,8 @@ export function makeCursorAdapter(
           }
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-          const rawPrompt = input.input?.trim() ?? "";
-          if (rawPrompt) {
-            let cursorSkillNames = ctx.cursorSkillNames;
-            if (hasCursorSkillMention(rawPrompt) && cursorSkillNames === undefined) {
-              const skills = yield* discoverCursorSkills(
-                ctx.session.cwd,
-                options?.environment,
-              ).pipe(
-                Effect.provideService(FileSystem.FileSystem, fileSystem),
-                Effect.provideService(Path.Path, path),
-              );
-              cursorSkillNames = new Set(
-                skills
-                  .filter((skill) => skill.enabled && skill.userInvocable !== false)
-                  .map((skill) => skill.name),
-              );
-              ctx.cursorSkillNames = cursorSkillNames;
-            }
-            const prompt = cursorSkillNames
-              ? rewriteCursorSkillMentions(rawPrompt, cursorSkillNames)
-              : rawPrompt;
-            promptParts.push({ type: "text", text: prompt });
+          if (input.input?.trim()) {
+            promptParts.push({ type: "text", text: input.input.trim() });
           }
           if (input.attachments && input.attachments.length > 0) {
             for (const attachment of input.attachments) {
@@ -1044,16 +1015,9 @@ export function makeCursorAdapter(
             });
           }
 
-          // ACP has no system-message field; keep runtime context separate from the user's text.
           const result = yield* ctx.acp
             .prompt({
-              prompt: [
-                ...promptParts,
-                {
-                  type: "text",
-                  text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
-                },
-              ],
+              prompt: promptParts,
             })
             .pipe(
               Effect.mapError((error) =>
@@ -1212,7 +1176,6 @@ export function makeCursorAdapter(
     return {
       provider: PROVIDER,
       capabilities: { sessionModelSwitch: "in-session" },
-      compaction: { type: "slash-command", command: "/compress" },
       startSession,
       sendTurn,
       interruptTurn,

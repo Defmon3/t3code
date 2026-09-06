@@ -15,7 +15,6 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 
 import type {
   CodexSettings,
-  CustomModelSetting,
   ServerProvider,
   ServerProviderState,
   ModelCapabilities,
@@ -25,33 +24,17 @@ import type {
 } from "@t3tools/contracts";
 import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/contracts";
 
-import { createModelCapabilities, readCustomModelEntries } from "@t3tools/shared/model";
+import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
-  COMPACT_SLASH_COMMAND,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
-import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
-import {
-  codexRateLimitsFailureMessage,
-  codexRateLimitsToLimits,
-  type CodexRateLimitSnapshot,
-  type CodexResetCreditsSummary,
-} from "./codexUsageLimits.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
-
-type CodexRateLimitsProbe =
-  | {
-      readonly snapshot: CodexRateLimitSnapshot;
-      readonly resetCredits: CodexResetCreditsSummary | null | undefined;
-    }
-  | { readonly failure: string };
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 
@@ -62,7 +45,6 @@ const CODEX_PRESENTATION = {
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
-  readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -90,12 +72,8 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
   if (account.type === "apiKey") return "OpenAI API Key";
   if (account.type === "amazonBedrock") return "Amazon Bedrock";
   if (account.type !== "chatgpt") return undefined;
-  return codexPlanLabel(account.planType);
-}
 
-/** Shared with usage-limit sources, which report the same `planType` slugs. */
-export function codexPlanLabel(planType: string | null | undefined): string | undefined {
-  switch (planType) {
+  switch (account.planType) {
     case "free":
       return "ChatGPT Free Subscription";
     case "go":
@@ -124,6 +102,7 @@ export function codexPlanLabel(planType: string | null | undefined): string | un
     case "unknown":
       return "ChatGPT Subscription";
     default:
+      account.planType satisfies never;
       return undefined;
   }
 }
@@ -245,14 +224,9 @@ export function applyPreferredCodexDefaultModel(
   });
 }
 
-/**
- * Codex has no static default capability set, so a bare custom slug borrows
- * the first built-in's descriptors; an entry with its own capabilities keeps
- * them.
- */
 function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
-  customModels: ReadonlyArray<CustomModelSetting>,
+  customModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
   if (customModels.length === 0) {
     return models;
@@ -261,16 +235,17 @@ function appendCustomCodexModels(
   const seen = new Set(models.map((model) => model.slug));
   const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   const customEntries: ServerProviderModel[] = [];
-  for (const entry of readCustomModelEntries(customModels)) {
-    if (seen.has(entry.slug)) {
+  for (const rawModel of customModels) {
+    const slug = rawModel.trim();
+    if (!slug || seen.has(slug)) {
       continue;
     }
-    seen.add(entry.slug);
+    seen.add(slug);
     customEntries.push({
-      slug: entry.slug,
-      name: entry.name,
+      slug,
+      name: slug,
       isCustom: true,
-      capabilities: entry.capabilities ?? fallbackCapabilities,
+      capabilities: fallbackCapabilities,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
@@ -343,18 +318,13 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   };
 }
 
-/**
- * Spawns a short-lived `codex app-server`, runs the initialize handshake, and
- * hands the caller a connected client. Scoped: the process is killed when
- * the caller's scope closes. Shared by the status probe, the skills probe,
- * and account-level requests such as reset-credit redemption.
- */
-export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(function* (input: {
+const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
   readonly binaryPath: string;
-  readonly homePath?: string | undefined;
-  readonly launchArgs?: string | undefined;
+  readonly homePath?: string;
+  readonly launchArgs?: string;
   readonly cwd: string;
-  readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly customModels?: ReadonlyArray<string>;
+  readonly environment?: NodeJS.ProcessEnv;
 }) {
   // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
   // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
@@ -369,7 +339,10 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   const spawnCommand = yield* resolveSpawnCommand(
     input.binaryPath,
     codexAppServerArgs(input.launchArgs),
-    { env: environment, extendEnv: true },
+    {
+      env: environment,
+      extendEnv: true,
+    },
   );
   const child = yield* spawner
     .spawn(
@@ -394,20 +367,18 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
     Effect.provide(clientContext),
   );
-  const initialize = yield* client.request("initialize", buildCodexInitializeParams());
-  yield* client.notify("initialized", undefined);
-  return { client, initialize };
-});
 
-const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
-  readonly binaryPath: string;
-  readonly homePath?: string;
-  readonly launchArgs?: string;
-  readonly cwd: string;
-  readonly customModels?: ReadonlyArray<CustomModelSetting>;
-  readonly environment?: NodeJS.ProcessEnv;
-}) {
-  const { client, initialize } = yield* withCodexAppServerClient(input);
+  const initialize = yield* client.request("initialize", {
+    clientInfo: {
+      name: "t3code_desktop",
+      title: "T3 Code Desktop",
+      version: "0.1.0",
+    },
+    capabilities: {
+      experimentalApi: true,
+    },
+  });
+  yield* client.notify("initialized", undefined);
 
   // Extract the version string after the first '/' in userAgent, up to the next space or the end
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
@@ -423,38 +394,18 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models, rateLimits] = yield* Effect.all(
+  const [skillsResponse, models] = yield* Effect.all(
     [
       client.request("skills/list", {
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
-      // Usage is an enrichment: a failure or a slow answer degrades to "no
-      // usage this probe" rather than costing the account and models.
-      client.request("account/rateLimits/read", undefined).pipe(
-        Effect.map((response): CodexRateLimitsProbe => ({
-          snapshot: response.rateLimits,
-          resetCredits: response.rateLimitResetCredits,
-        })),
-        Effect.timeoutOption(Duration.millis(RATE_LIMITS_PROBE_TIMEOUT_MS)),
-        Effect.map(
-          Option.getOrElse((): CodexRateLimitsProbe => ({
-            failure: "Codex did not answer the usage request.",
-          })),
-        ),
-        Effect.catch((error) =>
-          Effect.logDebug("Codex rate-limit read failed.", { cause: error }).pipe(
-            Effect.as<CodexRateLimitsProbe>({ failure: codexRateLimitsFailureMessage(error) }),
-          ),
-        ),
-      ),
     ],
     { concurrency: "unbounded" },
   );
 
   return {
     account: accountResponse,
-    rateLimits,
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -463,20 +414,21 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   } satisfies CodexAppServerProviderSnapshot;
 });
 
-export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(function* (input: {
-  readonly binaryPath: string;
-  readonly homePath?: string;
-  readonly launchArgs?: string;
-  readonly cwd: string;
-  readonly environment?: NodeJS.ProcessEnv;
-}) {
-  const { client } = yield* withCodexAppServerClient(input);
-  const skillsResponse = yield* client.request("skills/list", { cwds: [input.cwd] });
-  return parseCodexSkillsListResponse(skillsResponse, input.cwd);
-});
-
-const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
-  appendCustomCodexModels([], codexSettings.customModels);
+const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {
+  const models = new Set<string>();
+  for (const model of codexSettings.customModels) {
+    const trimmed = model.trim();
+    if (trimmed.length > 0) {
+      models.add(trimmed);
+    }
+  }
+  return Array.from(models, (model) => ({
+    slug: model,
+    name: model,
+    isCustom: true,
+    capabilities: null,
+  }));
+};
 
 const makePendingCodexProvider = (
   codexSettings: CodexSettings,
@@ -554,7 +506,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly homePath?: string;
     readonly launchArgs?: string;
     readonly cwd: string;
-    readonly customModels: ReadonlyArray<CustomModelSetting>;
+    readonly customModels: ReadonlyArray<string>;
     readonly environment?: NodeJS.ProcessEnv;
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,
@@ -641,20 +593,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   const snapshot = probeResult.success.value;
   const accountStatus = accountProbeStatus(snapshot.account);
-  const usageLimits =
-    snapshot.account.account?.type === "apiKey"
-      ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
-      : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
-        ? makeUnavailableUsageLimits({
-            checkedAt,
-            reason: "probeFailed",
-            ...(snapshot.rateLimits ? { message: snapshot.rateLimits.failure } : {}),
-          })
-        : codexRateLimitsToLimits({
-            snapshot: snapshot.rateLimits.snapshot,
-            resetCredits: snapshot.rateLimits.resetCredits,
-            checkedAt,
-          });
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,
@@ -663,7 +601,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     models: snapshot.models,
     skills: snapshot.skills,
     slashCommands: [
-      COMPACT_SLASH_COMMAND,
       {
         name: "feedback",
         description: "Send this thread and Codex logs to OpenAI",
@@ -676,7 +613,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       status: accountStatus.status,
       auth: accountStatus.auth,
       ...(accountStatus.message ? { message: accountStatus.message } : {}),
-      usageLimits,
     },
   });
 });

@@ -39,7 +39,6 @@ export interface DiffCheckpointsInput {
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
-  readonly format?: "patch" | "numstat";
 }
 
 export interface DeleteCheckpointRefsInput {
@@ -78,9 +77,8 @@ export class CheckpointStore extends Context.Service<
     ) => Effect.Effect<boolean, CheckpointStoreError>;
 
     /**
-     * Compute a diff between two checkpoint refs. Defaults to a full patch.
+     * Compute a patch diff between two checkpoint refs.
      *
-     * Numstat output has NUL-delimited paths for file summaries.
      * Can optionally treat a missing "from" ref as `HEAD`.
      */
     readonly diffCheckpoints: (

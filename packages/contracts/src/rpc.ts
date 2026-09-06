@@ -18,30 +18,27 @@ import {
   FilesystemBrowseResult,
   FilesystemBrowseError,
 } from "./filesystem.ts";
-import { AssetAccessError, AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
+import {
+  AssetAccessError,
+  AssetCreateUrlInput,
+  AssetCreateUrlResult,
+  AttachmentCreateUploadUrlInput,
+  AttachmentCreateUploadUrlResult,
+  AttachmentDeleteInput,
+  AttachmentUploadSigningKeyError,
+} from "./assets.ts";
 import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
-  VcsSnapshotExpiredError,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
   VcsCreateWorktreeResult,
-  VcsGetHistoryInput,
-  VcsGetHistoryResult,
-  VcsGetCommitDetailsInput,
-  VcsGetCommitDetailsResult,
-  VcsListCommitFilesInput,
-  VcsListCommitFilesResult,
-  VcsGetCommitDiffInput,
-  VcsGetCommitDiffResult,
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
-  VcsListHistoryRefsInput,
-  VcsListHistoryRefsResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -78,30 +75,10 @@ import {
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
 import {
-  IssueActionInput,
-  IssueActivity,
-  IssueAssigneeCandidateList,
-  IssueAssigneesInput,
-  IssueCommentInput,
-  IssueCommentsPageInput,
-  IssueCommentsPageResult,
-  IssueCommentUpdateInput,
-  IssueCreateInput,
-  IssueCreateResult,
-  IssueDetail,
-  IssueInvalidateInput,
-  IssueLabelCandidateList,
-  IssueLabelsInput,
-  IssueListInput,
-  IssueListResult,
-  IssueOperationError,
-  IssueReactionInput,
-  IssueRef,
-  IssueRepositoryRef,
-  IssueTemplateList,
-  IssueUnavailableError,
-  IssueUpdateInput,
-} from "./issue.ts";
+  ProviderUploadFeedbackError,
+  ProviderUploadFeedbackInput,
+  ProviderUploadFeedbackResult,
+} from "./provider.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -246,16 +223,16 @@ export const WS_METHODS = {
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
   assetsCreateUrl: "assets.createUrl",
+  attachmentsCreateUploadUrl: "attachments.createUploadUrl",
+  attachmentsDelete: "attachments.delete",
+
+  // Provider methods
+  providerUploadFeedback: "provider.uploadFeedback",
 
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
-  vcsListHistoryRefs: "vcs.listHistoryRefs",
-  vcsGetHistory: "vcs.getHistory",
-  vcsGetCommitDetails: "vcs.getCommitDetails",
-  vcsListCommitFiles: "vcs.listCommitFiles",
-  vcsGetCommitDiff: "vcs.getCommitDiff",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
@@ -337,24 +314,6 @@ export const WS_METHODS = {
   pullRequestsInvalidate: "pullRequests.invalidate",
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
-
-  // Issue methods
-  issuesList: "issues.list",
-  issuesDetail: "issues.detail",
-  issuesActivity: "issues.activity",
-  issuesCommentsPage: "issues.commentsPage",
-  issuesRunAction: "issues.runAction",
-  issuesComment: "issues.comment",
-  issuesUpdateComment: "issues.updateComment",
-  issuesSetReaction: "issues.setReaction",
-  issuesCreate: "issues.create",
-  issuesUpdate: "issues.update",
-  issuesSetLabels: "issues.setLabels",
-  issuesSetAssignees: "issues.setAssignees",
-  issuesLabelCandidates: "issues.labelCandidates",
-  issuesAssigneeCandidates: "issues.assigneeCandidates",
-  issuesTemplates: "issues.templates",
-  issuesInvalidate: "issues.invalidate",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -459,7 +418,9 @@ export const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTrace
 });
 
 export const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    scope: Schema.optionalKey(Schema.Literal("registered-project-tests")),
+  }),
   success: ServerProcessDiagnosticsResult,
   error: EnvironmentAuthorizationError,
 });
@@ -653,118 +614,6 @@ export const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequest
   error: PullRequestRpcError,
 });
 
-const IssueRpcError = Schema.Union([
-  IssueUnavailableError,
-  IssueOperationError,
-  EnvironmentAuthorizationError,
-]);
-
-export const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
-  payload: IssueListInput,
-  success: IssueListResult,
-  error: IssueRpcError,
-});
-
-export const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
-  payload: IssueRef,
-  success: IssueDetail,
-  error: IssueRpcError,
-});
-
-export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
-  payload: IssueRef,
-  success: IssueActivity,
-  error: IssueRpcError,
-});
-
-export const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
-  payload: IssueCommentsPageInput,
-  success: IssueCommentsPageResult,
-  error: IssueRpcError,
-});
-
-export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
-  payload: IssueActionInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
-  payload: IssueCommentInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-export const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
-  payload: IssueCommentUpdateInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-export const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
-  payload: IssueReactionInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-export const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
-  payload: IssueCreateInput,
-  success: IssueCreateResult,
-  error: IssueRpcError,
-});
-
-export const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
-  payload: IssueUpdateInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-export const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
-  payload: IssueLabelsInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-export const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
-  payload: IssueAssigneesInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-/**
- * Read on their own rather than as part of the detail: a repository's labels and the people who
- * may be assigned are only wanted once somebody opens the menu, and reading them with every issue
- * would spend a request per host on a list nobody looked at.
- */
-export const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
-  payload: IssueRef,
-  success: IssueLabelCandidateList,
-  error: IssueRpcError,
-});
-
-export const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
-  payload: IssueRef,
-  success: IssueAssigneeCandidateList,
-  error: IssueRpcError,
-});
-
-/**
- * What this repository offers as a starting point for a new issue, read when somebody opens the
- * composer rather than with the listing: it is about the repository and not about any issue in it,
- * which is why it takes a repository rather than a reference.
- */
-export const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
-  payload: IssueRepositoryRef,
-  success: IssueTemplateList,
-  error: IssueRpcError,
-});
-
-export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
-  payload: IssueInvalidateInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
   WS_METHODS.sourceControlLookupRepository,
   {
@@ -836,6 +685,23 @@ export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   error: Schema.Union([AssetAccessError, EnvironmentAuthorizationError]),
 });
 
+export const WsAttachmentsCreateUploadUrlRpc = Rpc.make(WS_METHODS.attachmentsCreateUploadUrl, {
+  payload: AttachmentCreateUploadUrlInput,
+  success: AttachmentCreateUploadUrlResult,
+  error: Schema.Union([AttachmentUploadSigningKeyError, EnvironmentAuthorizationError]),
+});
+
+export const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
+  payload: AttachmentDeleteInput,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
+  payload: ProviderUploadFeedbackInput,
+  success: ProviderUploadFeedbackResult,
+  error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
@@ -877,36 +743,6 @@ export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePu
 export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
-  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsListHistoryRefsRpc = Rpc.make(WS_METHODS.vcsListHistoryRefs, {
-  payload: VcsListHistoryRefsInput,
-  success: VcsListHistoryRefsResult,
-  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsGetHistoryRpc = Rpc.make(WS_METHODS.vcsGetHistory, {
-  payload: VcsGetHistoryInput,
-  success: VcsGetHistoryResult,
-  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsGetCommitDetailsRpc = Rpc.make(WS_METHODS.vcsGetCommitDetails, {
-  payload: VcsGetCommitDetailsInput,
-  success: VcsGetCommitDetailsResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsListCommitFilesRpc = Rpc.make(WS_METHODS.vcsListCommitFiles, {
-  payload: VcsListCommitFilesInput,
-  success: VcsListCommitFilesResult,
-  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsGetCommitDiffRpc = Rpc.make(WS_METHODS.vcsGetCommitDiff, {
-  payload: VcsGetCommitDiffInput,
-  success: VcsGetCommitDiffResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
@@ -1224,22 +1060,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
-  WsIssuesListRpc,
-  WsIssuesDetailRpc,
-  WsIssuesActivityRpc,
-  WsIssuesRunActionRpc,
-  WsIssuesCommentsPageRpc,
-  WsIssuesCommentRpc,
-  WsIssuesUpdateCommentRpc,
-  WsIssuesSetReactionRpc,
-  WsIssuesCreateRpc,
-  WsIssuesUpdateRpc,
-  WsIssuesSetLabelsRpc,
-  WsIssuesSetAssigneesRpc,
-  WsIssuesLabelCandidatesRpc,
-  WsIssuesAssigneeCandidatesRpc,
-  WsIssuesTemplatesRpc,
-  WsIssuesInvalidateRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
@@ -1251,6 +1071,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
+  WsAttachmentsCreateUploadUrlRpc,
+  WsAttachmentsDeleteRpc,
+  WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
@@ -1258,11 +1081,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
-  WsVcsListHistoryRefsRpc,
-  WsVcsGetHistoryRpc,
-  WsVcsGetCommitDetailsRpc,
-  WsVcsListCommitFilesRpc,
-  WsVcsGetCommitDiffRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,

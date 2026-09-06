@@ -122,20 +122,15 @@ export const make = Effect.gen(function* () {
       const previous = current.get(key);
       // Concurrent reads can finish out of order. Quota only falls within one reset window, and
       // an answer from an older window must not replace the current one.
-      if (previous !== undefined && snapshot.resetAtMs < previous.resetAtMs) {
+      if (
+        previous !== undefined &&
+        (snapshot.resetAtMs < previous.resetAtMs ||
+          (snapshot.resetAtMs === previous.resetAtMs && snapshot.remaining >= previous.remaining))
+      ) {
         return current;
       }
       const next = new Map(current);
-      // Keep the conservative balance, but learn the observed cost even when our reservation
-      // was larger. Otherwise one expensive read makes every later cheap read spend its cost.
-      next.set(
-        key,
-        previous !== undefined &&
-          snapshot.resetAtMs === previous.resetAtMs &&
-          snapshot.remaining >= previous.remaining
-          ? { ...previous, cost: snapshot.cost }
-          : snapshot,
-      );
+      next.set(key, snapshot);
       return next;
     });
   });

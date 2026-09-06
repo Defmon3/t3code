@@ -11,10 +11,6 @@ interface TargetedEvent {
   target: Int32;
 }
 
-interface ContextMenuActionEvent extends TargetedEvent {
-  actionIdentifier: string;
-}
-
 type TextDecorationLine = "none" | "underline" | "line-through";
 
 type TextDecorationStyle = "solid" | "double" | "dotted" | "dashed";
@@ -46,10 +42,8 @@ interface NativeProps extends ViewProps {
   textDecorationColor?: ColorValue;
   textAlign?: WithDefault<TextAlign, "auto">;
   shadowRadius?: WithDefault<Float, 0>;
-  contextMenuConfig?: string;
   onPress?: BubblingEventHandler<TargetedEvent>;
   onLongPress?: BubblingEventHandler<TargetedEvent>;
-  onContextMenuAction?: BubblingEventHandler<ContextMenuActionEvent>;
 }
 
 export default codegenNativeComponent<NativeProps>("T3MarkdownTextRun", {

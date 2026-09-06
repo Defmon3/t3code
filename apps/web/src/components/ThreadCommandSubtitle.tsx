@@ -15,7 +15,8 @@ export type ThreadCommandSubtitleVariant =
   | "favicon-workspace"
   | "favicon-branch-harness";
 
-const THREAD_COMMAND_SUBTITLE_VARIANT: ThreadCommandSubtitleVariant = "favicon-workspace-harness";
+export const THREAD_COMMAND_SUBTITLE_VARIANT: ThreadCommandSubtitleVariant =
+  "favicon-workspace-harness";
 
 export const COMMAND_PALETTE_META_ICON_CLASS = "size-3 shrink-0 text-muted-foreground/70";
 
@@ -37,7 +38,6 @@ export function ThreadCommandSubtitle(props: {
   environmentId: EnvironmentId;
   projectCwd: string | null;
   projectFaviconPath?: string | null;
-  projectIcon?: import("@t3tools/contracts").ProjectIconOverride | null;
   projectTitle: string | null;
   branch: string | null;
   worktreePath: string | null;
@@ -72,9 +72,7 @@ export function ThreadCommandSubtitle(props: {
             <ProjectFavicon
               environmentId={props.environmentId}
               cwd={props.projectCwd}
-              projectName={projectLabel}
               faviconPath={props.projectFaviconPath}
-              projectIcon={props.projectIcon}
               className="size-3 shrink-0"
             />
           ) : null}

@@ -2,7 +2,13 @@ import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/con
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { RightPanelTabs, surfaceShortcutActionForKey, tabMuteMenuItem } from "./RightPanelTabs";
+import {
+  RightPanelTabs,
+  surfaceShortcutActionForKey,
+  surfaceShortcutTargetsTypingContext,
+  tabMuteMenuItem,
+} from "./RightPanelTabs";
+import type { RightPanelSurface } from "~/rightPanelStore";
 
 function shortcutEvent(
   key: string,
@@ -78,12 +84,15 @@ function renderTabs(
   second?: DesktopPreviewFavicon,
   audio?: { audible?: boolean; audioMuted?: boolean },
   previewRuntimeTabId: ((tabId: string) => string) | null = (tabId) => `runtime:${tabId}`,
+  surfaces: readonly RightPanelSurface[] = second
+    ? [previewSurface, secondSurface]
+    : [previewSurface],
 ) {
   return renderToStaticMarkup(
     <RightPanelTabs
       mode="inline"
-      surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
-      activeSurfaceId={previewSurface.id}
+      surfaces={surfaces}
+      activeSurfaceId={surfaces[0]?.id ?? null}
       pendingSurfaceIds={new Set()}
       previewSessions={sessions}
       desktopByTabId={{
@@ -101,20 +110,18 @@ function renderTabs(
       onAddBrowser={() => undefined}
       onAddTerminal={() => undefined}
       onAddPullRequest={() => undefined}
-      onAddGitHistory={() => undefined}
-      onAddIssue={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
+      onAddProcesses={() => undefined}
       liveAgentCount={0}
       browserAvailable
       terminalAvailable={false}
       diffAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
-      gitHistoryAvailable={false}
-      issueAvailable={false}
       agentsAvailable={false}
+      processesAvailable={false}
     >
       <div>content</div>
     </RightPanelTabs>,
@@ -144,6 +151,15 @@ describe("RightPanelTabs preview favicon", () => {
   });
 });
 
+describe("RightPanelTabs processes surface", () => {
+  it("renders the persisted processes tab title", () => {
+    const html = renderTabs(null, undefined, undefined, undefined, [
+      { id: "processes", kind: "processes" },
+    ]);
+    expect(html).toContain("Processes");
+  });
+});
+
 describe("surface shortcuts", () => {
   const actions = [
     { shortcut: "B", available: true, label: "Browser" },
@@ -167,6 +183,33 @@ describe("surface shortcuts", () => {
     expect(
       surfaceShortcutActionForKey(actions, shortcutEvent("b", { defaultPrevented: true })),
     ).toBeNull();
+  });
+});
+
+describe("surface shortcut typing contexts", () => {
+  // Selector-aware stub: closest() answers only tokens the combined selector
+  // would actually match, mirroring how the browser resolves it.
+  const makeTarget = (matches: string | null) => ({
+    closest(selectors: string) {
+      if (matches === null || !selectors.includes(matches)) return null;
+      return {};
+    },
+  });
+
+  it("treats form fields and every editable region as typing contexts", () => {
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("input"))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("textarea"))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("select"))).toBe(true);
+    // The chat composer is a contenteditable that sits empty until a draft
+    // exists; launcher letters claimed from it redirected prompts into shells.
+    // The :not clause sees past contenteditable="false" islands to an editable
+    // host around them, so nested editors stay protected too.
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("[contenteditable]"))).toBe(true);
+  });
+
+  it("claims letters when focus sits outside any editable region", () => {
+    expect(surfaceShortcutTargetsTypingContext(null)).toBe(false);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget(null))).toBe(false);
   });
 });
 

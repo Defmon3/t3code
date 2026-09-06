@@ -13,9 +13,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, copy, nullable) NSString *text;
 
-- (nullable UIMenu *)contextMenu;
-- (BOOL)hasContextMenu;
-- (void)onContextMenuAction:(NSString *)actionIdentifier;
 - (void)onPress;
 - (void)onLongPress;
 

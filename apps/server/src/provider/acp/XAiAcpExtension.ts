@@ -447,11 +447,11 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
         runtime
           .start()
           .pipe(Effect.tap((started) => Ref.set(activeSessionIdRef, started.sessionId))),
-      prompt: (payload, promptOptions?) =>
+      prompt: (payload) =>
         Effect.gen(function* () {
           const sessionId = yield* Ref.get(activeSessionIdRef);
           if (sessionId === undefined) {
-            return yield* runtime.prompt(payload, promptOptions);
+            return yield* runtime.prompt(payload);
           }
 
           const promptId = yield* allocatePromptFallbackId;
@@ -470,7 +470,7 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
           } satisfies Omit<EffectAcpSchema.PromptRequest, "sessionId">;
 
           return yield* Effect.raceFirst(
-            runtime.prompt(requestPayload, promptOptions),
+            runtime.prompt(requestPayload),
             Deferred.await(fallback.deferred),
           ).pipe(
             Effect.tap((response) =>

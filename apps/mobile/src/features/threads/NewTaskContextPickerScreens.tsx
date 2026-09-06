@@ -1,5 +1,4 @@
 import type { VcsRef } from "@t3tools/client-runtime/state/vcs";
-import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react-native";
 import {
   isAtomCommandInterrupted,
@@ -22,11 +21,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
-import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ThemedSwitch } from "../../components/ThemedSwitch";
 import { cn } from "../../lib/cn";
+import { useFontFamily } from "../../lib/useFontFamily";
+import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useServerConfigs } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import {
@@ -38,7 +37,7 @@ import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { shouldCheckoutNewTaskBranch } from "./new-task-context-presentation";
 
 function SelectionRow(props: {
-  readonly icon?: "arrow.triangle.branch" | ReactNode;
+  readonly icon?: "arrow.triangle.branch" | "desktopcomputer";
   readonly onPress: () => void;
   readonly disabled?: boolean;
   readonly selected: boolean;
@@ -46,6 +45,9 @@ function SelectionRow(props: {
   readonly subtitle?: string;
   readonly title: string;
 }) {
+  const iconColor = useThemeColor("--color-icon-muted");
+  const checkmarkColor = useThemeColor("--color-icon");
+
   return (
     <Pressable
       accessibilityLabel={[props.title, props.subtitle].filter(Boolean).join(", ")}
@@ -59,16 +61,9 @@ function SelectionRow(props: {
       onPress={props.onPress}
       style={{ opacity: props.disabled ? 0.45 : 1 }}
     >
-      {props.icon === "arrow.triangle.branch" ? (
-        <SymbolView
-          name="arrow.triangle.branch"
-          size={17}
-          tintColorClassName={"accent-icon-muted"}
-          type="monochrome"
-        />
-      ) : (
-        (props.icon ?? null)
-      )}
+      {props.icon ? (
+        <SymbolView name={props.icon} size={17} tintColor={iconColor} type="monochrome" />
+      ) : null}
       <View className="min-w-0 flex-1 gap-0.5">
         <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
           {props.title}
@@ -83,7 +78,7 @@ function SelectionRow(props: {
         <SymbolView
           name="checkmark"
           size={16}
-          tintColorClassName={"accent-icon"}
+          tintColor={checkmarkColor}
           type="monochrome"
           weight="semibold"
         />
@@ -150,7 +145,6 @@ export function NewTaskEnvironmentPickerRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const serverConfigs = useServerConfigs();
 
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
@@ -176,15 +170,7 @@ export function NewTaskEnvironmentPickerRouteScreen() {
           {flow.environments.map((environment, index) => (
             <SelectionRow
               key={String(environment.environmentId)}
-              icon={
-                <EnvironmentMachineSymbol
-                  kind={resolveEnvironmentMachineKind(
-                    serverConfigs.get(environment.environmentId) ?? null,
-                  )}
-                  size={17}
-                  tintColorClassName="accent-icon-muted"
-                />
-              }
+              icon="desktopcomputer"
               isLast={index === flow.environments.length - 1}
               onPress={() => {
                 void Haptics.selectionAsync();
@@ -205,6 +191,9 @@ export function NewTaskBranchPickerRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const placeholderColor = useThemeColor("--color-placeholder");
+  const foregroundColor = useThemeColor("--color-foreground");
+  const fontFamily = useFontFamily("regular");
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const [switchingBranchName, setSwitchingBranchName] = useState<string | null>(null);
   const selectingBranchNameRef = useRef<string | null>(null);
@@ -427,10 +416,11 @@ export function NewTaskBranchPickerRouteScreen() {
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
-            className="h-11 rounded-xl bg-card px-4 font-sans text-base text-foreground"
+            className="h-11 rounded-xl bg-card px-4 text-base text-foreground"
             onChangeText={flow.setBranchQuery}
             placeholder="Find a branch"
-            placeholderTextColorClassName={"accent-placeholder"}
+            placeholderTextColor={placeholderColor}
+            style={{ color: foregroundColor, fontFamily }}
             value={flow.branchQuery}
           />
         </View>

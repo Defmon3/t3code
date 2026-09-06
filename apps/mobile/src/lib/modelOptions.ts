@@ -4,7 +4,7 @@ import type {
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
-  buildExplicitProviderOptionSelectionsFromDescriptors,
+  buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 
@@ -17,7 +17,6 @@ export type ModelOption = {
   readonly providerDriver: string;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
-  readonly isUnavailable?: boolean;
   readonly capabilities: ModelCapabilities | null;
   readonly selection: ModelSelection;
 };
@@ -46,12 +45,11 @@ function normalizeSelectionOptions(
   if (!capabilities) {
     return selection;
   }
-  const options = buildExplicitProviderOptionSelectionsFromDescriptors(
+  const options = buildProviderOptionSelectionsFromDescriptors(
     getProviderOptionDescriptors({
       caps: capabilities,
       selections: selection.options,
     }),
-    selection.options,
   );
   return options
     ? { ...selection, options }
@@ -61,34 +59,12 @@ function normalizeSelectionOptions(
       };
 }
 
-/** Whether a known Antigravity selection needs setup or a different model. */
-export function isModelSelectionUnavailable(
-  config: T3ServerConfig | null | undefined,
-  selection: ModelSelection | null | undefined,
-): boolean {
-  if (!config || !selection) {
-    return false;
-  }
-  const provider = config.providers.find(
-    (candidate) => candidate.instanceId === selection.instanceId,
-  );
-  const driver =
-    provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
-  return (
-    driver === "antigravity" &&
-    (!provider ||
-      !provider.enabled ||
-      !provider.installed ||
-      provider.auth.status === "unauthenticated" ||
-      provider.availability === "unavailable" ||
-      !provider.models.some((model) => model.slug === selection.model))
-  );
-}
-
 /**
- * Keep Antigravity selections when setup or catalog changes make them
- * unavailable. Other providers fall through to the server default when they
- * are disabled, missing, or signed out. Without config, keep stored selections.
+ * A stored model selection is only usable when its provider instance is
+ * currently enabled, installed, and authenticated on the server. Returns the
+ * selection unchanged when usable, otherwise `null` so callers fall through to
+ * the server's default model. A missing config (environment offline) cannot be
+ * validated, so stored selections pass through untouched.
  */
 export function resolveSelectableModelSelection(
   config: T3ServerConfig | null | undefined,
@@ -100,11 +76,6 @@ export function resolveSelectableModelSelection(
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
-  const driver =
-    provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
-  if (driver === "antigravity") {
-    return selection;
-  }
   return provider &&
     provider.enabled &&
     provider.installed &&
@@ -114,9 +85,11 @@ export function resolveSelectableModelSelection(
 }
 
 /**
- * Reject legacy models for implicit defaults, except Antigravity selections,
- * which must not silently change after a catalog update. Explicit picks in
- * the settings sheet are unaffected.
+ * Like resolveSelectableModelSelection, but additionally rejects legacy
+ * models. Used for implicit defaults (stored draft, project last-used): a
+ * new thread should never quietly start on a legacy model, so those fall
+ * through to the provider's default instead. Explicit picks in the settings
+ * sheet are unaffected.
  */
 export function resolveDefaultableModelSelection(
   config: T3ServerConfig | null | undefined,
@@ -128,23 +101,7 @@ export function resolveDefaultableModelSelection(
   }
   const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === usable.model);
-  return provider?.driver !== "antigravity" && model?.isLegacy === true ? null : usable;
-}
-
-export function resolveNewTaskModelSelection(input: {
-  readonly draftSelection: ModelSelection | null;
-  readonly projectDefaultSelection: ModelSelection | null;
-  readonly stickySelection: ModelSelection | null;
-  readonly modelOptions: ReadonlyArray<ModelOption>;
-}): ModelSelection | null {
-  return (
-    input.draftSelection ??
-    input.projectDefaultSelection ??
-    input.stickySelection ??
-    input.modelOptions.find((option) => option.isDefault && !option.isUnavailable)?.selection ??
-    input.modelOptions.find((option) => !option.isUnavailable)?.selection ??
-    null
-  );
+  return model?.isLegacy === true ? null : usable;
 }
 
 export function buildModelOptions(
@@ -154,12 +111,7 @@ export function buildModelOptions(
   const options = new Map<string, ModelOption>();
 
   for (const provider of config?.providers ?? []) {
-    if (
-      !provider.enabled ||
-      !provider.installed ||
-      provider.auth.status === "unauthenticated" ||
-      (provider.driver === "antigravity" && provider.availability === "unavailable")
-    ) {
+    if (!provider.enabled || !provider.installed || provider.auth.status === "unauthenticated") {
       continue;
     }
 
@@ -169,7 +121,7 @@ export function buildModelOptions(
       options.set(key, {
         key,
         label: model.name,
-        subtitle: model.subProvider ?? "",
+        subtitle: providerLabel,
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
@@ -193,39 +145,20 @@ export function buildModelOptions(
     if (existing) {
       options.set(key, {
         ...existing,
-        selection:
-          existing.providerDriver === "antigravity"
-            ? fallbackModelSelection
-            : normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
+        selection: normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
       });
     } else {
-      const provider = config?.providers.find(
-        (candidate) => candidate.instanceId === fallbackModelSelection.instanceId,
-      );
-      const instanceConfig = config?.settings?.providerInstances[fallbackModelSelection.instanceId];
-      const model = provider?.models.find(
-        (candidate) => candidate.slug === fallbackModelSelection.model,
-      );
-      const providerDriver =
-        provider?.driver ?? instanceConfig?.driver ?? fallbackModelSelection.instanceId;
-      const providerLabel = providerDisplayLabel({
-        driver: providerDriver,
-        displayName: provider?.displayName ?? instanceConfig?.displayName,
-        instanceId: fallbackModelSelection.instanceId,
-      });
+      const providerLabel = fallbackModelSelection.instanceId;
       options.set(key, {
         key,
-        label: model?.name ?? fallbackModelSelection.model,
-        subtitle: model?.subProvider ?? "",
+        label: fallbackModelSelection.model,
+        subtitle: providerLabel,
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
-        providerDriver,
+        providerDriver: fallbackModelSelection.instanceId,
         isDefault: false,
-        isLegacy: model?.isLegacy === true,
-        ...(isModelSelectionUnavailable(config, fallbackModelSelection)
-          ? { isUnavailable: true }
-          : {}),
-        capabilities: model?.capabilities ?? null,
+        isLegacy: false,
+        capabilities: null,
         selection: fallbackModelSelection,
       });
     }

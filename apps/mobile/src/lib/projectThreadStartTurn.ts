@@ -7,12 +7,11 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
-import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
-import type { UploadedMobileAttachment } from "./attachmentUpload";
+import { toUploadChatImageAttachments, type DraftComposerImageAttachment } from "./composerImages";
 
 export function deriveThreadTitleFromPrompt(value: string): string {
-  const trimmed = assistantCitationsToPlainText(value).trim();
+  const trimmed = value.trim();
   if (trimmed.length === 0) {
     return "New thread";
   }
@@ -29,8 +28,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly messageId: string;
   readonly createdAt: string;
   readonly text: string;
-  /** Wire attachments from `prepareTurnAttachments`, in composer order. */
-  readonly uploadedAttachments: ReadonlyArray<UploadedMobileAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -57,7 +55,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
       messageId: MessageId.make(spec.messageId),
       role: "user" as const,
       text: spec.text,
-      attachments: spec.uploadedAttachments,
+      attachments: toUploadChatImageAttachments(spec.attachments),
     },
     modelSelection: spec.modelSelection,
     titleSeed: title,

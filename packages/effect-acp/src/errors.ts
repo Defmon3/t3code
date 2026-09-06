@@ -3,7 +3,7 @@ import type * as SchemaIssue from "effect/SchemaIssue";
 
 import * as AcpSchema from "./_generated/schema.gen.ts";
 
-const AcpRequestOperation = Schema.Literals([
+export const AcpRequestOperation = Schema.Literals([
   "decode-extension-request-payload",
   "encode-extension-response",
   "handle-request",
@@ -11,12 +11,12 @@ const AcpRequestOperation = Schema.Literals([
   "receive-response",
   "receive-streaming-response",
 ]);
-type AcpRequestOperation = typeof AcpRequestOperation.Type;
+export type AcpRequestOperation = typeof AcpRequestOperation.Type;
 
 export const AcpRequestId = Schema.Union([Schema.String, Schema.Number]);
 export type AcpRequestId = typeof AcpRequestId.Type;
 
-const AcpSchemaIssueKind = Schema.Literals([
+export const AcpSchemaIssueKind = Schema.Literals([
   "Filter",
   "Encoding",
   "Pointer",
@@ -29,9 +29,9 @@ const AcpSchemaIssueKind = Schema.Literals([
   "Forbidden",
   "OneOf",
 ]);
-type AcpSchemaIssueKind = typeof AcpSchemaIssueKind.Type;
+export type AcpSchemaIssueKind = typeof AcpSchemaIssueKind.Type;
 
-interface AcpSchemaIssueDiagnostics {
+export interface AcpSchemaIssueDiagnostics {
   readonly issueCount: number;
   readonly issueKinds: ReadonlyArray<AcpSchemaIssueKind>;
   readonly maximumPathDepth: number;

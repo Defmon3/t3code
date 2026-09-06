@@ -1,4 +1,7 @@
-import { isWorkspaceVideoPreviewPath } from "@t3tools/shared/filePreview";
+import {
+  isWorkspaceBrowserPreviewPath,
+  isWorkspaceImagePreviewPath,
+} from "@t3tools/shared/filePreview";
 
 export interface FileBreadcrumb {
   readonly label: string;
@@ -10,15 +13,8 @@ function isWindowsAbsolutePath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
-/** A file route holding an absolute path shows a host file outside the workspace. */
-export function isAbsolutePath(value: string): boolean {
+function isAbsolutePath(value: string): boolean {
   return value.startsWith("/") || isWindowsAbsolutePath(value);
-}
-
-/** Route segments that `normalizeRoutePath` joins back into the same path, root included. */
-export function fileRoutePathSegments(path: string): string[] {
-  const segments = path.split("/").filter((segment) => segment.length > 0);
-  return path.startsWith("/") ? ["", ...segments] : segments;
 }
 
 function isWindowsPathStyle(value: string): boolean {
@@ -88,16 +84,15 @@ export function resolveWorkspaceRelativeFilePath(
     return null;
   }
 
-  const relativePath = normalizedTarget.slice(normalizedRoot.length + 1);
-  // `/repo/../x` starts with the root but escapes it.
-  if (relativePath.split("/").includes("..")) {
-    return null;
-  }
-  return normalizeRelativePath(relativePath);
+  return normalizeRelativePath(normalizedTarget.slice(normalizedRoot.length + 1));
 }
 
-export function isVideoPreviewFile(path: string): boolean {
-  return isWorkspaceVideoPreviewPath(path);
+export function isBrowserPreviewFile(path: string): boolean {
+  return isWorkspaceBrowserPreviewPath(path);
+}
+
+export function isImagePreviewFile(path: string): boolean {
+  return isWorkspaceImagePreviewPath(path);
 }
 
 export function isSvgImagePreviewFile(path: string): boolean {

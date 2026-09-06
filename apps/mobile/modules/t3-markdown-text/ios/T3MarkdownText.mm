@@ -60,16 +60,14 @@ static void T3MarkdownTextApplyAttachments(
     NSString *imageUri = [NSString stringWithUTF8String:attachmentRange.imageUri.c_str()];
     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
     UIImage *image = images[imageUri];
-    const BOOL isSymbol = [imageUri hasPrefix:@"sf:"];
-    if (isSymbol) {
-      image = [UIImage systemImageNamed:[imageUri substringFromIndex:3]];
-    }
-    UIColor *foregroundColor = [attributedString attribute:NSForegroundColorAttributeName
-                                                   atIndex:attachmentRange.location
-                                            effectiveRange:nil];
-    if (image != nil && (isSymbol || attachmentRange.tintWithForeground)) {
-      image = [image imageWithTintColor:foregroundColor ?: UIColor.labelColor
-                          renderingMode:UIImageRenderingModeAlwaysOriginal];
+    if ([imageUri hasPrefix:@"sf:"]) {
+      NSString *symbolName = [imageUri substringFromIndex:3];
+      UIColor *foregroundColor =
+          [attributedString attribute:NSForegroundColorAttributeName
+                              atIndex:attachmentRange.location
+                       effectiveRange:nil] ?: UIColor.labelColor;
+      image = [[UIImage systemImageNamed:symbolName] imageWithTintColor:foregroundColor
+                                                          renderingMode:UIImageRenderingModeAlwaysOriginal];
     }
     attachment.image = image ?: [[UIImage alloc] init];
     const CGFloat attachmentSize = T3MarkdownTextAttachmentSize(attachmentRange);
@@ -81,15 +79,8 @@ static void T3MarkdownTextApplyAttachments(
     const NSRange range = NSMakeRange(
         attachmentRange.location,
         MIN(attachmentRange.length, attributedString.length - attachmentRange.location));
-    NSMutableAttributedString *attachmentString =
-        [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
-    // Keep the run color on the attachment so a later re-apply (after the image
-    // loads asynchronously) still tints with the link color, not labelColor.
-    if (foregroundColor != nil) {
-      [attachmentString addAttribute:NSForegroundColorAttributeName
-                               value:foregroundColor
-                               range:NSMakeRange(0, attachmentString.length)];
-    }
+    NSAttributedString *attachmentString =
+        [NSAttributedString attributedStringWithAttachment:attachment];
     [attributedString replaceCharactersInRange:range withAttributedString:attachmentString];
   }
 }
@@ -207,8 +198,6 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
   BOOL _suppressSelectionChange;
   NSMutableDictionary<NSString *, UIImage *> * _attachmentImages;
   NSMutableSet<NSString *> * _pendingAttachmentUris;
-  UILongPressGestureRecognizer *_longPressGestureRecognizer;
-  UITapGestureRecognizer *_pressGestureRecognizer;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider
@@ -234,24 +223,21 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
     _textView.textContainerInset = UIEdgeInsetsZero;
     _textView.textContainer.lineFragmentPadding = 0;
     _textView.delegate = self;
-    // Chat text supports selection and contextual actions, but not drag-and-drop.
-    _textView.textDragInteraction.enabled = NO;
-    _textView.linkTextAttributes = @{};
     // Must match RCTTextLayoutManager, which measures with usesFontLeading = NO.
     _textView.layoutManager.usesFontLeading = NO;
     [self addSubview:_textView];
 
-    _longPressGestureRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self
-                                                                                 action:@selector(handleLongPressIfNecessary:)];
-    _longPressGestureRecognizer.delegate = self;
+    const auto longPressGestureRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                                                          action:@selector(handleLongPressIfNecessary:)];
+    longPressGestureRecognizer.delegate = self;
 
-    _pressGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                       action:@selector(handlePressIfNecessary:)];
-    _pressGestureRecognizer.delegate = self;
-    [_pressGestureRecognizer requireGestureRecognizerToFail:_longPressGestureRecognizer];
+    const auto pressGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                                action:@selector(handlePressIfNecessary:)];
+    pressGestureRecognizer.delegate = self;
+    [pressGestureRecognizer requireGestureRecognizerToFail:longPressGestureRecognizer];
 
-    [_textView addGestureRecognizer:_pressGestureRecognizer];
-    [_textView addGestureRecognizer:_longPressGestureRecognizer];
+    [_textView addGestureRecognizer:pressGestureRecognizer];
+    [_textView addGestureRecognizer:longPressGestureRecognizer];
   }
 
   return self;
@@ -326,26 +312,6 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
       convertedAttrString,
       _state->getData().attachmentRanges,
       _attachmentImages);
-  NSUInteger runLocation = 0;
-  for (UIView *child in self.subviews) {
-    if (![child isKindOfClass:[T3MarkdownTextRun class]]) {
-      continue;
-    }
-
-    T3MarkdownTextRun *textChild = (T3MarkdownTextRun *)child;
-    const NSRange runRange = NSMakeRange(runLocation, textChild.text.length);
-    runLocation = NSMaxRange(runRange);
-    if (![textChild hasContextMenu] || runRange.length == 0 ||
-        NSMaxRange(runRange) > convertedAttrString.length) {
-      continue;
-    }
-
-    NSURL *link = [NSURL URLWithString:
-        [NSString stringWithFormat:@"t3-markdown-run://%ld", (long)textChild.tag]];
-    if (link != nil) {
-      [convertedAttrString addAttribute:NSLinkAttributeName value:link range:runRange];
-    }
-  }
   [self loadAttachmentImages:_state->getData().attachmentRanges];
 
   // Setting attributedText clears any active text selection, and re-assigning
@@ -518,18 +484,6 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
   return YES;
 }
 
-- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer
-{
-  if (gestureRecognizer != _longPressGestureRecognizer &&
-      gestureRecognizer != _pressGestureRecognizer) {
-    return YES;
-  }
-
-  const auto location = [self getLocationOfPress:gestureRecognizer];
-  const auto child = [self getTouchChild:location];
-  return ![child hasContextMenu];
-}
-
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch
 {
   return YES;
@@ -552,24 +506,6 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
 }
 
 // MARK: - Touch handling
-
-- (nullable T3MarkdownTextRun *)childForCharacterRange:(NSRange)characterRange
-{
-  NSUInteger location = 0;
-  for (UIView *child in self.subviews) {
-    if (![child isKindOfClass:[T3MarkdownTextRun class]]) {
-      continue;
-    }
-
-    T3MarkdownTextRun *textChild = (T3MarkdownTextRun *)child;
-    const NSRange range = NSMakeRange(location, textChild.text.length);
-    if (NSIntersectionRange(range, characterRange).length > 0) {
-      return textChild;
-    }
-    location = NSMaxRange(range);
-  }
-  return nil;
-}
 
 - (CGPoint)getLocationOfPress:(UIGestureRecognizer*)sender
 {
@@ -614,10 +550,6 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
 
 - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
 {
-  if (sender.state != UIGestureRecognizerStateBegan) {
-    return;
-  }
-
   const auto location = [self getLocationOfPress:sender];
   const auto child = [self getTouchChild:location];
 
@@ -627,30 +559,6 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
 }
 
 // MARK: - UITextViewDelegate
-
-- (nullable UIAction *)textView:(UITextView *)textView
-    primaryActionForTextItem:(UITextItem *)textItem
-               defaultAction:(UIAction *)defaultAction API_AVAILABLE(ios(17.0))
-{
-  T3MarkdownTextRun *child = [self childForCharacterRange:textItem.range];
-  if (![child hasContextMenu]) {
-    return defaultAction;
-  }
-
-  __weak T3MarkdownTextRun *weakChild = child;
-  return [UIAction actionWithHandler:^(__kindof UIAction *action) {
-    [weakChild onPress];
-  }];
-}
-
-- (nullable UITextItemMenuConfiguration *)textView:(UITextView *)textView
-                      menuConfigurationForTextItem:(UITextItem *)textItem
-                                       defaultMenu:(UIMenu *)defaultMenu API_AVAILABLE(ios(17.0))
-{
-  T3MarkdownTextRun *child = [self childForCharacterRange:textItem.range];
-  UIMenu *menu = [child contextMenu];
-  return [UITextItemMenuConfiguration configurationWithMenu:menu ?: defaultMenu];
-}
 
 - (void)textViewDidChangeSelection:(UITextView *)textView
 {

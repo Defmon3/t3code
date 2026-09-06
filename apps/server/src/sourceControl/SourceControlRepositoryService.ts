@@ -1,3 +1,4 @@
+import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,7 +20,6 @@ import {
 } from "@t3tools/contracts";
 
 import { ServerConfig } from "../config.ts";
-import { expandHomePathWith } from "../pathExpansion.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 const isSourceControlRepositoryError = Schema.is(SourceControlRepositoryError);
@@ -77,6 +77,16 @@ function selectRemoteUrl(
   }
 }
 
+function expandHomePath(input: string, path: Path.Path): string {
+  if (input === "~") {
+    return NodeOS.homedir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(NodeOS.homedir(), input.slice(2));
+  }
+  return input;
+}
+
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -127,7 +137,7 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      return path.resolve(expandHomePathWith(trimmed, path));
+      return path.resolve(expandHomePath(trimmed, path));
     },
   );
 

@@ -1,13 +1,11 @@
-import { LoaderCircleIcon } from "lucide-react";
-import { observeVisibleAnimation } from "~/lib/visibleAnimation";
+import { Loader2Icon } from "lucide-react";
 import { cn } from "~/lib/utils";
 
-function Spinner({ className, ...props }: React.ComponentPropsWithoutRef<typeof LoaderCircleIcon>) {
+function Spinner({ className, ...props }: React.ComponentProps<typeof Loader2Icon>) {
   return (
-    <LoaderCircleIcon
+    <Loader2Icon
       aria-label="Loading"
-      ref={observeVisibleAnimation}
-      className={cn("motion-safe:visible-animate-spin", className)}
+      className={cn("animate-spin", className)}
       role="status"
       {...props}
     />
