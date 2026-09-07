@@ -80,6 +80,7 @@ function normalizeContextMenuItems(source: readonly ContextMenuItem[]): ContextM
       disabled: sourceItem.disabled === true,
       ...(sourceItem.icon ? { icon: sourceItem.icon } : {}),
       ...(sourceItem.separatorBefore === true ? { separatorBefore: true } : {}),
+      ...(sourceItem.icon ? { icon: sourceItem.icon } : {}),
     };
 
     if (sourceItem.children) {

@@ -14,9 +14,19 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
     { tag: "path", attrs: { d: "m9 12 2 2 4-4" } },
   ],
+  undo: [
+    { tag: "path", attrs: { d: "M9 14 4 9l5-5" } },
+    { tag: "path", attrs: { d: "M4 9h10a6 6 0 0 1 6 6v1" } },
+  ],
   clock: [
     { tag: "path", attrs: { d: "M12 6v6l4 2" } },
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
+  ],
+  "alarm-clock": [
+    { tag: "circle", attrs: { cx: "12", cy: "13", r: "8" } },
+    { tag: "path", attrs: { d: "M12 9v4l2 2" } },
+    { tag: "path", attrs: { d: "m5 3-3 3" } },
+    { tag: "path", attrs: { d: "m19 3 3 3" } },
   ],
   pencil: [
     {

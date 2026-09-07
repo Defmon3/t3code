@@ -157,6 +157,10 @@ class FakeDocument {
     return new FakeElement(tagName);
   }
 
+  createElementNS(_namespace: string, tagName: string) {
+    return new FakeElement(tagName);
+  }
+
   addEventListener(type: string, listener: FakeListener) {
     const existing = this.listeners.get(type) ?? [];
     existing.push(listener);
@@ -245,6 +249,30 @@ describe("showContextMenuFallback", () => {
     renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     await expect(selectionPromise).resolves.toBe("rename");
+  });
+
+  it("renders distinct reverse-action icons", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "unsettle", label: "Un-settle thread", icon: "undo" },
+      { id: "unsnooze", label: "Wake thread", icon: "alarm-clock" },
+    ]);
+
+    const unsettleIcon = findButton("Un-settle thread")?.children[0];
+    const wakeIcon = findButton("Wake thread")?.children[0];
+
+    expect(unsettleIcon?.children.map((child) => child.attributes.get("d"))).toEqual([
+      "M9 14 4 9l5-5",
+      "M4 9h10a6 6 0 0 1 6 6v1",
+    ]);
+    expect(wakeIcon?.children.map((child) => child.attributes.get("d"))).toEqual([
+      undefined,
+      "M12 9v4l2 2",
+      "m5 3-3 3",
+      "m19 3 3 3",
+    ]);
+
+    dismissContextMenu();
+    await expect(selectionPromise).resolves.toBeNull();
   });
 
   it("ignores a click from the gesture that opened the menu", async () => {
