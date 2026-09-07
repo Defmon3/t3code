@@ -115,8 +115,10 @@ const stageWslRuntimeTreeFixture = Effect.fn("stageWslRuntimeTreeFixture")(funct
   );
 });
 
-function mockProcess(exitCode: number, stdout = "") {
-  const encodedStdout = new TextEncoder().encode(stdout);
+function mockProcess(exitCode: number, stdout: string | ReadonlyArray<string> = "") {
+  const stdoutChunks = (typeof stdout === "string" ? [stdout] : stdout).map((chunk) =>
+    new TextEncoder().encode(chunk),
+  );
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(1),
     exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(exitCode)),
@@ -124,7 +126,7 @@ function mockProcess(exitCode: number, stdout = "") {
     kill: () => Effect.void,
     unref: Effect.succeed(Effect.void),
     stdin: Sink.drain,
-    stdout: stdout ? Stream.make(encodedStdout) : Stream.empty,
+    stdout: stdoutChunks.length > 0 ? Stream.make(...stdoutChunks) : Stream.empty,
     stderr: Stream.empty,
     all: Stream.empty,
     getInputFd: () => Sink.drain,
@@ -803,7 +805,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ),
   );
 
-  it.effect("stages a cached resource monitor without invoking Cargo", () =>
+  it.effect("stages a cached foreign resource monitor without invoking a process", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -908,6 +910,64 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error, ResourceMonitorProtocolVersionMismatchError);
         assert.equal(error.expectedVersion, 2);
         assert.equal(error.actualVersion, 1);
+      }),
+    ),
+  );
+
+  it.effect("stages a host prebuild after reading a split matching hello", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-resource-monitor-prebuild-match-test-",
+        });
+        const prebuildPath = path.join(repoRoot, "prebuilt", "t3-resource-monitor.exe");
+        yield* fs.makeDirectory(path.dirname(prebuildPath), { recursive: true });
+        yield* fs.makeDirectory(path.join(repoRoot, "native/resource-monitor/src"), {
+          recursive: true,
+        });
+        yield* fs.makeDirectory(path.join(repoRoot, "packages/contracts/src"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(repoRoot, "native/resource-monitor/src/main.rs"),
+          "const PROTOCOL_VERSION: u32 = 2;\n",
+        );
+        yield* fs.writeFileString(
+          path.join(repoRoot, "packages/contracts/src/resourceTelemetry.ts"),
+          "export const RESOURCE_MONITOR_PROTOCOL_VERSION = 2 as const;\n",
+        );
+        yield* fs.writeFileString(prebuildPath, "new monitor");
+        const spawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(mockProcess(0, ['{"version":2,"type":"he', 'llo"}\n'])),
+          ),
+        );
+        const stageResourcesDir = path.join(repoRoot, "stage");
+
+        yield* stageResourceMonitor({
+          repoRoot,
+          stageResourcesDir,
+          platform: "win",
+          arch: "x64",
+          verbose: false,
+          prebuild: prebuildPath,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              spawner,
+              Layer.succeed(HostProcessPlatform, "win32"),
+              Layer.succeed(HostProcessArchitecture, "x64"),
+            ),
+          ),
+        );
+
+        assert.equal(
+          yield* fs.readFileString(
+            path.join(stageResourcesDir, "resource-monitor/t3-resource-monitor.exe"),
+          ),
+          "new monitor",
+        );
       }),
     ),
   );
