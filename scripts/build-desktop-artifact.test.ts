@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
@@ -1054,6 +1055,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         yield* writeResourceMonitorProtocolSources(repoRoot, 2);
         yield* fs.writeFileString(prebuildPath, "silent monitor");
         let killed = false;
+        const stdoutStarted = yield* Deferred.make<void>();
         const spawner = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make(() =>
@@ -1068,7 +1070,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                   }),
                 unref: Effect.succeed(Effect.void),
                 stdin: Sink.drain,
-                stdout: Stream.never,
+                stdout: Stream.unwrap(
+                  Deferred.succeed(stdoutStarted, undefined).pipe(Effect.as(Stream.never)),
+                ),
                 stderr: Stream.empty,
                 all: Stream.empty,
                 getInputFd: () => Sink.drain,
@@ -1096,6 +1100,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           Effect.forkChild,
         );
 
+        yield* Deferred.await(stdoutStarted);
         yield* TestClock.adjust("5 seconds");
         const error = yield* Fiber.join(fiber);
         assert.instanceOf(error, ResourceMonitorProtocolVersionMismatchError);
