@@ -362,8 +362,13 @@ describe("MessagesTimeline", () => {
       `updated ${formatDayAwareTimestamp(commentaryUpdatedAt, timestampFormat)}`,
     );
     expect(markup).toContain(`updated ${formatDayAwareTimestamp(finalUpdatedAt, timestampFormat)}`);
-    expect(markup.match(/data-agent-output-timestamp=""/gu)).toHaveLength(2);
-    expect(markup).toContain('data-agent-output-timestamp="" class="text-muted-foreground');
+    const timestampElements = markup.match(/<time\b[^>]*data-agent-output-timestamp[^>]*>/gu) ?? [];
+    expect(timestampElements).toHaveLength(2);
+    expect(
+      timestampElements.every((element) =>
+        element.includes('class="text-muted-foreground text-xs tabular-nums"'),
+      ),
+    ).toBe(true);
   });
 
   it("renders elapsed time for a completed turn", () => {
