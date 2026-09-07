@@ -105,6 +105,9 @@ const withHarness = <A, E, R>(
     | FileSystem.FileSystem
     | DesktopBackendConfiguration.DesktopBackendConfiguration
   >,
+  options?: {
+    readonly platform?: NodeJS.Platform;
+  },
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -119,7 +122,12 @@ const withHarness = <A, E, R>(
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
           Layer.provideMerge(DesktopWslServerTree.layerTest()),
-          Layer.provideMerge(makeEnvironmentLayer(baseDir)),
+          Layer.provideMerge(
+            makeEnvironmentLayer(
+              baseDir,
+              options?.platform === undefined ? undefined : { platform: options.platform },
+            ),
+          ),
         ),
       ),
     );
@@ -294,6 +302,110 @@ describe("DesktopBackendConfiguration", () => {
       assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("resolvePrimary supplies a user-local temp directory on Windows", () => {
+    let previousTemp: string | undefined;
+    let previousTmp: string | undefined;
+    let previousUserProfile: string | undefined;
+    let previousLocalAppData: string | undefined;
+
+    return withHarness(
+      Effect.gen(function* () {
+        previousTemp = process.env.TEMP;
+        previousTmp = process.env.TMP;
+        previousUserProfile = process.env.USERPROFILE;
+        previousLocalAppData = process.env.LOCALAPPDATA;
+        yield* Effect.sync(() => {
+          delete process.env.TEMP;
+          delete process.env.TMP;
+          delete process.env.USERPROFILE;
+          delete process.env.LOCALAPPDATA;
+        });
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        const expectedTempDirectory = environment.path.join(
+          environment.homeDirectory,
+          "AppData",
+          "Local",
+          "Temp",
+        );
+
+        assert.equal(config.env.TEMP, expectedTempDirectory);
+        assert.equal(config.env.TMP, expectedTempDirectory);
+        assert.isTrue(yield* fileSystem.exists(expectedTempDirectory));
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreEnv("TEMP", previousTemp);
+            restoreEnv("TMP", previousTmp);
+            restoreEnv("USERPROFILE", previousUserProfile);
+            restoreEnv("LOCALAPPDATA", previousLocalAppData);
+          }),
+        ),
+      ),
+      { platform: "win32" },
+    );
+  });
+
+  it.effect("resolvePrimary preserves configured Windows temp directories", () => {
+    let previousTemp: string | undefined;
+    let previousTmp: string | undefined;
+
+    return withHarness(
+      Effect.gen(function* () {
+        previousTemp = process.env.TEMP;
+        previousTmp = process.env.TMP;
+        yield* Effect.sync(() => {
+          process.env.TEMP = "D:\\configured-temp";
+          process.env.TMP = "E:\\configured-tmp";
+        });
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.equal(config.env.TEMP, "D:\\configured-temp");
+        assert.equal(config.env.TMP, "E:\\configured-tmp");
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreEnv("TEMP", previousTemp);
+            restoreEnv("TMP", previousTmp);
+          }),
+        ),
+      ),
+      { platform: "win32" },
+    );
+  });
+
+  it.effect("resolvePrimary completes a partial Windows temp configuration", () => {
+    let previousTemp: string | undefined;
+    let previousTmp: string | undefined;
+
+    return withHarness(
+      Effect.gen(function* () {
+        previousTemp = process.env.TEMP;
+        previousTmp = process.env.TMP;
+        yield* Effect.sync(() => {
+          process.env.TEMP = "D:\\configured-temp";
+          delete process.env.TMP;
+        });
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.equal(config.env.TEMP, "D:\\configured-temp");
+        assert.equal(config.env.TMP, "D:\\configured-temp");
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreEnv("TEMP", previousTemp);
+            restoreEnv("TMP", previousTmp);
+          }),
+        ),
+      ),
+      { platform: "win32" },
+    );
+  });
 
   it.effect("resolveWsl reuses the primary's bootstrap token", () =>
     withHarness(

@@ -98,6 +98,41 @@ const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bi
 const backendChildEnvPatch = (): Record<string, string | undefined> =>
   Object.fromEntries(DESKTOP_BACKEND_ENV_NAMES.map((name) => [name, undefined]));
 
+const resolveWindowsTempEnvironment = Effect.fn(
+  "desktop.backendConfiguration.resolveWindowsTempEnvironment",
+)(function* (): Effect.fn.Return<
+  Record<string, string>,
+  PlatformError.PlatformError,
+  DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem
+> {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  if (environment.platform !== "win32") {
+    return {};
+  }
+
+  const configuredTemp = process.env.TEMP?.trim() || process.env.TMP?.trim();
+  if (configuredTemp) {
+    return {
+      TEMP: process.env.TEMP?.trim() || configuredTemp,
+      TMP: process.env.TMP?.trim() || configuredTemp,
+    };
+  }
+
+  const tempDirectory = environment.path.join(
+    environment.homeDirectory,
+    "AppData",
+    "Local",
+    "Temp",
+  );
+  const fileSystem = yield* FileSystem.FileSystem;
+  yield* fileSystem.makeDirectory(tempDirectory, { recursive: true });
+
+  return {
+    TEMP: tempDirectory,
+    TMP: tempDirectory,
+  };
+});
+
 const getWslEnvEntryName = (entry: string): string => {
   const slashIndex = entry.indexOf("/");
   return slashIndex === -1 ? entry : entry.slice(0, slashIndex);
@@ -474,12 +509,15 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
-    never,
-    DesktopEnvironment.DesktopEnvironment | DesktopServerExposure.DesktopServerExposure
+    PlatformError.PlatformError,
+    | DesktopEnvironment.DesktopEnvironment
+    | DesktopServerExposure.DesktopServerExposure
+    | FileSystem.FileSystem
   > {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    const tempEnvironment = yield* resolveWindowsTempEnvironment();
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -506,6 +544,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
+        ...tempEnvironment,
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
@@ -812,6 +851,7 @@ export const make = Effect.gen(function* () {
     return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
     );
   });
 
