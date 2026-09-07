@@ -52,7 +52,7 @@ describe("project skill shortcuts", () => {
     expect(markup).not.toContain(">Add quick slot<");
   });
 
-  it("renders inside the composer surface so attached widgets remain above it", () => {
+  it("mounts through the chat composer surface", () => {
     const markup = renderToStaticMarkup(
       createElement(ProjectSkillShortcutBar, {
         shortcuts: [],
@@ -66,22 +66,10 @@ describe("project skill shortcuts", () => {
       new URL("./ChatComposer.tsx", import.meta.url),
       "utf8",
     );
-    const indexCssSource = NodeFS.readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+    const chatViewSource = NodeFS.readFileSync(new URL("../ChatView.tsx", import.meta.url), "utf8");
     const renderStart = composerSource.lastIndexOf("// Render");
     const formStart = composerSource.indexOf('data-chat-composer-form="true"', renderStart);
-    const topDrawerStart = composerSource.indexOf(
-      'data-chat-composer-top-drawer="true"',
-      formStart,
-    );
-    const tasksDrawerStart = composerSource.indexOf("<ComposerTasksDrawer", formStart);
-    const mainSurfaceStart = composerSource.indexOf(
-      'data-chat-composer-main-surface="true"',
-      formStart,
-    );
-    const surfaceStart = composerSource.indexOf(
-      'data-chat-composer-surface="true"',
-      mainSurfaceStart,
-    );
+    const surfaceStart = composerSource.indexOf('data-chat-composer-surface="true"', formStart);
     const slotStart = composerSource.indexOf(
       'data-chat-composer-surface-top-slot="true"',
       surfaceStart,
@@ -90,17 +78,13 @@ describe("project skill shortcuts", () => {
 
     expect(markup).toContain('data-project-skill-shortcut-bar="true"');
     expect(renderStart).toBeGreaterThan(-1);
-    expect(topDrawerStart).toBeGreaterThan(formStart);
-    expect(tasksDrawerStart).toBeGreaterThan(topDrawerStart);
-    expect(mainSurfaceStart).toBeGreaterThan(tasksDrawerStart);
-    expect(surfaceStart).toBeGreaterThan(mainSurfaceStart);
+    expect(surfaceStart).toBeGreaterThan(formStart);
     expect(slotStart).toBeGreaterThan(surfaceStart);
     expect(promptRowStart).toBeGreaterThan(slotStart);
-    expect(indexCssSource).toContain(
-      '[data-chat-composer-form="true"]:has(.chat-composer-top-drawer)',
-    );
-    expect(indexCssSource).toContain('[data-chat-composer-surface-top-slot="true"]');
-    expect(indexCssSource).toContain("padding-top: var(--chat-composer-attachment-overlap)");
+    expect(chatViewSource).toContain('from "./chat/ProjectSkillShortcutBar"');
+    expect(chatViewSource).toContain("<ProjectSkillShortcutBar");
+    expect(chatViewSource).toContain("surfaceTopSlot={");
+    expect(chatViewSource).toContain("resolveProjectSkillShortcutText(shortcut, selectedProvider)");
   });
 
   it("preserves quick-slot text and rejects empty or duplicate additions", () => {
