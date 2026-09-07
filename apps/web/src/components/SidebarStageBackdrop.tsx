@@ -6,7 +6,7 @@ import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import { primaryServerConfigAtom } from "../state/server";
 
 export type SidebarStageBackdropVariant = "nightly" | "dev";
-export type EnvironmentIdentificationPillLabel = "Custom" | "Dev";
+export type EnvironmentIdentificationPillLabel = "Custom" | "Dev" | "Nightly";
 
 export function formatBuildIdentityLabel(input: {
   readonly stageLabel: EnvironmentIdentificationPillLabel;
@@ -51,7 +51,7 @@ export function resolveEnvironmentIdentificationPillLabel(
 
   const normalized = stageLabel.trim().toLowerCase();
   if (normalized === "dev") return "Dev";
-  if (normalized === "nightly") return "Custom";
+  if (normalized === "nightly") return "Nightly";
   return null;
 }
 
