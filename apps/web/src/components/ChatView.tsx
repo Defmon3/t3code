@@ -8339,14 +8339,15 @@ export default function ChatView(props: ChatViewProps) {
                                       skillShortcutColors,
                                     )
                                   }
-                                  onInvoke={(shortcut) =>
-                                    void onSend(undefined, undefined, undefined, {
-                                      standaloneText: resolveProjectSkillShortcutText(
-                                        shortcut,
-                                        selectedProvider,
-                                      ),
-                                    })
-                                  }
+                                  onInvoke={(shortcut) => {
+                                    const text = resolveProjectSkillShortcutText(
+                                      shortcut,
+                                      selectedProvider,
+                                    );
+                                    promptRef.current = text;
+                                    setComposerDraftPrompt(composerDraftTarget, text);
+                                    void onSend();
+                                  }}
                                   onInsert={(shortcut) => {
                                     composerRef.current?.insertTextAtEnd(
                                       resolveProjectSkillShortcutText(shortcut, selectedProvider),

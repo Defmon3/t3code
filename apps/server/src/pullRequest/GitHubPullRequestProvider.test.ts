@@ -725,7 +725,6 @@ describe("getChangeRequest commits", () => {
     reviewRequestLogins: [],
     hasTeamReviewRequest: false,
     checksState: null,
-    checksState: null,
     labels: [],
     body: "",
     changedFiles: 1,

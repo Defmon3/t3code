@@ -47,7 +47,7 @@ export function BranchToolbarWorktreeNameInput({
           environmentId,
           input: {
             cwd,
-            query: deferredNormalizedValue,
+            prefix: deferredNormalizedValue,
             limit: 20,
           },
         }),
