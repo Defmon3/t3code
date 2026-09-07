@@ -80,7 +80,10 @@ const handlers = {
     invokeTargeted<PreviewAutomationResizeResult>("resize", input, input.timeoutMs),
   preview_set_appearance: (input) =>
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
-  preview_snapshot: (input) => invokeTargeted<PreviewAutomationSnapshot>("snapshot", input ?? {}),
+  preview_snapshot: (input) => {
+    const { includeImage: _includeImage, ...operationInput } = input ?? {};
+    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", operationInput);
+  },
   preview_observe_start: (input) =>
     invokeTargeted<PreviewAutomationObservationStatus>("observeStart", input ?? {}),
   preview_observe_read: (input) =>

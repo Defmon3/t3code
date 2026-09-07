@@ -120,6 +120,13 @@ export const ResourceMonitorSampleNowCommand = Schema.Struct({
 });
 export type ResourceMonitorSampleNowCommand = typeof ResourceMonitorSampleNowCommand.Type;
 
+export const ResourceMonitorProcessTableCommand = Schema.Struct({
+  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  type: Schema.Literal("processTable"),
+  requestId: TrimmedNonEmptyString,
+});
+export type ResourceMonitorProcessTableCommand = typeof ResourceMonitorProcessTableCommand.Type;
+
 export const ResourceMonitorSetSampleIntervalCommand = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("setSampleInterval"),
@@ -171,6 +178,7 @@ export const ResourceMonitorCommand = Schema.Union([
   ResourceMonitorSetSampleIntervalCommand,
   ResourceMonitorSetStreamingCommand,
   ResourceMonitorSampleNowCommand,
+  ResourceMonitorProcessTableCommand,
   ResourceMonitorReadHistoryCommand,
   ResourceMonitorDiscoverProcessesCommand,
   ResourceMonitorShutdownCommand,
@@ -202,6 +210,21 @@ export const ResourceMonitorSnapshotEvent = Schema.Struct({
   processes: Schema.Array(ResourceMonitorProcessSample),
 });
 export type ResourceMonitorSnapshotEvent = typeof ResourceMonitorSnapshotEvent.Type;
+
+export const ResourceMonitorProcessTableEntry = Schema.Struct({
+  pid: PositiveInt,
+  ppid: NonNegativeInt,
+  name: Schema.String,
+});
+export type ResourceMonitorProcessTableEntry = typeof ResourceMonitorProcessTableEntry.Type;
+
+export const ResourceMonitorProcessTableEvent = Schema.Struct({
+  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  type: Schema.Literal("processTable"),
+  requestId: TrimmedNonEmptyString,
+  processes: Schema.Array(ResourceMonitorProcessTableEntry),
+});
+export type ResourceMonitorProcessTableEvent = typeof ResourceMonitorProcessTableEvent.Type;
 
 export const ResourceMonitorHistoryChunkEvent = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
@@ -236,6 +259,7 @@ export type ResourceMonitorErrorEvent = typeof ResourceMonitorErrorEvent.Type;
 export const ResourceMonitorEvent = Schema.Union([
   ResourceMonitorHelloEvent,
   ResourceMonitorSnapshotEvent,
+  ResourceMonitorProcessTableEvent,
   ResourceMonitorHistoryChunkEvent,
   ResourceMonitorProcessDiscoveryEvent,
   ResourceMonitorErrorEvent,

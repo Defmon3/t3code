@@ -7,6 +7,7 @@ import type {
   ResourceMonitorExternalProcess,
   ResourceMonitorHelloEvent,
   ResourceMonitorProcessDiscoveryEvent,
+  ResourceMonitorProcessTableEntry,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetrySourceStatus,
 } from "@t3tools/contracts";
@@ -48,6 +49,7 @@ const BATTERY_SAMPLE_INTERVAL_MS = 5_000;
 const CONSTRAINED_SAMPLE_INTERVAL_MS = 15_000;
 const HANDSHAKE_TIMEOUT = Duration.seconds(5);
 const SAMPLE_REQUEST_TIMEOUT = Duration.seconds(5);
+const PROCESS_TABLE_REQUEST_TIMEOUT = Duration.seconds(5);
 const HISTORY_REQUEST_TIMEOUT = Duration.seconds(15);
 const PROCESS_DISCOVERY_REQUEST_TIMEOUT = Duration.seconds(10);
 const INITIAL_RESTART_DELAY = Duration.millis(500);
@@ -100,7 +102,7 @@ export class NativeTelemetryHandshakeTimedOut extends Schema.TaggedErrorClass<Na
 class NativeTelemetryRequestTimedOut extends Schema.TaggedErrorClass<NativeTelemetryRequestTimedOut>()(
   "NativeTelemetryRequestTimedOut",
   {
-    operation: Schema.Literals(["discoverProcesses", "readHistory", "sampleNow"]),
+    operation: Schema.Literals(["discoverProcesses", "processTable", "readHistory", "sampleNow"]),
     timeoutMs: Schema.Number,
   },
 ) {
@@ -222,6 +224,10 @@ export class NativeTelemetryClient extends Context.Service<
       snapshot: HostPowerSnapshot,
     ) => Effect.Effect<void, NativeTelemetryClientError>;
     readonly sampleNow: Effect.Effect<NativeTelemetrySnapshot, NativeTelemetryClientError>;
+    readonly processTable: Effect.Effect<
+      ReadonlyArray<ResourceMonitorProcessTableEntry>,
+      NativeTelemetryClientError
+    >;
     readonly retry: Effect.Effect<boolean>;
     readonly health: Effect.Effect<NativeTelemetryClientHealth>;
     readonly subscribeHealth: Effect.Effect<
@@ -508,6 +514,12 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
   const pendingSamples = yield* Ref.make(
     new Map<string, Deferred.Deferred<NativeTelemetrySnapshot, NativeTelemetryClientError>>(),
   );
+  const pendingProcessTables = yield* Ref.make(
+    new Map<
+      string,
+      Deferred.Deferred<ReadonlyArray<ResourceMonitorProcessTableEntry>, NativeTelemetryClientError>
+    >(),
+  );
   const pendingHistories = yield* Ref.make(new Map<string, PendingHistoryRequest>());
   const pendingDiscoveries = yield* Ref.make(new Map<string, PendingDiscoveryRequest>());
   const discoveryMutex = yield* Semaphore.make(1);
@@ -527,9 +539,13 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
   const failPending = (error: NativeTelemetryClientError) =>
     Effect.gen(function* () {
       const samples = yield* Ref.getAndSet(pendingSamples, new Map());
+      const processTables = yield* Ref.getAndSet(pendingProcessTables, new Map());
       const histories = yield* Ref.getAndSet(pendingHistories, new Map());
       const discoveries = yield* Ref.getAndSet(pendingDiscoveries, new Map());
       yield* Effect.forEach(samples.values(), (deferred) => Deferred.fail(deferred, error), {
+        discard: true,
+      });
+      yield* Effect.forEach(processTables.values(), (deferred) => Deferred.fail(deferred, error), {
         discard: true,
       });
       yield* Effect.forEach(
@@ -615,6 +631,21 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
             }
           }
         });
+      case "processTable":
+        return Ref.modify(pendingProcessTables, (pending) => {
+          const next = new Map(pending);
+          const deferred = next.get(event.requestId);
+          next.delete(event.requestId);
+          return [Option.fromUndefinedOr(deferred), next] as const;
+        }).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (deferred) => Deferred.succeed(deferred, event.processes),
+            }),
+          ),
+          Effect.asVoid,
+        );
       case "historyChunk":
         return Effect.gen(function* () {
           const latestSnapshot = event.snapshots.at(-1);
@@ -1215,6 +1246,60 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     );
   });
 
+  const processTable: NativeTelemetryClient["Service"]["processTable"] = Effect.gen(function* () {
+    const current = yield* Ref.get(state);
+    if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) {
+      return yield* new NativeTelemetryUnavailable({
+        reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
+      });
+    }
+
+    const requestId = yield* crypto.randomUUIDv4.pipe(
+      Effect.mapError(
+        (cause) => new NativeTelemetryCommandFailed({ operation: "createRequestId", cause }),
+      ),
+    );
+    const deferred = yield* Deferred.make<
+      ReadonlyArray<ResourceMonitorProcessTableEntry>,
+      NativeTelemetryClientError
+    >();
+    yield* Ref.update(pendingProcessTables, (pending) => {
+      const next = new Map(pending);
+      next.set(requestId, deferred);
+      return next;
+    });
+    return yield* writeCommand(Option.getOrThrow(current.handle), {
+      version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+      type: "processTable",
+      requestId,
+    }).pipe(
+      Effect.andThen(
+        Deferred.await(deferred).pipe(
+          Effect.timeoutOption(PROCESS_TABLE_REQUEST_TIMEOUT),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new NativeTelemetryRequestTimedOut({
+                    operation: "processTable",
+                    timeoutMs: Duration.toMillis(PROCESS_TABLE_REQUEST_TIMEOUT),
+                  }),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
+        ),
+      ),
+      Effect.ensuring(
+        Ref.update(pendingProcessTables, (pending) => {
+          const next = new Map(pending);
+          next.delete(requestId);
+          return next;
+        }),
+      ),
+    );
+  });
+
   const health = currentHealth;
 
   return NativeTelemetryClient.of({
@@ -1237,6 +1322,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     setExternalProcesses,
     setHostPowerState,
     sampleNow,
+    processTable,
     retry: Ref.get(state).pipe(
       Effect.flatMap((current) =>
         !canRequestNativeTelemetryRetry(current.status, Option.isSome(current.handle))
@@ -1294,6 +1380,11 @@ export const layerTest = (
       sampleNow: Effect.fail(
         new NativeTelemetryUnavailable({
           reason: "No resource monitor sample was configured for this test.",
+        }),
+      ),
+      processTable: Effect.fail(
+        new NativeTelemetryUnavailable({
+          reason: "No resource monitor process table was configured for this test.",
         }),
       ),
       retry: Effect.succeed(false),

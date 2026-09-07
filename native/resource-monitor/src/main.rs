@@ -73,6 +73,10 @@ enum Command {
         version: u32,
         request_id: String,
     },
+    ProcessTable {
+        version: u32,
+        request_id: String,
+    },
     ReadHistory {
         version: u32,
         request_id: String,
@@ -96,6 +100,7 @@ impl Command {
             | Self::SetSampleInterval { version, .. }
             | Self::SetStreaming { version, .. }
             | Self::SampleNow { version, .. }
+            | Self::ProcessTable { version, .. }
             | Self::ReadHistory { version, .. }
             | Self::DiscoverProcesses { version, .. }
             | Self::Shutdown { version } => *version,
@@ -157,6 +162,24 @@ struct ProcessSample {
     io_read_bytes: u64,
     io_write_bytes: u64,
     io_semantics: IoSemantics,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessTableEntry {
+    pid: u32,
+    ppid: u32,
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessTableEvent<'a> {
+    version: u32,
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    request_id: &'a str,
+    processes: Vec<ProcessTableEntry>,
 }
 
 impl ProcessSample {
@@ -395,6 +418,41 @@ impl Collector {
             global_process_refresh_kind(),
         );
         self.cpu_baseline_refreshed_at = Some(Instant::now());
+    }
+
+    fn process_table(&self) -> Vec<ProcessTableEntry> {
+        // Use a dedicated System so this refresh cannot reset the CPU
+        // baseline tracked by self.system for snapshots.
+        let mut process_table_system = System::new();
+        process_table_system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        let mut processes = process_table_system
+            .processes()
+            .iter()
+            .filter_map(|(pid, process)| {
+                let pid = pid.as_u32();
+                // Pid 0 is the kernel idle process on some platforms. The
+                // processTable contract requires positive pids, and one zero
+                // would fail the whole event decode on the server, so drop it
+                // here. It can never be a terminal descendant.
+                if pid == 0 {
+                    return None;
+                }
+                Some(ProcessTableEntry {
+                    pid,
+                    ppid: process.parent().map(Pid::as_u32).unwrap_or(0),
+                    name: truncate_utf8(
+                        process.name().to_string_lossy().into_owned(),
+                        MAX_PROCESS_NAME_BYTES,
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
+        processes.sort_by_key(|process| process.pid);
+        processes
     }
 
     fn sample(&mut self, config: &CollectorConfig, request_id: Option<String>) -> SnapshotEvent {
@@ -1229,6 +1287,15 @@ fn main() -> io::Result<()> {
                             )?;
                         }
                     }
+                    Command::ProcessTable { request_id, .. } => {
+                        let event = ProcessTableEvent {
+                            version: PROTOCOL_VERSION,
+                            event_type: "processTable",
+                            request_id: &request_id,
+                            processes: collector.process_table(),
+                        };
+                        write_event(&mut writer, &event)?;
+                    }
                     Command::ReadHistory {
                         request_id,
                         window_ms,
@@ -1415,6 +1482,15 @@ mod tests {
             discovery,
             Command::DiscoverProcesses { request_id, roots, .. }
                 if request_id == "discovery-1" && roots == ["/workspace"]
+        ));
+
+        let process_table = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"processTable","requestId":"processes-1"}"#,
+        )
+        .expect("process table command");
+        assert!(matches!(
+            process_table,
+            Command::ProcessTable { request_id, .. } if request_id == "processes-1"
         ));
     }
 

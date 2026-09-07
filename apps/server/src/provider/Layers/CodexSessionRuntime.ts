@@ -699,17 +699,33 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
   return RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
 }
 
+const CodexThreadResumeMetadata = Schema.Struct({
+  cwd: Schema.String,
+  model: Schema.String,
+  thread: Schema.Struct({ id: Schema.String }),
+});
+const decodeCodexThreadResumeMetadata = Schema.decodeUnknownEffect(CodexThreadResumeMetadata);
+
 type CodexThreadOpenResponse =
   | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"];
-
-type CodexThreadOpenMethod = "thread/start" | "thread/resume";
+  | typeof CodexThreadResumeMetadata.Type;
 
 interface CodexThreadOpenClient {
-  readonly request: <M extends CodexThreadOpenMethod>(
-    method: M,
-    payload: CodexRpc.ClientRequestParamsByMethod[M],
-  ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
+  readonly raw: {
+    readonly request: (
+      method: "thread/resume",
+      payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"] & {
+        readonly excludeTurns?: boolean;
+      },
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
+  readonly request: (
+    method: "thread/start",
+    payload: CodexRpc.ClientRequestParamsByMethod["thread/start"],
+  ) => Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/start"],
+    CodexErrors.CodexAppServerError
+  >;
 }
 
 export const openCodexThread = (input: {
@@ -737,13 +753,24 @@ export const openCodexThread = (input: {
     return input.client.request("thread/start", startParams);
   }
 
-  return input.client
+  return input.client.raw
     .request("thread/resume", {
       threadId: resumeThreadId,
-      excludeTurns: true,
       ...startParams,
+      excludeTurns: true,
     })
     .pipe(
+      Effect.flatMap((response) =>
+        decodeCodexThreadResumeMetadata(response).pipe(
+          Effect.mapError((error) =>
+            CodexErrors.CodexAppServerRequestError.invalidPayload(
+              "thread/resume",
+              "decode-payload",
+              error,
+            ),
+          ),
+        ),
+      ),
       Effect.catchIf(isRecoverableThreadResumeError, (error) =>
         Effect.logWarning("codex app-server thread resume fell back to fresh start", {
           threadId: input.threadId,
