@@ -157,7 +157,7 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { buildTemporaryWorktreeBranchName, normalizeWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
@@ -204,6 +204,7 @@ import {
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import { BranchToolbar } from "./BranchToolbar";
+import type { WorktreeBranchNameStatus } from "./BranchToolbarWorktreeNameInput";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -415,6 +416,7 @@ import {
   resolveDraftHeroState,
   observeProactivePanelUserChoice,
   resolveProactiveTurnDiffAction,
+  resolveWorktreeBranchNameValidation,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -1663,6 +1665,8 @@ export default function ChatView(props: ChatViewProps) {
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
   ] = useState<Record<string, boolean>>({});
+  const [worktreeBranchNameStatus, setWorktreeBranchNameStatus] =
+    useState<WorktreeBranchNameStatus | null>(null);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -5163,6 +5167,15 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         primaryServerSettings.newWorktreesStartFromOrigin)
       : false;
+  const draftWorktreeBranchName = isLocalDraftThread
+    ? normalizeWorktreeBranchName(draftThread?.worktreeBranchName ?? "")
+    : null;
+  const worktreeBranchNameValidation = resolveWorktreeBranchNameValidation(
+    draftWorktreeBranchName,
+    worktreeBranchNameStatus,
+  );
+  const customWorktreeBranchName =
+    worktreeBranchNameValidation.state === "available" ? worktreeBranchNameValidation.name : null;
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
@@ -6567,6 +6580,22 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
+    // A typed name is never silently dropped: sending waits for its conflict
+    // lookup to settle instead of trusting the last reported answer.
+    if (shouldCreateWorktree && worktreeBranchNameValidation.state === "checking") {
+      setThreadError(
+        threadIdForSend,
+        `Still checking whether branch "${worktreeBranchNameValidation.name}" is available. Try again in a moment.`,
+      );
+      return;
+    }
+    if (shouldCreateWorktree && worktreeBranchNameValidation.state === "conflict") {
+      setThreadError(
+        threadIdForSend,
+        `Branch "${worktreeBranchNameValidation.name}" already exists. Pick a different worktree branch name.`,
+      );
+      return;
+    }
 
     const composerImagesSnapshot = [...composerImages];
     const composerFilesSnapshot = [...composerFiles];
@@ -6873,7 +6902,10 @@ export default function ChatView(props: ChatViewProps) {
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
                       baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
+                      // A custom name skips the server's LLM branch naming:
+                      // only temporary-pattern branches get renamed.
+                      branch:
+                        customWorktreeBranchName ?? buildTemporaryWorktreeBranchName(randomHex),
                       ...(startFromOrigin ? { startFromOrigin: true } : {}),
                     },
                     runSetupScript: true,
@@ -8386,6 +8418,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onEnvModeChange={onEnvModeChange}
                                 startFromOrigin={startFromOrigin}
                                 onStartFromOriginChange={onStartFromOriginChange}
+                                onWorktreeBranchNameStatusChange={setWorktreeBranchNameStatus}
                                 {...(canOverrideServerThreadEnvMode
                                   ? { effectiveEnvModeOverride: envMode }
                                   : {})}

@@ -28,6 +28,10 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import {
+  BranchToolbarWorktreeNameInput,
+  type WorktreeBranchNameStatus,
+} from "./BranchToolbarWorktreeNameInput";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -59,6 +63,7 @@ interface BranchToolbarProps {
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
+  onWorktreeBranchNameStatusChange?: (status: WorktreeBranchNameStatus | null) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -463,6 +468,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onStartFromOriginChange,
   autoEnvironmentLabel,
   onAutoEnvironment,
+  onWorktreeBranchNameStatusChange,
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -543,7 +549,39 @@ export const BranchToolbar = memo(function BranchToolbar({
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const labelsOverflow = useLabelsOverflow(stripElement);
 
+  // Naming the next worktree's branch only makes sense before the first send,
+  // when a brand-new worktree (not a reused one) is about to be created.
+  const showWorktreeNameInput =
+    showGitControls &&
+    serverThread === null &&
+    draftThread !== null &&
+    effectiveEnvMode === "worktree" &&
+    activeWorktreePath === null &&
+    !envLocked;
+  const onWorktreeBranchNameChange = useCallback(
+    (value: string) => {
+      setDraftThreadContext(draftId ?? threadRef, {
+        worktreeBranchName: value.length > 0 ? value : null,
+      });
+    },
+    [draftId, setDraftThreadContext, threadRef],
+  );
+
   if (!hasActiveThread || !activeProject) return null;
+
+  // Rendered in both layouts: a stored name the user can't see is a name they
+  // can't clear, and the send path ignores it while the input is unmounted.
+  const worktreeNameInput = showWorktreeNameInput ? (
+    <BranchToolbarWorktreeNameInput
+      environmentId={environmentId}
+      cwd={activeProject.workspaceRoot}
+      value={draftThread?.worktreeBranchName ?? ""}
+      onValueChange={onWorktreeBranchNameChange}
+      {...(onWorktreeBranchNameStatusChange
+        ? { onStatusChange: onWorktreeBranchNameStatusChange }
+        : {})}
+    />
+  ) : null;
 
   return (
     <ComposerSurface.ContextStrip
@@ -575,6 +613,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
           />
+          {worktreeNameInput}
         </div>
       ) : null}
       {showGitControls || showEnvironmentIndicator ? (
@@ -614,6 +653,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               onUsePreviousWorktree={onUsePreviousWorktree}
             />
           ) : null}
+          {worktreeNameInput}
         </div>
       ) : null}
 
