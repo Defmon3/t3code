@@ -4,12 +4,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -132,6 +134,25 @@ function mockProcess(exitCode: number, stdout: string | ReadonlyArray<string> = 
     getOutputFd: () => Stream.empty,
   });
 }
+
+const writeResourceMonitorProtocolSources = Effect.fn("test.writeResourceMonitorProtocolSources")(
+  function* (repoRoot: string, version: number) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(path.join(repoRoot, "native/resource-monitor/src"), {
+      recursive: true,
+    });
+    yield* fs.makeDirectory(path.join(repoRoot, "packages/contracts/src"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(repoRoot, "native/resource-monitor/src/main.rs"),
+      `const PROTOCOL_VERSION: u32 = ${version};\n`,
+    );
+    yield* fs.writeFileString(
+      path.join(repoRoot, "packages/contracts/src/resourceTelemetry.ts"),
+      `export const RESOURCE_MONITOR_PROTOCOL_VERSION = ${version} as const;\n`,
+    );
+  },
+);
 
 function iconResizeSpawnerLayer(
   commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>,
@@ -906,6 +927,54 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("rejects a reused host resource monitor with a different protocol version", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-resource-monitor-cache-match-",
+        });
+        const binaryPath = path.join(
+          repoRoot,
+          "native/resource-monitor/target/x86_64-pc-windows-msvc/release/t3-resource-monitor.exe",
+        );
+        yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+        yield* writeResourceMonitorProtocolSources(repoRoot, 2);
+        yield* fs.writeFileString(binaryPath, "old monitor");
+        const spawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(mockProcess(0, '{"version":1,"type":"hello"}\n')),
+          ),
+        );
+
+        const error = yield* stageResourceMonitor({
+          repoRoot,
+          stageResourcesDir: path.join(repoRoot, "stage"),
+          platform: "win",
+          arch: "x64",
+          verbose: false,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              spawner,
+              Layer.succeed(HostProcessPlatform, "win32"),
+              Layer.succeed(HostProcessArchitecture, "x64"),
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({ env: { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true" } }),
+              ),
+            ),
+          ),
+          Effect.flip,
+        );
+
+        assert.instanceOf(error, ResourceMonitorProtocolVersionMismatchError);
+        assert.equal(error.actualVersion, 1);
+      }),
+    ),
+  );
+
   it.effect("stages a host prebuild after reading a split matching hello", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -961,6 +1030,69 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "new monitor",
         );
       }),
+    ),
+  );
+
+  it.effect("kills a silent host prebuild after the hello timeout", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-resource-monitor-timeout-test-",
+        });
+        const prebuildPath = path.join(repoRoot, "prebuilt", "t3-resource-monitor.exe");
+        yield* fs.makeDirectory(path.dirname(prebuildPath), { recursive: true });
+        yield* writeResourceMonitorProtocolSources(repoRoot, 2);
+        yield* fs.writeFileString(prebuildPath, "silent monitor");
+        let killed = false;
+        const spawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              ChildProcessSpawner.makeHandle({
+                pid: ChildProcessSpawner.ProcessId(1),
+                exitCode: Effect.never,
+                isRunning: Effect.succeed(true),
+                kill: () =>
+                  Effect.sync(() => {
+                    killed = true;
+                  }),
+                unref: Effect.succeed(Effect.void),
+                stdin: Sink.drain,
+                stdout: Stream.never,
+                stderr: Stream.empty,
+                all: Stream.empty,
+                getInputFd: () => Sink.drain,
+                getOutputFd: () => Stream.empty,
+              }),
+            ),
+          ),
+        );
+        const fiber = yield* stageResourceMonitor({
+          repoRoot,
+          stageResourcesDir: path.join(repoRoot, "stage"),
+          platform: "win",
+          arch: "x64",
+          verbose: false,
+          prebuild: prebuildPath,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              spawner,
+              Layer.succeed(HostProcessPlatform, "win32"),
+              Layer.succeed(HostProcessArchitecture, "x64"),
+            ),
+          ),
+          Effect.flip,
+          Effect.forkChild,
+        );
+
+        yield* TestClock.adjust("5 seconds");
+        const error = yield* Fiber.join(fiber);
+        assert.instanceOf(error, ResourceMonitorProtocolVersionMismatchError);
+        assert.isTrue(killed);
+      }).pipe(Effect.provide(TestClock.layer())),
     ),
   );
 
