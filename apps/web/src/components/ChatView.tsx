@@ -1,5 +1,5 @@
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+import type { ProjectSkillShortcutColors, UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
   hasProviderUsageLimits,
@@ -302,6 +302,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
+import { projectEnvironment } from "../state/projects";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import {
   requestOlderThreadTurns,
@@ -320,6 +321,10 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import {
+  ProjectSkillShortcutBar,
+  resolveProjectSkillShortcutText,
+} from "./chat/ProjectSkillShortcutBar";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
@@ -1405,6 +1410,7 @@ export default function ChatView(props: ChatViewProps) {
   const updateProjectScriptSettings = useAtomCommand(serverEnvironment.updateSettings, {
     reportFailure: false,
   });
+  const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
@@ -3823,6 +3829,26 @@ export default function ChatView(props: ChatViewProps) {
       return updateResult;
     },
     [environmentId, updateProjectScriptSettings, upsertKeybinding],
+  );
+  const persistProjectSkillShortcuts = useCallback(
+    async (skillShortcuts: string[], skillShortcutColors: ProjectSkillShortcutColors) => {
+      if (!activeProject) return;
+      const result = await updateProject({
+        environmentId,
+        input: { projectId: activeProject.id, skillShortcuts, skillShortcutColors },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not save skill shortcuts",
+            description: error instanceof Error ? error.message : "The project update failed.",
+          }),
+        );
+      }
+    },
+    [activeProject, environmentId, updateProject],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {
@@ -8270,6 +8296,34 @@ export default function ChatView(props: ChatViewProps) {
                             keybindings={keybindings}
                             terminalOpen={Boolean(terminalUiState.terminalOpen)}
                             gitCwd={gitCwd}
+                            surfaceTopSlot={
+                              activeProject ? (
+                                <ProjectSkillShortcutBar
+                                  shortcuts={activeProject.skillShortcuts}
+                                  colors={activeProject.skillShortcutColors ?? {}}
+                                  onChange={(skillShortcuts, skillShortcutColors) =>
+                                    void persistProjectSkillShortcuts(
+                                      skillShortcuts,
+                                      skillShortcutColors,
+                                    )
+                                  }
+                                  onInvoke={(shortcut) =>
+                                    void onSend(undefined, undefined, undefined, {
+                                      standaloneText: resolveProjectSkillShortcutText(
+                                        shortcut,
+                                        selectedProvider,
+                                      ),
+                                    })
+                                  }
+                                  onInsert={(shortcut) => {
+                                    composerRef.current?.insertTextAtEnd(
+                                      resolveProjectSkillShortcutText(shortcut, selectedProvider),
+                                      { ensureLeadingBoundary: true },
+                                    );
+                                  }}
+                                />
+                              ) : null
+                            }
                             restingControlsHost={restingComposerControlsHost}
                             restingControlsHaveLeadingContext={
                               isGitRepo || showComposerEnvironmentIndicator
