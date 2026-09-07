@@ -69,6 +69,7 @@ import {
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   LinuxBrowserSecretHostError,
+  ResourceMonitorProtocolVersionMismatchError,
   stageBrowserSecret,
   validateWindowsPackagedPayload,
   WindowsPrimaryNativeProbeError,
@@ -808,6 +809,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
         const stageResourcesDir = path.join(repoRoot, "stage");
         yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+        yield* fs.makeDirectory(path.join(repoRoot, "native/resource-monitor/src"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(repoRoot, "native/resource-monitor/src/main.rs"),
+          "const PROTOCOL_VERSION: u32 = 2;\n",
+        );
+        yield* fs.makeDirectory(path.join(repoRoot, "packages/contracts/src"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(repoRoot, "packages/contracts/src/resourceTelemetry.ts"),
+          "export const RESOURCE_MONITOR_PROTOCOL_VERSION = 2 as const;\n",
+        );
         yield* fs.writeFileString(binaryPath, "cached monitor");
 
         yield* stageResourceMonitor({
@@ -832,6 +845,61 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ),
           "cached monitor",
         );
+      }),
+    ),
+  );
+
+  it.effect("rejects a prebuilt resource monitor with a different protocol version", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-resource-monitor-prebuild-test-",
+        });
+        const prebuildPath = path.join(repoRoot, "prebuilt", "t3-resource-monitor.exe");
+        yield* fs.makeDirectory(path.dirname(prebuildPath), { recursive: true });
+        yield* fs.makeDirectory(path.join(repoRoot, "native/resource-monitor/src"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(repoRoot, "native/resource-monitor/src/main.rs"),
+          "const PROTOCOL_VERSION: u32 = 2;\n",
+        );
+        yield* fs.makeDirectory(path.join(repoRoot, "packages/contracts/src"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(repoRoot, "packages/contracts/src/resourceTelemetry.ts"),
+          "export const RESOURCE_MONITOR_PROTOCOL_VERSION = 2 as const;\n",
+        );
+        yield* fs.writeFileString(prebuildPath, "old monitor");
+        const spawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(mockProcess(0, '{"version":1,"type":"hello"}\n')),
+          ),
+        );
+
+        const error = yield* stageResourceMonitor({
+          repoRoot,
+          stageResourcesDir: path.join(repoRoot, "stage"),
+          platform: "win",
+          arch: "x64",
+          verbose: false,
+          prebuild: prebuildPath,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              spawner,
+              Layer.succeed(HostProcessPlatform, "win32"),
+              Layer.succeed(HostProcessArchitecture, "x64"),
+            ),
+          ),
+          Effect.flip,
+        );
+
+        assert.instanceOf(error, ResourceMonitorProtocolVersionMismatchError);
+        assert.equal(error.expectedVersion, 2);
+        assert.equal(error.actualVersion, 1);
       }),
     ),
   );
@@ -2112,6 +2180,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         mockUpdates: Option.none(),
         mockUpdateServerPort: Option.none(),
         wslPrebuild: Option.none(),
+        resourceMonitorPrebuild: Option.none(),
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -2152,6 +2221,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             mockUpdates: Option.none(),
             mockUpdateServerPort: Option.none(),
             wslPrebuild: Option.none(),
+            resourceMonitorPrebuild: Option.none(),
           }),
         );
 
@@ -2176,6 +2246,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         mockUpdates: Option.some(false),
         mockUpdateServerPort: Option.none(),
         wslPrebuild: Option.none(),
+        resourceMonitorPrebuild: Option.none(),
       }).pipe(
         Effect.provide(
           ConfigProvider.layer(

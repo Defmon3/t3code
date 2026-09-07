@@ -173,6 +173,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
+  readonly resourceMonitorPrebuild: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -448,6 +449,30 @@ export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedErrorCl
 ) {
   override get message(): string {
     return `Resource monitor build for ${this.rustTarget} did not produce ${this.binaryPath}.`;
+  }
+}
+
+export class ResourceMonitorProtocolVersionMismatchError extends Schema.TaggedErrorClass<ResourceMonitorProtocolVersionMismatchError>()(
+  "ResourceMonitorProtocolVersionMismatchError",
+  {
+    binaryPath: Schema.String,
+    expectedVersion: Schema.Number,
+    actualVersion: Schema.optional(Schema.Number),
+  },
+) {
+  override get message(): string {
+    const actualVersion =
+      this.actualVersion === undefined ? "missing or invalid" : String(this.actualVersion);
+    return `Resource monitor ${this.binaryPath} reported protocol version ${actualVersion}; expected ${this.expectedVersion}.`;
+  }
+}
+
+export class ResourceMonitorProtocolVersionSourceInvalidError extends Schema.TaggedErrorClass<ResourceMonitorProtocolVersionSourceInvalidError>()(
+  "ResourceMonitorProtocolVersionSourceInvalidError",
+  { sourcePath: Schema.String },
+) {
+  override get message(): string {
+    return `Resource monitor protocol versions are missing or incompatible in ${this.sourcePath}.`;
   }
 }
 
@@ -942,6 +967,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
+  readonly resourceMonitorPrebuild: string | undefined;
 }
 
 interface StagePackageJson {
@@ -1582,6 +1608,9 @@ const BuildEnvConfig = Config.all({
   // into the staged node-pty so the WSL backend ships a ready binary and never
   // compiles on the user's machine.
   wslPrebuild: Config.string("T3CODE_DESKTOP_WSL_PREBUILD").pipe(Config.option),
+  resourceMonitorPrebuild: Config.string("T3CODE_DESKTOP_RESOURCE_MONITOR_PREBUILD").pipe(
+    Config.option,
+  ),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1675,6 +1704,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslPrebuild =
     Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
+  const resourceMonitorPrebuild =
+    Option.getOrUndefined(input.resourceMonitorPrebuild) ??
+    Option.getOrUndefined(env.resourceMonitorPrebuild);
 
   return {
     platform,
@@ -1689,6 +1721,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
+    resourceMonitorPrebuild,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2148,22 +2181,139 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
   },
 );
 
+const ResourceMonitorHello = Schema.Struct({
+  version: Schema.Int,
+  type: Schema.Literal("hello"),
+});
+const decodeResourceMonitorHello = Schema.decodeUnknownSync(
+  Schema.fromJsonString(ResourceMonitorHello),
+);
+
+export function resourceMonitorHelloVersion(output: string): number | undefined {
+  try {
+    return decodeResourceMonitorHello(output).version;
+  } catch {
+    return undefined;
+  }
+}
+
+const readResourceMonitorProtocolVersion = Effect.fn("readResourceMonitorProtocolVersion")(
+  function* (repoRoot: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const nativeSourcePath = path.join(repoRoot, "native/resource-monitor/src/main.rs");
+    const contractSourcePath = path.join(repoRoot, "packages/contracts/src/resourceTelemetry.ts");
+    const [nativeSource, contractSource] = yield* Effect.all([
+      fs.readFileString(nativeSourcePath),
+      fs.readFileString(contractSourcePath),
+    ]);
+    const nativeVersion = /^const PROTOCOL_VERSION: u32 = (\d+);$/mu.exec(nativeSource)?.[1];
+    const contractVersion =
+      /^export const RESOURCE_MONITOR_PROTOCOL_VERSION = (\d+) as const;$/mu.exec(
+        contractSource,
+      )?.[1];
+    if (
+      nativeVersion === undefined ||
+      contractVersion === undefined ||
+      nativeVersion !== contractVersion
+    ) {
+      return yield* new ResourceMonitorProtocolVersionSourceInvalidError({
+        sourcePath: `${nativeSourcePath} and ${contractSourcePath}`,
+      });
+    }
+    return Number(contractVersion);
+  },
+);
+
+function resourceMonitorTargetMatchesHost(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  hostPlatform: NodeJS.Platform,
+  hostArch: NodeJS.Architecture,
+): boolean {
+  return (
+    (platform === "win"
+      ? hostPlatform === "win32"
+      : platform === "mac"
+        ? hostPlatform === "darwin"
+        : hostPlatform === "linux") && arch === hostArch
+  );
+}
+
+const validateNativeResourceMonitorProtocol = Effect.fn("validateNativeResourceMonitorProtocol")(
+  function* (
+    binaryPath: string,
+    platform: typeof BuildPlatform.Type,
+    arch: typeof BuildArch.Type,
+    expectedVersion: number,
+  ) {
+    const hostPlatform = yield* HostProcessPlatform;
+    const hostArch = yield* HostProcessArchitecture;
+    if (!resourceMonitorTargetMatchesHost(platform, arch, hostPlatform, hostArch)) return;
+
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const helloOutput = yield* Effect.acquireUseRelease(
+      spawner.spawn(
+        ChildProcess.make(binaryPath, [], {
+          stdin: { stream: "pipe", endOnDone: false },
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+      ),
+      (child) => child.stdout.pipe(Stream.decodeText(), Stream.splitLines, Stream.runHead),
+      (child) => child.kill().pipe(Effect.ignore),
+    ).pipe(Effect.timeoutOption(Duration.seconds(5)));
+    const actualVersion = Option.match(Option.flatten(helloOutput), {
+      onNone: () => undefined,
+      onSome: resourceMonitorHelloVersion,
+    });
+    if (actualVersion !== expectedVersion) {
+      return yield* new ResourceMonitorProtocolVersionMismatchError({
+        binaryPath,
+        expectedVersion,
+        ...(actualVersion === undefined ? {} : { actualVersion }),
+      });
+    }
+  },
+);
+
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
   readonly platform: typeof BuildPlatform.Type;
   readonly arch: typeof BuildArch.Type;
   readonly verbose: boolean;
+  readonly prebuild?: string | undefined;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifestPath = path.join(input.repoRoot, "native/resource-monitor/Cargo.toml");
   const executableName = resourceMonitorExecutableName(input.platform);
   const rustTargets = resolveResourceMonitorRustTargets(input.platform, input.arch);
+  const protocolVersion = yield* readResourceMonitorProtocolVersion(input.repoRoot);
   const reuseResourceMonitor = yield* Config.boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
     Config.withDefault(false),
   );
   const builtBinaries: string[] = [];
+
+  if (input.prebuild) {
+    const prebuildPath = path.resolve(input.prebuild);
+    const destinationDirectory = path.join(input.stageResourcesDir, "resource-monitor");
+    const destinationPath = path.join(destinationDirectory, executableName);
+    yield* validateNativeResourceMonitorProtocol(
+      prebuildPath,
+      input.platform,
+      input.arch,
+      protocolVersion,
+    );
+    yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+    yield* fs.copyFile(prebuildPath, destinationPath);
+    if (input.platform !== "win") {
+      yield* fs.chmod(destinationPath, 0o755);
+    }
+    return destinationPath;
+  }
 
   for (const rustTarget of rustTargets) {
     if (!reuseResourceMonitor) {
@@ -2204,6 +2354,12 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
       });
     }
     if (reuseResourceMonitor) {
+      yield* validateNativeResourceMonitorProtocol(
+        binaryPath,
+        input.platform,
+        input.arch,
+        protocolVersion,
+      );
       yield* Effect.log(`[desktop-artifact] Reusing cached resource monitor (${rustTarget}).`);
     }
     builtBinaries.push(binaryPath);
@@ -3621,6 +3777,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     platform: options.platform,
     arch: options.arch,
     verbose: options.verbose,
+    prebuild: options.resourceMonitorPrebuild,
   });
   yield* stageBrowserSecret({
     repoRoot,
@@ -3989,6 +4146,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   wslPrebuild: Flag.string("wsl-prebuild").pipe(
     Flag.withDescription(
       "Path to a prebuilt Linux node-pty (pty.node) for the target arch, staged for the WSL backend (env: T3CODE_DESKTOP_WSL_PREBUILD).",
+    ),
+    Flag.optional,
+  ),
+  resourceMonitorPrebuild: Flag.string("resource-monitor-prebuild").pipe(
+    Flag.withDescription(
+      "Path to a prebuilt resource monitor executable for the selected platform and architecture (env: T3CODE_DESKTOP_RESOURCE_MONITOR_PREBUILD).",
     ),
     Flag.optional,
   ),
