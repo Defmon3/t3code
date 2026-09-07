@@ -7,14 +7,20 @@ import * as Option from "effect/Option";
 import type * as Electron from "electron";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { buildFromTemplateMock, createFromDataURLMock, createFromNamedImageMock, setApplicationMenuMock } = vi.hoisted(
-  () => ({
-    buildFromTemplateMock: vi.fn(),
-    createFromDataURLMock: vi.fn(() => ({ isEmpty: () => false, setTemplateImage: vi.fn() })),
-    createFromNamedImageMock: vi.fn(),
-    setApplicationMenuMock: vi.fn(),
-  }),
-);
+const {
+  buildFromTemplateMock,
+  createFromDataURLMock,
+  createFromNamedImageMock,
+  setApplicationMenuMock,
+} = vi.hoisted(() => ({
+  buildFromTemplateMock: vi.fn(),
+  createFromDataURLMock: vi.fn((_dataUrl: string) => ({
+    isEmpty: () => false,
+    setTemplateImage: vi.fn(),
+  })),
+  createFromNamedImageMock: vi.fn(),
+  setApplicationMenuMock: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   Menu: {
@@ -168,7 +174,7 @@ describe("ElectronMenu", () => {
       });
 
       const generatedIcons = createFromDataURLMock.mock.calls.map(([dataUrl]) =>
-        Buffer.from((dataUrl as string).split(",")[1]!, "base64").toString(),
+        Buffer.from(dataUrl.split(",")[1]!, "base64").toString(),
       );
       assert.isTrue(generatedIcons.some((svg) => svg.includes("M9 14 4 9l5-5")));
       assert.isTrue(generatedIcons.some((svg) => svg.includes("m5 3-3 3")));
