@@ -10,6 +10,7 @@ import {
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+import { resolveThreadPr } from "@t3tools/client-runtime/state/thread-settled";
 import {
   ChangeRequestStatusIcon,
   prStatusIndicator,
@@ -447,7 +448,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     thread.linkedPullRequest ?? thread.branchPullRequest,
     leaseLiveStatus,
   );
-  const pr = linkedPullRequestStatus?.pr ?? null;
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
+    gitStatus:
+      thread.branch === null || linkedPullRequestStatus === null
+        ? null
+        : { refName: thread.branch, pr: linkedPullRequestStatus.pr },
+  });
   const prStatus = prStatusIndicator(pr, linkedPullRequestStatus?.sourceControlProvider);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;

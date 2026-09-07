@@ -20,6 +20,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   canSnooze,
   effectiveSnoozed,
+  resolveThreadPr,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
@@ -859,7 +860,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     JSON.stringify([thread.environmentId, gitCwd]),
     gitStatus.data,
   );
-  const pr = linkedPullRequestStatus?.pr ?? null;
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    threadCreatedAt: thread.createdAt,
+    gitStatus:
+      thread.branch === null || linkedPullRequestStatus === null
+        ? null
+        : { refName: thread.branch, pr: linkedPullRequestStatus.pr },
+  });
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
