@@ -70,7 +70,7 @@ This fork keeps custom work independently portable and combines it only in one c
 
 ### Custom-main input registry
 
-This registry, not merge ancestry or branch-name pattern matching, defines the maintained inputs. Update it whenever an input is added, retired, or accepted upstream. The current count is **26**.
+This registry, not merge ancestry or branch-name pattern matching, defines the maintained inputs. Update it whenever an input is added, retired, or accepted upstream. The current count is **27**.
 
 - Local-only input: `custom-tweaks`
 - Independently portable feature input: `feat/git-history`
@@ -99,6 +99,7 @@ This registry, not merge ancestry or branch-name pattern matching, defines the m
   - `component/vcs-poll-interval`
   - `component/windows-file-links`
   - `component/windows-process-shutdown`
+  - `component/windows-temp-environment`
 
 ## The three ways to hurt yourself
 
