@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef, MaintainScrollAtEndOptions } from "@legendapp/list/react";
+import { formatDayAwareTimestamp } from "../../timestampFormat";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
 
@@ -328,6 +329,42 @@ describe("MessagesTimeline", () => {
       }
     },
   );
+
+  it("keeps each assistant output's update timestamp visible", () => {
+    const commentaryUpdatedAt = "2026-03-17T19:12:29.000Z";
+    const finalUpdatedAt = "2026-03-17T19:13:30.000Z";
+    const commentary = buildAssistantTimelineEntry("I’ll inspect the component.");
+    const final = buildAssistantTimelineEntry("The timestamp is now visible.");
+    const timestampFormat = "24-hour" as const;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timestampFormat={timestampFormat}
+        timelineEntries={[
+          {
+            ...commentary,
+            message: { ...commentary.message, updatedAt: commentaryUpdatedAt },
+          },
+          {
+            ...final,
+            id: "entry-assistant-final",
+            message: {
+              ...final.message,
+              id: MessageId.make("message-assistant-final"),
+              updatedAt: finalUpdatedAt,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain(
+      `updated ${formatDayAwareTimestamp(commentaryUpdatedAt, timestampFormat)}`,
+    );
+    expect(markup).toContain(`updated ${formatDayAwareTimestamp(finalUpdatedAt, timestampFormat)}`);
+    expect(markup.match(/data-agent-output-timestamp=""/gu)).toHaveLength(2);
+    expect(markup).toContain('data-agent-output-timestamp="" class="text-muted-foreground');
+  });
 
   it("renders elapsed time for a completed turn", () => {
     const turnId = TurnId.make("turn-with-fold");

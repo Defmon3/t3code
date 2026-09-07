@@ -1255,14 +1255,12 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           resolvedTheme={ctx.resolvedTheme}
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
-        {row.showAssistantMeta ? (
-          <AssistantMessageMeta
-            className="mt-1.5"
-            message={row.message}
-            showCopyButton={row.showAssistantCopyButton}
-            copyStreaming={row.assistantCopyStreaming}
-          />
-        ) : null}
+        <AssistantMessageMeta
+          className="mt-1.5"
+          message={row.message}
+          showCopyButton={row.showAssistantCopyButton}
+          copyStreaming={row.assistantCopyStreaming}
+        />
       </div>
     </>
   );
@@ -1302,30 +1300,36 @@ function AssistantMessageMeta({
   const ctx = use(TimelineRowCtx);
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 focus-within:opacity-100 group-hover/assistant:opacity-100",
-        className,
-      )}
-    >
-      <AssistantCopyButton
-        message={message}
-        showCopyButton={showCopyButton}
-        streaming={copyStreaming}
-      />
-      {!message.streaming && (
-        <Tooltip>
-          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
-          </TooltipTrigger>
-          <TooltipPopup>
-            {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
-          </TooltipPopup>
-        </Tooltip>
-      )}
+    <div className={cn("flex items-center gap-2 text-xs tabular-nums", className)}>
+      <span
+        className={cn(
+          alwaysVisible
+            ? "opacity-100"
+            : "opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        )}
+      >
+        <AssistantCopyButton
+          message={message}
+          showCopyButton={showCopyButton}
+          streaming={copyStreaming}
+        />
+      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <time
+              dateTime={message.updatedAt}
+              data-agent-output-timestamp
+              className="text-muted-foreground text-xs tabular-nums"
+            />
+          }
+        >
+          {`updated ${formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}`}
+        </TooltipTrigger>
+        <TooltipPopup>
+          {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
+        </TooltipPopup>
+      </Tooltip>
     </div>
   );
 }
