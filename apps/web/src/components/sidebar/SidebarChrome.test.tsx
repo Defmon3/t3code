@@ -54,7 +54,7 @@ describe("SidebarChromeHeader", () => {
   it("renders a keyboard-focusable custom build pill when the server reports Latest", () => {
     const html = renderToStaticMarkup(<SidebarChromeHeader isElectron />);
 
-    expect(html).toContain('data-environment-identification="pill"');
+    expect(html.match(/data-environment-identification="pill"/g)).toHaveLength(1);
     expect(html).toContain('tabindex="0"');
     expect(html).toContain(">Custom build</span>");
   });
