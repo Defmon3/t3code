@@ -37,6 +37,10 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  clearHookProviderSession,
+  setHookProviderSession,
+} from "../../hooks/HookProviderSession.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -286,16 +290,23 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
-        binaryPath: "codex",
-        cwd: process.cwd(),
-        launchArgs: "",
-        model: "gpt-5.3-codex",
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        serviceTier: "priority",
-        threadId: asThreadId("thread-1"),
-        runtimeMode: "full-access",
-      });
+      NodeAssert.deepStrictEqual(
+        {
+          ...validationRuntimeFactory.factory.mock.calls[0]?.[0],
+          environment: undefined,
+        },
+        {
+          binaryPath: "codex",
+          cwd: process.cwd(),
+          environment: undefined,
+          launchArgs: "",
+          model: "gpt-5.3-codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          serviceTier: "priority",
+          threadId: asThreadId("thread-1"),
+          runtimeMode: "full-access",
+        },
+      );
     }),
   );
 });
@@ -508,6 +519,48 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       const runtime = runtimeFactory.lastRuntime;
       NodeAssert.ok(runtime);
       NodeAssert.equal(runtime.options.launchArgs, "--strict-config --enable env-feature");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("passes the thread hook approval credential to the session runtime", () => {
+    const threadId = asThreadId("sess-hook-approval");
+    const runtimeFactory = makeRuntimeFactory();
+    setHookProviderSession({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerSessionId: "hook-session",
+      endpoint: "http://127.0.0.1:4312/hook-approvals",
+      token: "hook-token",
+    });
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        return yield* makeCodexAdapter(decodeCodexSettings({}), {
+          makeRuntime: runtimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(
+        runtime.options.environment?.T3_HOOK_APPROVAL_URL,
+        "http://127.0.0.1:4312/hook-approvals",
+      );
+      NodeAssert.equal(runtime.options.environment?.T3_HOOK_APPROVAL_TOKEN, "hook-token");
+      clearHookProviderSession(threadId);
     }).pipe(Effect.provide(layer));
   });
 

@@ -234,6 +234,11 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  HookApprovalRequest,
+  HookApprovalRespondError,
+  HookApprovalRespondInput,
+} from "./hookApproval.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -379,6 +384,8 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  hookApprovalsSubscribe: "hookApprovals.subscribe",
+  hookApprovalsRespond: "hookApprovals.respond",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1181,6 +1188,19 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsHookApprovalsSubscribeRpc = Rpc.make(WS_METHODS.hookApprovalsSubscribe, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(HookApprovalRequest),
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsHookApprovalsRespondRpc = Rpc.make(WS_METHODS.hookApprovalsRespond, {
+  payload: HookApprovalRespondInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([HookApprovalRespondError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1295,6 +1315,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsHookApprovalsSubscribeRpc,
+  WsHookApprovalsRespondRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

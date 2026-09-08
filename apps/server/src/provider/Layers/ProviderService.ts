@@ -72,6 +72,8 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import * as HookProviderSession from "../../hooks/HookProviderSession.ts";
+import * as HookApprovalRegistry from "../../hooks/HookApprovalRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 const isModelSelection = Schema.is(ModelSelection);
@@ -105,6 +107,8 @@ export interface ProviderServiceLiveOptions {
   readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
   /** Same seam as `issueMcpCredential`, for observing the deny path's revoke. */
   readonly revokeMcpCredential?: typeof McpSessionRegistry.revokeActiveMcpThread;
+  readonly issueHookApprovalCredential?: typeof HookApprovalRegistry.issueActiveHookApprovalCredential;
+  readonly revokeHookApprovalCredential?: typeof HookApprovalRegistry.revokeActiveHookApprovalThread;
 }
 
 interface TurnAnalyticsMetadata {
@@ -335,6 +339,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const revokeMcpCredential =
     options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
+  const issueHookApprovalCredential =
+    options?.issueHookApprovalCredential ?? HookApprovalRegistry.issueActiveHookApprovalCredential;
+  const revokeHookApprovalCredential =
+    options?.revokeHookApprovalCredential ?? HookApprovalRegistry.revokeActiveHookApprovalThread;
   const fileSystem = yield* FileSystem.FileSystem;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
@@ -766,6 +774,45 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
     );
+  const prepareHookApprovalSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
+    Effect.gen(function* () {
+      const credential = yield* issueHookApprovalCredential({ threadId, providerInstanceId });
+      if (credential) {
+        yield* Effect.sync(() =>
+          HookProviderSession.setHookProviderSession({
+            threadId,
+            providerInstanceId,
+            ...credential,
+          }),
+        );
+      } else {
+        yield* Effect.sync(() => HookProviderSession.clearHookProviderSession(threadId));
+      }
+    });
+  const clearHookApprovalSession = (threadId: ThreadId) =>
+    revokeHookApprovalCredential(threadId).pipe(
+      Effect.tap(() => Effect.sync(() => HookProviderSession.clearHookProviderSession(threadId))),
+    );
+  const clearHookApprovalSessionIfInactive = (input: {
+    readonly threadId: ThreadId;
+    readonly providerInstanceId: ProviderInstanceId;
+  }) =>
+    Effect.gen(function* () {
+      const issued = HookProviderSession.readHookProviderSession(input.threadId);
+      if (issued?.providerInstanceId !== input.providerInstanceId) return;
+      const adapter = yield* registry
+        .getByInstance(input.providerInstanceId)
+        .pipe(Effect.catchTag("ProviderUnsupportedError", () => Effect.void));
+      if (!adapter) return;
+      if (yield* adapter.hasSession(input.threadId)) return;
+      const current = HookProviderSession.readHookProviderSession(input.threadId);
+      if (
+        current?.providerInstanceId !== input.providerInstanceId ||
+        current.providerSessionId !== issued.providerSessionId
+      )
+        return;
+      yield* clearHookApprovalSession(input.threadId);
+    });
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
@@ -907,6 +954,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* recordTurnCompletedAnalytics(source, canonicalEvent);
       } else if (canonicalEvent.type === "session.exited") {
         yield* clearTurnAnalyticsSession(source.instanceId, canonicalEvent.threadId);
+        yield* clearHookApprovalSessionIfInactive({
+          threadId: canonicalEvent.threadId,
+          providerInstanceId: source.instanceId,
+        });
       }
       if (
         isCompactedEvent(canonicalEvent) &&
@@ -1046,6 +1097,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* prepareHookApprovalSession(input.binding.threadId, bindingInstanceId);
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -1056,9 +1108,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
-        .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+        .pipe(
+          Effect.onError(() =>
+            Effect.all([
+              clearMcpSession(input.binding.threadId),
+              clearHookApprovalSession(input.binding.threadId),
+            ]),
+          ),
+        );
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
+        yield* clearHookApprovalSession(input.binding.threadId);
         return yield* toValidationError(
           input.operation,
           `Adapter/provider mismatch while recovering thread '${input.binding.threadId}'. Expected '${adapter.provider}', received '${resumed.provider}'.`,
@@ -1277,6 +1337,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
+        yield* prepareHookApprovalSession(threadId, resolvedInstanceId);
         const session = yield* adapter
           .startSession({
             ...input,
@@ -1284,10 +1345,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
           })
-          .pipe(Effect.onError(() => clearMcpSession(threadId)));
+          .pipe(
+            Effect.onError(() =>
+              Effect.all([clearMcpSession(threadId), clearHookApprovalSession(threadId)]),
+            ),
+          );
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
+          yield* clearHookApprovalSession(threadId);
           return yield* toValidationError(
             "ProviderService.startSession",
             `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
@@ -1775,6 +1841,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         timedOutNativeCompactions.delete(input.threadId);
         yield* clearTurnAnalyticsSession(routed.instanceId, input.threadId);
         yield* clearMcpSession(input.threadId);
+        yield* clearHookApprovalSession(input.threadId);
         yield* directory.upsert({
           threadId: input.threadId,
           provider: routed.adapter.provider,
@@ -2035,6 +2102,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
     McpProviderSession.clearAllMcpProviderSessions();
+    yield* HookApprovalRegistry.revokeAllActiveHookApprovalCredentials();
+    HookProviderSession.clearAllHookProviderSessions();
     const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
     yield* Effect.forEach(bindings, (binding) =>
       Effect.gen(function* () {
