@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthAccessStreamError,
+  HookApprovalRespondError,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
@@ -119,6 +120,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import { HookApprovalRegistry } from "./hooks/HookApprovalRegistry.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -548,6 +550,7 @@ const makeWsRpcLayer = <E, R>(
       R
     >;
   },
+  hookApprovals: HookApprovalRegistry["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2083,6 +2086,27 @@ const makeWsRpcLayer = <E, R>(
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.hookApprovalsSubscribe]: () =>
+          observeRpcStream(WS_METHODS.hookApprovalsSubscribe, hookApprovals.subscribe(), {
+            "rpc.aggregate": "hook-approvals",
+          }),
+        [WS_METHODS.hookApprovalsRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.hookApprovalsRespond,
+            hookApprovals.respond(input).pipe(
+              Effect.flatMap((responded) =>
+                responded
+                  ? Effect.succeed({})
+                  : Effect.fail(
+                      new HookApprovalRespondError({
+                        reason: "request_not_pending",
+                        message: "The hook approval request is no longer pending.",
+                      }),
+                    ),
+              ),
+            ),
+            { "rpc.aggregate": "hook-approvals" },
+          ),
         [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverCommitDesktopUpdate,
@@ -3447,6 +3471,7 @@ const makeWsRpcLayer = <E, R>(
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const hookApprovals = yield* HookApprovalRegistry;
     const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const config = yield* ServerConfig.ServerConfig;
     const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -3528,8 +3553,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               processDiscoveryCollector,
+              hookApprovals,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(Layer.succeed(HookApprovalRegistry, hookApprovals)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

@@ -24,6 +24,7 @@ import {
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
+import { hookApprovalHttpRouteLayer } from "./hooks/HookApprovalHttp.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as IssueProviderRegistry from "./issue/IssueProviderRegistry.ts";
@@ -60,6 +61,7 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as WorkspaceAdoption from "./mcp/WorkspaceAdoption.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -571,6 +573,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     assetRouteLayer,
     attachmentUploadRouteLayer,
     staticAndDevRouteLayer,
+    hookApprovalHttpRouteLayer,
     websocketRpcRouteLayer,
   ),
   McpHttpServer.layer.pipe(
@@ -592,6 +595,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
+  Layer.provide(HookApprovalRegistry.layer),
 );
 
 export const makeServerLayer = Layer.unwrap(

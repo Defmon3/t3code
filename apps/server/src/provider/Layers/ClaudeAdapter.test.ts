@@ -39,6 +39,10 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
+  clearHookProviderSession,
+  setHookProviderSession,
+} from "../../hooks/HookProviderSession.ts";
+import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
   SYNTHETIC_CLAUDE_COLLIDING_ALIAS,
   SYNTHETIC_CLAUDE_MODEL_CATALOG,
@@ -307,6 +311,36 @@ async function readPromptMessages(
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 const SYNTHETIC_SUBAGENT_MODEL = "claude-synthetic-subagent[expanded]";
+
+describe("hook approval environment", () => {
+  it.effect("passes the thread hook approval credential to Claude", () => {
+    const threadId = ThreadId.make("thread-claude-hook-approval");
+    const harness = makeHarness();
+    setHookProviderSession({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      providerSessionId: "hook-session",
+      endpoint: "http://127.0.0.1:4312/hook-approvals",
+      token: "hook-token",
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const input = harness.getLastCreateQueryInput();
+      assert.equal(
+        input?.options.env?.T3_HOOK_APPROVAL_URL,
+        "http://127.0.0.1:4312/hook-approvals",
+      );
+      assert.equal(input?.options.env?.T3_HOOK_APPROVAL_TOKEN, "hook-token");
+      clearHookProviderSession(threadId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
 
 describe("ClaudeAdapterLive", () => {
   it.effect("returns validation error for non-claude provider on startSession", () => {

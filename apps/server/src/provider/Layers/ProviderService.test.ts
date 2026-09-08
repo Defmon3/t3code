@@ -78,6 +78,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as HookProviderSession from "../../hooks/HookProviderSession.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
@@ -4667,6 +4668,141 @@ describe("agent browser access", () => {
       const threadId = asThreadId("thread-project-browser-on");
       const issued = yield* startSessionWith(false, threadId, true);
       assert.deepEqual(issued, [threadId]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("hook approval credentials", () => {
+  it.effect("keeps a new session credential through turn errors and stale exits", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-hook-restart");
+      const issued: Array<string> = [];
+      const revoked: Array<string> = [];
+      const codex = makeFakeCodexAdapter();
+      const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const providerLayer = makeProviderServiceLive({
+        issueHookApprovalCredential: ({ threadId: issuedThreadId }) =>
+          Effect.sync(() => {
+            issued.push(String(issuedThreadId));
+            return {
+              endpoint: "http://127.0.0.1:4312/hook-approvals",
+              token: `token-${issued.length}`,
+              providerSessionId: `session-${issued.length}`,
+            };
+          }),
+        revokeHookApprovalCredential: (revokedThreadId) =>
+          Effect.sync(() => {
+            revoked.push(String(revokedThreadId));
+          }),
+      }).pipe(
+        Layer.provide(
+          Layer.succeed(
+            ProviderAdapterRegistry.ProviderAdapterRegistry,
+            makeAdapterRegistryMock({
+              [CODEX_DRIVER]: codex.adapter,
+              [CLAUDE_AGENT_DRIVER]: claude.adapter,
+            }),
+          ),
+        ),
+        Layer.provide(
+          ProviderSessionDirectoryLive.pipe(
+            Layer.provide(
+              ProviderSessionRuntime.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
+            ),
+          ),
+        ),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const runtimeError = yield* provider.streamEvents.pipe(
+          Stream.filter((event) => event.type === "runtime.error"),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        codex.emit({
+          type: "runtime.error",
+          eventId: asEventId("event-hook-runtime-error"),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          payload: { message: "turn failed", class: "provider_error" },
+        });
+        yield* Fiber.join(runtimeError);
+        yield* provider.sendTurn({ threadId, input: "still alive", attachments: [] });
+        const staleExit = yield* provider.streamEvents.pipe(
+          Stream.filter((event) => event.type === "session.exited"),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        codex.emit({
+          type: "session.exited",
+          eventId: asEventId("event-hook-stale-exit"),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          payload: { exitKind: "graceful" },
+        });
+        yield* Fiber.join(staleExit);
+        yield* provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: claudeAgentInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const oldProviderExit = yield* provider.streamEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "session.exited" && event.eventId === "event-hook-old-provider-exit",
+          ),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        codex.emit({
+          type: "session.exited",
+          eventId: asEventId("event-hook-old-provider-exit"),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          payload: { exitKind: "graceful" },
+        });
+        yield* Fiber.join(oldProviderExit);
+        assert.deepEqual(HookProviderSession.readHookProviderSession(threadId), {
+          endpoint: "http://127.0.0.1:4312/hook-approvals",
+          token: "token-3",
+          providerSessionId: "session-3",
+          providerInstanceId: claudeAgentInstanceId,
+          threadId,
+        });
+        yield* provider.stopSession({ threadId });
+      }).pipe(Effect.provide(providerLayer));
+
+      assert.deepEqual(issued, [String(threadId), String(threadId), String(threadId)]);
+      assert.deepEqual(revoked, [String(threadId)]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

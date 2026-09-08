@@ -47,8 +47,9 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
-import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { withHookProviderSessionEnvironment } from "../../hooks/HookProviderSession.ts";
 import type { T3HookRunner } from "../../hooks/T3HookRunner.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -2266,13 +2267,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 ),
               )
             : undefined;
+        const environment = {
+          ...withHookProviderSessionEnvironment(
+            options?.environment ?? process.env,
+            input.threadId,
+          ),
+          ...(mcpSession
+            ? { T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, "") }
+            : {}),
+        };
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd,
           binaryPath: codexConfig.binaryPath,
           launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          ...(options?.environment ? { environment: options.environment } : {}),
+          environment,
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -2285,10 +2295,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(hookPlan ? { hookPlan } : {}),
           ...(mcpSession
             ? {
-                environment: {
-                  ...(options?.environment ?? process.env),
-                  T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
-                },
                 appServerArgs: [
                   "-c",
                   `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
