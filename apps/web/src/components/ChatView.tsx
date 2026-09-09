@@ -9,6 +9,13 @@ import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { usageLimitsBannerItem } from "./chat/ComposerUsageLimits";
 import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
 import {
+  createPendingHookApprovals,
+  findPendingHookApproval,
+  hookApprovalDecisionForProviderDecision,
+  hookApprovalsForThread,
+  hookApprovalResponseTarget,
+} from "@t3tools/client-runtime/state/hook-approvals";
+import {
   type AssistantCitation,
   type ApprovalRequestId,
   type ChatFileAttachment,
@@ -70,6 +77,7 @@ import {
 } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
+import { hookApprovalEnvironment, pendingHookApprovalRequestsAtom } from "../state/hookApprovals";
 import {
   lazy,
   memo,
@@ -1445,6 +1453,9 @@ export default function ChatView(props: ChatViewProps) {
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
+  const respondToHookApproval = useAtomCommand(hookApprovalEnvironment.respond, {
+    reportFailure: false,
+  });
   const respondToThreadUserInput = useAtomCommand(threadEnvironment.respondToUserInput, {
     reportFailure: false,
   });
@@ -2644,9 +2655,26 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [agentSessionLive, threadActivities],
   );
-  const { approvals: pendingApprovals, userInputs: pendingUserInputs } = useMemo(
+  const pendingHookApprovalRequests = useAtomValue(pendingHookApprovalRequestsAtom);
+  const { approvals: providerPendingApprovals, userInputs: pendingUserInputs } = useMemo(
     () => derivePendingRequests(threadActivities),
     [threadActivities],
+  );
+  const pendingHookApprovals = useMemo(
+    () =>
+      createPendingHookApprovals(
+        hookApprovalsForThread(pendingHookApprovalRequests, environmentId, activeThreadId),
+        providerPendingApprovals.map((approval) => approval.requestId),
+      ),
+    [activeThreadId, environmentId, pendingHookApprovalRequests, providerPendingApprovals],
+  );
+  const pendingApprovals = useMemo(
+    () =>
+      [
+        ...providerPendingApprovals,
+        ...pendingHookApprovals.map((approval) => approval.approval),
+      ].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [pendingHookApprovals, providerPendingApprovals],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
@@ -7091,29 +7119,50 @@ export default function ChatView(props: ChatViewProps) {
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
+      const pendingHookApproval = findPendingHookApproval(pendingHookApprovals, requestId);
+      const hookDecision = hookApprovalDecisionForProviderDecision(decision);
+      if (
+        pendingHookApproval !== null &&
+        (hookDecision === null ||
+          (hookDecision === "allow-session" && pendingHookApproval.request.scope === undefined))
+      ) {
+        return;
+      }
 
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
-      const result = await respondToThreadApproval({
-        environmentId,
-        input: {
-          threadId: activeThreadId,
-          requestId,
-          decision,
-        },
-      });
+      const result =
+        pendingHookApproval === null
+          ? await respondToThreadApproval({
+              environmentId,
+              input: {
+                threadId: activeThreadId,
+                requestId,
+                decision,
+              },
+            })
+          : await respondToHookApproval(
+              hookApprovalResponseTarget(pendingHookApproval.request, hookDecision!),
+            );
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
-          activeThreadId,
+          pendingHookApproval?.request.threadId ?? activeThreadId,
           error instanceof Error ? error.message : "Failed to submit approval decision.",
         );
       }
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
+    [
+      activeThreadId,
+      environmentId,
+      pendingHookApprovals,
+      respondToHookApproval,
+      respondToThreadApproval,
+      setThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
