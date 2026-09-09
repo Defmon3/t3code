@@ -20,15 +20,18 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -53,6 +56,7 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
+const CODEX_CHILD_RECONCILIATION_INTERVAL = "30 seconds" as const;
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -218,6 +222,8 @@ export interface CodexSessionRuntimeShape {
 
 export type CodexSessionRuntimeError =
   | CodexErrors.CodexAppServerError
+  | CodexSessionRuntimeChildInterruptError
+  | CodexSessionRuntimeInterruptTimeoutError
   | CodexSessionRuntimePendingApprovalNotFoundError
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
@@ -231,6 +237,27 @@ export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.Tagg
 ) {
   override get message(): string {
     return `Unknown pending Codex approval request: ${this.requestId}`;
+  }
+}
+
+type CodexChildThreadReconciliation =
+  | { readonly status: "active"; readonly activeTurnId: string | undefined }
+  | { readonly status: "idle" | "systemError" };
+
+function reconcileCodexChildThreadSnapshot(
+  snapshot: Pick<EffectCodexSchema.V2ThreadReadResponse["thread"], "status" | "turns">,
+): CodexChildThreadReconciliation | undefined {
+  switch (snapshot.status.type) {
+    case "active":
+      return {
+        status: "active",
+        activeTurnId: snapshot.turns.findLast((turn) => turn.status === "inProgress")?.id,
+      };
+    case "idle":
+    case "systemError":
+      return { status: snapshot.status.type };
+    case "notLoaded":
+      return undefined;
   }
 }
 
@@ -264,6 +291,24 @@ export class CodexSessionRuntimeThreadIdMissingError extends Schema.TaggedErrorC
 ) {
   override get message(): string {
     return `Codex session is missing a provider thread id for ${this.threadId}`;
+  }
+}
+
+export class CodexSessionRuntimeChildInterruptError extends Schema.TaggedErrorClass<CodexSessionRuntimeChildInterruptError>()(
+  "CodexSessionRuntimeChildInterruptError",
+  { childThreadIds: Schema.Array(Schema.String) },
+) {
+  override get message(): string {
+    return `Failed to interrupt Codex child threads: ${this.childThreadIds.join(", ")}`;
+  }
+}
+
+export class CodexSessionRuntimeInterruptTimeoutError extends Schema.TaggedErrorClass<CodexSessionRuntimeInterruptTimeoutError>()(
+  "CodexSessionRuntimeInterruptTimeoutError",
+  { threadId: Schema.String },
+) {
+  override get message(): string {
+    return `Timed out interrupting Codex thread: ${this.threadId}`;
   }
 }
 
@@ -1211,6 +1256,8 @@ export const makeCodexSessionRuntime = (
     const collabChildLifecycleStatesRef = yield* Ref.make(
       new Map<string, CollabChildLifecycleState>(),
     );
+    const collabChildLifecycleRevisionsRef = yield* Ref.make(new Map<string, number>());
+    const collabChildLastActivityRef = yield* Ref.make(new Map<string, number>());
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
 
@@ -1434,12 +1481,36 @@ export const makeCodexSessionRuntime = (
     const setCollabChildLifecycleState = Effect.fn(
       "CodexSessionRuntime.setCollabChildLifecycleState",
     )(function* (agentThreadId: string, state: CollabChildLifecycleState) {
+      const now = yield* Clock.currentTimeMillis;
       yield* Ref.update(collabChildLifecycleStatesRef, (current) => {
         const next = new Map(current);
         next.set(agentThreadId, state);
         return next;
       });
+      yield* Ref.update(collabChildLifecycleRevisionsRef, (current) => {
+        const next = new Map(current);
+        next.set(agentThreadId, (next.get(agentThreadId) ?? 0) + 1);
+        return next;
+      });
+      if (state === "active") {
+        yield* Ref.update(collabChildLastActivityRef, (current) => {
+          const next = new Map(current);
+          next.set(agentThreadId, now);
+          return next;
+        });
+      }
     });
+
+    const touchCollabChildActivity = (agentThreadId: string) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          Ref.update(collabChildLastActivityRef, (current) => {
+            const next = new Map(current);
+            next.set(agentThreadId, now);
+            return next;
+          }),
+        ),
+      );
 
     const emitCollabChildLifecycleAfterRegistration = Effect.fn(
       "CodexSessionRuntime.emitCollabChildLifecycleAfterRegistration",
@@ -1525,6 +1596,106 @@ export const makeCodexSessionRuntime = (
         yield* Ref.set(collabChildLiveTurnsRef, new Map());
       },
     );
+
+    const reconcileCollabChild = Effect.fn("CodexSessionRuntime.reconcileCollabChild")(function* (
+      agentThreadId: string,
+      includeTurns: boolean,
+    ) {
+      const revision = (yield* Ref.get(collabChildLifecycleRevisionsRef)).get(agentThreadId) ?? 0;
+      const response = yield* client.request("thread/read", {
+        threadId: agentThreadId,
+        ...(includeTurns ? { includeTurns: true } : {}),
+      });
+      const currentRevision =
+        (yield* Ref.get(collabChildLifecycleRevisionsRef)).get(agentThreadId) ?? 0;
+      if (currentRevision !== revision) {
+        return { _tag: "unknown" as const };
+      }
+      const reconciliation = reconcileCodexChildThreadSnapshot(response.thread);
+      if (!reconciliation) {
+        return { _tag: "unknown" as const };
+      }
+
+      const child = (yield* Ref.get(collabChildAgentsRef)).get(agentThreadId);
+      const previous = (yield* Ref.get(collabChildLifecycleStatesRef)).get(agentThreadId);
+      if (reconciliation.status === "active") {
+        yield* setCollabChildLifecycleState(agentThreadId, "active");
+        if (includeTurns) {
+          yield* Ref.update(collabChildLiveTurnsRef, (current) => {
+            const next = new Map(current);
+            if (reconciliation.activeTurnId) {
+              next.set(agentThreadId, reconciliation.activeTurnId);
+            } else {
+              next.delete(agentThreadId);
+            }
+            return next;
+          });
+        }
+        return {
+          _tag: "active" as const,
+          turnId:
+            reconciliation.activeTurnId ??
+            (yield* Ref.get(collabChildLiveTurnsRef)).get(agentThreadId),
+        };
+      }
+
+      const settlement = {
+        method: "collabAgent/statusChanged" as const,
+        payload: { status: { type: reconciliation.status } },
+      };
+      yield* setCollabChildLifecycleState(agentThreadId, settlement);
+      yield* Ref.update(collabChildLiveTurnsRef, (current) => {
+        const next = new Map(current);
+        next.delete(agentThreadId);
+        return next;
+      });
+      const alreadySettled =
+        previous !== undefined &&
+        previous !== "active" &&
+        previous.method === settlement.method &&
+        previous.payload.status.type === reconciliation.status;
+      if (child && !alreadySettled) {
+        const metadata = (yield* Ref.get(collabChildMetadataRef)).get(agentThreadId);
+        yield* emitEvent({
+          kind: "notification",
+          threadId: options.threadId,
+          ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
+          method: settlement.method,
+          payload: {
+            ...collabChildIdentity(child, metadata),
+            ...(child.parentThreadId ? { parentThreadId: child.parentThreadId } : {}),
+            ...settlement.payload,
+          },
+        });
+      }
+      return { _tag: "settled" as const };
+    });
+
+    const reconcileQuietCollabChildren = Effect.fn(
+      "CodexSessionRuntime.reconcileQuietCollabChildren",
+    )(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const children = yield* Ref.get(collabChildAgentsRef);
+      const states = yield* Ref.get(collabChildLifecycleStatesRef);
+      const liveTurns = yield* Ref.get(collabChildLiveTurnsRef);
+      const lastActivity = yield* Ref.get(collabChildLastActivityRef);
+      const candidates = Array.from(children.keys()).filter(
+        (agentThreadId) =>
+          (states.get(agentThreadId) === "active" || liveTurns.has(agentThreadId)) &&
+          now - (lastActivity.get(agentThreadId) ?? 0) >= 30_000,
+      );
+      yield* Effect.forEach(
+        candidates,
+        (agentThreadId) =>
+          reconcileCollabChild(agentThreadId, false).pipe(
+            Effect.timeoutOption("5 seconds"),
+            Effect.catch((cause) =>
+              Effect.logWarning("codex.child.reconciliation-failed", { agentThreadId, cause }),
+            ),
+          ),
+        { concurrency: 4, discard: true },
+      );
+    });
 
     const settlePendingApprovals = (decision: ProviderApprovalDecision) =>
       Ref.get(pendingApprovalsRef).pipe(
@@ -1734,6 +1905,7 @@ export const makeCodexSessionRuntime = (
         if (!child) {
           return false;
         }
+        yield* touchCollabChildActivity(child.agentThreadId);
         const metadata = (yield* Ref.get(collabChildMetadataRef)).get(child.agentThreadId);
         const childIdentity = collabChildIdentity(child, metadata);
         switch (notification.method) {
@@ -2370,6 +2542,11 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
+    yield* reconcileQuietCollabChildren().pipe(
+      Effect.repeat(Schedule.spaced(CODEX_CHILD_RECONCILIATION_INTERVAL)),
+      Effect.forkIn(runtimeScope),
+    );
+
     const stderrRemainderRef = yield* Ref.make("");
     yield* child.stderr.pipe(
       Stream.decodeText(),
@@ -2565,23 +2742,84 @@ export const makeCodexSessionRuntime = (
           // exactly during the runaway fleet where Stop matters most
           // (review finding). Per-child and overall deadlines guarantee the
           // parent interrupt below always runs.
+          const children = yield* Ref.get(collabChildAgentsRef);
+          const lifecycleStates = yield* Ref.get(collabChildLifecycleStatesRef);
           const liveChildTurns = yield* Ref.get(collabChildLiveTurnsRef);
-          yield* Effect.forEach(
-            Array.from(liveChildTurns.entries()),
-            ([childThreadId, childTurnId]) =>
-              client
-                .request("turn/interrupt", {
-                  threadId: childThreadId,
-                  turnId: childTurnId,
-                })
-                .pipe(Effect.timeoutOption("3 seconds"), Effect.ignore),
-            { concurrency: 8, discard: true },
-          ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
+          const childThreadIds = new Set([
+            ...liveChildTurns.keys(),
+            ...Array.from(children.keys()).filter((childThreadId) => {
+              const state = lifecycleStates.get(childThreadId);
+              return state === undefined || state === "active";
+            }),
+          ]);
+          const childInterrupts = yield* Effect.forEach(
+            Array.from(childThreadIds),
+            (childThreadId) =>
+              Effect.gen(function* () {
+                const cachedTurnId = (yield* Ref.get(collabChildLiveTurnsRef)).get(childThreadId);
+                const reconciliationOption = yield* reconcileCollabChild(childThreadId, true).pipe(
+                  Effect.result,
+                  Effect.timeoutOption("3 seconds"),
+                );
+                if (Option.isNone(reconciliationOption)) {
+                  return childThreadId;
+                }
+                const reconciliation = reconciliationOption.value;
+                if (reconciliation._tag === "Failure") {
+                  if (!cachedTurnId) {
+                    return childThreadId;
+                  }
+                } else if (reconciliation.success._tag === "active") {
+                  if (!reconciliation.success.turnId) {
+                    return childThreadId;
+                  }
+                } else if (reconciliation.success._tag === "unknown") {
+                  return childThreadId;
+                } else {
+                  return undefined;
+                }
+                const childTurnId =
+                  reconciliation._tag === "Success" && reconciliation.success._tag === "active"
+                    ? reconciliation.success.turnId
+                    : cachedTurnId;
+                if (!childTurnId) {
+                  return undefined;
+                }
+                const interrupted = yield* client
+                  .request("turn/interrupt", { threadId: childThreadId, turnId: childTurnId })
+                  .pipe(Effect.timeoutOption("3 seconds"), Effect.map(Option.isSome));
+                if (!interrupted) {
+                  return childThreadId;
+                }
+                yield* Ref.update(collabChildLiveTurnsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(childThreadId);
+                  return next;
+                });
+                return undefined;
+              }).pipe(Effect.orElseSucceed(() => childThreadId)),
+            { concurrency: 8 },
+          ).pipe(Effect.timeoutOption("10 seconds"));
           const effectiveTurnId = turnId ?? session.activeTurnId;
           if (effectiveTurnId) {
-            yield* client.request("turn/interrupt", {
-              threadId: providerThreadId,
-              turnId: effectiveTurnId,
+            const parentInterrupted = yield* client
+              .request("turn/interrupt", { threadId: providerThreadId, turnId: effectiveTurnId })
+              .pipe(Effect.timeoutOption("10 seconds"));
+            if (Option.isNone(parentInterrupted)) {
+              return yield* new CodexSessionRuntimeInterruptTimeoutError({
+                threadId: providerThreadId,
+              });
+            }
+          }
+          const failedChildIds =
+            childInterrupts._tag === "Some"
+              ? childInterrupts.value.filter(
+                  (childThreadId): childThreadId is string => childThreadId !== undefined,
+                )
+              : Array.from(childThreadIds);
+          if (failedChildIds.length > 0) {
+            return yield* new CodexSessionRuntimeChildInterruptError({
+              childThreadIds: failedChildIds,
             });
           }
           yield* settleLiveCollabChildren();

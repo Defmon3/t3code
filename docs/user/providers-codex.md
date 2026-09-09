@@ -40,6 +40,10 @@ The web and desktop Agents panel shows each sub-agent's model and reasoning effo
 reports them. If Codex does not report either value, T3 Code leaves it out instead of using the
 parent agent's settings.
 
+The panel distinguishes queued, waiting, and idle sub-agents, and refreshes their status when
+Codex is quiet. Stop targets the parent agent and active sub-agents. If an interrupt cannot finish,
+T3 Code closes the thread's provider session.
+
 ## Approve access to other apps
 
 When a Codex tool needs access to an app such as Safari, T3 Code shows the app name and asks for

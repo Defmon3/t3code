@@ -1,5 +1,7 @@
 import {
+  type CommandId,
   type EnvironmentId,
+  type OrchestrationThreadActivity,
   isProviderDriverKind,
   ProjectId,
   type MessageId,
@@ -222,6 +224,37 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
     threadId: thread.id,
     ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
   };
+}
+
+export function hasNewBackgroundStopFailure(input: {
+  activeThreadId: ThreadId | null;
+  stoppingThreadId: ThreadId;
+  stoppingTurnId: TurnId | null;
+  stoppingCommandId: CommandId;
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+}): boolean {
+  return (
+    input.activeThreadId === input.stoppingThreadId &&
+    input.activities.some(
+      (activity) =>
+        activity.kind === "provider.turn.interrupt.failed" &&
+        activity.turnId === input.stoppingTurnId &&
+        typeof activity.payload === "object" &&
+        activity.payload !== null &&
+        !Array.isArray(activity.payload) &&
+        "requestId" in activity.payload &&
+        activity.payload.requestId === input.stoppingCommandId,
+    )
+  );
+}
+
+export function backgroundLivenessTitle(
+  liveness: "working" | "monitoring",
+  liveAgentCount: number,
+): string {
+  if (liveness === "monitoring") return "Monitoring";
+  if (liveAgentCount === 0) return "Background work";
+  return `${liveAgentCount} ${liveAgentCount === 1 ? "agent" : "agents"}`;
 }
 
 export function reconcileMountedTerminalThreadIds(input: {

@@ -109,6 +109,29 @@ rl.on("line", (line) => {
     write({ id, result: fixture.responses.threadStart });
     return;
   }
+  if (method === "thread/read") {
+    const threadId = message.params?.threadId;
+    const read = script.childThreadReads?.[threadId];
+    if (read?.error) {
+      write({ id, error: { code: -32000, message: read.error } });
+      return;
+    }
+    const template = fixture.notifications.find((entry) => entry.method === "thread/started")
+      ?.params?.thread;
+    write({
+      id,
+      result: {
+        thread: {
+          ...template,
+          id: threadId,
+          sessionId: threadId,
+          status: read?.status ?? { type: "idle" },
+          turns: message.params?.includeTurns ? (read?.turns ?? []) : [],
+        },
+      },
+    });
+    return;
+  }
   if (method === "turn/start") {
     const turnId = script.turnIds?.[turnStartCount];
     const turn = turnId

@@ -151,6 +151,7 @@ describe("ProviderCommandReactor", () => {
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
+    readonly listSessionsEffect?: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly startSessionEffect?: (
       session: ProviderSession,
@@ -326,7 +327,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
-      listSessions: () => Effect.succeed(runtimeSessions),
+      listSessions: () => input?.listSessionsEffect?.() ?? Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
@@ -2546,81 +2547,75 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  effectIt.effect(
-    "stops a running session and records the failure when provider interrupt fails",
-    () =>
-      Effect.gen(function* () {
-        const harness = yield* Effect.promise(() =>
-          createHarness({
-            interruptTurnEffect: () =>
-              Effect.fail(
-                new ProviderAdapterRequestError({
-                  provider: "codex",
-                  method: "thread.interrupt",
-                  detail: "provider session disappeared",
-                }),
-              ),
-            stopSessionEffect: () =>
-              Effect.fail(
-                new ProviderAdapterRequestError({
-                  provider: "codex",
-                  method: "session.stop",
-                  detail: "provider process already exited",
-                }),
-              ),
-          }),
-        );
-        const now = "2026-01-01T00:00:00.000Z";
+  effectIt.effect("keeps a running session when stopping after an interrupt failure fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          interruptTurnEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "thread.interrupt",
+                detail: "provider session disappeared",
+              }),
+            ),
+          stopSessionEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "session.stop",
+                detail: "provider process already exited",
+              }),
+            ),
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
 
-        yield* harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.make("cmd-session-set-interrupt-failure"),
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-interrupt-failure"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
           threadId: ThreadId.make("thread-1"),
-          session: {
-            threadId: ThreadId.make("thread-1"),
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId("turn-1"),
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        });
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
 
-        yield* harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.make("cmd-turn-interrupt-provider-failure"),
-          threadId: ThreadId.make("thread-1"),
-          turnId: asTurnId("turn-1"),
-          createdAt: now,
-        });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-provider-failure"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      });
 
-        yield* Effect.promise(() =>
-          waitFor(async () => {
-            const thread = (await harness.readModel()).threads.find(
-              (entry) => entry.id === ThreadId.make("thread-1"),
-            );
-            return thread?.session?.status === "stopped";
-          }),
-        );
+      yield* Effect.promise(() => harness.drain());
 
-        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
-          (entry) => entry.id === ThreadId.make("thread-1"),
-        );
-        expect(thread?.session).toMatchObject({
-          status: "stopped",
-          activeTurnId: null,
-          lastError: "provider session disappeared",
-        });
-        expect(
-          thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
-        ).toMatchObject({
-          summary: "Provider turn interrupt failed",
-          payload: { detail: "provider session disappeared" },
-        });
-        expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
-      }),
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId("turn-1"),
+        lastError: null,
+      });
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
+      ).toMatchObject({
+        summary: "Provider turn interrupt failed",
+        payload: {
+          detail: "provider session disappeared",
+          requestId: "cmd-turn-interrupt-provider-failure",
+        },
+      });
+      expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+    }),
   );
 
   effectIt.effect("stops a starting session without a bound turn when interrupt fails", () =>
@@ -2755,6 +2750,334 @@ describe("ProviderCommandReactor", () => {
       expect(
         thread?.activities.some((activity) => activity.kind === "provider.turn.interrupt.failed"),
       ).toBe(false);
+    }),
+  );
+
+  effectIt.effect(
+    "stops a live provider session when its parent becomes ready during a child interrupt failure",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            interruptTurnEffect: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "thread.interrupt",
+                  detail: "background child interrupt failed",
+                }),
+              ),
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
+        const completedAt = "2026-01-01T00:00:01.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-child-interrupt-failure"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("turn-1"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        harness.runtimeSessions.push({
+          provider: ProviderDriverKind.make("codex"),
+          status: "running",
+          runtimeMode: "approval-required",
+          threadId: ThreadId.make("thread-1"),
+          cwd: "/tmp/provider-project",
+          resumeCursor: { opaque: "background-child" },
+          createdAt: now,
+          updatedAt: now,
+        });
+        harness.interruptTurn.mockImplementation(() =>
+          harness.engine
+            .dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.make("cmd-session-set-parent-ready-during-child-failure"),
+              threadId: ThreadId.make("thread-1"),
+              session: {
+                threadId: ThreadId.make("thread-1"),
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "approval-required",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              createdAt: completedAt,
+            })
+            .pipe(
+              Effect.catchCause((cause) => Effect.die(cause)),
+              Effect.andThen(
+                Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: "codex",
+                    method: "thread.interrupt",
+                    detail: "background child interrupt failed",
+                  }),
+                ),
+              ),
+            ),
+        );
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("cmd-turn-interrupt-child-provider-failure"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: now,
+        });
+        yield* Effect.promise(() => harness.drain());
+
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+        expect(thread?.session).toMatchObject({
+          status: "stopped",
+          activeTurnId: null,
+          lastError: "background child interrupt failed",
+        });
+      }),
+  );
+
+  effectIt.effect("does not stop new parent work after an idle child interrupt fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          interruptTurnEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "thread.interrupt",
+                detail: "background child interrupt failed",
+              }),
+            ),
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+      const startedAt = "2026-01-01T00:00:01.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-idle-parent-race"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      harness.runtimeSessions.push({
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        runtimeMode: "approval-required",
+        threadId: ThreadId.make("thread-1"),
+        cwd: "/tmp/provider-project",
+        resumeCursor: { opaque: "new-parent" },
+        createdAt: now,
+        updatedAt: now,
+      });
+      harness.interruptTurn.mockImplementation(() =>
+        harness.engine
+          .dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("cmd-session-set-new-parent-race"),
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("turn-new"),
+              lastError: null,
+              updatedAt: startedAt,
+            },
+            createdAt: startedAt,
+          })
+          .pipe(
+            Effect.catchCause((cause) => Effect.die(cause)),
+            Effect.andThen(
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "thread.interrupt",
+                  detail: "background child interrupt failed",
+                }),
+              ),
+            ),
+          ),
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-idle-parent-race"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId("turn-new"),
+        updatedAt: startedAt,
+      });
+    }),
+  );
+
+  effectIt.effect("does not stop parent work that starts while checking a live idle session", () =>
+    Effect.gen(function* () {
+      let listSessionsEffect: () => Effect.Effect<ReadonlyArray<ProviderSession>> = () =>
+        Effect.succeed([]);
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          interruptTurnEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "thread.interrupt",
+                detail: "background child interrupt failed",
+              }),
+            ),
+          listSessionsEffect: () => listSessionsEffect(),
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+      const startedAt = "2026-01-01T00:00:01.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-idle-parent-lookup-race"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      harness.runtimeSessions.push({
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        runtimeMode: "approval-required",
+        threadId: ThreadId.make("thread-1"),
+        cwd: "/tmp/provider-project",
+        resumeCursor: { opaque: "new-parent-after-lookup" },
+        createdAt: now,
+        updatedAt: now,
+      });
+      listSessionsEffect = () =>
+        harness.engine
+          .dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("cmd-session-set-new-parent-after-lookup"),
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("turn-new"),
+              lastError: null,
+              updatedAt: startedAt,
+            },
+            createdAt: startedAt,
+          })
+          .pipe(
+            Effect.catchCause((cause) => Effect.die(cause)),
+            Effect.as(harness.runtimeSessions),
+          );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-idle-parent-lookup-race"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: asTurnId("turn-new"),
+        updatedAt: startedAt,
+      });
+    }),
+  );
+
+  effectIt.effect("records an interrupt failure when checking an idle parent session fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          interruptTurnEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "thread.interrupt",
+                detail: "background child interrupt failed",
+              }),
+            ),
+          listSessionsEffect: () => Effect.die(new Error("provider session lookup failed")),
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-idle-parent-list-failure"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-idle-parent-list-failure"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
+      ).toMatchObject({
+        payload: { detail: expect.stringContaining("provider session lookup failed") },
+      });
     }),
   );
 

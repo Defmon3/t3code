@@ -19,10 +19,16 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { assert, describe } from "vite-plus/test";
 
 import wireFixture from "../testFixtures/codexMultiAgentWire.json" with { type: "json" };
-import { makeCodexSessionRuntime } from "./CodexSessionRuntime.ts";
+import {
+  CodexSessionRuntimeChildInterruptError,
+  makeCodexSessionRuntime,
+} from "./CodexSessionRuntime.ts";
+
+const isCodexSessionRuntimeChildInterruptError = Schema.is(CodexSessionRuntimeChildInterruptError);
 
 const ROOT = wireFixture.rootThreadId;
 const [CHILD_A, CHILD_B] = wireFixture.childThreadIds as [string, string];
@@ -35,6 +41,7 @@ const decodeMcpElicitationResponse = Schema.decodeUnknownEffect(
     }),
   ),
 );
+const encodeFixtureJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /**
  * The captured sequence, extended with the shapes the live capture didn't
@@ -634,6 +641,67 @@ describe("CodexSessionRuntime collab integration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("reconciles a quiet active child to idle from thread/read", () =>
+    Effect.gen(function* () {
+      const childThreadId = "00000000-0000-4000-8000-000000000401";
+      NodeFS.writeFileSync(
+        scriptPath,
+        encodeFixtureJson({
+          rootThreadId: ROOT,
+          holdTurnOpen: true,
+          childThreadReads: { [childThreadId]: { status: { type: "idle" }, turns: [] } },
+          notifications: [
+            {
+              method: "turn/started",
+              params: {
+                threadId: childThreadId,
+                turn: {
+                  id: "00000000-0000-4000-8000-000000000402",
+                  status: "inProgress",
+                  items: [],
+                },
+              },
+            },
+            mockChildActivity(childThreadId, "call_fixture_quiet_child", "interacted"),
+          ],
+        }),
+        "utf8",
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-collab-quiet-reconcile"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const active = yield* Deferred.make<void>();
+      const idle = yield* Deferred.make<void>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => {
+          const payload = event.payload as
+            | { agentThreadId?: string; status?: { type?: string } }
+            | undefined;
+          if (payload?.agentThreadId !== childThreadId) return Effect.void;
+          if (event.method === "collabAgent/turnStarted")
+            return Deferred.succeed(active, undefined).pipe(Effect.asVoid);
+          return event.method === "collabAgent/statusChanged" && payload.status?.type === "idle"
+            ? Deferred.succeed(idle, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        }),
+        Effect.forkScoped,
+      );
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "quiet child" });
+      yield* Deferred.await(active);
+      yield* TestClock.adjust("31 seconds");
+      yield* Deferred.await(idle);
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   // it.live: the runtime talks to a real child process; under it.effect's
   // TestClock the internal timers freeze and the join never completes.
   it.live("Stop interrupts every live child regardless of registration timing", () =>
@@ -667,6 +735,7 @@ describe("CodexSessionRuntime collab integration", () => {
       assert.isDefined(registrationA);
       assert.isDefined(registrationB);
       assert.isDefined(rootThreadStarted);
+      const childATurnId = (turnStartedA.params as { turn: { id: string } }).turn.id;
       const memoryThreadStarted = {
         ...rootThreadStarted,
         params: {
@@ -691,6 +760,20 @@ describe("CodexSessionRuntime collab integration", () => {
         rootThreadId: ROOT,
         holdTurnOpen: true,
         hangInterruptFor: CHILD_A,
+        childThreadReads: {
+          [CHILD_A]: {
+            status: { type: "active", activeFlags: [] },
+            turns: [{ id: childATurnId, status: "inProgress", items: [] }],
+          },
+          [CHILD_B]: {
+            status: { type: "active", activeFlags: [] },
+            turns: [{ id: "refreshed-child-b-turn", status: "inProgress", items: [] }],
+          },
+          [MEMORY]: {
+            status: { type: "active", activeFlags: [] },
+            turns: [{ id: "memory-consolidation-turn", status: "inProgress", items: [] }],
+          },
+        },
         notifications: [
           turnStartedA,
           registrationA,
@@ -740,38 +823,14 @@ describe("CodexSessionRuntime collab integration", () => {
       );
       assert.isTrue(childBStarted._tag === "Some", "child B turnStarted never arrived");
 
-      const childrenSettledFiber = yield* runtime.events.pipe(
-        Stream.filter(
-          (event) =>
-            event.method === "collabAgent/closed" &&
-            [CHILD_A, CHILD_B].includes(
-              (event.payload as { agentThreadId?: string }).agentThreadId ?? "",
-            ),
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkScoped,
-      );
-
       // Stop everything. A's interrupt hangs forever — the bounded child
-      // deadline must expire and the parent interrupt must still be sent.
-      yield* runtime.interruptTurn();
-      const childrenSettled = yield* Fiber.join(childrenSettledFiber).pipe(
-        Effect.timeoutOption("5 seconds"),
-      );
-      assert.isTrue(childrenSettled._tag === "Some", "stopped children never settled");
-      if (childrenSettled._tag === "Some") {
-        assert.deepEqual(
-          new Set(
-            Array.from(childrenSettled.value).map(
-              (event) => (event.payload as { agentThreadId?: string }).agentThreadId,
-            ),
-          ),
-          new Set([CHILD_A, CHILD_B]),
-        );
-      }
+      // deadline must expire, report the failed child, and still reach the
+      // parent interrupt.
+      const interruptError = yield* runtime.interruptTurn().pipe(Effect.flip);
+      assert.isTrue(isCodexSessionRuntimeChildInterruptError(interruptError));
 
-      const parseInterruptLine = (line: string) => JSON.parse(line) as { threadId?: string };
+      const parseInterruptLine = (line: string) =>
+        JSON.parse(line) as { threadId?: string; turnId?: string };
       const interrupted = NodeFS.readFileSync(interruptsPath, "utf8")
         .trim()
         .split("\n")
@@ -783,6 +842,12 @@ describe("CodexSessionRuntime collab integration", () => {
         "pre-registration child A must still receive the interrupt RPC",
       );
       assert.isTrue(interruptedThreads.has(CHILD_B), "registered child B must be interrupted");
+      assert.isTrue(
+        interrupted.some(
+          (entry) => entry.threadId === CHILD_B && entry.turnId === "refreshed-child-b-turn",
+        ),
+        "Stop must replace a stale child turn id with thread/read's active turn",
+      );
       assert.isTrue(
         interruptedThreads.has(MEMORY),
         "memory consolidation must be interrupted without appearing in chat",
