@@ -1,6 +1,8 @@
 import {
+  CommandId,
   ANTIGRAVITY_DEFAULT_MODEL,
   EnvironmentId,
+  EventId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -30,6 +32,7 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   agentControlledBrowserCloseConfirmation,
   branchMismatchKey,
+  backgroundLivenessTitle,
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
@@ -41,6 +44,7 @@ import {
   getAntigravitySendBlockReason,
   getStartedThreadModelChangeBlockReason,
   hasEnvironmentReconnectWarningGraceElapsed,
+  hasNewBackgroundStopFailure,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
@@ -1653,6 +1657,58 @@ describe("shouldWriteThreadErrorToCurrentServerThread", () => {
         targetThreadId: threadId,
       }),
     ).toBe(false);
+  });
+});
+
+describe("hasNewBackgroundStopFailure", () => {
+  const interruptFailure = {
+    id: EventId.make("activity-interrupt-failed"),
+    tone: "error" as const,
+    kind: "provider.turn.interrupt.failed",
+    summary: "Provider turn interrupt failed",
+    payload: { detail: "provider session disappeared", requestId: "command-stop-1" },
+    turnId: TurnId.make("turn-1"),
+    sequence: 42,
+    createdAt: now,
+  };
+
+  it("clears the current stop for its newer interrupt failure", () => {
+    expect(
+      hasNewBackgroundStopFailure({
+        activeThreadId: threadId,
+        stoppingThreadId: threadId,
+        stoppingTurnId: TurnId.make("turn-1"),
+        stoppingCommandId: CommandId.make("command-stop-1"),
+        activities: [interruptFailure],
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores failures from an earlier stop or another thread", () => {
+    expect(
+      hasNewBackgroundStopFailure({
+        activeThreadId: threadId,
+        stoppingThreadId: threadId,
+        stoppingTurnId: TurnId.make("turn-1"),
+        stoppingCommandId: CommandId.make("command-stop-2"),
+        activities: [interruptFailure],
+      }),
+    ).toBe(false);
+    expect(
+      hasNewBackgroundStopFailure({
+        activeThreadId: ThreadId.make("thread-2"),
+        stoppingThreadId: threadId,
+        stoppingTurnId: TurnId.make("turn-1"),
+        stoppingCommandId: CommandId.make("command-stop-1"),
+        activities: [interruptFailure],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("backgroundLivenessTitle", () => {
+  it("does not call queued or waiting agents working", () => {
+    expect(backgroundLivenessTitle("working", 2)).toBe("2 agents");
   });
 });
 

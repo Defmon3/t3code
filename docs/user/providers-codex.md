@@ -71,3 +71,12 @@ In an existing Codex thread, send `/feedback` with an optional description, for
 example `/feedback The agent stopped before finishing the tests`. This uploads
 the conversation and Codex logs to OpenAI. The returned thread ID can be shared
 with OpenAI support.
+
+## Sub-agent activity
+
+The web and desktop Agents panel shows each sub-agent's model and reasoning effort when Codex
+reports them. It distinguishes queued, waiting, and idle sub-agents and refreshes their status when
+Codex is quiet.
+
+When background work continues after a turn, T3 Code shows a neutral activity banner. Stop targets
+the parent agent and active sub-agents. If an interrupt fails, you can retry it.

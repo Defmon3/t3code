@@ -1461,6 +1461,7 @@ const make = Effect.gen(function* () {
         detail: "No active provider session is bound to this thread.",
         turnId: event.payload.turnId ?? null,
         createdAt: event.payload.createdAt,
+        ...(event.commandId ? { requestId: event.commandId } : {}),
       });
     }
 
@@ -1471,44 +1472,85 @@ const make = Effect.gen(function* () {
 
       const detail = formatFailureDetail(cause);
       return Effect.gen(function* () {
+        const matchesInterruptedSession = (candidate: OrchestrationSession | null | undefined) =>
+          candidate !== undefined &&
+          candidate !== null &&
+          candidate.status !== "stopped" &&
+          candidate.providerName === session.providerName &&
+          candidate.providerInstanceId === session.providerInstanceId &&
+          (event.payload.turnId === undefined
+            ? candidate.activeTurnId === null || candidate.activeTurnId === session.activeTurnId
+            : candidate.activeTurnId === null || candidate.activeTurnId === event.payload.turnId);
         const latestThread = yield* resolveThreadShell(event.payload.threadId);
         const latestSession = latestThread?.session;
-        if (
-          !latestSession ||
-          latestSession.status === "stopped" ||
-          latestSession.status === "ready" ||
-          (event.payload.turnId !== undefined &&
-            latestSession.activeTurnId !== null &&
-            latestSession.activeTurnId !== event.payload.turnId)
-        ) {
+        if (!latestSession || !matchesInterruptedSession(latestSession)) {
           return;
         }
 
-        yield* providerService.stopSession({ threadId: event.payload.threadId }).pipe(
-          Effect.catchCause((stopCause) => {
-            if (Cause.hasInterruptsOnly(stopCause)) {
-              return Effect.interrupt;
-            }
-            return Effect.logWarning(
-              "provider command reactor failed to stop session after interrupt failure",
-              {
+        if (latestSession.status === "ready") {
+          const liveSession = yield* providerService.listSessions().pipe(
+            Effect.map((sessions) =>
+              sessions.some(
+                (providerSession) => providerSession.threadId === event.payload.threadId,
+              ),
+            ),
+            Effect.catchCause((listCause) => {
+              if (Cause.hasInterruptsOnly(listCause)) {
+                return Effect.interrupt;
+              }
+              return appendProviderFailureActivity({
                 threadId: event.payload.threadId,
-                cause: Cause.pretty(stopCause),
-                originalCause: Cause.pretty(cause),
-              },
-            );
-          }),
-        );
+                kind: "provider.turn.interrupt.failed",
+                summary: "Provider turn interrupt failed",
+                detail: formatFailureDetail(listCause),
+                turnId: event.payload.turnId ?? null,
+                createdAt: event.payload.createdAt,
+                ...(event.commandId ? { requestId: event.commandId } : {}),
+              }).pipe(Effect.as(false));
+            }),
+          );
+          if (!liveSession) {
+            return;
+          }
+          const threadAfterSessionLookup = yield* resolveThreadShell(event.payload.threadId);
+          if (!matchesInterruptedSession(threadAfterSessionLookup?.session)) {
+            return;
+          }
+        }
+
+        const stopped = yield* providerService
+          .stopSession({ threadId: event.payload.threadId })
+          .pipe(
+            Effect.as(true),
+            Effect.catchCause((stopCause) => {
+              if (Cause.hasInterruptsOnly(stopCause)) {
+                return Effect.interrupt;
+              }
+              return Effect.logWarning(
+                "provider command reactor failed to stop session after interrupt failure",
+                {
+                  threadId: event.payload.threadId,
+                  cause: Cause.pretty(stopCause),
+                  originalCause: Cause.pretty(cause),
+                },
+              ).pipe(Effect.as(false));
+            }),
+          );
+        if (!stopped) {
+          return yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.interrupt.failed",
+            summary: "Provider turn interrupt failed",
+            detail,
+            turnId: event.payload.turnId ?? null,
+            createdAt: event.payload.createdAt,
+            ...(event.commandId ? { requestId: event.commandId } : {}),
+          });
+        }
+
         const stoppedThread = yield* resolveThreadShell(event.payload.threadId);
         const stoppedSession = stoppedThread?.session;
-        if (
-          !stoppedSession ||
-          stoppedSession.status === "stopped" ||
-          stoppedSession.status === "ready" ||
-          (event.payload.turnId !== undefined &&
-            stoppedSession.activeTurnId !== null &&
-            stoppedSession.activeTurnId !== event.payload.turnId)
-        ) {
+        if (!stoppedSession || !matchesInterruptedSession(stoppedSession)) {
           return;
         }
 
@@ -1530,6 +1572,7 @@ const make = Effect.gen(function* () {
           detail,
           turnId: event.payload.turnId ?? null,
           createdAt: event.payload.createdAt,
+          ...(event.commandId ? { requestId: event.commandId } : {}),
         });
       });
     };

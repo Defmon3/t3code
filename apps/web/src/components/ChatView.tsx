@@ -18,6 +18,7 @@ import {
 import {
   type AssistantCitation,
   type ApprovalRequestId,
+  CommandId,
   type ChatFileAttachment,
   DEFAULT_MODEL,
   type EnvironmentId,
@@ -224,7 +225,7 @@ import {
   PaperclipIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { cn, randomHex } from "~/lib/utils";
+import { cn, newDraftId, newMessageId, newThreadId, randomHex, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import {
@@ -239,7 +240,6 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
@@ -385,6 +385,7 @@ import {
 } from "./chat/draftHeroTransition";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  backgroundLivenessTitle,
   agentControlledBrowserCloseConfirmation,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
@@ -396,6 +397,7 @@ import {
   deriveComposerSendState,
   dismissBranchMismatchForSession,
   hasEnvironmentReconnectWarningGraceElapsed,
+  hasNewBackgroundStopFailure,
   latestTurnStartFailureId,
   scheduleEnvironmentReconnectWarning,
   hasServerAcknowledgedLocalDispatch,
@@ -1376,6 +1378,12 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
 type LocalThreadErrorEntry = {
   readonly message: string | null;
   readonly at: number;
+};
+
+type BackgroundStopRequest = {
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | null;
+  readonly commandId: CommandId;
 };
 
 function chatActionErrorMessage(error: unknown): string {
@@ -5557,31 +5565,50 @@ export default function ChatView(props: ChatViewProps) {
   // interrupting, and works by session, so no active turn is needed.
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
-  const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
+  const [backgroundStopRequest, setBackgroundStopRequest] = useState<BackgroundStopRequest | null>(
+    null,
+  );
+  const isStoppingBackgroundWork = backgroundStopRequest?.threadId === activeThread?.id;
   useEffect(() => {
-    // "Stopping..." holds until the liveness clears; the interrupt command
-    // returning only means the request was accepted.
-    if (activeBackgroundLiveness === null) {
-      setIsStoppingBackgroundWork(false);
+    if (activeBackgroundLiveness === null && backgroundStopRequest?.threadId === activeThread?.id) {
+      setBackgroundStopRequest(null);
     }
-  }, [activeBackgroundLiveness]);
+  }, [activeBackgroundLiveness, activeThread?.id, backgroundStopRequest?.threadId]);
   useEffect(() => {
-    // Per-thread state: switching threads while A's stop is pending must not
-    // disable B's Stop button (review finding).
-    setIsStoppingBackgroundWork(false);
-  }, [activeThreadId]);
+    if (backgroundStopRequest && backgroundStopRequest.threadId !== activeThreadId) {
+      setBackgroundStopRequest(null);
+    }
+  }, [activeThreadId, backgroundStopRequest?.threadId]);
+  useEffect(() => {
+    if (
+      backgroundStopRequest &&
+      hasNewBackgroundStopFailure({
+        activeThreadId,
+        stoppingThreadId: backgroundStopRequest.threadId,
+        stoppingTurnId: backgroundStopRequest.turnId,
+        stoppingCommandId: backgroundStopRequest.commandId,
+        activities: activeThread?.activities ?? [],
+      })
+    ) {
+      setBackgroundStopRequest(null);
+    }
+  }, [activeThread?.activities, activeThreadId, backgroundStopRequest]);
   const handleStopBackgroundWork = useCallback(async () => {
     if (!activeThread) return;
-    setIsStoppingBackgroundWork(true);
+    const commandId = CommandId.make(randomUUID());
+    const input = { ...buildThreadTurnInterruptInput(activeThread), commandId };
+    const turnId = input.turnId ?? null;
+    setBackgroundStopRequest({
+      threadId: activeThread.id,
+      turnId,
+      commandId,
+    });
     const result = await interruptThreadTurn({
       environmentId,
-      input: buildThreadTurnInterruptInput(activeThread),
+      input,
     });
     if (result._tag === "Failure") {
-      // Every failure clears the pending state — an interrupted command
-      // never reached the server, so liveness would hold "Stopping..."
-      // forever. Only real failures toast.
-      setIsStoppingBackgroundWork(false);
+      setBackgroundStopRequest((request) => (request?.commandId === commandId ? null : request));
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
@@ -5596,7 +5623,6 @@ export default function ChatView(props: ChatViewProps) {
       return null;
     }
     const working = activeBackgroundLiveness === "working";
-    const liveCount = agentPanelModel.liveCount;
     return {
       id: `background-liveness:${activeThread.id}`,
       variant: "default",
@@ -5607,11 +5633,7 @@ export default function ChatView(props: ChatViewProps) {
           aria-hidden="true"
         />
       ),
-      title: working
-        ? liveCount > 0
-          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working`
-          : "Background work"
-        : "Monitoring",
+      title: backgroundLivenessTitle(activeBackgroundLiveness, agentPanelModel.liveCount),
       actions: (
         <Button
           size="xs"
