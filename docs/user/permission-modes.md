@@ -34,14 +34,14 @@ See the [provider guides](./install.md#providers) for setup and provider-specifi
 
 Custom hooks can request approval in T3 even when a thread uses **Full access**.
 Install a hook that supports T3 approvals on each server where you run agents. The
-hook decides which actions need confirmation; provider permission requests do not
-open the custom hook dialog.
+hook decides which actions need confirmation.
 
-The dialog identifies the server, thread, command, and scope. **Allow** permits
-one request. **Allow for this session** remembers the scope shown by the hook,
-such as Git commits in one repository, while other scopes still require approval.
-It is available only when the hook supplies a scope. **Deny** blocks the request.
-Hooks continue to enforce their explicit blocks after a session allowance.
+The approval controls in the relevant thread identify the command and scope
+without blocking the rest of T3. **Allow** permits one request. **Allow for this session** remembers
+the scope shown by the hook, such as Git commits in one repository, while other
+scopes still require approval. It is available only when the hook supplies a
+scope. **Deny** blocks the request. Hooks continue to enforce their explicit
+blocks after a session allowance.
 
 OpenCode does not currently support custom hook approvals.
 
