@@ -134,7 +134,7 @@ export interface T3HookPlan {
   ) => Effect.Effect<T3HookDecision, T3HookCommandError>;
 }
 
-export class T3HookConfigError extends Schema.TaggedErrorClass<T3HookConfigError>()(
+export class T3HookConfigError extends Schema.TaggedError<T3HookConfigError>()(
   "T3HookConfigError",
   {
     operation: Schema.Literals(["inspect", "read", "decode", "matcher"]),
@@ -143,7 +143,7 @@ export class T3HookConfigError extends Schema.TaggedErrorClass<T3HookConfigError
   },
 ) {}
 
-export class T3HookCommandError extends Schema.TaggedErrorClass<T3HookCommandError>()(
+export class T3HookCommandError extends Schema.TaggedError<T3HookCommandError>()(
   "T3HookCommandError",
   {
     command: Schema.String,

@@ -255,15 +255,17 @@ export function ListProjectFilterGroup({
                   <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
                 ) : (
                   <ProjectFavicon
-                    environmentId={environmentId}
-                    cwd={project.workspaceRoot}
-                    projectName={project.title}
-                    {...(project.faviconPath === undefined
-                      ? {}
-                      : { faviconPath: project.faviconPath })}
-                    {...(project.projectIcon === undefined
-                      ? {}
-                      : { projectIcon: project.projectIcon })}
+                    project={{
+                      environmentId,
+                      workspaceRoot: project.workspaceRoot,
+                      title: project.title,
+                      ...(project.faviconPath === undefined
+                        ? {}
+                        : { faviconPath: project.faviconPath }),
+                      ...(project.projectIcon === undefined
+                        ? {}
+                        : { projectIcon: project.projectIcon }),
+                    }}
                     fallbackIcon={FolderGit2Icon}
                     className="size-3.5 shrink-0"
                   />

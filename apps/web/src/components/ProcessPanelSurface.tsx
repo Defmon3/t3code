@@ -17,19 +17,29 @@ interface ProcessPanelPresentation extends ProcessPanelInput {
   readonly owner: symbol | null;
   readonly rect: DOMRect | null;
   readonly visible: boolean;
+  readonly onBack?: (() => void) | undefined;
 }
 
 interface ProcessPanelSurfaceState {
   readonly byEnvironmentId: Record<string, ProcessPanelPresentation>;
-  readonly claim: (input: ProcessPanelInput, owner: symbol) => void;
-  readonly update: (input: ProcessPanelInput, owner: symbol, visible: boolean) => void;
+  readonly claim: (
+    input: ProcessPanelInput,
+    owner: symbol,
+    onBack?: (() => void) | undefined,
+  ) => void;
+  readonly update: (
+    input: ProcessPanelInput,
+    owner: symbol,
+    visible: boolean,
+    onBack?: (() => void) | undefined,
+  ) => void;
   readonly present: (environmentId: EnvironmentId, owner: symbol, rect: DOMRect) => void;
   readonly release: (environmentId: EnvironmentId, owner: symbol) => void;
 }
 
 export const useProcessPanelSurfaceStore = create<ProcessPanelSurfaceState>()((set) => ({
   byEnvironmentId: {},
-  claim: (input, owner) =>
+  claim: (input, owner, onBack) =>
     set((state) => {
       const current = state.byEnvironmentId[input.environmentId];
       return {
@@ -40,11 +50,12 @@ export const useProcessPanelSurfaceStore = create<ProcessPanelSurfaceState>()((s
             owner,
             rect: current?.rect ?? null,
             visible: false,
+            onBack,
           },
         },
       };
     }),
-  update: (input, owner, visible) =>
+  update: (input, owner, visible, onBack) =>
     set((state) => {
       const current = state.byEnvironmentId[input.environmentId];
       if (!current || current.owner !== owner) return state;
@@ -52,14 +63,15 @@ export const useProcessPanelSurfaceStore = create<ProcessPanelSurfaceState>()((s
         current.environmentConnectionPhase === input.environmentConnectionPhase &&
         current.projects === input.projects &&
         current.threads === input.threads &&
-        current.visible === visible
+        current.visible === visible &&
+        current.onBack === onBack
       ) {
         return state;
       }
       return {
         byEnvironmentId: {
           ...state.byEnvironmentId,
-          [input.environmentId]: { ...current, ...input, visible },
+          [input.environmentId]: { ...current, ...input, visible, onBack },
         },
       };
     }),
@@ -90,16 +102,20 @@ export const useProcessPanelSurfaceStore = create<ProcessPanelSurfaceState>()((s
 export function ProcessPanelSurfaceSlot({
   input,
   visible,
+  onBack,
 }: {
   readonly input: ProcessPanelInput;
   readonly visible: boolean;
+  readonly onBack?: (() => void) | undefined;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef(input);
   const visibleRef = useRef(visible);
+  const onBackRef = useRef(onBack);
   const ownerRef = useRef<symbol | null>(null);
   inputRef.current = input;
   visibleRef.current = visible;
+  onBackRef.current = onBack;
 
   useLayoutEffect(() => {
     const owner = Symbol(`process-panel:${input.environmentId}`);
@@ -109,11 +125,11 @@ export function ProcessPanelSurfaceSlot({
       if (!element) return;
       const currentInput = inputRef.current;
       const store = useProcessPanelSurfaceStore.getState();
-      store.update(currentInput, owner, visibleRef.current);
+      store.update(currentInput, owner, visibleRef.current, onBackRef.current);
       store.present(currentInput.environmentId, owner, element.getBoundingClientRect());
     };
 
-    useProcessPanelSurfaceStore.getState().claim(inputRef.current, owner);
+    useProcessPanelSurfaceStore.getState().claim(inputRef.current, owner, onBackRef.current);
     present();
     let observer: ResizeObserver | null = null;
     if (element) {
@@ -134,8 +150,8 @@ export function ProcessPanelSurfaceSlot({
   useLayoutEffect(() => {
     const owner = ownerRef.current;
     if (!owner) return;
-    useProcessPanelSurfaceStore.getState().update(input, owner, visible);
-  }, [input, visible]);
+    useProcessPanelSurfaceStore.getState().update(input, owner, visible, onBack);
+  }, [input, onBack, visible]);
 
   return (
     <div

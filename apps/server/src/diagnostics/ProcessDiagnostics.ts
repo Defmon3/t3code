@@ -28,7 +28,7 @@ interface ProcessDiscoveryCacheEntry {
   readonly read: Effect.Effect<ServerProcessDiagnosticsResult>;
 }
 
-export class ProcessSignalFailed extends Schema.TaggedErrorClass<ProcessSignalFailed>()(
+export class ProcessSignalFailed extends Schema.TaggedError<ProcessSignalFailed>()(
   "ProcessSignalFailed",
   {
     pid: Schema.Number,

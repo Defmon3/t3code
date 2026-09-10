@@ -87,6 +87,7 @@ import {
   CircleAlertIcon,
   DownloadIcon,
   EyeIcon,
+  GitPullRequestIcon,
   GlobeIcon,
   HammerIcon,
   MessageCircleIcon,
@@ -1305,7 +1306,7 @@ function AssistantMessageMeta({
         className={cn(
           alwaysVisible
             ? "opacity-100"
-            : "opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100",
+            : "opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
         )}
       >
         <AssistantCopyButton
@@ -1830,6 +1831,11 @@ function toolGroupSummaryIconName(
       return "terminal";
     case "browser":
       return "browser";
+    case "link-pr":
+    case "unlink-pr":
+    case "list-prs":
+    case "pull-request":
+      return "pull-request";
     case "search":
       return "globe";
     case "code-search":
@@ -2395,6 +2401,7 @@ type WorkEntryIconName =
   | "globe"
   | "hammer"
   | "message-circle"
+  | "pull-request"
   | "search"
   | "square-pen"
   | "terminal"
@@ -2620,6 +2627,8 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
       return <EyeIcon className={className} aria-hidden />;
     case "globe":
       return <GlobeIcon className={className} aria-hidden />;
+    case "pull-request":
+      return <GitPullRequestIcon className={className} aria-hidden />;
     case "hammer":
       return <HammerIcon className={className} aria-hidden />;
     case "message-circle":

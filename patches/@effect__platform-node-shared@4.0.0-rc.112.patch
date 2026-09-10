@@ -1,0 +1,54 @@
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index aa8abbe37..97aa95310 100644
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -243,7 +243,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   };
+   const spawn = (command, spawnOptions) => Effect.callback(resume => {
+     const deferred = Deferred.makeUnsafe();
+-    const handle = NodeChildProcess.spawn(command.command, command.args, spawnOptions);
++    const handle = NodeChildProcess.spawn(command.command, command.args, { ...spawnOptions, windowsHide: process.platform === "win32" && !spawnOptions.detached });
+     handle.on("error", error => {
+       resume(Effect.fail(toPlatformError("spawn", error, command)));
+     });
+@@ -278,8 +278,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+   };
+   const killProcessGroupOnExit = (childProcess, signal) => {
+     if (globalThis.process.platform === "win32") {
+-      // ignore errors during best-effort cleanup
+-      taskkill(childProcess);
++      try {
++        taskkill(childProcess);
++      } catch {}
+       return;
+     }
+     try {
+diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
+index 38299e217..b6cf6a6ce 100644
+--- a/src/NodeChildProcessSpawner.ts
++++ b/src/NodeChildProcessSpawner.ts
+@@ -341,9 +341,9 @@ const make = Effect.gen(function*() {
+     >((resume) => {
+       const deferred = Deferred.makeUnsafe<ExitCodeWithSignal>()
+       const handle = NodeChildProcess.spawn(
+-        command.command,
+-        command.args,
+-        spawnOptions
++        command.command,
++        command.args,
++        { ...spawnOptions, windowsHide: process.platform === "win32" && !spawnOptions.detached }
+       )
+       handle.on("error", (error) => {
+         resume(Effect.fail(toPlatformError("spawn", error, command)))
+@@ -388,8 +388,9 @@ const make = Effect.gen(function*() {
+     signal: NodeJS.Signals
+   ): void => {
+     if (globalThis.process.platform === "win32") {
+-      // ignore errors during best-effort cleanup
+-      taskkill(childProcess)
++      try {
++        taskkill(childProcess)
++      } catch {}
+       return
+     }
+     try {

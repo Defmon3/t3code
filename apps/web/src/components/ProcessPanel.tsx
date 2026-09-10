@@ -57,6 +57,7 @@ export function ProcessPanel(input: {
   readonly environmentConnectionPhase: EnvironmentConnectionPhase;
   readonly projects: readonly ProcessPanelProject[];
   readonly threads: readonly ProcessPanelThread[];
+  readonly onBack?: (() => void) | undefined;
 }) {
   const query = useEnvironmentQuery(
     serverEnvironment.processDiscovery({
@@ -91,7 +92,14 @@ export function ProcessPanel(input: {
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto" aria-label="Running tests">
       <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">
-        <h2 className="font-medium text-sm">Running tests</h2>
+        <div className="flex items-center gap-2">
+          {input.onBack ? (
+            <Button onClick={input.onBack} size="xs" type="button" variant="ghost">
+              Back to pull requests
+            </Button>
+          ) : null}
+          <h2 className="font-medium text-sm">Running tests</h2>
+        </div>
         <div className="flex items-center gap-2">
           {query.data ? (
             <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
@@ -149,11 +157,7 @@ export function ProcessPanel(input: {
             <div key={`${group.project.id}:${group.cwd}`}>
               <div className="flex min-h-7 items-center gap-2 px-3 py-1 text-sm">
                 <ProjectFavicon
-                  environmentId={input.environmentId}
-                  cwd={group.project.workspaceRoot}
-                  projectName={group.project.title}
-                  projectIcon={group.project.projectIcon}
-                  faviconPath={group.project.faviconPath}
+                  project={{ ...group.project, environmentId: input.environmentId }}
                 />
                 <span className="min-w-0 truncate font-medium">{group.project.title}</span>
                 <span className="min-w-0 break-all font-mono text-muted-foreground text-xs">

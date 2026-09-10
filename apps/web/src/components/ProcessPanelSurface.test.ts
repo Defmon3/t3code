@@ -42,6 +42,22 @@ describe("ProcessPanelSurface", () => {
     expect(useProcessPanelSurfaceStore.getState().byEnvironmentId[environmentId]?.owner).toBeNull();
   });
 
+  it("publishes and clears the optional back action", () => {
+    const owner = Symbol("owner");
+    const onBack = () => undefined;
+    useProcessPanelSurfaceStore.getState().claim(input, owner, onBack);
+
+    expect(useProcessPanelSurfaceStore.getState().byEnvironmentId[environmentId]?.onBack).toBe(
+      onBack,
+    );
+
+    useProcessPanelSurfaceStore.getState().update(input, owner, true);
+
+    expect(
+      useProcessPanelSurfaceStore.getState().byEnvironmentId[environmentId]?.onBack,
+    ).toBeUndefined();
+  });
+
   it("does not notify equivalent slot updates while publishing changed presentations", () => {
     const owner = Symbol("owner");
     const store = useProcessPanelSurfaceStore;

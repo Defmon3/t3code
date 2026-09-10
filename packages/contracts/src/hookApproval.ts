@@ -56,7 +56,7 @@ export type HookApprovalHttpResponse = typeof HookApprovalHttpResponse.Type;
 export const HookApprovalRespondErrorReason = Schema.Literals(["request_not_pending"]);
 export type HookApprovalRespondErrorReason = typeof HookApprovalRespondErrorReason.Type;
 
-export class HookApprovalRespondError extends Schema.TaggedErrorClass<HookApprovalRespondError>()(
+export class HookApprovalRespondError extends Schema.TaggedError<HookApprovalRespondError>()(
   "HookApprovalRespondError",
   {
     reason: HookApprovalRespondErrorReason,

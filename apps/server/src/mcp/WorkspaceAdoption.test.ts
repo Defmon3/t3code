@@ -54,6 +54,7 @@ const makeThread = (
   interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
   branch: null,
   worktreePath: null,
+  pullRequests: [],
   latestTurn: null,
   createdAt: now,
   updatedAt: now,

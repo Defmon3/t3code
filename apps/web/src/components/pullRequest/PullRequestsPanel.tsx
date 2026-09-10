@@ -41,7 +41,7 @@ import {
 } from "./pullRequestList.logic";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import { PullRequestFiltersMenu, type PullRequestFilterOption } from "./PullRequestListFilters";
-import { PullRequestRow } from "./PullRequestRow";
+import { PullRequestRow, type PullRequestRowTarget } from "./PullRequestRow";
 
 const STATE_OPTIONS = [
   { value: "all", label: "All", Icon: LayersIcon },
@@ -304,7 +304,7 @@ function PullRequestBrowserList({
   ]);
 
   const select = useCallback(
-    (entry: EnvironmentPullRequestEntry) =>
+    (entry: PullRequestRowTarget) =>
       onSelect({ projectId, repository: entry.repository, number: entry.number }),
     [onSelect, projectId],
   );

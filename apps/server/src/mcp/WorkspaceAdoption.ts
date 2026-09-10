@@ -31,7 +31,7 @@ export const WorkspaceAdoptionFailureReason = Schema.Literals([
 ]);
 export type WorkspaceAdoptionFailureReason = typeof WorkspaceAdoptionFailureReason.Type;
 
-export class WorkspaceAdoptionError extends Schema.TaggedErrorClass<WorkspaceAdoptionError>()(
+export class WorkspaceAdoptionError extends Schema.TaggedError<WorkspaceAdoptionError>()(
   "WorkspaceAdoptionError",
   {
     reason: WorkspaceAdoptionFailureReason,
