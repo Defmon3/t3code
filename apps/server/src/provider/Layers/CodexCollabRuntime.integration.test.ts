@@ -475,10 +475,9 @@ describe("CodexSessionRuntime collab integration", () => {
         Stream.filter((event) => event.method === "item/fileChange/requestApproval"),
         Stream.runForEach((event) => {
           approvalCount += 1;
-          return Deferred.succeed(
-            approvalCount === 1 ? approval : missingApproval,
-            event,
-          ).pipe(Effect.asVoid);
+          return Deferred.succeed(approvalCount === 1 ? approval : missingApproval, event).pipe(
+            Effect.asVoid,
+          );
         }),
         Effect.forkScoped,
       );
@@ -1336,7 +1335,10 @@ describe("CodexSessionRuntime collab integration", () => {
         NodeFS.readFileSync(responsesPath, "utf8"),
       );
       assert.equal(recordedResponse.id, scriptedRequest.id);
-      assert.deepEqual(recordedResponse.result, { action: "accept", content: { approval: "once" } });
+      assert.deepEqual(recordedResponse.result, {
+        action: "accept",
+        content: { approval: "once" },
+      });
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
