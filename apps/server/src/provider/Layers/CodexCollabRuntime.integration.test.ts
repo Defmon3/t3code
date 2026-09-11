@@ -246,6 +246,45 @@ const runMockCollabScript = Effect.fn("CodexCollabRuntimeTest.runMockCollabScrip
 });
 
 describe("CodexSessionRuntime collab integration", () => {
+  it.effect("keeps full-access provider approvals disabled with configured hooks", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        JSON.stringify({ rootThreadId: ROOT, recordThreadStart: true, notifications: [] }),
+        "utf8",
+      );
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-hooks-full-access"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        hookPlan: {
+          configPath: "hooks.json",
+          hasPreToolUseHooks: true,
+          hasPreToolUseHooksNow: Effect.succeed(true),
+          evaluatePreToolUse: () => Effect.succeed({ decision: "allow" as const }),
+          evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
+        },
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Check policies" });
+      const requests = readRecordedRequests();
+      const start = requests.find((request) => request.method === "thread/start");
+      const turn = requests.find((request) => request.method === "turn/start");
+      assert.equal(start?.params.approvalPolicy, "never");
+      assert.equal(turn?.params.approvalPolicy, "never");
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   for (const notification of [
     {
       method: "item/started",
@@ -320,7 +359,7 @@ describe("CodexSessionRuntime collab integration", () => {
           threadId: ThreadId.make("thread-codex-file-hooks"),
           binaryPath: peerPath,
           cwd: NodeOS.tmpdir(),
-          runtimeMode: "full-access",
+          runtimeMode: "auto-accept-edits",
           hookPlan: {
             configPath: "hooks.json",
             hasPreToolUseHooks: true,
@@ -371,7 +410,22 @@ describe("CodexSessionRuntime collab integration", () => {
         JSON.stringify({
           rootThreadId: ROOT,
           holdTurnOpen: true,
-          notifications: [],
+          notifications: [
+            {
+              method: "item/started",
+              params: {
+                threadId: ROOT,
+                turnId: "turn-unknown",
+                startedAtMs: 0,
+                item: {
+                  type: "fileChange",
+                  id: "file-change-empty",
+                  status: "inProgress",
+                  changes: [],
+                },
+              },
+            },
+          ],
           serverRequests: [
             {
               id: 92,
@@ -379,7 +433,17 @@ describe("CodexSessionRuntime collab integration", () => {
               params: {
                 threadId: ROOT,
                 turnId: "turn-unknown",
-                itemId: "file-change-unknown",
+                itemId: "file-change-empty",
+                startedAtMs: 0,
+              },
+            },
+            {
+              id: 93,
+              method: "item/fileChange/requestApproval",
+              params: {
+                threadId: ROOT,
+                turnId: "turn-unknown",
+                itemId: "file-change-missing",
                 startedAtMs: 0,
               },
             },
@@ -394,7 +458,7 @@ describe("CodexSessionRuntime collab integration", () => {
         threadId: ThreadId.make("thread-codex-unknown-file-hooks"),
         binaryPath: peerPath,
         cwd: NodeOS.tmpdir(),
-        runtimeMode: "full-access",
+        runtimeMode: "auto-accept-edits",
         hookPlan: {
           configPath: "hooks.json",
           hasPreToolUseHooks: true,
@@ -405,9 +469,17 @@ describe("CodexSessionRuntime collab integration", () => {
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
       const approval = yield* Deferred.make<ProviderEvent>();
+      const missingApproval = yield* Deferred.make<ProviderEvent>();
+      let approvalCount = 0;
       yield* runtime.events.pipe(
         Stream.filter((event) => event.method === "item/fileChange/requestApproval"),
-        Stream.runForEach((event) => Deferred.succeed(approval, event).pipe(Effect.asVoid)),
+        Stream.runForEach((event) => {
+          approvalCount += 1;
+          return Deferred.succeed(
+            approvalCount === 1 ? approval : missingApproval,
+            event,
+          ).pipe(Effect.asVoid);
+        }),
         Effect.forkScoped,
       );
       yield* runtime.start();
@@ -415,6 +487,14 @@ describe("CodexSessionRuntime collab integration", () => {
       const request = yield* Deferred.await(approval);
       assert.equal(
         (request.payload as { approvalReason?: string }).approvalReason,
+        "Changed files unknown.",
+      );
+      if (request.requestId !== undefined) {
+        yield* runtime.respondToRequest(request.requestId, "decline");
+      }
+      const missingRequest = yield* Deferred.await(missingApproval);
+      assert.equal(
+        (missingRequest.payload as { approvalReason?: string }).approvalReason,
         "Changed files unknown.",
       );
       yield* runtime.close;
@@ -1193,4 +1273,71 @@ describe("CodexSessionRuntime collab integration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   }
+
+  it.effect("auto-resolves MCP elicitations without a provider card in full-access", () =>
+    Effect.gen(function* () {
+      const scriptedRequest = {
+        id: 7002,
+        method: "mcpServer/elicitation/request",
+        params: {
+          mode: "form",
+          message: "Allow ChatGPT to use Safari?",
+          serverName: "computer-use",
+          threadId: ROOT,
+          turnId: wireFixture.responses.turnStart.turn.id,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              approval: {
+                type: "string",
+                enum: ["once", "session", "always"],
+              },
+            },
+            required: ["approval"],
+          },
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        completeTurnOnServerResponse: true,
+        notifications: [],
+        serverRequests: [scriptedRequest],
+      };
+      const responsesPath = `${scriptPath}.responses`;
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(responsesPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(responsesPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-mcp-full-access"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const eventsFiber = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.method === "turn/completed"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Open Safari" });
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isFalse(events.some((event) => event.method === "mcpServer/elicitation/request"));
+
+      const recordedResponse = yield* decodeMcpElicitationResponse(
+        NodeFS.readFileSync(responsesPath, "utf8"),
+      );
+      assert.equal(recordedResponse.id, scriptedRequest.id);
+      assert.deepEqual(recordedResponse.result, { action: "accept", content: { approval: "once" } });
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });

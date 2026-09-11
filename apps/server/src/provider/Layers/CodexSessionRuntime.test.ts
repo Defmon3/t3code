@@ -72,25 +72,11 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
-  it("requests callbacks for T3 hooks without reducing full-access sandboxing", () => {
+  it("keeps full-access provider approvals disabled", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
         threadId: "provider-thread-1",
         runtimeMode: "full-access",
-        interceptApprovals: true,
-      }),
-    );
-
-    NodeAssert.equal(params.approvalPolicy, "untrusted");
-    NodeAssert.deepStrictEqual(params.sandboxPolicy, { type: "dangerFullAccess" });
-  });
-
-  it("stops requesting callbacks once a full-access turn has no T3 hooks", () => {
-    const params = Effect.runSync(
-      buildTurnStartParams({
-        threadId: "provider-thread-1",
-        runtimeMode: "full-access",
-        interceptApprovals: false,
       }),
     );
 

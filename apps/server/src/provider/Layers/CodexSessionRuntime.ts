@@ -574,10 +574,7 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
-function runtimeModeToThreadConfig(
-  input: RuntimeMode,
-  interceptApprovals = false,
-): {
+function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
   // Always explicit: omitting the field on resume keeps the thread's previous
@@ -606,7 +603,7 @@ function runtimeModeToThreadConfig(
     case "full-access":
     default:
       return {
-        approvalPolicy: interceptApprovals ? "untrusted" : "never",
+        approvalPolicy: "never",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       };
@@ -618,9 +615,8 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
-  readonly interceptApprovals?: boolean;
 }): EffectCodexSchema.V2ThreadStartParams {
-  const config = runtimeModeToThreadConfig(input.runtimeMode, input.interceptApprovals);
+  const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
@@ -689,7 +685,6 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly interceptApprovals?: boolean;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
 }): Effect.Effect<
@@ -707,7 +702,7 @@ export function buildTurnStartParams(input: {
     turnInput.push(attachment);
   }
 
-  const config = runtimeModeToThreadConfig(input.runtimeMode, input.interceptApprovals);
+  const config = runtimeModeToThreadConfig(input.runtimeMode);
   const collaborationMode = buildCodexCollaborationMode({
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -801,7 +796,6 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
-  readonly interceptApprovals?: boolean;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -809,9 +803,6 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
-    ...(input.interceptApprovals !== undefined
-      ? { interceptApprovals: input.interceptApprovals }
-      : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -1369,8 +1360,6 @@ export const makeCodexSessionRuntime = (
         }
         return next;
       });
-    const interceptApprovalsAtStart = options.hookPlan?.hasPreToolUseHooks === true;
-
     const evaluatePreToolUseHook = Effect.fn("CodexSessionRuntime.evaluatePreToolUseHook")(
       function* (toolName: string, toolInput: unknown) {
         if (!options.hookPlan || (yield* Ref.get(allowHookApprovalsForSessionRef))) {
@@ -2578,6 +2567,11 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
+        if (options.runtimeMode === "full-access") {
+          return {
+            decision: "accept",
+          } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
+        }
         const hookDecision: T3HookDecision | undefined = options.hookPlan
           ? yield* evaluatePreToolUseHook("Bash", payload)
           : undefined;
@@ -2654,6 +2648,11 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
+        if (options.runtimeMode === "full-access") {
+          return {
+            decision: "accept",
+          } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+        }
         const proposals = options.hookPlan
           ? (yield* Ref.get(fileChangeProposalsRef)).get(
               fileChangeProposalKey(payload.threadId, payload.turnId, payload.itemId),
@@ -2742,6 +2741,9 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
       Effect.gen(function* () {
+        if (options.runtimeMode === "full-access") {
+          return toMcpElicitationResponse(payload, "accept");
+        }
         if (toMcpElicitationResponse(payload, "accept").action !== "accept") {
           yield* Effect.logWarning("Declined an unsupported MCP elicitation.", {
             serverName: payload.serverName,
@@ -3003,7 +3005,6 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
-        interceptApprovals: interceptApprovalsAtStart,
       });
 
       const providerThreadId = opened.thread.id;
@@ -3074,9 +3075,6 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
-          const interceptApprovals = options.hookPlan
-            ? yield* options.hookPlan.hasPreToolUseHooksNow
-            : false;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
@@ -3086,7 +3084,6 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
-            interceptApprovals,
             // Derived from the session's own MCP configuration rather than the
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.

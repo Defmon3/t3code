@@ -49,7 +49,7 @@ Mobile offers the same four modes with the same labels and descriptions.
 
 ## Project Hooks
 
-Claude and Codex threads can add project-specific checks to **Full access** with
+Claude and Codex threads can add project-specific checks with
 `.t3code/hooks.json`. T3 Code searches from the thread working directory toward the filesystem
 root and uses the first configuration it finds.
 
@@ -110,17 +110,12 @@ also accepted. Empty output with exit code 0 allows the tool; exit code 2 denies
 standard error as the reason. Other script failures are shown as an approval instead of being
 silently ignored.
 
-Hook approvals appear only in the thread that triggered them. The approval card keeps the full
-requested action in a scrollable code area, so you can review long commands and tool inputs before
-choosing **Cancel**, **Decline**, **Allow for session**, or **Approve**. **Allow for session**
-skips later hook prompts for that provider session. Other permission modes keep their provider's
-built-in protections and do not run T3 project hooks.
+In **Full access**, Codex keeps native command, file-change, and MCP approvals disabled. Its
+native requests do not create provider permission cards, and `.t3code` hooks do not enable them.
 
 **Live changes.** T3 Code re-reads `.t3code/hooks.json` before every hook check, so edits do not
 need a restart. In a Claude thread, creating, editing, or deleting the file affects the very next
-tool call. In a Codex thread, edits to hook commands and matchers apply to the next tool approval;
-adding hooks to a project that had none (or removing the last hook) changes how Codex routes
-approvals starting with the next message you send in that thread.
+tool call. In a Codex thread, `.t3code` hooks do not enable provider approvals in **Full access**.
 
 **Supported events.** `PreToolUse` runs before matching tool calls. `Stop` runs once after a root
 Claude or Codex turn finishes normally; an `ask` response keeps the turn open until the user
@@ -156,9 +151,10 @@ See the [provider guides](./install.md#providers) for setup and provider-specifi
 
 ## Custom hook approvals
 
-Custom hooks can request approval in T3 even when a thread uses **Full access**.
-Install a hook that supports T3 approvals on each server where you run agents. The
-hook decides which actions need confirmation.
+Independent custom HTTP hooks can request approval in T3 even when a thread uses **Full access**.
+They use a separate bridge from `.t3code` hooks and do not change the provider's permission mode.
+Install a hook that supports T3 approvals on each server where you run agents. The hook decides
+which actions need confirmation.
 
 The approval controls in the relevant thread identify the command and scope
 without blocking the rest of T3. **Allow** permits one request. **Allow for this session** remembers
