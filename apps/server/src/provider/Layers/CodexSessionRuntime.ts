@@ -42,7 +42,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
-import type { T3HookPlan } from "../../hooks/T3HookRunner.ts";
+import type { T3HookDecision, T3HookPlan } from "../../hooks/T3HookRunner.ts";
 import {
   buildCodexDeveloperInstructions,
   type T3CodeToolAvailability,
@@ -170,6 +170,12 @@ type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["servi
 type CodexThreadItem =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number]
   | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["turns"][number]["items"][number];
+type CodexFileChangeProposal =
+  EffectCodexSchema.V2FileChangePatchUpdatedNotification__FileUpdateChange;
+
+function fileChangeProposalKey(threadId: string, turnId: string, itemId: string): string {
+  return `${threadId}\u0000${turnId}\u0000${itemId}`;
+}
 
 export interface CodexSessionRuntimeOptions {
   readonly threadId: ThreadId;
@@ -1332,6 +1338,37 @@ export const makeCodexSessionRuntime = (
     const closedRef = yield* Ref.make(false);
     const stopHookEvaluatedTurnIdsRef = yield* Ref.make(new Set<string>());
     const allowHookApprovalsForSessionRef = yield* Ref.make(false);
+    const fileChangeProposalsRef = yield* Ref.make(
+      new Map<string, ReadonlyArray<CodexFileChangeProposal>>(),
+    );
+    const replaceFileChangeProposals = (
+      threadId: string,
+      turnId: string,
+      itemId: string,
+      changes: ReadonlyArray<CodexFileChangeProposal>,
+    ) =>
+      Ref.update(fileChangeProposalsRef, (current) => {
+        const next = new Map(current);
+        next.set(fileChangeProposalKey(threadId, turnId, itemId), changes);
+        return next;
+      });
+    const clearFileChangeProposalsForItem = (threadId: string, turnId: string, itemId: string) =>
+      Ref.update(fileChangeProposalsRef, (current) => {
+        const next = new Map(current);
+        next.delete(fileChangeProposalKey(threadId, turnId, itemId));
+        return next;
+      });
+    const clearFileChangeProposalsForTurn = (threadId: string, turnId: string) =>
+      Ref.update(fileChangeProposalsRef, (current) => {
+        const next = new Map(current);
+        const prefix = `${threadId}\u0000${turnId}\u0000`;
+        for (const key of next.keys()) {
+          if (key.startsWith(prefix)) {
+            next.delete(key);
+          }
+        }
+        return next;
+      });
     const interceptApprovalsAtStart = options.hookPlan?.hasPreToolUseHooks === true;
 
     const evaluatePreToolUseHook = Effect.fn("CodexSessionRuntime.evaluatePreToolUseHook")(
@@ -2518,6 +2555,7 @@ export const makeCodexSessionRuntime = (
             });
           });
         }),
+        Effect.andThen(clearFileChangeProposalsForTurn(payload.threadId, payload.turn.id)),
       ),
     );
 
@@ -2540,7 +2578,7 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
-        const hookDecision = options.hookPlan
+        const hookDecision: T3HookDecision | undefined = options.hookPlan
           ? yield* evaluatePreToolUseHook("Bash", payload)
           : undefined;
         if (hookDecision && hookDecision.decision !== "ask") {
@@ -2616,8 +2654,18 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
+        const proposals = options.hookPlan
+          ? (yield* Ref.get(fileChangeProposalsRef)).get(
+              fileChangeProposalKey(payload.threadId, payload.turnId, payload.itemId),
+            )
+          : undefined;
         const hookDecision = options.hookPlan
-          ? yield* evaluatePreToolUseHook("Edit", payload)
+          ? proposals?.length
+            ? yield* evaluatePreToolUseHook("Edit", {
+                ...payload,
+                changes: proposals.map(({ path, kind }) => ({ path, kind })),
+              })
+            : ({ decision: "ask", reason: "Changed files unknown." } as const)
           : undefined;
         if (hookDecision && hookDecision.decision !== "ask") {
           return {
@@ -2818,9 +2866,53 @@ export const makeCodexSessionRuntime = (
         ),
       );
 
+    yield* client.handleServerNotification("item/started", (payload) =>
+      Effect.gen(function* () {
+        if (payload.item.type === "fileChange" && "changes" in payload.item) {
+          yield* replaceFileChangeProposals(
+            payload.threadId,
+            payload.turnId,
+            payload.item.id,
+            payload.item.changes,
+          );
+        }
+        yield* Queue.offer(
+          serverNotifications,
+          makeCodexServerNotification("item/started", payload),
+        );
+      }),
+    );
+
+    yield* client.handleServerNotification("item/fileChange/patchUpdated", (payload) =>
+      replaceFileChangeProposals(
+        payload.threadId,
+        payload.turnId,
+        payload.itemId,
+        payload.changes,
+      ).pipe(
+        Effect.andThen(
+          Queue.offer(
+            serverNotifications,
+            makeCodexServerNotification("item/fileChange/patchUpdated", payload),
+          ),
+        ),
+      ),
+    );
+
+    yield* client.handleServerNotification("item/completed", (payload) =>
+      clearFileChangeProposalsForItem(payload.threadId, payload.turnId, payload.item.id).pipe(
+        Effect.andThen(
+          Queue.offer(serverNotifications, makeCodexServerNotification("item/completed", payload)),
+        ),
+      ),
+    );
+
     yield* Effect.forEach(
-      Object.values(
-        CodexRpc.SERVER_NOTIFICATION_METHODS,
+      Object.values(CodexRpc.SERVER_NOTIFICATION_METHODS).filter(
+        (method) =>
+          method !== "item/started" &&
+          method !== "item/fileChange/patchUpdated" &&
+          method !== "item/completed",
       ) as ReadonlyArray<CodexRpc.ServerNotificationMethod>,
       registerServerNotification,
       { concurrency: 1, discard: true },

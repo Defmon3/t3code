@@ -89,6 +89,11 @@ examples include `Bash`, `Read`, `Edit`, and `Write`, but availability varies by
 `cwd`, and `hook_event_name` after a root agent turn finishes normally. T3 Code also sets
 `T3_PROJECT_DIR` and `CLAUDE_PROJECT_DIR` to the directory that contains `.t3code`.
 
+A Codex `PreToolUse` `Edit` hook receives the native approval fields in `tool_input`, plus
+`tool_input.changes`, for example `[ {"path":"package.json","kind":{"type":"update"}} ]`.
+Each entry keeps the original path and omits its diff. If Codex does not report changed files, T3
+asks for approval with the reason `Changed files unknown.`
+
 A hook can return a small T3 response:
 
 ```json

@@ -246,6 +246,181 @@ const runMockCollabScript = Effect.fn("CodexCollabRuntimeTest.runMockCollabScrip
 });
 
 describe("CodexSessionRuntime collab integration", () => {
+  for (const notification of [
+    {
+      method: "item/started",
+      params: {
+        threadId: ROOT,
+        turnId: "turn-file-change",
+        startedAtMs: 0,
+        item: {
+          type: "fileChange",
+          id: "file-change-1",
+          status: "inProgress",
+          changes: [{ path: "src/a.ts", diff: "@@ -1 +1 @@", kind: { type: "update" } }],
+        },
+      },
+    },
+    {
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: ROOT,
+        turnId: "turn-file-change",
+        itemId: "file-change-1",
+        changes: [{ path: "src/a.ts", diff: "@@ -1 +1 @@", kind: { type: "update" } }],
+      },
+    },
+  ] as const) {
+    it.effect(`sends changed files to hooks after ${notification.method}`, () =>
+      Effect.gen(function* () {
+        const hookInputs: Array<unknown> = [];
+        NodeFS.writeFileSync(
+          scriptPath,
+          JSON.stringify({
+            rootThreadId: ROOT,
+            holdTurnOpen: true,
+            completeTurnOnServerResponse: true,
+            notifications:
+              notification.method === "item/fileChange/patchUpdated"
+                ? [
+                    {
+                      method: "item/started",
+                      params: {
+                        ...notification.params,
+                        item: {
+                          type: "fileChange",
+                          id: "file-change-1",
+                          status: "inProgress",
+                          changes: [],
+                        },
+                      },
+                    },
+                    notification,
+                  ]
+                : [notification],
+            serverRequests: [
+              {
+                id: 91,
+                method: "item/fileChange/requestApproval",
+                params: {
+                  threadId: ROOT,
+                  turnId: "turn-file-change",
+                  itemId: "file-change-1",
+                  startedAtMs: 0,
+                },
+              },
+            ],
+          }),
+          "utf8",
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+        );
+        const runtime = yield* makeCodexSessionRuntime({
+          threadId: ThreadId.make("thread-codex-file-hooks"),
+          binaryPath: peerPath,
+          cwd: NodeOS.tmpdir(),
+          runtimeMode: "full-access",
+          hookPlan: {
+            configPath: "hooks.json",
+            hasPreToolUseHooks: true,
+            hasPreToolUseHooksNow: Effect.succeed(true),
+            evaluatePreToolUse: (input) => {
+              hookInputs.push(input.toolInput);
+              return Effect.succeed({ decision: "ask" as const, reason: "Review edits." });
+            },
+            evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
+          },
+          environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        });
+        const approval = yield* Deferred.make<ProviderEvent>();
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.method === "item/fileChange/requestApproval"),
+          Stream.runForEach((event) => Deferred.succeed(approval, event).pipe(Effect.asVoid)),
+          Effect.forkScoped,
+        );
+        yield* runtime.start();
+        yield* runtime.sendTurn({ input: "Edit src/a.ts" });
+        const request = yield* Deferred.await(approval);
+        assert.equal((request.payload as { approvalSource?: string }).approvalSource, "hook");
+        assert.equal(
+          (request.payload as { approvalReason?: string }).approvalReason,
+          "Review edits.",
+        );
+        assert.isDefined(request.requestId);
+        if (request.requestId !== undefined)
+          yield* runtime.respondToRequest(request.requestId, "accept");
+        assert.deepEqual(hookInputs, [
+          {
+            threadId: ROOT,
+            turnId: "turn-file-change",
+            itemId: "file-change-1",
+            startedAtMs: 0,
+            changes: [{ path: "src/a.ts", kind: { type: "update" } }],
+          },
+        ]);
+        yield* runtime.close;
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  }
+
+  it.effect("asks when Codex omits changed files", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        JSON.stringify({
+          rootThreadId: ROOT,
+          holdTurnOpen: true,
+          notifications: [],
+          serverRequests: [
+            {
+              id: 92,
+              method: "item/fileChange/requestApproval",
+              params: {
+                threadId: ROOT,
+                turnId: "turn-unknown",
+                itemId: "file-change-unknown",
+                startedAtMs: 0,
+              },
+            },
+          ],
+        }),
+        "utf8",
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-unknown-file-hooks"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        hookPlan: {
+          configPath: "hooks.json",
+          hasPreToolUseHooks: true,
+          hasPreToolUseHooksNow: Effect.succeed(true),
+          evaluatePreToolUse: () => Effect.die("Hook must not run."),
+          evaluateStop: () => Effect.succeed({ decision: "allow" as const }),
+        },
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const approval = yield* Deferred.make<ProviderEvent>();
+      yield* runtime.events.pipe(
+        Stream.filter((event) => event.method === "item/fileChange/requestApproval"),
+        Stream.runForEach((event) => Deferred.succeed(approval, event).pipe(Effect.asVoid)),
+        Effect.forkScoped,
+      );
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Edit unknown file" });
+      const request = yield* Deferred.await(approval);
+      assert.equal(
+        (request.payload as { approvalReason?: string }).approvalReason,
+        "Changed files unknown.",
+      );
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("looks up child model metadata once after activity registration", () =>
     Effect.gen(function* () {
       const script = {
