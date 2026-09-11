@@ -27,6 +27,8 @@ import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGenerat
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import * as T3HookRunner from "../../hooks/T3HookRunner.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
@@ -114,6 +116,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
+      const processRunner = yield* ProcessRunner.make();
+      const hookRunner = yield* T3HookRunner.make().pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+      );
       const modelCatalog = modelManifest.current.pipe(Effect.map(resolveClaudeModelCatalog));
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
@@ -150,6 +156,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const adapterOptions = {
         instanceId,
         environment: processEnv,
+        hookRunner,
         modelCatalog,
         scopedLimitNames,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
