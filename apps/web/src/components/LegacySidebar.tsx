@@ -120,6 +120,7 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { pendingHookApprovalRequestsAtom } from "../state/hookApprovals";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -461,10 +462,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   const isThreadRunning =
     thread.session?.status === "running" && thread.session.activeTurnId != null;
+  const hasPendingHookApproval = useAtomValue(pendingHookApprovalRequestsAtom).some(
+    (request) => request.environmentId === thread.environmentId && request.threadId === thread.id,
+  );
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
       lastVisitedAt,
+      hasPendingApprovals: thread.hasPendingApprovals || hasPendingHookApproval,
     },
   });
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
