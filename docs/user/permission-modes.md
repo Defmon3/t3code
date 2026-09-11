@@ -43,6 +43,8 @@ scopes still require approval. It is available only when the hook supplies a
 scope. **Deny** blocks the request. Hooks continue to enforce their explicit
 blocks after a session allowance.
 
+Pending custom hook approvals mark their requesting thread in the sidebar, and the global approval indicator opens that thread.
+
 OpenCode does not currently support custom hook approvals.
 
 You can respond from a connected remote client. Session allowances end when the

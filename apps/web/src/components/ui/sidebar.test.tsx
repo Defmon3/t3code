@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import type { CSSProperties } from "react";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -36,6 +37,19 @@ describe("sidebar interactive cursors", () => {
     );
 
     expect(html).toContain('data-sidebar-state="collapsed"');
+  });
+
+  it("reserves optional titlebar control width without changing the default inset", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider
+        style={{ "--workspace-titlebar-extra-controls-width": "36px" } as CSSProperties}
+      >
+        <div />
+      </SidebarProvider>,
+    );
+
+    expect(html).toContain("--workspace-titlebar-extra-controls-width:36px");
+    expect(html).toContain("var(--workspace-titlebar-extra-controls-width, 0px)");
   });
 
   it("keeps the sidebar trigger interactive inside Electron drag regions", () => {

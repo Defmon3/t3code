@@ -124,6 +124,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { pendingHookApprovalRequestsAtom } from "../state/hookApprovals";
 import {
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
@@ -961,6 +962,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // rows. The marker can unpin the thread when the server supports pinning.
   pinningSupported: boolean;
   isPinned: boolean;
+  hasPendingHookApproval: boolean;
   // Present on rows whose server supports every drop outcome: dnd-kit
   // sortable bag applied to the row root so the whole row drags (the
   // pointer sensor's distance constraint keeps plain clicks working).
@@ -1088,7 +1090,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  const status = resolveSidebarThreadStatus({
+    ...thread,
+    hasPendingApprovals: thread.hasPendingApprovals || props.hasPendingHookApproval,
+  });
   const isInFlight =
     status === "working" || status === "monitoring" || status === "approval" || status === "input";
   // A woken thread reappears at its original position (the sort is
@@ -2126,6 +2131,7 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const pendingHookApprovalRequests = useAtomValue(pendingHookApprovalRequestsAtom);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -2236,6 +2242,15 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const pendingHookApprovalThreadKeys = useMemo(
+    () =>
+      new Set(
+        pendingHookApprovalRequests.map((request) =>
+          scopedThreadKey({ environmentId: request.environmentId, threadId: request.threadId }),
+        ),
+      ),
+    [pendingHookApprovalRequests],
+  );
   const routeTargetRef = useRef(routeTarget);
   routeTargetRef.current = routeTarget;
   // Post-settle navigation validates against the CURRENT route, not the one
@@ -4696,6 +4711,7 @@ export default function Sidebar() {
                                 .threadPinning === true
                             }
                             isPinned={thread.pinnedAt != null}
+                            hasPendingHookApproval={pendingHookApprovalThreadKeys.has(threadKey)}
                             sortable={sortable}
                             dropVerb={
                               dragState?.activeKey === threadKey
