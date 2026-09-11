@@ -63,15 +63,14 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
-  it.effect("requires native approval for hook-controlled full-access turns", () =>
+  it.effect("keeps full-access provider approvals disabled", () =>
     Effect.gen(function* () {
       const params = yield* buildTurnStartParams({
         threadId: "provider-thread-1",
         runtimeMode: "full-access",
-        requireApproval: true,
       });
 
-      NodeAssert.equal(params.approvalPolicy, "untrusted");
+      NodeAssert.equal(params.approvalPolicy, "never");
     }),
   );
   it("keeps invalid turn values only in the schema cause", () => {

@@ -24,6 +24,10 @@ native approval fields in `tool_input`, plus `tool_input.changes`, for example
 omits its diff. If Codex does not report the changed files, T3 asks for approval with the reason
 `Changed files unknown.`
 
+Project hooks use the project-configured hook bridge and do not change a provider's permission
+mode. In **Full access**, Codex keeps provider approvals disabled, including native MCP permission
+cards.
+
 ## Provider differences
 
 Providers enforce permissions differently. Some read-only actions can proceed in **Supervised**.

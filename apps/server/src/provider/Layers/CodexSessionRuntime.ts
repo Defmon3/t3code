@@ -557,12 +557,11 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
-  readonly requireApproval?: boolean;
 }): EffectCodexSchema.V2ThreadStartParams {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
-    approvalPolicy: input.requireApproval ? "untrusted" : config.approvalPolicy,
+    approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
@@ -628,7 +627,6 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly requireApproval?: boolean;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean;
 }): Effect.Effect<
@@ -657,7 +655,7 @@ export function buildTurnStartParams(input: {
   return decodeCodexTurnStartParamsWithCollaborationMode({
     threadId: input.threadId,
     input: turnInput,
-    approvalPolicy: input.requireApproval ? "untrusted" : config.approvalPolicy,
+    approvalPolicy: config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
     sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode),
     ...(input.model ? { model: input.model } : {}),
@@ -736,7 +734,6 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
-  readonly requireApproval?: boolean;
 }): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -744,7 +741,6 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
-    ...(input.requireApproval ? { requireApproval: true } : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -2006,7 +2002,7 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
-        if (options.hookPlan?.hasPreToolUseHooks && options.runtimeMode === "full-access") {
+        if (options.runtimeMode === "full-access") {
           return {
             decision: "accept",
           } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
@@ -2067,6 +2063,11 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
+        if (options.runtimeMode === "full-access") {
+          return {
+            decision: "accept",
+          } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+        }
         const hooksEnabled = options.hookPlan
           ? yield* options.hookPlan.hasPreToolUseHooksNow
           : false;
@@ -2220,6 +2221,9 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
       Effect.gen(function* () {
+        if (options.runtimeMode === "full-access") {
+          return toMcpElicitationResponse(payload, "accept");
+        }
         if (toMcpElicitationResponse(payload, "accept").action !== "accept") {
           yield* Effect.logWarning("Declined an unsupported MCP elicitation.", {
             serverName: payload.serverName,
@@ -2477,7 +2481,6 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
-        ...(options.hookPlan?.hasPreToolUseHooks ? { requireApproval: true } : {}),
       });
 
       const providerThreadId = opened.thread.id;
@@ -2547,13 +2550,9 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
-          const requireApproval = options.hookPlan
-            ? yield* options.hookPlan.hasPreToolUseHooksNow
-            : false;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
-            ...(requireApproval ? { requireApproval: true } : {}),
             ...(input.input ? { prompt: input.input } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),
             ...(normalizedModel ? { model: normalizedModel } : {}),

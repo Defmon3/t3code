@@ -222,6 +222,44 @@ const fileChangeNotificationCases = [
 ] as const;
 
 describe("CodexSessionRuntime collab integration", () => {
+  it.effect("keeps full-access provider approvals disabled with configured hooks", () =>
+    Effect.gen(function* () {
+      const script = {
+        rootThreadId: ROOT,
+        recordThreadStart: true,
+        notifications: [],
+      };
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-hooks-full-access"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        hookPlan: {
+          configPath: "hooks.json",
+          hasPreToolUseHooks: true,
+          hasPreToolUseHooksNow: Effect.succeed(true),
+          evaluatePreToolUse: () => Effect.succeed({ decision: "allow" } as const),
+          evaluateStop: () => Effect.succeed({ decision: "allow" } as const),
+        },
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+
+      yield* runtime.start();
+      const start = readRecordedRequests().find((request) => request.method === "thread/start");
+      assert.equal(start?.params.approvalPolicy, "never");
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   for (const notificationCase of fileChangeNotificationCases) {
     it.effect(`waits for each hook-requested file approval after ${notificationCase.name}`, () =>
       Effect.gen(function* () {
@@ -258,7 +296,7 @@ describe("CodexSessionRuntime collab integration", () => {
           threadId: ThreadId.make("thread-codex-file-hooks"),
           binaryPath: peerPath,
           cwd: NodeOS.tmpdir(),
-          runtimeMode: "full-access",
+          runtimeMode: "auto-accept-edits",
           hookPlan: {
             configPath: "hooks.json",
             hasPreToolUseHooks: true,
@@ -376,7 +414,7 @@ describe("CodexSessionRuntime collab integration", () => {
         threadId: ThreadId.make("thread-codex-file-hooks-unknown"),
         binaryPath: peerPath,
         cwd: NodeOS.tmpdir(),
-        runtimeMode: "full-access",
+        runtimeMode: "auto-accept-edits",
         hookPlan: {
           configPath: "hooks.json",
           hasPreToolUseHooks: true,
@@ -1021,4 +1059,71 @@ describe("CodexSessionRuntime collab integration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   }
+
+  it.effect("auto-resolves MCP elicitations without a provider card in full-access", () =>
+    Effect.gen(function* () {
+      const scriptedRequest = {
+        id: 7002,
+        method: "mcpServer/elicitation/request",
+        params: {
+          mode: "form",
+          message: "Allow ChatGPT to use Safari?",
+          serverName: "computer-use",
+          threadId: ROOT,
+          turnId: wireFixture.responses.turnStart.turn.id,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              approval: {
+                type: "string",
+                enum: ["once", "session", "always"],
+              },
+            },
+            required: ["approval"],
+          },
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        completeTurnOnServerResponse: true,
+        notifications: [],
+        serverRequests: [scriptedRequest],
+      };
+      const responsesPath = `${scriptPath}.responses`;
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(responsesPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(responsesPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-mcp-full-access"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const eventsFiber = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.method === "turn/completed"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Open Safari" });
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isFalse(events.some((event) => event.method === "mcpServer/elicitation/request"));
+
+      const recordedResponse = yield* decodeMcpElicitationResponse(
+        NodeFS.readFileSync(responsesPath, "utf8"),
+      );
+      assert.equal(recordedResponse.id, scriptedRequest.id);
+      assert.deepEqual(recordedResponse.result, { action: "accept", content: { approval: "once" } });
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
