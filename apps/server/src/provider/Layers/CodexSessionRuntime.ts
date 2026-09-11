@@ -40,6 +40,7 @@ import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
+import type { T3HookPlan } from "../../hooks/T3HookRunner.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -166,6 +167,23 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly hookPlan?: T3HookPlan;
+}
+
+type CodexFileChangeProposal =
+  EffectCodexSchema.V2FileChangePatchUpdatedNotification__FileUpdateChange;
+
+function fileChangeProposalKey(threadId: string, turnId: string, itemId: string): string {
+  return `${threadId}\u0000${turnId}\u0000${itemId}`;
+}
+
+function fileChangeApprovalDetail(proposal: CodexFileChangeProposal): string {
+  const movePath = proposal.kind.type === "update" ? proposal.kind.move_path : undefined;
+  return [
+    `file_path: ${proposal.path}`,
+    `diff: ${proposal.diff}`,
+    `kind: ${proposal.kind.type}${movePath ? ` (${movePath})` : ""}`,
+  ].join("\n");
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -532,11 +550,12 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
+  readonly requireApproval?: boolean;
 }): EffectCodexSchema.V2ThreadStartParams {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: input.requireApproval ? "untrusted" : config.approvalPolicy,
     sandbox: config.sandbox,
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
@@ -602,6 +621,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly requireApproval?: boolean;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean;
 }): Effect.Effect<
@@ -630,7 +650,7 @@ export function buildTurnStartParams(input: {
   return decodeCodexTurnStartParamsWithCollaborationMode({
     threadId: input.threadId,
     input: turnInput,
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: input.requireApproval ? "untrusted" : config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
     sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode),
     ...(input.model ? { model: input.model } : {}),
@@ -697,6 +717,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly requireApproval?: boolean;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -704,6 +725,7 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
+    ...(input.requireApproval ? { requireApproval: true } : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -1164,6 +1186,37 @@ export const makeCodexSessionRuntime = (
     const events = yield* Queue.unbounded<ProviderEvent>();
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
+    const fileChangeProposalsRef = yield* Ref.make(
+      new Map<string, ReadonlyArray<CodexFileChangeProposal>>(),
+    );
+    const replaceFileChangeProposals = (
+      threadId: string,
+      turnId: string,
+      itemId: string,
+      changes: ReadonlyArray<CodexFileChangeProposal>,
+    ) =>
+      Ref.update(fileChangeProposalsRef, (current) => {
+        const next = new Map(current);
+        next.set(fileChangeProposalKey(threadId, turnId, itemId), changes);
+        return next;
+      });
+    const clearFileChangeProposalsForItem = (threadId: string, turnId: string, itemId: string) =>
+      Ref.update(fileChangeProposalsRef, (current) => {
+        const next = new Map(current);
+        next.delete(fileChangeProposalKey(threadId, turnId, itemId));
+        return next;
+      });
+    const clearFileChangeProposalsForTurn = (threadId: string, turnId: string) =>
+      Ref.update(fileChangeProposalsRef, (current) => {
+        const next = new Map(current);
+        const prefix = `${threadId}\u0000${turnId}\u0000`;
+        for (const key of next.keys()) {
+          if (key.startsWith(prefix)) {
+            next.delete(key);
+          }
+        }
+        return next;
+      });
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const collabChildAgentsRef = yield* Ref.make(new Map<string, CollabChildAgentState>());
@@ -1896,6 +1949,7 @@ export const makeCodexSessionRuntime = (
             ...(lastError ? { lastError } : {}),
           });
         }),
+        Effect.andThen(clearFileChangeProposalsForTurn(payload.threadId, payload.turn.id)),
       ),
     );
 
@@ -1918,6 +1972,11 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
+        if (options.hookPlan?.hasPreToolUseHooks && options.runtimeMode === "full-access") {
+          return {
+            decision: "accept",
+          } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
+        }
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4("command-approval-request"));
         const turnId = TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
@@ -1974,6 +2033,101 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
+        const hooksEnabled = options.hookPlan
+          ? yield* options.hookPlan.hasPreToolUseHooksNow
+          : false;
+        const proposals = hooksEnabled
+          ? (yield* Ref.get(fileChangeProposalsRef)).get(
+              fileChangeProposalKey(payload.threadId, payload.turnId, payload.itemId),
+            )
+          : undefined;
+        if (hooksEnabled) {
+          const hookDecision = proposals?.length
+            ? yield* options
+                .hookPlan!.evaluatePreToolUse({
+                  provider: PROVIDER,
+                  threadId: options.threadId,
+                  toolName: "Edit",
+                  toolInput: {
+                    ...payload,
+                    changes: proposals.map(({ path, kind }) => ({ path, kind })),
+                  },
+                })
+                .pipe(
+                  Effect.catchTag("T3HookCommandError", (error) =>
+                    Effect.logError("Codex file-change hook failed", { error }).pipe(
+                      Effect.as({ decision: "deny" } as const),
+                    ),
+                  ),
+                )
+            : ({ decision: "ask", reason: "Changed files unknown." } as const);
+          if (hookDecision.decision === "deny") {
+            return {
+              decision: "decline",
+            } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+          }
+          if (hookDecision.decision === "allow") {
+            return {
+              decision: "accept",
+            } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+          }
+          const turnId = TurnId.make(payload.turnId);
+          const itemId = ProviderItemId.make(payload.itemId);
+          const approvals = yield* Effect.forEach(
+            proposals?.length ? proposals : [undefined],
+            (proposal) =>
+              Effect.gen(function* () {
+                const requestId = ApprovalRequestId.make(
+                  yield* randomUUIDv4("file-change-approval-request"),
+                );
+                const decision = yield* Deferred.make<ProviderApprovalDecision>();
+                yield* Ref.update(pendingApprovalsRef, (current) => {
+                  const next = new Map(current);
+                  next.set(requestId, {
+                    requestId,
+                    jsonRpcId: requestId,
+                    requestKind: "file-change",
+                    turnId,
+                    itemId,
+                    decision,
+                  });
+                  return next;
+                });
+                yield* emitEvent({
+                  kind: "request",
+                  threadId: options.threadId,
+                  method: "item/fileChange/requestApproval",
+                  requestId,
+                  requestKind: "file-change",
+                  turnId,
+                  itemId,
+                  payload: {
+                    ...payload,
+                    reason: proposal ? fileChangeApprovalDetail(proposal) : hookDecision.reason,
+                  },
+                });
+                return yield* Deferred.await(decision).pipe(
+                  Effect.ensuring(
+                    Ref.update(pendingApprovalsRef, (current) => {
+                      const next = new Map(current);
+                      next.delete(requestId);
+                      return next;
+                    }),
+                  ),
+                );
+              }),
+          );
+          return {
+            decision: approvals.every(
+              (decision) =>
+                decision === "accept" ||
+                decision === "acceptAlways" ||
+                decision === "acceptForSession",
+            )
+              ? "accept"
+              : "decline",
+          } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+        }
         const requestId = ApprovalRequestId.make(
           yield* randomUUIDv4("file-change-approval-request"),
         );
@@ -2156,9 +2310,54 @@ export const makeCodexSessionRuntime = (
         ),
       );
 
+    yield* client.handleServerNotification("item/started", (payload) =>
+      Effect.gen(function* () {
+        if (payload.item.type === "fileChange" && "changes" in payload.item) {
+          const changes = payload.item.changes;
+          yield* replaceFileChangeProposals(
+            payload.threadId,
+            payload.turnId,
+            payload.item.id,
+            changes,
+          );
+        }
+        yield* Queue.offer(
+          serverNotifications,
+          makeCodexServerNotification("item/started", payload),
+        );
+      }),
+    );
+
+    yield* client.handleServerNotification("item/fileChange/patchUpdated", (payload) =>
+      replaceFileChangeProposals(
+        payload.threadId,
+        payload.turnId,
+        payload.itemId,
+        payload.changes,
+      ).pipe(
+        Effect.andThen(
+          Queue.offer(
+            serverNotifications,
+            makeCodexServerNotification("item/fileChange/patchUpdated", payload),
+          ),
+        ),
+      ),
+    );
+
+    yield* client.handleServerNotification("item/completed", (payload) =>
+      clearFileChangeProposalsForItem(payload.threadId, payload.turnId, payload.item.id).pipe(
+        Effect.andThen(
+          Queue.offer(serverNotifications, makeCodexServerNotification("item/completed", payload)),
+        ),
+      ),
+    );
+
     yield* Effect.forEach(
-      Object.values(
-        CodexRpc.SERVER_NOTIFICATION_METHODS,
+      Object.values(CodexRpc.SERVER_NOTIFICATION_METHODS).filter(
+        (method) =>
+          method !== "item/started" &&
+          method !== "item/fileChange/patchUpdated" &&
+          method !== "item/completed",
       ) as ReadonlyArray<CodexRpc.ServerNotificationMethod>,
       registerServerNotification,
       { concurrency: 1, discard: true },
@@ -2244,6 +2443,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        ...(options.hookPlan?.hasPreToolUseHooks ? { requireApproval: true } : {}),
       });
 
       const providerThreadId = opened.thread.id;
@@ -2313,9 +2513,13 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
+          const requireApproval = options.hookPlan
+            ? yield* options.hookPlan.hasPreToolUseHooksNow
+            : false;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
+            ...(requireApproval ? { requireApproval: true } : {}),
             ...(input.input ? { prompt: input.input } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),
             ...(normalizedModel ? { model: normalizedModel } : {}),

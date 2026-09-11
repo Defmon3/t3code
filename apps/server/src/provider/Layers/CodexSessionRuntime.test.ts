@@ -63,6 +63,17 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
+  it.effect("requires native approval for hook-controlled full-access turns", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        requireApproval: true,
+      });
+
+      NodeAssert.equal(params.approvalPolicy, "untrusted");
+    }),
+  );
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";
     const error = Effect.runSync(

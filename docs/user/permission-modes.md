@@ -16,6 +16,14 @@ created from another thread inherits its mode.
 Approve or reject requests in the conversation to let the agent continue. Permission modes do
 not prevent the agent from asking questions about the task.
 
+## Project hooks
+
+Configure project hooks in `.t3code/hooks.json`. A Codex `PreToolUse` `Edit` hook receives the
+native approval fields in `tool_input`, plus `tool_input.changes`, for example
+`[{"path":"package.json","kind":{"type":"update"}}]`. Each entry keeps the original path and
+omits its diff. If Codex does not report the changed files, T3 asks for approval with the reason
+`Changed files unknown.`
+
 ## Provider differences
 
 Providers enforce permissions differently. Some read-only actions can proceed in **Supervised**.

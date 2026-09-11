@@ -15,6 +15,7 @@ import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { T3HookRunner } from "../../hooks/T3HookRunner.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { layerTest as codexResetCreditLayerTest } from "../Layers/codexResetCredit.ts";
@@ -40,6 +41,11 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
     }),
   ),
   Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+  Layer.provideMerge(
+    Layer.succeed(T3HookRunner, {
+      prepare: () => Effect.die("Disabled Codex must not read hooks"),
+    }),
+  ),
   Layer.provideMerge(
     Layer.succeed(
       HttpClient.HttpClient,
