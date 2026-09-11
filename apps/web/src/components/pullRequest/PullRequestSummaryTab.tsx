@@ -617,7 +617,6 @@ export function PullRequestSummaryTab({
                   environmentId={environmentId}
                   reference={reference}
                   allowed={detail.viewerPermissions.requestReviewers}
-                  onRequested={onRefresh}
                 />
               ) : null}
             </span>
@@ -652,7 +651,6 @@ export function PullRequestSummaryTab({
                     environmentId={environmentId}
                     reference={reference}
                     allowed={detail.viewerPermissions.labels !== false}
-                    onChanged={onRefresh}
                   />
                 ) : null}
               </span>

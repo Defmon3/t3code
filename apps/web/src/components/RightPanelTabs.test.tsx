@@ -137,6 +137,7 @@ function renderTabs(
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
+      onAddDevice={() => undefined}
       onAddProcesses={() => undefined}
       liveAgentCount={0}
       browserAvailable
@@ -148,6 +149,7 @@ function renderTabs(
       issueAvailable={false}
       pullRequestsAvailable={false}
       agentsAvailable={false}
+      deviceAvailable={false}
       processesAvailable={false}
     >
       <div>content</div>

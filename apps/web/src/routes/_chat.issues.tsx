@@ -1450,6 +1450,7 @@ function IssuesRouteView() {
             onAddIssue={() => undefined}
             onAddPullRequests={() => undefined}
             onAddAgents={() => undefined}
+            onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
@@ -1459,6 +1460,7 @@ function IssuesRouteView() {
             issueAvailable={false}
             pullRequestsAvailable={false}
             agentsAvailable={false}
+            deviceAvailable={false}
             liveAgentCount={0}
             pullRequestStatusSeeds={pullRequestTabStatuses}
             issueStatuses={issueTabStatuses}

@@ -55,11 +55,24 @@ export function SourceControlMarkdownEditor({
     setDraft(value);
   }
   const empty = draft.trim().length === 0;
+  const saveDisabled = saving || (empty && !allowEmpty);
 
   return (
     <div
       className={cn("space-y-2", className)}
       onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (
+          event.key === "Enter" &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.shiftKey &&
+          !event.altKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!saveDisabled && !event.repeat) onSave(draft);
+          return;
+        }
         if (event.key !== "Escape" || saving) return;
         event.preventDefault();
         onCancel();
@@ -107,12 +120,7 @@ export function SourceControlMarkdownEditor({
         <Button size="xs" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={saving || (empty && !allowEmpty)}
-          onClick={() => onSave(draft)}
-        >
+        <Button size="xs" variant="outline" disabled={saveDisabled} onClick={() => onSave(draft)}>
           {saving ? "Saving..." : "Save"}
         </Button>
       </div>
