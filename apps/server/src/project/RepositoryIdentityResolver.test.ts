@@ -3,6 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { SourceControlProviderError } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -12,8 +13,8 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import { TestClock } from "effect/testing";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { TestClock } from "effect/testing";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
@@ -112,27 +113,116 @@ it.effect("returns an unknown identity when repository discovery exceeds its dea
 );
 
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
-  it.effect("does not spawn Git below a malformed repository marker", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-repository-identity-malformed-marker-test-",
-      });
-      const nestedWorkspace = path.join(root, "projects", "app");
-      yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
-      yield* fileSystem.makeDirectory(nestedWorkspace, { recursive: true });
+  it.effect("refreshes the Git root only when requested", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const cwd = process.cwd();
+    let rootPath = cwd;
+    let remoteUrl = "git@github.com:T3Tools/t3code.git";
+    let refinements = 0;
+    let refinementFails = false;
+    const processRunner = Layer.succeed(ProcessRunner.ProcessRunner, {
+      run: (input) =>
+        Effect.sync(() => {
+          calls.push(input.args);
+          return {
+            stdout: `origin\t${remoteUrl} (fetch)\n`,
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          };
+        }),
+    });
+    const resolverLayer = Layer.effect(
+      RepositoryIdentityResolver.RepositoryIdentityResolver,
+      RepositoryIdentityResolver.make({
+        refine: (identity) => {
+          refinements++;
+          if (refinementFails)
+            return Effect.fail(
+              new SourceControlProviderError({
+                provider: "forgejo",
+                operation: "detectProvider",
+                cwd: rootPath,
+                detail: "account unavailable",
+              }),
+            );
+          return Effect.succeed(
+            identity.canonicalKey.startsWith("ssh.forge.test/")
+              ? {
+                  ...identity,
+                  provider: "forgejo",
+                  webUrl: "http://forge.test:3000/git/team/repo",
+                }
+              : identity,
+          );
+        },
+      }),
+    ).pipe(Layer.provide(processRunner));
 
-      const processRunner = ProcessRunner.ProcessRunner.of({
-        run: () => Effect.die("Git must not be spawned below a malformed .git marker"),
-      });
-      const resolver = yield* RepositoryIdentityResolver.make({ cacheCapacity: 16 }).pipe(
-        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
-      );
+    return Effect.gen(function* () {
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const first = yield* resolver.resolve(cwd);
+      const second = yield* resolver.resolve(cwd);
 
-      expect(yield* resolver.resolve(nestedWorkspace)).toBeNull();
-    }),
-  );
+      expect(first?.canonicalKey).toBe("github.com/t3tools/t3code");
+      expect(second).toEqual(first);
+      expect(refinements).toBe(1);
+      expect(calls).toEqual([["-C", cwd, "remote", "-v"]]);
+
+      const refreshed = yield* resolver.resolve(cwd, { refresh: true });
+      expect(refreshed?.rootPath).toBe(cwd);
+      expect(yield* resolver.resolve(cwd)).toEqual(refreshed);
+      expect(calls.slice(1)).toEqual([["-C", cwd, "remote", "-v"]]);
+      remoteUrl = "git@ssh.forge.test:team/repo.git";
+      const forgejo = yield* resolver.resolve(rootPath, { refresh: true });
+      expect(forgejo?.webUrl).toBe("http://forge.test:3000/git/team/repo");
+      expect(forgejo?.provider).toBe("forgejo");
+      expect(forgejo?.canonicalKey).toBe("ssh.forge.test/team/repo");
+      expect(forgejo?.locator.remoteUrl).toBe(remoteUrl);
+      expect(yield* resolver.resolve(rootPath)).toEqual(forgejo);
+      expect(refinements).toBe(3);
+      refinementFails = true;
+      const unavailable = yield* resolver.resolve(rootPath, { refresh: true });
+      expect(unavailable?.webUrl).toBeUndefined();
+      expect(unavailable?.canonicalKey).toBe("ssh.forge.test/team/repo");
+    }).pipe(Effect.provide(resolverLayer));
+  });
+
+  it.effect("resolves standard repository identity with filesystem discovery", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const cwd = process.cwd();
+    const processRunner = Layer.succeed(ProcessRunner.ProcessRunner, {
+      run: (input) =>
+        Effect.sync(() => {
+          calls.push(input.args);
+          return {
+            stdout: "origin\tgit@github.com:T3Tools/t3code.git (fetch)\n",
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          };
+        }),
+    });
+    const resolverLayer = Layer.effect(
+      RepositoryIdentityResolver.RepositoryIdentityResolver,
+      RepositoryIdentityResolver.make(),
+    ).pipe(Layer.provide(processRunner));
+
+    return Effect.gen(function* () {
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+      expect(identity?.rootPath).toBe(cwd);
+      expect(calls).toEqual([["-C", cwd, "remote", "-v"]]);
+    }).pipe(Effect.provide(resolverLayer));
+  });
 
   it.effect("normalizes equivalent GitHub remotes into a stable repository identity", () =>
     Effect.gen(function* () {

@@ -11,27 +11,23 @@ import type {
 import {
   ArrowDownUpIcon,
   ChevronDownIcon,
-  GitPullRequestClosedIcon,
+  ChevronRightIcon,
   HammerIcon,
-  MessageSquareIcon,
   PencilIcon,
-  RotateCcwIcon,
-  SendIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
-import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { cn } from "~/lib/utils";
-import { readLocalApi } from "~/localApi";
 import { useOpenLink } from "~/browser/useOpenLink";
+import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -48,9 +44,7 @@ import { PullRequestLabelPicker } from "./PullRequestLabelPicker";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueStateGlyph } from "../issue/issuePresentation";
-import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import {
-  LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
   orderPullRequestComments,
   pullRequestFindingKey,
@@ -63,15 +57,20 @@ import {
   canEditPullRequestComment,
 } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
-import { pullRequestLabelColor } from "./pullRequestList.logic";
 import { PullRequestReactionBar } from "./PullRequestReactions";
+import { ConversationGhost as PullRequestConversationGhost } from "../sourceControl/ListGhosts";
+import { pullRequestLabelColor } from "./pullRequestList.logic";
+import { LINK_ISSUES_HANDOFF_KIND } from "./pullRequestDetail.logic";
 import {
   useWorkItemMatches,
   WorkItemMatchButton,
   WorkItemMatchRows,
 } from "../workItems/WorkItemMatches";
+import {
+  SummaryMetaRow as MetaRow,
+  SummarySection as Section,
+} from "../sourceControl/SummaryMetaRow";
 
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
@@ -196,7 +195,7 @@ function CollapsedComment({
           <ChevronDownIcon
             aria-hidden
             className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform",
+              "size-3.5 shrink-0 text-muted-foreground/60 transition-transform",
               open && "rotate-180",
             )}
           />
@@ -228,113 +227,6 @@ function CollapsedComment({
   );
 }
 
-function CommentComposer({
-  environmentId,
-  reference,
-  detail,
-  actionPending,
-  onCommentAction,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  reference: PullRequestRef;
-  detail: PullRequestDetailView;
-  actionPending: boolean;
-  onCommentAction: (
-    body: string,
-    action: "close" | "reopen",
-  ) => Promise<{ readonly commentPosted: boolean }>;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [submitting, setSubmitting] = useState<"comment" | "close" | "reopen" | null>(null);
-  const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
-  const followUpAction =
-    detail.state === "open" &&
-    detail.capabilities.actions.includes("close") &&
-    detail.viewerPermissions.actions.includes("close")
-      ? ("close" as const)
-      : detail.state === "closed" &&
-          detail.capabilities.actions.includes("reopen") &&
-          detail.viewerPermissions.actions.includes("reopen")
-        ? ("reopen" as const)
-        : null;
-
-  const submit = async (action: "comment" | "close" | "reopen") => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || submitting !== null || actionPending) return;
-    setSubmitting(action);
-    if (action !== "comment") {
-      const result = await onCommentAction(trimmed, action);
-      if (result.commentPosted) setBody("");
-      setSubmitting(null);
-      return;
-    }
-    const result = await postComment({
-      environmentId,
-      input: {
-        ...reference,
-        body: trimmed,
-      },
-    });
-    if (result._tag === "Failure") {
-      setSubmitting(null);
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    setSubmitting(null);
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={submitting !== null || actionPending}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this pull request"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end gap-2">
-        {followUpAction === null ? null : (
-          <Button
-            size="xs"
-            variant={followUpAction === "close" ? "destructive-outline" : "outline"}
-            disabled={body.trim().length === 0 || submitting !== null || actionPending}
-            onClick={() => void submit(followUpAction)}
-          >
-            {followUpAction === "close" ? (
-              <GitPullRequestClosedIcon className="size-3.5" />
-            ) : (
-              <RotateCcwIcon className="size-3.5" />
-            )}
-            {submitting === followUpAction
-              ? followUpAction === "close"
-                ? "Closing..."
-                : "Reopening..."
-              : followUpAction === "close"
-                ? "Close with comment"
-                : "Reopen with comment"}
-          </Button>
-        )}
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || submitting !== null || actionPending}
-          onClick={() => void submit("comment")}
-        >
-          <SendIcon className="size-3.5" />
-          {submitting === "comment" ? "Posting..." : "Comment"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /**
  * What a first render of the conversation carries. A pull request with two hundred comments is
  * two hundred markdown documents, and the ones worth arriving for are the recent ones.
@@ -354,8 +246,6 @@ export function PullRequestSummaryTab({
   onFixFinding,
   onLinkIssues,
   onOpenLinkedIssue,
-  actionPending,
-  onCommentAction,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -371,11 +261,6 @@ export function PullRequestSummaryTab({
   onFixFinding?: (finding: PullRequestFinding) => void;
   onLinkIssues?: (match: WorkItemMatch) => void;
   onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
-  actionPending: boolean;
-  onCommentAction: (
-    body: string,
-    action: "close" | "reopen",
-  ) => Promise<{ readonly commentPosted: boolean }>;
   onRefresh: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
@@ -392,9 +277,11 @@ export function PullRequestSummaryTab({
     },
     version: detail.updatedAt,
   });
-  const openAiMatch = (match: { readonly url: string }) => {
+  const openAiMatch = (match: { readonly url: string }) =>
     void readLocalApi()?.shell.openExternal(match.url);
-  };
+  const checksId = useId();
+  const [expandedChecksUrl, setExpandedChecksUrl] = useState<string | null>(null);
+  const showChecks = expandedChecksUrl === detail.url;
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // Windowed by recency regardless of display order: expanding always reaches further back in
   // time, whether the newest comment currently reads first or last.
@@ -530,9 +417,9 @@ export function PullRequestSummaryTab({
 
   return (
     <div className="h-full overflow-y-auto" data-summary-scroll>
-      <section className="px-4 py-3">
-        <div>
-          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+      <section className="px-4 py-2.5">
+        <div className="space-y-2">
+          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {reviewerEntries.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -620,11 +507,11 @@ export function PullRequestSummaryTab({
                 />
               ) : null}
             </span>
-          </SummaryMetaRow>
+          </MetaRow>
           {/* The row is shown empty only where a label could be put on it from here; on a host
               with none to offer, an empty row is a row about nothing. */}
           {detail.labels.length > 0 || detail.capabilities.labels === true ? (
-            <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+            <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.length === 0 ? (
                   <span className="text-muted-foreground">None</span>
@@ -634,7 +521,7 @@ export function PullRequestSummaryTab({
                     return (
                       <span
                         key={label.name}
-                        className="inline-flex max-w-48 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
+                        className="inline-flex max-w-48 items-center gap-1.5 rounded-full bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
                       >
                         <span
                           aria-hidden
@@ -654,21 +541,12 @@ export function PullRequestSummaryTab({
                   />
                 ) : null}
               </span>
-            </SummaryMetaRow>
+            </MetaRow>
           ) : null}
-          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
-            {activityPending
-              ? "Loading conversation…"
-              : activityError
-                ? "Conversation unavailable"
-                : detail.commentCount === 1
-                  ? "1 comment"
-                  : `${detail.commentCount} comments`}
-          </SummaryMetaRow>
         </div>
       </section>
 
-      <SummarySection title="Description">
+      <Section title="Description">
         <div className="group">
           {bodyScope === detail.url ? (
             <PullRequestMarkdownEditor
@@ -706,18 +584,20 @@ export function PullRequestSummaryTab({
               ) : null}
             </div>
           )}
-          <PullRequestReactionBar
-            className="mt-2"
-            reactions={detail.reactions ?? []}
-            canReact={detail.capabilities.reactions === true}
-            environmentId={environmentId}
-            reference={reference}
-            onRefresh={onRefresh}
-          />
         </div>
-      </SummarySection>
+      </Section>
 
-      <SummarySection
+      <div className="px-4 pb-2">
+        <PullRequestReactionBar
+          reactions={detail.reactions ?? []}
+          canReact={detail.capabilities.reactions === true}
+          environmentId={environmentId}
+          reference={reference}
+          onRefresh={onRefresh}
+        />
+      </div>
+
+      <Section
         title="Related issues"
         {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
         actions={
@@ -739,8 +619,6 @@ export function PullRequestSummaryTab({
               <button
                 key={`${link.repository}#${link.number}`}
                 type="button"
-                // Beside the change rather than instead of it: reading what a change is for is
-                // reading the two together.
                 onClick={() =>
                   onOpenLinkedIssue === undefined
                     ? void readLocalApi()?.shell.openExternal(link.url)
@@ -751,9 +629,7 @@ export function PullRequestSummaryTab({
                 <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
                 <span className="min-w-0 flex-1 truncate">{link.title}</span>
                 {link.closesIssue ? (
-                  <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
-                    closed by this
-                  </span>
+                  <span className="shrink-0 text-muted-foreground">closed by this</span>
                 ) : null}
                 <span className="shrink-0 text-muted-foreground tabular-nums">#{link.number}</span>
               </button>
@@ -772,17 +648,14 @@ export function PullRequestSummaryTab({
               emptyText="No likely related issues found."
               onOpen={openAiMatch}
               {...(detail.linkedIssues !== undefined && onLinkIssues
-                ? {
-                    onLink: onLinkIssues,
-                    linking: pendingFinding === LINK_ISSUES_HANDOFF_KIND,
-                  }
+                ? { onLink: onLinkIssues, linking: pendingFinding === LINK_ISSUES_HANDOFF_KIND }
                 : {})}
             />
           </div>
         )}
-      </SummarySection>
+      </Section>
 
-      <SummarySection
+      <Section
         title="Possible duplicate pull requests"
         {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
         actions={
@@ -805,85 +678,101 @@ export function PullRequestSummaryTab({
             onOpen={openAiMatch}
           />
         )}
-      </SummarySection>
+      </Section>
 
-      <SummarySection title="Checks" count={detail.checks.length}>
+      <Section title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
-          <div className="space-y-0.5">
-            {detail.checks.map((check, index) => {
-              const finding = { kind: "check", check } as const;
-              const failing = check.status === "failure" || check.status === "cancelled";
-              return (
-                <div
-                  // Position too: the host decides how many runs share a name, and a repeated
-                  // key would be a rendering fault on top of whatever the list already says.
-                  key={`${index}:${check.name}:${check.url ?? ""}`}
-                  className="group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/60"
-                >
-                  <button
-                    type="button"
-                    disabled={!check.url}
-                    onClick={() => check.url && openCheck(check.url)}
-                    className={cn(
-                      "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
-                      check.url ? undefined : "cursor-default",
-                    )}
+          <div>
+            <div className="flex items-center gap-1 text-xs">
+              <span className="font-medium text-muted-foreground">Checks</span>
+              <Button
+                size="icon-xs"
+                variant="ghost-muted"
+                aria-label={showChecks ? "Hide checks" : "Show checks"}
+                aria-expanded={showChecks}
+                aria-controls={checksId}
+                onClick={() => setExpandedChecksUrl(showChecks ? null : detail.url)}
+              >
+                <ChevronRightIcon
+                  aria-hidden
+                  className={cn("size-3.5 text-muted-foreground/60", showChecks && "rotate-90")}
+                />
+              </Button>
+            </div>
+            <div id={checksId} className={showChecks ? "mt-2" : "hidden"}>
+              {(showChecks ? detail.checks : []).map((check, index) => {
+                const finding = { kind: "check", check } as const;
+                const failing = check.status === "failure" || check.status === "cancelled";
+                return (
+                  <div
+                    // Position too: the host decides how many runs share a name, and a repeated
+                    // key would be a rendering fault on top of whatever the list already says.
+                    key={`${index}:${check.name}:${check.url ?? ""}`}
+                    className="group flex items-center gap-2 rounded-md pr-1 hover:bg-accent/60"
                   >
-                    <PullRequestCheckStatusIcon status={check.status} />
-                    <span className="min-w-0 flex-1 truncate">{check.name}</span>
-                    <span className="shrink-0 text-muted-foreground">
-                      {pullRequestCheckStatusLabel(check)}
-                    </span>
-                  </button>
-                  {/* Only where there is something to fix. A passing check has no failure to
-                      reproduce, and the button would be an invitation to waste a thread. */}
-                  {onFixFinding && failing ? (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      className="shrink-0"
-                      disabled={pendingFinding !== null && pendingFinding !== undefined}
-                      onClick={() => onFixFinding(finding)}
+                    <button
+                      type="button"
+                      disabled={!check.url}
+                      onClick={() => check.url && openCheck(check.url)}
+                      className={cn(
+                        "flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left text-xs leading-5 [&>svg]:mt-0.5",
+                        check.url ? "cursor-pointer" : "cursor-default",
+                      )}
                     >
-                      <HammerIcon className="size-3" />
-                      {pendingFinding === pullRequestFindingKey(finding)
-                        ? "Preparing..."
-                        : fixCheckLabel}
-                    </Button>
-                  ) : null}
-                </div>
-              );
-            })}
+                      <PullRequestCheckStatusIcon status={check.status} />
+                      <span className="min-w-0 flex-1 wrap-anywhere">{check.name}</span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {pullRequestCheckStatusLabel(check)}
+                      </span>
+                    </button>
+                    {/* Only where there is something to fix. A passing check has no failure to
+                      reproduce, and the button would be an invitation to waste a thread. */}
+                    {onFixFinding && failing ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className="shrink-0"
+                        disabled={pendingFinding !== null && pendingFinding !== undefined}
+                        onClick={() => onFixFinding(finding)}
+                      >
+                        <HammerIcon className="size-3" />
+                        {pendingFinding === pullRequestFindingKey(finding)
+                          ? "Preparing..."
+                          : fixCheckLabel}
+                      </Button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
-      </SummarySection>
+      </Section>
 
-      <SummarySection
+      <Section
         title="Comments"
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
         actions={
-          !activityPending && !activityError && detail.comments.length > 0 ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
-              aria-label={
-                commentOrder === "newest"
-                  ? "Show oldest comments first"
-                  : "Show newest comments first"
-              }
-              onClick={() => setCommentOrder((value) => (value === "newest" ? "oldest" : "newest"))}
-            >
-              <ArrowDownUpIcon aria-hidden className="size-3" />
-              {commentOrder === "newest" ? "Newest first" : "Oldest first"}
-            </Button>
-          ) : null
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+            aria-label={
+              commentOrder === "newest"
+                ? "Show oldest comments first"
+                : "Show newest comments first"
+            }
+            onClick={() => setCommentOrder((value) => (value === "newest" ? "oldest" : "newest"))}
+          >
+            <ArrowDownUpIcon aria-hidden className="size-3" />
+            {commentOrder === "newest" ? "Newest first" : "Oldest first"}
+          </Button>
         }
       >
         {activityPending ? (
-          <ConversationGhost label="Loading pull request conversation" />
+          <PullRequestConversationGhost label="Loading pull request conversation" />
         ) : activityError ? (
           <ActivityUnavailableState
             compact
@@ -1020,25 +909,7 @@ export function PullRequestSummaryTab({
             )}
           </>
         )}
-        {/* Posting is a core capability and remains usable even if the activity read failed. */}
-        {detail.capabilities.comment && detail.viewerPermissions.comment ? (
-          <CommentComposer
-            reference={reference}
-            key={JSON.stringify([
-              environmentId,
-              reference.projectId,
-              reference.host,
-              reference.repository,
-              reference.number,
-            ])}
-            environmentId={environmentId}
-            detail={detail}
-            actionPending={actionPending}
-            onCommentAction={onCommentAction}
-            onCommented={onRefresh}
-          />
-        ) : null}
-      </SummarySection>
+      </Section>
     </div>
   );
 }

@@ -25,6 +25,9 @@ const threadId = ThreadId.make("thread-mcp-test");
 const tabId = PreviewTabId.make("tab-mcp-test");
 const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
 const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const decodeSnapshotMetadata = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ screenshotPath: Schema.optional(Schema.String) })),
+);
 const invocation = {
   environmentId,
   threadId,
@@ -338,9 +341,11 @@ it.effect("saves the snapshot PNG on request and reports its path", () =>
       );
       expect(Buffer.from(yield* fileSystem.readFile(screenshotPath!)).toString()).toBe("png");
       const [, metadata] = snapshot.content;
-      expect(metadata?.type === "text" ? JSON.parse(metadata.text).screenshotPath : undefined).toBe(
-        screenshotPath,
-      );
+      expect(
+        metadata?.type === "text"
+          ? decodeSnapshotMetadata(metadata.text).screenshotPath
+          : undefined,
+      ).toBe(screenshotPath);
 
       const unsaved = yield* callSnapshot({});
       expect(unsaved.structuredContent).not.toHaveProperty("screenshotPath");

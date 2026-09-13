@@ -10,6 +10,7 @@ import {
   type PullRequestChecksState,
   type PullRequestComment,
   type PullRequestCommit,
+  type PullRequestContextMetadata,
   type PullRequestDetailView,
   type PullRequestMergeability,
   type PullRequestMergeMethod,
@@ -23,6 +24,8 @@ import {
 } from "@t3tools/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
+import { reviewCommentContextId } from "~/lib/composerContextRecords";
+import { removeInlineContextReference } from "~/lib/composerContextReferences";
 
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
   merge: "Merge",
@@ -102,12 +105,17 @@ export function pullRequestCheckoutCommand(
   number: number,
   headBranch: string,
   headRepositoryNameWithOwner?: string | null,
+  repositoryUrl?: string | null,
 ): string | null {
   switch (provider) {
     case "github":
       return `gh pr checkout ${number}`;
     case "gitlab":
       return `glab mr checkout ${number}`;
+    case "forgejo":
+      return repositoryUrl
+        ? `git fetch '${repositoryUrl.replaceAll("'", "'\\''")}' refs/pull/${number}/head && git checkout -B pulls/${number} FETCH_HEAD`
+        : null;
     case "azure-devops":
       return `az repos pr checkout --id ${number}`;
     case "bitbucket": {
@@ -601,7 +609,79 @@ export interface FixFindingsHandoff {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
 }
 
-export { handoffPrompt, handoffReviewComments, readableFailure } from "../sourceControl/handoff";
+/**
+ * Every chip a hand-off leaves in the composer is named after the pull request it came from —
+ * `pull-request-context:`, `pull-request-finding:`, `pull-request-selection:` — which is what
+ * tells them apart from the ones a reader marked up in the thread's own diff.
+ */
+const HANDOFF_COMMENT_ID_PREFIX = "pull-request-";
+
+/** Removes references owned by the previous PR handoff before its prose is replaced. */
+export function stripPullRequestHandoffReferences(
+  prompt: string,
+  comments: ReadonlyArray<ReviewCommentContext>,
+  retainedIds: ReadonlySet<string> = new Set(),
+): string {
+  let next = prompt;
+  for (const comment of comments) {
+    if (!comment.id.startsWith(HANDOFF_COMMENT_ID_PREFIX) || retainedIds.has(comment.id)) continue;
+    next = removeInlineContextReference(next, reviewCommentContextId(comment.id)).prompt;
+  }
+  return next;
+}
+
+/**
+ * The prompt the composer should hold once a hand-off lands there.
+ *
+ * A hand-off owns what an earlier hand-off wrote and nothing else: pressing Ask and then Explain
+ * used to stack both in the composer, and the reader sent a question nobody wrote. What says an
+ * earlier one wrote it is the text itself — the caller remembers what it last put in this draft,
+ * and only that exact sentence is replaced. A reader who typed their own question, or edited the
+ * one they were given, has written something no hand-off may take away: an empty ask leaves it
+ * alone, and one carrying a prompt goes underneath it.
+ */
+export function handoffPrompt(
+  existing: {
+    readonly prompt: string;
+    /**
+     * What the last hand-off into this draft wrote — its own contribution alone, never the
+     * merged prompt it landed in, or a draft that held the reader's text before the first
+     * hand-off would read as all hand-off and be replaced wholesale by the second.
+     */
+    readonly lastHandoffPrompt: string | undefined;
+  },
+  incoming: string,
+): string {
+  if (existing.prompt.trim().length === 0) return incoming;
+  const last = existing.lastHandoffPrompt ?? "";
+  // Only the sentence the last hand-off wrote is taken back: alone, or off the end of the
+  // reader's own text it was appended under.
+  const kept =
+    last.length === 0
+      ? existing.prompt
+      : existing.prompt === last
+        ? ""
+        : existing.prompt.endsWith(`\n\n${last}`)
+          ? existing.prompt.slice(0, -(last.length + 2))
+          : existing.prompt;
+  if (kept.trim().length === 0) return incoming;
+  return incoming.length === 0 ? kept : `${kept}\n\n${incoming}`;
+}
+
+/**
+ * The chips the composer should hold once a hand-off lands there: this one's, plus whatever the
+ * reader attached themselves. What an earlier hand-off left goes, because a question about one
+ * pull request carrying another one's context is not a question anybody meant to ask.
+ */
+export function handoffReviewComments(
+  existing: ReadonlyArray<ReviewCommentContext>,
+  incoming: ReadonlyArray<ReviewCommentContext>,
+): ReviewCommentContext[] {
+  return [
+    ...existing.filter((comment) => !comment.id.startsWith(HANDOFF_COMMENT_ID_PREFIX)),
+    ...incoming,
+  ];
+}
 
 /**
  * The task for handing a pull request's review findings to a fresh thread. Everything derived
@@ -775,6 +855,32 @@ export function buildFixFindingHandoff(input: {
   };
 }
 
+export const LINK_ISSUES_HANDOFF_KIND = "link-issues";
+
+export function buildLinkIssuesHandoff(
+  input: {
+    readonly number: number;
+    readonly title: string;
+    readonly url: string;
+    readonly headBranch: string;
+    readonly baseBranch: string;
+  },
+  issue: WorkItemMatch,
+): FixFindingsHandoff {
+  return {
+    prompt: [
+      `Link this pull request to issue #${issue.number} on \`${boundedField(issue.repository)}\`.`,
+      `Read the change and the selected issue at ${boundedField(issue.url)}. Record the link in the pull request's own description: \`Closes #${issue.number}\` where the change closes the issue, and a plain \`#${issue.number}\` mention where it only relates to it.`,
+      "Edit the description and nothing else: keep every word it already has and add only the line carrying the link.",
+    ].join("\n"),
+    reviewComments: [
+      pullRequestContextComment({ ...input, state: "open", isDraft: false }, [
+        "This pull request is the change to link. Do not change any code: the only edit is to its description.",
+      ]),
+    ],
+  };
+}
+
 /** Prompt for handing a conflicting pull request to a fresh thread on its own branch. */
 export function buildResolveConflictsPrompt(input: {
   readonly number: number;
@@ -805,6 +911,8 @@ function pullRequestContextComment(
     readonly url: string;
     readonly headBranch: string;
     readonly baseBranch: string;
+    readonly state: PullRequestState;
+    readonly isDraft: boolean;
   },
   instructions: ReadonlyArray<string>,
 ): ReviewCommentContext {
@@ -825,7 +933,28 @@ function pullRequestContextComment(
       ...instructions,
     ].join("\n"),
     diff: "",
+    pullRequest: {
+      number: input.number,
+      title: boundedField(input.title),
+      url: boundedField(input.url),
+      headBranch: boundedField(input.headBranch),
+      baseBranch: boundedField(input.baseBranch),
+      state: input.state,
+      isDraft: input.isDraft,
+    },
   };
+}
+
+/**
+ * A neutral pull request reference inserted directly from the message composer. It is the
+ * reader's own chip, so it sits outside the `pull-request-` namespace a hand-off owns and
+ * sweeps: a later hand-off must not delete a reference the reader put there themselves.
+ */
+export function buildPullRequestReferenceContext(
+  input: PullRequestContextMetadata,
+): ReviewCommentContext {
+  const comment = pullRequestContextComment(input, []);
+  return { ...comment, id: `pr-reference:${input.number}` };
 }
 
 /** What the agent is asked to do with a question, as opposed to a task. */
@@ -844,6 +973,8 @@ export function buildAskAboutPullRequestHandoff(input: {
   readonly url: string;
   readonly headBranch: string;
   readonly baseBranch: string;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
 }): FixFindingsHandoff {
   return {
     prompt: "",
@@ -862,6 +993,8 @@ export function buildExplainPullRequestHandoff(input: {
   readonly url: string;
   readonly headBranch: string;
   readonly baseBranch: string;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
 }): FixFindingsHandoff {
   return {
     prompt: "Explain this pull request.",
@@ -874,44 +1007,14 @@ export function buildExplainPullRequestHandoff(input: {
   };
 }
 
-export const LINK_ISSUES_HANDOFF_KIND = "link-issues";
-
-/**
- * Links one selected issue to this change where the host reads the relationship. There is no
- * call to make for a link: the host derives one from a closing keyword in the
- * description, so the description is what gets edited — and saying so is what keeps the agent
- * from going looking for an API that does not exist.
- */
-export function buildLinkIssuesHandoff(
-  input: {
-    readonly number: number;
-    readonly title: string;
-    readonly url: string;
-    readonly headBranch: string;
-    readonly baseBranch: string;
-  },
-  issue: WorkItemMatch,
-): FixFindingsHandoff {
-  return {
-    prompt: [
-      `Link this pull request to issue #${issue.number} on \`${boundedField(issue.repository)}\`.`,
-      `Read the change and the selected issue at ${boundedField(issue.url)}. Record the link in the pull request's own description: \`Closes #${issue.number}\` where the change closes the issue, and a plain \`#${issue.number}\` mention where it only relates to it.`,
-      "Edit the description and nothing else: keep every word it already has and add only the line carrying the link.",
-    ].join("\n"),
-    reviewComments: [
-      pullRequestContextComment(input, [
-        "This pull request is the change to link. Do not change any code: the only edit is to its description.",
-      ]),
-    ],
-  };
-}
-
 export function buildAddSelectionToAgentHandoff(input: {
   readonly number: number;
   readonly title: string;
   readonly url: string;
   readonly headBranch: string;
   readonly baseBranch: string;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
   readonly comment: ReviewCommentContext;
   readonly request: string;
 }): FixFindingsHandoff {
@@ -919,6 +1022,44 @@ export function buildAddSelectionToAgentHandoff(input: {
     prompt: bounded(input.request),
     reviewComments: [pullRequestContextComment(input, []), { ...input.comment, text: "" }],
   };
+}
+
+/**
+ * The internal wrapper every failed operation arrives in: which operation ran, and which tool
+ * said no. A reader has no use for either.
+ */
+const OPERATION_PREFIX = /^Pull request operation \w+ failed:\s*/iu;
+
+/**
+ * Sentences that report only that a tool exited: true, and no help at all. Anything else the
+ * host says is worth more than what this page could invent, so only these are replaced.
+ */
+const TOOL_NOISE = [
+  /^(github|gitlab|bitbucket|azure devops)?\s*(cli|api)?\s*(command\s*)?failed\.?$/iu,
+  /^exited? with (code|status) \d+\.?$/iu,
+  /^unknown error\.?$/iu,
+];
+
+/** How much of a host's own message a toast can carry before it stops being read. */
+const FAILURE_DETAIL_MAX_LENGTH = 320;
+
+/**
+ * What to put under a failed action. The host's own sentence when it said something — it knows
+ * why, and this page does not — and otherwise what to go and check, because "the command failed"
+ * leaves the reader pressing the same button again.
+ */
+export function readableFailure(failure: unknown, hint: string): string {
+  const raw =
+    failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "";
+  const detail = raw.replace(OPERATION_PREFIX, "").trim();
+  if (detail.length === 0 || TOOL_NOISE.some((pattern) => pattern.test(detail))) return hint;
+  const bounded =
+    detail.length <= FAILURE_DETAIL_MAX_LENGTH
+      ? detail
+      : `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}…`;
+  // The host's words alone: the hint is a guess about why, and a guess printed under a reason
+  // that contradicts it is worse than no guess at all.
+  return bounded;
 }
 
 /**

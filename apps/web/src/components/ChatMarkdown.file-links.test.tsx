@@ -33,6 +33,7 @@ vi.mock("../state/entities", () => ({
   readThreadShell: () => null,
   useActiveEnvironmentId: () => "env-1",
   useProjects: () => [],
+  useServerConfigs: () => new Map(),
 }));
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: "preview-open" } }));
 vi.mock("../state/projects", () => ({ projectEnvironment: { searchEntries: "project-search" } }));

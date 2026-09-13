@@ -250,7 +250,7 @@ describe("CodexSessionRuntime collab integration", () => {
     Effect.gen(function* () {
       NodeFS.writeFileSync(
         scriptPath,
-        JSON.stringify({ rootThreadId: ROOT, recordThreadStart: true, notifications: [] }),
+        encodeFixtureJson({ rootThreadId: ROOT, recordThreadStart: true, notifications: [] }),
         "utf8",
       );
       NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
@@ -315,7 +315,7 @@ describe("CodexSessionRuntime collab integration", () => {
         const hookInputs: Array<unknown> = [];
         NodeFS.writeFileSync(
           scriptPath,
-          JSON.stringify({
+          encodeFixtureJson({
             rootThreadId: ROOT,
             holdTurnOpen: true,
             completeTurnOnServerResponse: true,
@@ -407,7 +407,7 @@ describe("CodexSessionRuntime collab integration", () => {
     Effect.gen(function* () {
       NodeFS.writeFileSync(
         scriptPath,
-        JSON.stringify({
+        encodeFixtureJson({
           rootThreadId: ROOT,
           holdTurnOpen: true,
           notifications: [
@@ -1304,7 +1304,7 @@ describe("CodexSessionRuntime collab integration", () => {
         serverRequests: [scriptedRequest],
       };
       const responsesPath = `${scriptPath}.responses`;
-      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.writeFileSync(scriptPath, encodeFixtureJson(script), "utf8");
       NodeFS.rmSync(responsesPath, { force: true });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {

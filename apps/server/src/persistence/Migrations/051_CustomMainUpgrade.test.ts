@@ -51,7 +51,7 @@ layer("custom-main nightly migration upgrade", (it) => {
         const applied = yield* runMigrations();
         assert.deepEqual(
           applied.map(([id]) => id),
-          [48, 49, 50, 51, 52, 53, 54],
+          [48, 49, 50, 51, 52, 53, 54, 55],
         );
         const retainedHistory = yield* sql`
         SELECT * FROM effect_sql_migrations WHERE migration_id <= 47 ORDER BY migration_id

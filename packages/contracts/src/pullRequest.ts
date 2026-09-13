@@ -10,14 +10,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import {
-  SourceControlActor,
-  SourceControlLabel,
-  SourceControlListCursors,
-  SourceControlListProjectError,
-  SourceControlProviderKind,
-  sourceControlHostOf,
-} from "./sourceControl.ts";
+import { SourceControlProviderKind, sourceControlHostOf } from "./sourceControl.ts";
 import { IssueLink } from "./issue.ts";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
@@ -109,7 +102,6 @@ export const PullRequestAction = Schema.Literals([
 ]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
-export const PullRequestActor = SourceControlActor;
 /**
  * How a stale branch catches up with its base: a merge commit, or a rebase onto it. The two are
  * the host's own choices, not this page's — GitHub offers both and refuses a rebase it cannot
@@ -129,9 +121,18 @@ export type PullRequestUpdateMethod = typeof PullRequestUpdateMethod.Type;
 export const PullRequestBaseComparison = Schema.Literals(["up-to-date", "behind", "unknown"]);
 export type PullRequestBaseComparison = typeof PullRequestBaseComparison.Type;
 
+export const PullRequestActor = Schema.Struct({
+  login: TrimmedNonEmptyString,
+  name: Schema.NullOr(Schema.String),
+  /** Null where a host does not report one, which is what the initials fall back to. */
+  avatarUrl: Schema.NullOr(Schema.String),
+});
 export type PullRequestActor = typeof PullRequestActor.Type;
 
-export const PullRequestLabel = SourceControlLabel;
+export const PullRequestLabel = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  color: Schema.NullOr(Schema.String),
+});
 export type PullRequestLabel = typeof PullRequestLabel.Type;
 
 export const PullRequestCheckStatus = Schema.Literals([
@@ -519,7 +520,19 @@ export const PullRequestListEntry = Schema.Struct({
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
 
-export const PullRequestListCursors = SourceControlListCursors;
+/**
+ * Where each repository a listing already reached carries on from, keyed `"<host> <repository>"`
+ * — which is how a listing tells two repositories apart, since the same `owner/repo` exists on
+ * github.com and on an Enterprise install at once.
+ *
+ * Each value is opaque: only the provider that issued one knows what it means, and the page hands
+ * back exactly what it was given rather than composing one.
+ */
+export const PullRequestListCursors = Schema.Record(
+  TrimmedNonEmptyString,
+  // Bounded because it arrives from the page and is unfolded into a host's own filter.
+  TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+);
 export type PullRequestListCursors = typeof PullRequestListCursors.Type;
 
 export const PullRequestListInput = Schema.Struct({
@@ -585,7 +598,12 @@ export const PullRequestProviderSummary = Schema.Struct({
 });
 export type PullRequestProviderSummary = typeof PullRequestProviderSummary.Type;
 
-export const PullRequestListProjectError = SourceControlListProjectError;
+/** One project whose repository could not be read; healthy projects still return entries. */
+export const PullRequestListProjectError = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+});
 export type PullRequestListProjectError = typeof PullRequestListProjectError.Type;
 
 export const PullRequestListResult = Schema.Struct({
@@ -626,10 +644,38 @@ export type PullRequestListResult = typeof PullRequestListResult.Type;
 export const PullRequestRef = Schema.Struct({
   projectId: ProjectId,
   host: Schema.optional(TrimmedNonEmptyString),
+  /** Refuse a routed operation unless this GitHub account still owns the active credential. */
+  expectedAccountId: Schema.optional(TrimmedNonEmptyString),
+  /** Let another environment answer when this one's cached response has expired. */
+  allowStale: Schema.optional(Schema.Boolean),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
 });
 export type PullRequestRef = typeof PullRequestRef.Type;
+
+/** Account discovery never needs the originating project's private repository metadata. */
+export const PullRequestRoutingIdentityInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+});
+export type PullRequestRoutingIdentityInput = typeof PullRequestRoutingIdentityInput.Type;
+
+export const PullRequestRoutingIdentityResult = Schema.Struct({
+  accountId: TrimmedNonEmptyString,
+  host: TrimmedNonEmptyString,
+  provider: Schema.Literal("github"),
+  viewer: TrimmedNonEmptyString,
+});
+export type PullRequestRoutingIdentityResult = typeof PullRequestRoutingIdentityResult.Type;
+
+export const PullRequestRoutingResult = Schema.Struct({
+  accountId: TrimmedNonEmptyString,
+  host: TrimmedNonEmptyString,
+  provider: SourceControlProviderKind,
+  viewer: TrimmedNonEmptyString,
+  projectTitle: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+});
+export type PullRequestRoutingResult = typeof PullRequestRoutingResult.Type;
 
 export const PullRequestLinkedThreadsResult = Schema.Struct({
   threads: Schema.Array(
@@ -771,13 +817,7 @@ export const PullRequestDetail = Schema.Struct({
   labels: Schema.Array(PullRequestLabel),
   checks: Schema.Array(PullRequestCheck),
   mergeCapabilities: PullRequestMergeCapabilities,
-  /**
-   * The issues this change request cites, with the ones it closes marked as such. Optional
-   * because a server from before issues could be browsed does not report them, and because a
-   * host with no notion of the link answers with nothing rather than with an empty promise.
-   */
   linkedIssues: Schema.optional(Schema.Array(IssueLink)),
-  /** True when the host has more linked issues than this bounded read returned. */
   linkedIssuesTruncated: Schema.optional(Schema.Boolean),
   /**
    * Who the host says the reader is, which is the one thing a conversation cannot be read without
@@ -1125,6 +1165,12 @@ const PROVIDER_REQUIREMENT: Partial<
       "GitHub CLI (`gh`) is required to browse change requests on this host. Install it from https://cli.github.com/ and reload.",
     unauthenticated: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
   },
+  forgejo: {
+    missing:
+      "Install Forgejo CLI (`fj` 0.6 or later) from https://codeberg.org/forgejo-contrib/forgejo-cli or Gitea CLI (`tea` 0.16 or later) from https://gitea.com/gitea/tea to browse Forgejo pull requests.",
+    unauthenticated:
+      "Authenticate your Forgejo or Gitea server with `fj --host <server-url> auth add-token` on the T3 Code server. If fj is missing or unconfigured for that server, use `tea login add`. A configured fj account must be repaired with fj.",
+  },
   gitlab: {
     missing:
       "GitLab CLI (`glab`) is required to browse change requests on this host. Install it from https://gitlab.com/gitlab-org/cli and reload.",
@@ -1143,8 +1189,33 @@ const PROVIDER_REQUIREMENT: Partial<
   },
 };
 
-/** @see sourceControlHostOf, which change requests and issues bucket their workspaces with alike. */
-export const pullRequestHostOf = sourceControlHostOf;
+/**
+ * The host a project's repository is addressed below. `canonicalKey` is the normalized remote,
+ * `host/owner/repo`, so its first segment is the host; the provider kind stands in when there is
+ * no key to read, which keeps one bucket per kind for identities recorded before it existed.
+ *
+ * Shared between the server and the page so both bucket a workspace the same way — the page
+ * knows its hosts before the listing answers, and the two must agree on what they are called.
+ */
+export function pullRequestHostOf(
+  identity:
+    | {
+        readonly canonicalKey?: string | undefined;
+        readonly locator?: { readonly remoteUrl: string } | undefined;
+      }
+    | null
+    | undefined,
+  kind: SourceControlProviderKind,
+): string {
+  if (kind === "forgejo") {
+    try {
+      const remote = new URL(identity?.locator?.remoteUrl ?? "");
+      if (remote.protocol === "http:" || remote.protocol === "https:")
+        return remote.host.toLowerCase();
+    } catch {}
+  }
+  return sourceControlHostOf(identity, kind);
+}
 
 /**
  * `author:me` names whoever is signed in to the host being read, GitHub's `@me` spelled either

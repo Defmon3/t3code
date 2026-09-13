@@ -29,7 +29,11 @@ import {
   reconcilePreviewServerSessions,
   updatePreviewServerSnapshot,
 } from "~/previewStateStore";
-import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
+import {
+  browserMiniPlayerSource,
+  selectThreadPreviewMiniPlayerTabId,
+  usePreviewMiniPlayerStore,
+} from "~/previewMiniPlayerStore";
 import { resolveBrowserNavigationTarget } from "~/browser/browserTargetResolver";
 import {
   readActiveBrowserRecordingTargets,
@@ -370,7 +374,9 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                     ?.has(runtimeTabId) ?? false,
               })
             ) {
-              usePreviewMiniPlayerStore.getState().open(threadRef, readyTabId);
+              usePreviewMiniPlayerStore
+                .getState()
+                .open(threadRef, browserMiniPlayerSource(readyTabId));
             }
           }
           browserActivity.release ??= acquireBrowserSurfaceActivity(runtimeTabId);
@@ -485,11 +491,11 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                   new Set([activeRuntimeTabId]),
                 );
               }
-              const miniPlayer = selectThreadPreviewMiniPlayer(
+              const miniPlayerTabId = selectThreadPreviewMiniPlayerTabId(
                 usePreviewMiniPlayerStore.getState().byThreadKey,
                 threadRef,
               );
-              if (miniPlayer?.tabId === activeTabId) {
+              if (miniPlayerTabId === activeTabId) {
                 usePreviewMiniPlayerStore.getState().close(threadRef);
               }
             } else if (shouldPresentPreview) {
@@ -499,7 +505,9 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               }
             }
             if (shouldPresentPreview) {
-              usePreviewMiniPlayerStore.getState().open(threadRef, activeTabId);
+              usePreviewMiniPlayerStore
+                .getState()
+                .open(threadRef, browserMiniPlayerSource(activeTabId));
             }
             if (activeSnapshot && previewAutomationOpenNeedsOverlay(input, activeSnapshot)) {
               await requireReadyTab();
