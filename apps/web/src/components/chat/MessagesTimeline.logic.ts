@@ -28,7 +28,12 @@ import {
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
-import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
+import {
+  type MessageId,
+  type OrchestrationLatestTurn,
+  type TurnId,
+  type WorktreeSetupSnapshot,
+} from "@t3tools/contracts";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 
 function singleToolCallLabel(entry: WorkLogEntry): string {
@@ -284,6 +289,12 @@ export type MessagesTimelineRow =
       kind: "thinking";
       id: string;
       createdAt: string | null;
+    }
+  | {
+      kind: "worktree-setup";
+      id: string;
+      createdAt: string | null;
+      snapshot: WorktreeSetupSnapshot;
     };
 
 export interface StableMessagesTimelineRowsState {
@@ -420,13 +431,16 @@ function deriveTurnEndedWithoutFinalResponse(
     return null;
   }
 
-  const hasAssistantMessage = timelineEntries.some(
+  const hasVisibleTurnConclusion = timelineEntries.some(
     (entry) =>
-      entry.kind === "message" &&
-      entry.message.role === "assistant" &&
-      entry.message.turnId === latestTurn.turnId,
+      (entry.kind === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.turnId === latestTurn.turnId) ||
+      (entry.kind === "work" &&
+        entry.entry.turnId === latestTurn.turnId &&
+        entry.entry.questionAnswer !== undefined),
   );
-  if (hasAssistantMessage) {
+  if (hasVisibleTurnConclusion) {
     return null;
   }
 
@@ -789,6 +803,8 @@ export function deriveMessagesTimelineRows(input: {
   supportsConversationRollback: boolean;
   /** Task ids of subagents still working, used by the active tool indicator. */
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
+  /** Live bootstrap progress. Renders a stage card under the first user message. */
+  worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
@@ -1190,6 +1206,30 @@ export function deriveMessagesTimelineRows(input: {
     nextRows.push(turnEndedWithoutFinalResponse);
   }
 
+  // The setup card takes the place of the working and thinking placeholders
+  // while a worktree is being prepared. It stays after the setup settles so a
+  // failure and its actions remain visible until the thread state moves on.
+  if (input.worktreeSetup) {
+    const setupRow = {
+      kind: "worktree-setup",
+      id: WORKTREE_SETUP_ROW_ID,
+      createdAt: input.worktreeSetup.startedAt,
+      snapshot: input.worktreeSetup,
+    } as const;
+    // Sit directly under the first user message: a finished snapshot can
+    // outlive the first assistant reply, and it belongs to the send, not the
+    // end of the thread.
+    const firstUserRowIndex = nextRows.findIndex(
+      (row) => row.kind === "message" && row.message.role === "user",
+    );
+    if (firstUserRowIndex >= 0) {
+      nextRows.splice(firstUserRowIndex + 1, 0, setupRow);
+    } else {
+      nextRows.push(setupRow);
+    }
+    return attachTrailingToolGroupsToAssistant(nextRows);
+  }
+
   if (input.isWorking && activeTurnHeaderIndex === input.timelineEntries.length) {
     appendWorkingRow();
   }
@@ -1203,6 +1243,8 @@ export function deriveMessagesTimelineRows(input: {
 
   return attachTrailingToolGroupsToAssistant(nextRows);
 }
+
+export const WORKTREE_SETUP_ROW_ID = "worktree-setup-row";
 
 type MessagesTimelineRowsInput = Parameters<typeof deriveMessagesTimelineRows>[0];
 
@@ -1306,6 +1348,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "working":
     case "thinking":
       return a.createdAt === (b as typeof a).createdAt;
+    case "worktree-setup":
+      return a.snapshot === (b as typeof a).snapshot;
 
     case "turn-ended-without-response": {
       const bt = b as typeof a;
