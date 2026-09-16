@@ -150,7 +150,10 @@ export const make = Effect.gen(function* () {
       groups.values(),
       (group) =>
         Effect.gen(function* () {
-          const pullRequest = yield* pullRequestFor(group[0]!);
+          const settings = yield* settingsService.getSettings;
+          const pullRequest = settings.sidebarAutoSettleOnMerge
+            ? yield* pullRequestFor(group[0]!)
+            : null;
           yield* Effect.forEach(
             group,
             (thread) =>

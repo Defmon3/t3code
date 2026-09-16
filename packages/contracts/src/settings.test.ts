@@ -274,11 +274,11 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the current sidebar with automatic merge and inactivity settling", () => {
+  it("defaults to the current sidebar with merge settlement opt-in and inactivity settling", () => {
     const settings = decodeClientSettings({});
     expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
-    expect(settings.sidebarAutoSettleOnMerge).toBe(true);
+    expect(settings.sidebarAutoSettleOnMerge).toBe(false);
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -354,10 +354,10 @@ describe("ClientSettings composer collapse", () => {
 });
 
 describe("ServerSettings thread settlement", () => {
-  it("defaults merge settlement on and inactivity settlement to three days", () => {
+  it("defaults merge settlement off and inactivity settlement to three days", () => {
     const settings = decodeServerSettings({});
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
-    expect(settings.sidebarAutoSettleOnMerge).toBe(true);
+    expect(settings.sidebarAutoSettleOnMerge).toBe(false);
   });
 
   it("allows both automatic rules to be disabled", () => {
