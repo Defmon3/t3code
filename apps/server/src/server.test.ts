@@ -560,6 +560,7 @@ const buildAppUnderTest = (options?: {
     >;
     relayClient?: Partial<RelayClient.RelayClient["Service"]>;
     cloudCliTokenManager?: Partial<CloudCliTokenManager.CloudCliTokenManager["Service"]>;
+    processDiagnostics?: Partial<ProcessDiagnostics.ProcessDiagnostics["Service"]>;
     nativeTelemetryClient?: Partial<NativeTelemetryClient.NativeTelemetryClient["Service"]>;
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
@@ -847,6 +848,7 @@ const buildAppUnderTest = (options?: {
               signaled: true,
               message: Option.none(),
             }),
+          ...options?.layers?.processDiagnostics,
         }),
       ),
       Layer.provide(
@@ -4624,6 +4626,52 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepEqual(response.issues, []);
       assert.deepEqual(response.keybindings, [resolved]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps a websocket connected after process diagnostics requests", () =>
+    Effect.gen(function* () {
+      const diagnostics = {
+        serverPid: process.pid,
+        readAt: TEST_EPOCH,
+        processCount: 0,
+        totalRssBytes: 0,
+        totalCpuPercent: 0,
+        hostCpuPercent: 0,
+        hostMemoryUsedBytes: 0,
+        hostMemoryTotalBytes: 0,
+        processes: [],
+        error: Option.none(),
+      };
+      const read = vi.fn(() => Effect.succeed(diagnostics));
+
+      yield* buildAppUnderTest({
+        layers: {
+          processDiagnostics: { read },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const unscoped = yield* client[WS_METHODS.serverGetProcessDiagnostics]({});
+            const registeredProjects = yield* client[WS_METHODS.serverGetProcessDiagnostics]({
+              scope: "registered-project-tests",
+            });
+            const probe = yield* client[WS_METHODS.serverProbe]({});
+            return { unscoped, registeredProjects, probe };
+          }),
+        ),
+      );
+
+      assert.deepEqual(result.unscoped, diagnostics);
+      assert.deepEqual(result.registeredProjects, {
+        ...diagnostics,
+        registeredProjectWorktrees: [],
+      });
+      assert.deepEqual(result.probe, {});
+      assert.deepEqual(read.mock.calls, [[{}], [{}]]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
