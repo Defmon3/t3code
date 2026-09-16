@@ -867,7 +867,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.map((row) => row.id)).toContain("running-work-entry");
   });
 
-  it("only shows assistant metadata on the terminal assistant message", () => {
+  it("shows assistant metadata on every completed assistant message", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
@@ -911,10 +911,11 @@ describe("deriveMessagesTimelineRows", () => {
         row.kind === "message" && row.message.role === "assistant",
     );
 
-    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
+    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([true, true]);
+    expect(assistantRows.map((row) => row.showAssistantCopyButton)).toEqual([false, true]);
   });
 
-  it("withholds assistant metadata while the active turn is still in progress", () => {
+  it("shows metadata for completed messages but not streaming messages in the active turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
@@ -931,6 +932,20 @@ describe("deriveMessagesTimelineRows", () => {
             streaming: false,
           },
         },
+        {
+          id: "assistant-streaming-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:12Z",
+          message: {
+            id: "assistant-streaming" as never,
+            role: "assistant",
+            text: "Still working...",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:12Z",
+            updatedAt: "2026-01-01T00:00:13Z",
+            streaming: true,
+          },
+        },
       ],
       latestTurn: {
         turnId: "turn-1" as never,
@@ -944,13 +959,13 @@ describe("deriveMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
-    const assistantRow = rows.find(
+    const assistantRows = rows.filter(
       (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
         row.kind === "message" && row.message.role === "assistant",
     );
 
-    expect(assistantRow?.showAssistantMeta).toBe(false);
-    expect(assistantRow?.showAssistantCopyButton).toBe(false);
+    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([true, false]);
+    expect(assistantRows.map((row) => row.showAssistantCopyButton)).toEqual([false, false]);
   });
 
   it("models work log overflow expansion as inserted list rows", () => {

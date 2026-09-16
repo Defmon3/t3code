@@ -45,7 +45,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     environmentIdentificationMode === "artwork",
   );
   const resolvedPillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel, {
-    version: APP_VERSION,
     commitHash: APP_COMMIT_HASH,
     buildTime: APP_BUILD_TIME,
   });

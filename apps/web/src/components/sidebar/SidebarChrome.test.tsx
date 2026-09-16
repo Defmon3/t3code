@@ -10,7 +10,7 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../../branding", () => ({
   APP_BUILD_TIME: "2026-08-13T10:00:00.000Z",
   APP_COMMIT_HASH: "b1b5c80c00e68cf4",
-  APP_VERSION: "0.0.34-nightly.20260813.1000",
+  APP_VERSION: "0.0.34-custom.20260816.1",
 }));
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentIdentificationMode: () => "artwork",
@@ -21,14 +21,12 @@ vi.mock("../SidebarStageBackdrop", () => ({
   resolveEnvironmentIdentificationPillLabel: (
     _stageLabel: string,
     buildIdentity: {
-      readonly version: string;
       readonly commitHash: string | null;
       readonly buildTime: string | null;
     },
   ) =>
     buildIdentity.commitHash &&
-    buildIdentity.buildTime &&
-    /-nightly\.\d{8}\.\d+$/.test(buildIdentity.version)
+    buildIdentity.buildTime
       ? "Custom"
       : null,
   resolveSidebarStageBackdropVariant: () => null,
@@ -61,7 +59,7 @@ vi.mock("./SidebarUpdatePill", () => ({
 import { SidebarChromeHeader } from "./SidebarChrome";
 
 describe("SidebarChromeHeader", () => {
-  it("renders a keyboard-focusable custom build pill when the server reports Latest", () => {
+  it("renders a keyboard-focusable custom build pill for an arbitrary version when the server reports Latest", () => {
     const html = renderToStaticMarkup(<SidebarChromeHeader isElectron />);
 
     expect(html).toContain('data-environment-identification="pill"');
