@@ -28,21 +28,24 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   const isHookApproval = approval.source === "hook";
 
   if (isHookApproval) {
-    const title = approval.title ?? "Hook approval requested";
+    const title = approval.title ?? "Approval required";
     return (
-      <div aria-label={title} className={cn("min-w-0 flex-1 space-y-2", className)} role="group">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="font-medium text-xs text-foreground">{title}</span>
-          <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-warning text-[10px]">
-            Project hook
-          </span>
+      <div aria-label={title} className={cn("min-w-0 flex-1 space-y-2.5", className)} role="group">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-hidden="true" />
+          <span className="min-w-0 font-medium text-sm text-foreground">{title}</span>
           {pendingCount > 1 ? (
-            <span className="text-[10px] text-muted-foreground tabular-nums">1/{pendingCount}</span>
+            <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+              1 of {pendingCount}
+            </span>
           ) : null}
+          <span className="ml-auto shrink-0 rounded-full border border-warning/25 bg-warning/8 px-2 py-0.5 text-[10px] font-medium text-warning">
+            Hook
+          </span>
         </div>
         {approval.reason ? (
           <p
-            className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/85"
+            className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground"
             data-approval-reason="complete"
           >
             {approval.reason}
@@ -53,14 +56,19 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
             {approval.description}
           </p>
         ) : null}
-        <code
-          aria-label={detailAriaLabel}
-          className="block max-h-20 min-w-0 overflow-auto whitespace-pre font-mono text-[11px] text-foreground/85 [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5"
-          data-approval-detail="complete"
-          tabIndex={0}
-        >
-          {approval.detail || fallbackLabel}
-        </code>
+        <div className="min-w-0 overflow-hidden rounded-lg border border-border/55 bg-background/50">
+          <div className="border-b border-border/45 px-3 py-1.5 text-[10px] font-medium text-muted-foreground">
+            Requested action
+          </div>
+          <code
+            aria-label="Requested action"
+            className="block max-h-28 min-w-0 overflow-auto whitespace-pre-wrap px-3 py-2.5 font-mono text-[11px] leading-relaxed text-foreground/85 [overflow-wrap:anywhere] [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5"
+            data-approval-detail="complete"
+            tabIndex={0}
+          >
+            {approval.detail || fallbackLabel}
+          </code>
+        </div>
       </div>
     );
   }

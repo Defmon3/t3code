@@ -2826,12 +2826,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data-variant={activePendingApproval ? "warning" : "info"}
         >
           {!isComposerCollapsedMobile && activePendingApproval ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-1 px-3 py-1.5 sm:px-4">
+            <div className="min-w-0 px-3 py-2.5 sm:px-4">
               <ComposerPendingApprovalPanel
                 approval={activePendingApproval}
                 pendingCount={pendingApprovals.length}
               />
-              <div className="flex min-w-0 flex-wrap items-center gap-0.5">
+              <div className="mt-2.5 flex min-w-0 w-full flex-wrap items-center gap-1.5">
                 <ComposerPendingApprovalActions
                   requestId={activePendingApproval.requestId}
                   isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
@@ -3190,7 +3190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   </div>
                 )}
 
-              <div className="relative">
+              <div className={cn("relative", isComposerApprovalState && "hidden")}>
                 <ComposerPromptEditor
                   editorRef={composerEditorRef}
                   value={
