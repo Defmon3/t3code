@@ -1089,8 +1089,16 @@ export function selectMergedThreadRightPanelState(
   ref: ScopedThreadRef | null | undefined,
 ): ThreadRightPanelState {
   const threadState = selectThreadRightPanelState(byThreadKey, ref);
-  if (!ref) return threadState;
-  const environmentState = byEnvironmentId[ref.environmentId];
+  return mergeThreadRightPanelState(
+    threadState,
+    ref ? byEnvironmentId[ref.environmentId] : undefined,
+  );
+}
+
+export function mergeThreadRightPanelState(
+  threadState: ThreadRightPanelState,
+  environmentState: EnvironmentRightPanelState | undefined,
+): ThreadRightPanelState {
   if (!environmentState || environmentState.surfaces.length === 0) return threadState;
   return {
     isOpen: environmentState.isActive ? environmentState.isOpen : threadState.isOpen,
