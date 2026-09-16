@@ -7,6 +7,7 @@ import {
 import { afterEach, assert, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import { ServerConfig } from "../config.ts";
 import * as ResourceMonitorBinary from "./ResourceMonitorBinary.ts";
@@ -19,6 +20,33 @@ describe("ResourceMonitorBinary", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.effect("resolves the unpacked binary when the bundled path is inside an asar archive", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const archivePath =
+        "C:\\Users\\defmon3\\AppData\\Local\\Programs\\t3code\\resources\\server.asar\\apps\\server\\dist\\resource-monitor\\win32-x64\\t3-resource-monitor.exe";
+      const unpackedPath = archivePath.replace(".asar\\", ".asar.unpacked\\");
+      const service = yield* ResourceMonitorBinary.make().pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), "C:\\temp")),
+        Effect.provideService(HostProcessPlatform, "win32"),
+        Effect.provideService(HostProcessArchitecture, "x64"),
+        Effect.provideService(HostProcessEnvironment, {}),
+        Effect.provideService(Path.Path, Path.Path.of({ ...path, resolve: () => archivePath })),
+        Effect.provideService(
+          FileSystem.FileSystem,
+          FileSystem.FileSystem.of({
+            ...fileSystem,
+            exists: (candidate) =>
+              Effect.succeed(candidate === archivePath || candidate === unpackedPath),
+          }),
+        ),
+      );
+
+      assert.equal(yield* service.resolve, unpackedPath);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("skips Linux libc detection on Windows", () =>
     Effect.gen(function* () {

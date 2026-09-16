@@ -135,6 +135,10 @@ export function resourceMonitorRustTarget(
   return undefined;
 }
 
+export function resourceMonitorUnpackedPath(candidate: string): string {
+  return candidate.replace(/\.asar([\\/])/, ".asar.unpacked$1");
+}
+
 export const make = Effect.fn("resourceTelemetry.resourceMonitorBinary.make")(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -193,7 +197,7 @@ export const make = Effect.fn("resourceTelemetry.resourceMonitorBinary.make")(fu
     });
   }
 
-  const candidates = [...overrideCandidates, ...bundledCandidates];
+  const candidates = [...overrideCandidates, ...bundledCandidates.map(resourceMonitorUnpackedPath)];
 
   const resolve: ResourceMonitorBinary["Service"]["resolve"] = Effect.gen(function* () {
     for (const candidate of candidates) {
