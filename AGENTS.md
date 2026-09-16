@@ -56,6 +56,48 @@ We need to be on the same page with terminology. When communicating, use this la
 - **turn** means one user-to-agent cycle, including follow-up work such as checkpointing.
 - **T3 home** means the base data directory. Runtime state normally lives below its userdata directory.
 
+## Local branch model
+
+This fork keeps custom work independently portable and combines it only in one composition branch.
+
+- A **custom-main input** (or **maintained custom branch**) is an independently maintained branch intentionally integrated into `custom-main`.
+- A **custom feature branch** is a maintained custom branch based on `upstream/main`. It remains suitable either for an upstream pull request or for integration into `custom-main`.
+- `custom-tweaks` is the maintained custom branch for tiny local-only changes that are not meaningful upstream pull-request candidates.
+- `custom-main` is the composition branch: `upstream/main` plus the selected maintained custom branches. It is an integration and build target, never a source branch for custom work.
+- Create and update every custom feature branch from `upstream/main`, never from `custom-main`. Never merge `custom-main` into a custom feature branch.
+- Before merging a custom feature branch into `custom-main`, align the feature branch and `custom-main` independently to the same `upstream/main` baseline.
+- When asked how many custom branches we maintain, interpret that as "how many custom-main inputs do we maintain?" Count only the maintained custom branches intended for integration into `custom-main`. Do not count `custom-main`, `upstream/main`, temporary fix or work branches, recovery branches, or branches that were merged once but are no longer maintained.
+
+### Custom-main input registry
+
+This registry, not merge ancestry or branch-name pattern matching, defines the maintained inputs. Update it whenever an input is added, retired, or accepted upstream. The current count is **24**.
+
+- Local-only input: `custom-tweaks`
+- Independently portable feature input: `feat/git-history`
+- Independently portable component inputs:
+  - `component/active-thread-ordering`
+  - `component/agent-worktree-adoption`
+  - `component/branch-toolbar-overflow`
+  - `component/completed-turn-status`
+  - `component/custom-build-identity`
+  - `component/custom-worktree-branch-name`
+  - `component/git-history`
+  - `component/issues-workspace`
+  - `component/pending-user-input-rescan`
+  - `component/pr-identity`
+  - `component/preview-observation`
+  - `component/process-monitor-pane`
+  - `component/project-hooks`
+  - `component/project-quick-slots`
+  - `component/provider-session-activity`
+  - `component/repository-identity`
+  - `component/selective-projection-replay`
+  - `component/slow-request-warning`
+  - `component/thread-action-menu`
+  - `component/vcs-poll-interval`
+  - `component/windows-file-links`
+  - `component/windows-process-shutdown`
+
 ## The three ways to hurt yourself
 
 1. **Killing by pattern.** Never `pkill -f`, `pgrep | kill`, or `kill` a PID you found by matching a name, path, or worktree string. Your own agent process has this worktree's path in its argv, and this machine runs several other dev servers at once. Kill only a PID you captured at spawn, or the owner of your port from `ss -H -ltnp` after confirming `/proc/<pid>/cwd` is your worktree.
