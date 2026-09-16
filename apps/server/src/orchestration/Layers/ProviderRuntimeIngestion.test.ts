@@ -176,6 +176,7 @@ function createProviderServiceHarness() {
 function providerServiceFromCodexAdapter(
   adapter: CodexAdapterShape,
   receiptAfterTurnCompletion?: ProviderRuntimeEvent,
+  receiptQueued?: Deferred.Deferred<void>,
 ): ProviderServiceShape {
   return {
     startSession: (threadId, input) => adapter.startSession({ ...input, threadId }),
@@ -206,11 +207,20 @@ function providerServiceFromCodexAdapter(
         return adapter.streamEvents;
       }
       return adapter.streamEvents.pipe(
-        Stream.flatMap((event) =>
-          Stream.fromIterable(
-            event.type === "turn.completed" ? [event, receiptAfterTurnCompletion] : [event],
-          ),
-        ),
+        Stream.flatMap((event) => {
+          if (event.type !== "turn.completed") {
+            return Stream.succeed(event);
+          }
+          const events = Stream.fromIterable([event, receiptAfterTurnCompletion]);
+          if (!receiptQueued) {
+            return events;
+          }
+          return events.pipe(
+            Stream.concat(
+              Stream.fromEffect(Deferred.succeed(receiptQueued, undefined)).pipe(Stream.drain),
+            ),
+          );
+        }),
       );
     },
   };
@@ -3243,7 +3253,7 @@ describe("ProviderRuntimeIngestion", () => {
       const childTurnId = (childTurnStarted?.params as { turn?: { id?: string } } | undefined)?.turn
         ?.id;
       expect(childTurnId).toBeDefined();
-      const burstSize = 32;
+      const burstSize = 64;
       const burst = Array.from({ length: burstSize }, (_, index) => [
         {
           method: "item/completed",
@@ -3314,20 +3324,25 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       );
       const ingestionReceiptTaskId = RuntimeTaskId.make("codex-progress-ingestion-receipt");
+      const ingestionReceiptQueued = yield* Deferred.make<void>();
       const harness = yield* Effect.promise(() =>
         createHarness({
-          providerService: providerServiceFromCodexAdapter(adapter, {
-            type: "task.updated",
-            eventId: asEventId("evt-codex-progress-ingestion-receipt"),
-            provider: ProviderDriverKind.make("codex"),
-            threadId: asThreadId("thread-1"),
-            createdAt: "2026-01-01T00:00:00.000Z",
-            payload: {
-              taskId: ingestionReceiptTaskId,
-              status: "idle",
-              description: "Codex progress ingestion receipt",
+          providerService: providerServiceFromCodexAdapter(
+            adapter,
+            {
+              type: "task.updated",
+              eventId: asEventId("evt-codex-progress-ingestion-receipt"),
+              provider: ProviderDriverKind.make("codex"),
+              threadId: asThreadId("thread-1"),
+              createdAt: "2026-01-01T00:00:00.000Z",
+              payload: {
+                taskId: ingestionReceiptTaskId,
+                status: "idle",
+                description: "Codex progress ingestion receipt",
+              },
             },
-          }),
+            ingestionReceiptQueued,
+          ),
         }),
       );
       const threadId = asThreadId("thread-1");
@@ -3344,17 +3359,7 @@ describe("ProviderRuntimeIngestion", () => {
       }).pipe(Effect.forkChild);
 
       try {
-        yield* Effect.promise(() =>
-          waitForThread(
-            harness.readModel,
-            (thread) =>
-              thread.activities.some((activity) => {
-                const payload = activity.payload as { taskId?: string } | undefined;
-                return payload?.taskId === ingestionReceiptTaskId;
-              }),
-            30_000,
-          ),
-        );
+        yield* Deferred.await(ingestionReceiptQueued);
         yield* Effect.promise(() => harness.drain());
 
         const events = Array.from(yield* Stream.runCollect(harness.engine.readEvents(0)));
@@ -3374,29 +3379,37 @@ describe("ProviderRuntimeIngestion", () => {
           const payload = activity.payload as { status?: string } | undefined;
           return payload?.status === "idle";
         });
+        const itemProgress = progress.find(({ activity }) => {
+          const payload = activity.payload as { summary?: string } | undefined;
+          return payload?.summary !== undefined;
+        });
+        const usageProgress = progress.find(({ activity }) => {
+          const payload = activity.payload as
+            | {
+                typedUsage?: { totalTokens?: number };
+              }
+            | undefined;
+          return payload?.typedUsage !== undefined;
+        });
 
         expect(progress).toHaveLength(2);
-        expect(
-          progress.some(({ activity }) => {
-            const payload = activity.payload as { summary?: string } | undefined;
-            return payload?.summary === `latest-query-${burstSize - 1}`;
-          }),
-        ).toBe(true);
-        expect(
-          progress.some(({ activity }) => {
-            const payload = activity.payload as
-              | {
-                  typedUsage?: { totalTokens?: number };
-                }
-              | undefined;
-            return payload?.typedUsage?.totalTokens === 10_000 + burstSize - 1;
-          }),
-        ).toBe(true);
+        expect(itemProgress?.activity.payload).toMatchObject({
+          summary: `latest-query-${burstSize - 1}`,
+        });
+        expect(usageProgress?.activity.payload).toMatchObject({
+          typedUsage: {
+            totalTokens: 10_000 + burstSize - 1,
+            reasoningOutputTokens: burstSize - 1,
+          },
+        });
+        const completionSequence = completion?.durableSequence;
         expect(completion).toBeDefined();
+        expect(completionSequence).toBeDefined();
+        expect(childActivities.at(-1)).toEqual(completion);
         expect(
           progress.every(
             ({ durableSequence }) =>
-              completion !== undefined && durableSequence < completion.durableSequence,
+              completionSequence !== undefined && durableSequence < completionSequence,
           ),
         ).toBe(true);
       } finally {

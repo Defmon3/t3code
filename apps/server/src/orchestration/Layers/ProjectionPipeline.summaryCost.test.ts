@@ -82,6 +82,13 @@ const projectionStateWrites = (statements: ReadonlyArray<string>) =>
     statement.replace(/\s+/g, " ").trim().toLowerCase().includes("insert into projection_state"),
   );
 
+const statementSet = (statements: ReadonlyArray<string>) =>
+  [
+    ...new Set(
+      statements.map((statement) => statement.replace(/\s+/g, " ").trim().toLowerCase()),
+    ),
+  ].sort();
+
 const PROJECTOR_NAMES = [
   "projection.projects",
   "projection.threads",
@@ -456,10 +463,56 @@ const seedThread = Effect.fn("seedThread")(function* (input: {
   };
 });
 
+const INCIDENT_ACTIVITY_COUNT = 14_625;
+const INCIDENT_ACTIVITY_BATCH_SIZE = 100;
+const INCIDENT_PAYLOAD = JSON.stringify({ output: "x".repeat(3_385) });
+const INCIDENT_PAYLOAD_BYTES = INCIDENT_ACTIVITY_COUNT * INCIDENT_PAYLOAD.length;
+
+const seedIncidentActivities = Effect.fn("seedIncidentActivities")(function* (
+  threadId: ThreadId,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql.withTransaction(
+    Effect.forEach(
+      Array.from(
+        { length: Math.ceil(INCIDENT_ACTIVITY_COUNT / INCIDENT_ACTIVITY_BATCH_SIZE) },
+        (_unused, batchIndex) => batchIndex,
+      ),
+      (batchIndex) => {
+        const firstIndex = batchIndex * INCIDENT_ACTIVITY_BATCH_SIZE;
+        const batchLength = Math.min(
+          INCIDENT_ACTIVITY_BATCH_SIZE,
+          INCIDENT_ACTIVITY_COUNT - firstIndex,
+        );
+        return sql`
+          INSERT INTO projection_thread_activities ${sql.insert(
+            Array.from({ length: batchLength }, (_unused, offset) => {
+              const index = firstIndex + offset;
+              return {
+                activity_id: `activity-incident-history-${index}`,
+                thread_id: threadId,
+                turn_id: null,
+                tone: "info",
+                kind: "tool.call",
+                summary: `Incident history activity ${index}`,
+                payload_json: INCIDENT_PAYLOAD,
+                sequence: null,
+                created_at: at(2),
+              };
+            }),
+          )}
+        `;
+      },
+      { concurrency: 1, discard: true },
+    ),
+  );
+});
+
 it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) => {
   const measureAssistantDelta = Effect.fn("measureAssistantDelta")(function* (input: {
     readonly slug: string;
     readonly historyLength: number;
+    readonly turnId?: TurnId;
   }) {
     const sql = yield* SqlClient.SqlClient;
     const { appendAndProject, recordProjectionResult, threadId } = yield* seedThread(input);
@@ -473,7 +526,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
         messageId,
         role: "assistant",
         text: "First ",
-        turnId: null,
+        turnId: input.turnId ?? null,
         streaming: true,
         occurredAt: at(3),
       }),
@@ -487,7 +540,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
         messageId,
         role: "assistant",
         text: "delta",
-        turnId: null,
+        turnId: input.turnId ?? null,
         streaming: true,
         occurredAt: at(4),
       }),
@@ -613,6 +666,153 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
     return { activityRows, projectionStateRows, sequence, statements, threadRows };
   });
 
+  const measureIncidentScale = Effect.fn("measureIncidentScale")(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const { appendAndProject, recordProjectionResult, threadId } = yield* seedThread({
+      slug: "incident-scale",
+      historyLength: 0,
+    });
+    yield* seedIncidentActivities(threadId);
+
+    const seededRows = yield* sql<{
+      readonly activityCount: number;
+      readonly payloadBytes: number;
+    }>`
+      SELECT
+        COUNT(*) AS "activityCount",
+        SUM(length(CAST(payload_json AS BLOB))) AS "payloadBytes"
+      FROM projection_thread_activities
+      WHERE thread_id = ${threadId}
+    `;
+
+    const turnId = TurnId.make("turn-incident-scale");
+    const messageId = MessageId.make("message-incident-scale-assistant");
+    yield* appendAndProject(
+      messageEvent({
+        slug: "incident-scale",
+        label: "assistant-initial",
+        threadId,
+        messageId,
+        role: "assistant",
+        text: "First ",
+        turnId,
+        streaming: true,
+        occurredAt: at(3),
+      }),
+    );
+    const assistant = yield* recordProjectionResult(
+      messageEvent({
+        slug: "incident-scale",
+        label: "assistant-delta",
+        threadId,
+        messageId,
+        role: "assistant",
+        text: "delta",
+        turnId,
+        streaming: true,
+        occurredAt: at(4),
+      }),
+    );
+    recordedStatements.length = 0;
+    const assistantProjectionStateRows = yield* sql<{
+      readonly projector: string;
+      readonly lastAppliedSequence: number;
+      readonly updatedAt: string;
+    }>`
+      SELECT
+        projector,
+        last_applied_sequence AS "lastAppliedSequence",
+        updated_at AS "updatedAt"
+      FROM projection_state
+      ORDER BY projector ASC
+    `;
+    recordedStatements.length = 0;
+
+    const activityId = EventId.make(`task-progress:${threadId}:task-1`);
+    yield* appendAndProject(
+      activityEvent({
+        slug: "incident-scale",
+        label: "progress-initial",
+        threadId,
+        occurredAt: at(5),
+        activity: {
+          id: activityId,
+          tone: "info",
+          kind: "task.progress",
+          summary: "Queued",
+          payload: { taskId: "task-1", status: "queued" },
+          turnId,
+          createdAt: at(5),
+        },
+      }),
+    );
+    const progress = yield* recordProjectionResult(
+      activityEvent({
+        slug: "incident-scale",
+        label: "progress-update",
+        threadId,
+        occurredAt: at(6),
+        activity: {
+          id: activityId,
+          tone: "info",
+          kind: "task.progress",
+          summary: "Running checks",
+          payload: { taskId: "task-1", status: "running", summary: "Running checks" },
+          turnId,
+          createdAt: at(6),
+        },
+      }),
+    );
+
+    recordedStatements.length = 0;
+    const messageRows = yield* sql<{
+      readonly messageId: string;
+      readonly text: string;
+      readonly turnId: string | null;
+    }>`
+      SELECT message_id AS "messageId", text, turn_id AS "turnId"
+      FROM projection_thread_messages
+      WHERE thread_id = ${threadId} AND message_id = ${messageId}
+    `;
+    const activityRows = yield* sql<{
+      readonly activityId: string;
+      readonly summary: string;
+      readonly status: string;
+      readonly turnId: string | null;
+    }>`
+      SELECT
+        activity_id AS "activityId",
+        summary,
+        json_extract(payload_json, '$.status') AS status,
+        turn_id AS "turnId"
+      FROM projection_thread_activities
+      WHERE thread_id = ${threadId} AND activity_id = ${activityId}
+    `;
+    const projectionStateRows = yield* sql<{
+      readonly projector: string;
+      readonly lastAppliedSequence: number;
+      readonly updatedAt: string;
+    }>`
+      SELECT
+        projector,
+        last_applied_sequence AS "lastAppliedSequence",
+        updated_at AS "updatedAt"
+      FROM projection_state
+      ORDER BY projector ASC
+    `;
+    recordedStatements.length = 0;
+
+    return {
+      activityRows,
+      assistant,
+      assistantProjectionStateRows,
+      messageRows,
+      progress,
+      projectionStateRows,
+      seededRows,
+    };
+  });
+
   it.effect("projects assistant deltas without thread-wide shell-summary scans", () =>
     Effect.gen(function* () {
       const shallow = yield* measureAssistantDelta({
@@ -702,6 +902,78 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
         },
         { shallow: [], deep: [] },
         `task progress updates must not reload thread-wide collections (statement counts: shallow=${shallow.statements.length}, deep=${deep.statements.length})`,
+      );
+    }),
+  );
+
+  it.effect("keeps incident-scale assistant and task progress projection work constant", () =>
+    Effect.gen(function* () {
+      const shallowAssistant = yield* measureAssistantDelta({
+        slug: "incident-assistant-shallow",
+        historyLength: 4,
+        turnId: TurnId.make("turn-incident-assistant-shallow"),
+      });
+      const shallowProgress = yield* measureTaskProgress({
+        slug: "incident-progress-shallow",
+        historyLength: 4,
+      });
+      const incident = yield* measureIncidentScale();
+
+      assert.deepEqual(incident.seededRows, [
+        { activityCount: INCIDENT_ACTIVITY_COUNT, payloadBytes: INCIDENT_PAYLOAD_BYTES },
+      ]);
+      assert.isAtLeast(INCIDENT_PAYLOAD_BYTES, 47.3 * 1024 * 1024);
+      assert.isBelow(INCIDENT_PAYLOAD_BYTES, 47.5 * 1024 * 1024);
+      assert.deepEqual(incident.messageRows, [
+        {
+          messageId: "message-incident-scale-assistant",
+          text: "First delta",
+          turnId: "turn-incident-scale",
+        },
+      ]);
+      assert.deepEqual(incident.activityRows, [
+        {
+          activityId: "task-progress:thread-incident-scale:task-1",
+          summary: "Running checks",
+          status: "running",
+          turnId: "turn-incident-scale",
+        },
+      ]);
+
+      assert.equal(incident.assistant.statements.length, shallowAssistant.statements.length);
+      assert.deepEqual(
+        statementSet(incident.assistant.statements),
+        statementSet(shallowAssistant.statements),
+      );
+      assert.equal(incident.progress.statements.length, shallowProgress.statements.length);
+      assert.deepEqual(
+        statementSet(incident.progress.statements),
+        statementSet(shallowProgress.statements),
+      );
+      assert.deepEqual(
+        {
+          assistant: threadCollectionScans(incident.assistant.statements),
+          progress: threadCollectionScans(incident.progress.statements),
+        },
+        { assistant: [], progress: [] },
+      );
+      assert.lengthOf(projectionStateWrites(incident.assistant.statements), 1);
+      assert.lengthOf(projectionStateWrites(incident.progress.statements), 1);
+      assert.deepEqual(
+        incident.assistantProjectionStateRows,
+        [...PROJECTOR_NAMES].sort().map((projector) => ({
+          projector,
+          lastAppliedSequence: incident.assistant.sequence,
+          updatedAt: at(4),
+        })),
+      );
+      assert.deepEqual(
+        incident.projectionStateRows,
+        [...PROJECTOR_NAMES].sort().map((projector) => ({
+          projector,
+          lastAppliedSequence: incident.progress.sequence,
+          updatedAt: at(6),
+        })),
       );
     }),
   );
