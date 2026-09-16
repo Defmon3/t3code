@@ -891,6 +891,31 @@ export function isCustomDesktopBuild(branchName: string, appVersion: string): bo
   );
 }
 
+export function resolveDesktopArchiveVersionFromReleaseTag(tag: string): string | undefined {
+  const match = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+)$/.exec(tag.trim());
+  return match?.[1];
+}
+
+const resolveCustomDesktopArchiveVersion = Effect.fn("resolveCustomDesktopArchiveVersion")(
+  function* (repoRoot: string) {
+    const result = yield* spawnAndCollectOutput(
+      ChildProcess.make("git", ["describe", "--tags", "--match", "v*-nightly.*", "--abbrev=0"], {
+        cwd: repoRoot,
+      }),
+    ).pipe(Effect.orDie);
+    const archiveVersion =
+      result.exitCode === 0 ? resolveDesktopArchiveVersionFromReleaseTag(result.stdout) : undefined;
+    if (archiveVersion === undefined) {
+      return yield* Effect.die(
+        new Error(
+          "Custom desktop builds require an exact reachable nightly release tag for SSH archives.",
+        ),
+      );
+    }
+    return archiveVersion;
+  },
+);
+
 const resolveGitBranchName = Effect.fn("resolveGitBranchName")(function* (repoRoot: string) {
   const result = yield* spawnAndCollectOutput(
     ChildProcess.make("git", ["branch", "--show-current"], {
@@ -988,6 +1013,7 @@ interface StagePackageJson {
   readonly version: string;
   readonly buildVersion: string;
   readonly t3codeCommitHash: string;
+  readonly t3codeArchiveVersion: string;
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
@@ -3639,6 +3665,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const isCustomBuild = isCustomDesktopBuild(yield* resolveGitBranchName(repoRoot), appVersion);
+  const archiveVersion = isCustomBuild
+    ? yield* resolveCustomDesktopArchiveVersion(repoRoot)
+    : appVersion;
   const buildTime = DateTime.formatIso(yield* DateTime.now);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
@@ -3897,6 +3926,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
+    t3codeArchiveVersion: archiveVersion,
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: "T3 Code desktop build",

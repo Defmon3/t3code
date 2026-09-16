@@ -12,6 +12,7 @@ const {
   getVersionMock,
   isDefaultProtocolClientMock,
   onMock,
+  readFileSyncMock,
   quitMock,
   relaunchMock,
   removeListenerMock,
@@ -34,6 +35,7 @@ const {
   getVersionMock: vi.fn(() => "1.2.3"),
   isDefaultProtocolClientMock: vi.fn(() => false),
   onMock: vi.fn(),
+  readFileSyncMock: vi.fn(),
   quitMock: vi.fn(),
   relaunchMock: vi.fn(),
   removeListenerMock: vi.fn(),
@@ -83,6 +85,8 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("node:fs", () => ({ readFileSync: readFileSyncMock }));
+
 import * as ElectronApp from "./ElectronApp.ts";
 
 describe("ElectronApp", () => {
@@ -106,11 +110,26 @@ describe("ElectronApp", () => {
 
       assert.deepEqual(metadata, {
         appVersion: "1.2.3",
+        archiveVersion: undefined,
         appPath: "/app",
         isPackaged: true,
         resourcesPath: process.resourcesPath,
         runningUnderArm64Translation: false,
       });
+    }).pipe(Effect.provide(ElectronApp.layer)),
+  );
+
+  it.effect("reads the pinned SSH archive version from a custom package", () =>
+    Effect.gen(function* () {
+      getVersionMock.mockImplementationOnce(() => "0.0.41-custom.20260914.4afd3e70e");
+      readFileSyncMock.mockImplementationOnce(
+        () => '{"t3codeArchiveVersion":"0.0.41-nightly.20260914.1707"}',
+      );
+
+      const electronApp = yield* ElectronApp.ElectronApp;
+      const metadata = yield* electronApp.metadata;
+
+      assert.strictEqual(metadata.archiveVersion, "0.0.41-nightly.20260914.1707");
     }).pipe(Effect.provide(ElectronApp.layer)),
   );
 

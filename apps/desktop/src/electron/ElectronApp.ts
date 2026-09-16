@@ -1,13 +1,18 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Electron reads staged package metadata from its asar path before services are available.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import * as Electron from "electron";
 
 export interface ElectronAppMetadata {
   readonly appVersion: string;
+  readonly archiveVersion: string | undefined;
   readonly appPath: string;
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
@@ -17,7 +22,7 @@ export interface ElectronAppMetadata {
 export class ElectronAppMetadataReadError extends Schema.TaggedError<ElectronAppMetadataReadError>()(
   "ElectronAppMetadataReadError",
   {
-    property: Schema.Literals(["app-version", "app-path"]),
+    property: Schema.Literals(["app-version", "app-path", "app-package"]),
     cause: Schema.Defect(),
   },
 ) {
@@ -25,6 +30,9 @@ export class ElectronAppMetadataReadError extends Schema.TaggedError<ElectronApp
     return `Failed to read Electron app metadata property "${this.property}".`;
   }
 }
+
+const PackageMetadata = Schema.Struct({ t3codeArchiveVersion: Schema.optional(Schema.String) });
+const decodePackageMetadata = Schema.decodeUnknownOption(Schema.fromJsonString(PackageMetadata));
 
 export class ElectronAppWhenReadyError extends Schema.TaggedError<ElectronAppWhenReadyError>()(
   "ElectronAppWhenReadyError",
@@ -117,9 +125,28 @@ export const make = ElectronApp.of({
           cause,
         }),
     });
+    const archiveVersion =
+      Electron.app.isPackaged && appVersion.includes("-custom")
+        ? yield* Effect.try({
+            try: () =>
+              Option.getOrUndefined(
+                decodePackageMetadata(
+                  NodeFS.readFileSync(NodePath.join(appPath, "package.json"), "utf8"),
+                ).pipe(
+                  Option.flatMap((metadata) => Option.fromNullishOr(metadata.t3codeArchiveVersion)),
+                ),
+              ),
+            catch: (cause) =>
+              new ElectronAppMetadataReadError({
+                property: "app-package",
+                cause,
+              }),
+          })
+        : undefined;
 
     return {
       appVersion,
+      archiveVersion,
       appPath,
       isPackaged: Electron.app.isPackaged,
       resourcesPath: process.resourcesPath,

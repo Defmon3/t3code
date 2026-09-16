@@ -36,6 +36,7 @@ import {
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
   isCustomDesktopBuild,
+  resolveDesktopArchiveVersionFromReleaseTag,
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
@@ -162,6 +163,14 @@ it("identifies custom desktop builds from their branch or resolved version", () 
   assert.isFalse(isCustomDesktopBuild("", "0.0.34"));
   assert.isFalse(isCustomDesktopBuild("", "0.0.34-nightly.abc1234"));
   assert.isTrue(isCustomDesktopBuild("custom-main", "0.0.34"));
+});
+
+it("uses only an exact nightly release tag for custom desktop SSH archives", () => {
+  assert.equal(
+    resolveDesktopArchiveVersionFromReleaseTag("v0.0.41-nightly.20260914.1707"),
+    "0.0.41-nightly.20260914.1707",
+  );
+  assert.isUndefined(resolveDesktopArchiveVersionFromReleaseTag("v0.0.41"));
 });
 
 const writeResourceMonitorProtocolSources = Effect.fn("test.writeResourceMonitorProtocolSources")(

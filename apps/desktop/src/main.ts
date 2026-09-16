@@ -98,7 +98,12 @@ const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
-  return { archiveVersion: environment.appVersion };
+  if (environment.appVersion.includes("-custom") && environment.archiveVersion === undefined) {
+    throw new Error(
+      `Custom desktop build '${environment.appVersion}' is missing its SSH archive version.`,
+    );
+  }
+  return { archiveVersion: environment.archiveVersion ?? environment.appVersion };
 };
 
 const desktopSshEnvironmentLayer = Layer.unwrap(

@@ -23,6 +23,7 @@ export interface MakeDesktopEnvironmentInput {
   readonly platform: NodeJS.Platform;
   readonly processArch: string;
   readonly appVersion: string;
+  readonly archiveVersion?: string | undefined;
   readonly appPath: string;
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
@@ -39,6 +40,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
     readonly appVersion: string;
+    readonly archiveVersion: string | undefined;
     readonly appPath: string;
     readonly resourcesPath: string;
     readonly homeDirectory: string;
@@ -197,6 +199,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     isPackaged: input.isPackaged,
     isDevelopment,
     appVersion: input.appVersion,
+    archiveVersion: input.archiveVersion,
     appPath: input.appPath,
     resourcesPath,
     homeDirectory,
