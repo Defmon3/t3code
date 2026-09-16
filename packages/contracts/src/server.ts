@@ -592,6 +592,17 @@ export const ServerProviderUpdatedPayload = Schema.Struct({
 });
 export type ServerProviderUpdatedPayload = typeof ServerProviderUpdatedPayload.Type;
 
+export const ServerComposerAutocompleteInput = Schema.Struct({
+  draft: Schema.String,
+});
+export type ServerComposerAutocompleteInput = typeof ServerComposerAutocompleteInput.Type;
+
+export const ServerComposerAutocompleteResult = Schema.Struct({
+  suggestion: Schema.NullOr(Schema.String),
+  model: Schema.NullOr(Schema.String),
+});
+export type ServerComposerAutocompleteResult = typeof ServerComposerAutocompleteResult.Type;
+
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,
   instanceId: Schema.optionalKey(ProviderInstanceId),

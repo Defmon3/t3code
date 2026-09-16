@@ -82,6 +82,8 @@ import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTermin
 import { formatProviderSkillDisplayName } from "~/providerSkillPresentation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { registerComposerInlineTokenPaste } from "./composerInlineTokenPaste";
+import { $getComposerDraftText, ComposerAutocompleteNode } from "./ComposerAutocompleteNode";
+import { ComposerAutocompletePlugin } from "./ComposerAutocompletePlugin";
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
 const SURROUND_SYMBOLS: [string, string][] = [
@@ -899,6 +901,8 @@ interface ComposerPromptEditorProps {
   ) => boolean;
   onPaste: React.ClipboardEventHandler<HTMLElement>;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
+  autocompleteEnabled?: boolean;
+  queryAutocomplete?: (draft: string) => Promise<string | null>;
 }
 
 function ComposerCommandKeyPlugin(props: {
@@ -1539,6 +1543,8 @@ function ComposerPromptEditorInner({
   onCommandKeyDown,
   onPaste,
   editorRef,
+  autocompleteEnabled = false,
+  queryAutocomplete,
 }: ComposerPromptEditorProps) {
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
@@ -1651,7 +1657,7 @@ function ComposerPromptEditorInner({
   } => {
     let snapshot = snapshotRef.current;
     editor.getEditorState().read(() => {
-      const nextValue = $getRoot().getTextContent();
+      const nextValue = $getComposerDraftText();
       const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
       const nextCursor = clampCollapsedComposerCursor(
         nextValue,
@@ -1699,7 +1705,7 @@ function ComposerPromptEditorInner({
 
   const handleEditorChange = useCallback((editorState: EditorState) => {
     editorState.read(() => {
-      const nextValue = $getRoot().getTextContent();
+      const nextValue = $getComposerDraftText();
       const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
       const nextCursor = clampCollapsedComposerCursor(
         nextValue,
@@ -1773,6 +1779,9 @@ function ComposerPromptEditorInner({
           ErrorBoundary={LexicalErrorBoundary}
         />
         <OnChangePlugin onChange={handleEditorChange} />
+        {queryAutocomplete ? (
+          <ComposerAutocompletePlugin enabled={autocompleteEnabled} query={queryAutocomplete} />
+        ) : null}
         <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
         <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
         <ComposerHomeEndKeyPlugin />
@@ -1800,6 +1809,8 @@ export function ComposerPromptEditor({
   onCommandKeyDown,
   onPaste,
   editorRef,
+  autocompleteEnabled,
+  queryAutocomplete,
 }: ComposerPromptEditorProps) {
   const initialValueRef = useRef(value);
   const initialTerminalContextsRef = useRef(terminalContexts);
@@ -1808,7 +1819,12 @@ export function ComposerPromptEditor({
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
+      nodes: [
+        ComposerMentionNode,
+        ComposerSkillNode,
+        ComposerTerminalContextNode,
+        ComposerAutocompleteNode,
+      ],
       editorState: () => {
         $setComposerEditorPrompt(
           initialValueRef.current,
@@ -1836,6 +1852,8 @@ export function ComposerPromptEditor({
         onChange={onChange}
         onPaste={onPaste}
         editorRef={editorRef}
+        {...(autocompleteEnabled !== undefined ? { autocompleteEnabled } : {})}
+        {...(queryAutocomplete ? { queryAutocomplete } : {})}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
       />

@@ -152,6 +152,8 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  ServerComposerAutocompleteInput,
+  ServerComposerAutocompleteResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -271,6 +273,7 @@ export const WS_METHODS = {
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
+  serverComposerAutocomplete: "server.composerAutocomplete",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -327,6 +330,12 @@ export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybi
 export const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsServerComposerAutocompleteRpc = Rpc.make(WS_METHODS.serverComposerAutocomplete, {
+  payload: ServerComposerAutocompleteInput,
+  success: ServerComposerAutocompleteResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -975,6 +984,7 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
 
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
+  WsServerComposerAutocompleteRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

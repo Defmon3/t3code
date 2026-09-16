@@ -17,10 +17,16 @@ import {
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  WS_METHODS,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import { EnvironmentRegistry } from "@t3tools/client-runtime/connection";
+import { request } from "@t3tools/client-runtime/rpc";
+import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
+import * as Effect from "effect/Effect";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import {
   memo,
   type ReactNode,
@@ -114,6 +120,24 @@ import {
   submitComposerDraft,
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
+import { connectionAtomRuntime } from "../../connection/runtime";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+
+const composerAutocompleteCommand = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:composer:autocomplete",
+  concurrency: {
+    mode: "latest",
+    key: (input: { environmentId: EnvironmentId; draft: string }) => input.environmentId,
+  },
+  execute: (input: { environmentId: EnvironmentId; draft: string }) =>
+    Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry;
+      return yield* registry.run(
+        input.environmentId,
+        request(WS_METHODS.serverComposerAutocomplete, { draft: input.draft }),
+      );
+    }),
+});
 
 type ComposerCommandMenuPosition = {
   bottom: number;
@@ -677,6 +701,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onExpandImage,
   } = props;
   const isSendDisabled = sendDisabledReason !== null;
+  const queryComposerAutocomplete = useCallback(
+    async (draft: string): Promise<string | null> => {
+      const result = await composerAutocompleteCommand.run(appAtomRegistry, {
+        environmentId,
+        draft,
+      });
+      return AsyncResult.isSuccess(result) ? result.value.suggestion : null;
+    },
+    [environmentId],
+  );
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -3079,6 +3113,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
+                autocompleteEnabled={
+                  !isConnecting &&
+                  !isComposerApprovalState &&
+                  !projectSelectionRequired &&
+                  pendingUserInputs.length === 0 &&
+                  activePendingProgress === null
+                }
+                queryAutocomplete={queryComposerAutocomplete}
               />
               {showMobilePendingAnswerActions ? (
                 <div
