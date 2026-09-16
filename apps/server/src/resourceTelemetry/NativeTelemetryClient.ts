@@ -545,16 +545,13 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         killSignal: "SIGTERM",
         forceKillAfter: Duration.seconds(2),
       });
-      const handle = yield* Effect.acquireRelease(
-        spawner
-          .spawn(command)
-          .pipe(
-            Effect.mapError(
-              (cause) => new NativeTelemetrySpawnFailed({ path: executablePath, cause }),
-            ),
+      const handle = yield* spawner
+        .spawn(command)
+        .pipe(
+          Effect.mapError(
+            (cause) => new NativeTelemetrySpawnFailed({ path: executablePath, cause }),
           ),
-        (child) => child.kill().pipe(Effect.ignore),
-      );
+        );
       yield* Ref.update(state, (current) => ({
         ...current,
         status: "starting" as const,

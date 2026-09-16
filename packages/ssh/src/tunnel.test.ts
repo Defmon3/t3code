@@ -343,22 +343,24 @@ describe("ssh tunnel scripts", () => {
     let tunnelKillCount = 0;
     let stopCommandCount = 0;
     const spawner = ChildProcessSpawner.make((command) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const args = commandArgs(command);
         spawnedCommands.push(args);
+        let handle: ChildProcessSpawner.ChildProcessHandle;
         if (args.includes("-N")) {
-          return makeRunningProcess(() => {
+          handle = makeRunningProcess(() => {
             tunnelKillCount += 1;
           });
-        }
-        if (args.includes("sh") && args.includes("--")) {
-          return makeSuccessfulProcess('{"remotePort":3773}\n');
-        }
-        if (args.includes("sh")) {
+        } else if (args.includes("sh") && args.includes("--")) {
+          handle = makeSuccessfulProcess('{"remotePort":3773}\n');
+        } else if (args.includes("sh")) {
           stopCommandCount += 1;
-          return makeSuccessfulProcess('{"stopped":true}\n');
+          handle = makeSuccessfulProcess('{"stopped":true}\n');
+        } else {
+          handle = makeSuccessfulProcess("\n");
         }
-        return makeSuccessfulProcess("\n");
+        yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
+        return handle;
       }),
     );
     const layer = Layer.mergeAll(
