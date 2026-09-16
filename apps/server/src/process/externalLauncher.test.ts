@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -187,14 +188,11 @@ it.effect("memoizes editor discovery and refreshes after the cache window", () =
     const statCallsAfterFirstScan = statCalls;
     assert.isAbove(statCallsAfterFirstScan, 0);
 
-    // Past the shared command-resolution cache TTL (30s) but within the
-    // discovery cache window: the memoized set is reused without any scan.
     yield* TestClock.adjust("31 seconds");
     const second = yield* launcher.resolveAvailableEditors();
     assert.deepEqual([...second], [...first]);
     assert.equal(statCalls, statCallsAfterFirstScan);
 
-    // Past the discovery cache window the next call rescans.
     yield* TestClock.adjust("30 seconds");
     yield* launcher.resolveAvailableEditors();
     assert.isAbove(statCalls, statCallsAfterFirstScan);
@@ -217,26 +215,214 @@ it.effect("memoizes editor discovery and refreshes after the cache window", () =
   );
 });
 
-// A client that disconnects mid-scan interrupts the shared discovery effect on
-// the connection fiber. The cache must not retain that interrupt: doing so
-// replayed it to every later connect for the whole TTL, so `server.getConfig`
-// failed and no client could reconnect until the server restarted.
-it.effect("rescans after an interrupted discovery instead of caching the interrupt", () => {
+it.effect("shares one editor discovery between concurrent callers", () => {
   const fileInfo = { type: "File" } as FileSystem.File.Info;
-  let blockFirstScan = true;
-  let scans = 0;
+  const discoveryStarted = Deferred.makeUnsafe<void>();
+  const releaseDiscovery = Deferred.makeUnsafe<void>();
+  let firstStat = true;
+  let statCalls = 0;
   const launcherLayer = ExternalLauncher.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         FileSystem.layerNoop({
-          // The first scan parks inside `stat` so the interrupt lands while
-          // discovery is in flight, which is what a client disconnecting
-          // mid-connect does to the shared effect.
           stat: () =>
             Effect.gen(function* () {
-              scans += 1;
-              if (blockFirstScan) {
-                return yield* Effect.never;
+              statCalls += 1;
+              if (firstStat) {
+                firstStat = false;
+                yield* Deferred.succeed(discoveryStarted, undefined);
+                yield* Deferred.await(releaseDiscovery);
+              }
+              return fileInfo;
+            }),
+        }),
+        Path.layer,
+        Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.sync(() => makeMockDetachedHandle())),
+        ),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+    const first = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Deferred.await(discoveryStarted);
+    const second = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    assert.equal(statCalls, 1);
+    yield* Deferred.succeed(releaseDiscovery, undefined);
+
+    const [firstEditors, secondEditors] = yield* Effect.all([Fiber.join(first), Fiber.join(second)]);
+
+    assert.equal(firstEditors.includes("vscode"), true);
+    assert.deepEqual([...secondEditors], [...firstEditors]);
+    assert.isAbove(statCalls, 0);
+    const statCallsAfterSharedDiscovery = statCalls;
+    const cachedEditors = yield* launcher.resolveAvailableEditors();
+    assert.deepEqual([...cachedEditors], [...firstEditors]);
+    assert.equal(statCalls, statCallsAfterSharedDiscovery);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        launcherLayer,
+        Layer.succeed(HostProcessPlatform, "win32"),
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              PATH: "C:\\t3-editor-discovery-concurrent-test",
+              PATHEXT: ".COM;.EXE;.BAT;.CMD",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("evicts a timed out editor discovery so a later caller can retry", () => {
+  const fileInfo = { type: "File" } as FileSystem.File.Info;
+  const discoveryStarted = Deferred.makeUnsafe<void>();
+  const neverReleaseDiscovery = Deferred.makeUnsafe<void>();
+  let firstStat = true;
+  let statCalls = 0;
+  const launcherLayer = ExternalLauncher.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        FileSystem.layerNoop({
+          stat: () =>
+            Effect.gen(function* () {
+              statCalls += 1;
+              if (firstStat) {
+                firstStat = false;
+                yield* Deferred.succeed(discoveryStarted, undefined);
+                yield* Deferred.await(neverReleaseDiscovery);
+              }
+              return fileInfo;
+            }),
+        }),
+        Path.layer,
+        Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.sync(() => makeMockDetachedHandle())),
+        ),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+    const first = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Deferred.await(discoveryStarted);
+    const second = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    assert.equal(statCalls, 1);
+
+    yield* TestClock.adjust("5 seconds");
+    const [firstEditors, secondEditors] = yield* Effect.all([Fiber.join(first), Fiber.join(second)]);
+    assert.deepEqual([...firstEditors], []);
+    assert.deepEqual([...secondEditors], []);
+
+    const retriedEditors = yield* launcher.resolveAvailableEditors();
+    assert.equal(retriedEditors.includes("vscode"), true);
+    const statCallsAfterRetry = statCalls;
+    yield* launcher.resolveAvailableEditors();
+    assert.equal(statCalls, statCallsAfterRetry);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        launcherLayer,
+        Layer.succeed(HostProcessPlatform, "win32"),
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              PATH: "C:\\t3-editor-discovery-timeout-test",
+              PATHEXT: ".COM;.EXE;.BAT;.CMD",
+            },
+          }),
+        ),
+        TestClock.layer(),
+      ),
+    ),
+  );
+});
+
+it.effect("releases callers and retries after a defective editor discovery", () => {
+  const fileInfo = { type: "File" } as FileSystem.File.Info;
+  const discoveryStarted = Deferred.makeUnsafe<void>();
+  let firstStat = true;
+  let statCalls = 0;
+  const launcherLayer = ExternalLauncher.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        FileSystem.layerNoop({
+          stat: () =>
+            Effect.gen(function* () {
+              statCalls += 1;
+              if (firstStat) {
+                firstStat = false;
+                yield* Deferred.succeed(discoveryStarted, undefined);
+                return yield* Effect.die(new Error("editor discovery failed"));
+              }
+              return fileInfo;
+            }),
+        }),
+        Path.layer,
+        Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.sync(() => makeMockDetachedHandle())),
+        ),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+    const first = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Deferred.await(discoveryStarted);
+
+    const firstEditors = yield* Fiber.join(first);
+    assert.deepEqual([...firstEditors], []);
+
+    const retriedEditors = yield* launcher.resolveAvailableEditors();
+    assert.equal(retriedEditors.includes("vscode"), true);
+    assert.isAbove(statCalls, 1);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        launcherLayer,
+        Layer.succeed(HostProcessPlatform, "win32"),
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              PATH: "C:\\t3-editor-discovery-defect-test",
+              PATHEXT: ".COM;.EXE;.BAT;.CMD",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("continues editor discovery after an interrupted caller", () => {
+  const fileInfo = { type: "File" } as FileSystem.File.Info;
+  const discoveryStarted = Deferred.makeUnsafe<void>();
+  const releaseDiscovery = Deferred.makeUnsafe<void>();
+  let firstStat = true;
+  let statCalls = 0;
+  const launcherLayer = ExternalLauncher.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        FileSystem.layerNoop({
+          stat: () =>
+            Effect.gen(function* () {
+              statCalls += 1;
+              if (firstStat) {
+                firstStat = false;
+                yield* Deferred.succeed(discoveryStarted, undefined);
+                yield* Deferred.await(releaseDiscovery);
               }
               return fileInfo;
             }),
@@ -253,16 +439,21 @@ it.effect("rescans after an interrupted discovery instead of caching the interru
   return Effect.gen(function* () {
     const launcher = yield* ExternalLauncher.ExternalLauncher;
 
-    const fiber = yield* Effect.forkChild(launcher.resolveAvailableEditors());
-    yield* Effect.yieldNow;
-    yield* Fiber.interrupt(fiber);
+    const interruptedCaller = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Deferred.await(discoveryStarted);
+    yield* Fiber.interrupt(interruptedCaller);
 
-    // The next connect must still get a real answer well inside the TTL.
-    blockFirstScan = false;
-    scans = 0;
-    const editors = yield* launcher.resolveAvailableEditors();
+    const reconnect = yield* launcher.resolveAvailableEditors().pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    assert.equal(statCalls, 1);
+    yield* Deferred.succeed(releaseDiscovery, undefined);
+
+    const editors = yield* Fiber.join(reconnect);
     assert.equal(editors.includes("vscode"), true);
-    assert.isAbove(scans, 0);
+    const statCallsAfterDiscovery = statCalls;
+    const cachedEditors = yield* launcher.resolveAvailableEditors();
+    assert.deepEqual([...cachedEditors], [...editors]);
+    assert.equal(statCalls, statCallsAfterDiscovery);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(

@@ -22,13 +22,16 @@ import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -300,27 +303,29 @@ const resolveAvailableEditors = Effect.fn("externalLauncher.resolveAvailableEdit
   return yield* buildAvailableEditors(platform, env);
 });
 
-// Editor discovery walks PATH for every known editor and runs for every
-// client connect (the server config embeds the available editors). Memoize
-// the discovered set for a bounded window so repeat connects skip even the
-// per-command cache lookups in @t3tools/shared/shell.
-//
-// This deliberately does not use `Effect.cachedWithTTL`: that memoizes the
-// first caller's Exit whatever it is, including an interrupt. Callers run this
-// on the connection fiber under a timeout (`resolveAvailableEditorsForConfig`),
-// so one client disconnecting mid-scan would cache the interrupt and replay it
-// to every later connect for the whole TTL, breaking `server.getConfig`
-// permanently. Storing only on success means an interrupted scan leaves the
-// cache untouched and the next connect simply rescans.
-// Expiry uses the monotonic clock (Clock.currentTimeNanos), matching the
-// command-resolution cache in @t3tools/shared/shell, so a backward wall-clock
-// adjustment cannot keep an expired entry alive.
 const EDITOR_DISCOVERY_CACHE_TTL_NANOS = 60_000_000_000n;
+const EDITOR_DISCOVERY_TIMEOUT = "5 seconds";
 
 interface EditorDiscoveryCacheEntry {
   readonly editors: ReadonlyArray<EditorId>;
   readonly expiresAtNanos: bigint;
 }
+
+interface EditorDiscoveryState {
+  readonly cache: Option.Option<EditorDiscoveryCacheEntry>;
+  readonly inFlight: Option.Option<Deferred.Deferred<ReadonlyArray<EditorId>, never>>;
+}
+
+type EditorDiscoveryDecision =
+  | { readonly _tag: "cached"; readonly editors: ReadonlyArray<EditorId> }
+  | {
+      readonly _tag: "waiting";
+      readonly deferred: Deferred.Deferred<ReadonlyArray<EditorId>, never>;
+    }
+  | {
+      readonly _tag: "starting";
+      readonly deferred: Deferred.Deferred<ReadonlyArray<EditorId>, never>;
+    };
 
 /**
  * ExternalLauncher - Service tag for browser/editor launch operations.
@@ -467,25 +472,75 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
 
-  const editorDiscoveryCache = yield* Ref.make<Option.Option<EditorDiscoveryCacheEntry>>(
-    Option.none(),
-  );
-  const cachedAvailableEditors = Effect.gen(function* () {
-    const nowNanos = yield* Clock.currentTimeNanos;
-    const entry = yield* Ref.get(editorDiscoveryCache);
-    if (Option.isSome(entry) && entry.value.expiresAtNanos > nowNanos) {
-      return entry.value.editors;
-    }
-    const editors = yield* provideCommandResolutionServices(resolveAvailableEditors());
-    yield* Ref.set(
-      editorDiscoveryCache,
-      Option.some({
-        editors,
-        expiresAtNanos: nowNanos + EDITOR_DISCOVERY_CACHE_TTL_NANOS,
-      }),
-    );
-    return editors;
+  const editorDiscoveryScope = yield* Scope.make("sequential");
+  yield* Effect.addFinalizer(() => Scope.close(editorDiscoveryScope, Exit.void));
+  const editorDiscoveryState = yield* Ref.make<EditorDiscoveryState>({
+    cache: Option.none(),
+    inFlight: Option.none(),
   });
+
+  const runEditorDiscovery = (deferred: Deferred.Deferred<ReadonlyArray<EditorId>, never>) =>
+    provideCommandResolutionServices(resolveAvailableEditors()).pipe(
+      Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
+      Effect.onExit((exit) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const completedAtNanos = yield* Clock.currentTimeNanos;
+            const result = Exit.match(exit, {
+              onSuccess: (result) => result,
+              onFailure: () => Option.none<ReadonlyArray<EditorId>>(),
+            });
+            yield* Ref.update(editorDiscoveryState, (state) => ({
+              cache: Option.match(result, {
+                onNone: () => state.cache,
+                onSome: (editors) =>
+                  Option.some({
+                    editors,
+                    expiresAtNanos: completedAtNanos + EDITOR_DISCOVERY_CACHE_TTL_NANOS,
+                  }),
+              }),
+              inFlight: state.inFlight.pipe(Option.filter((inFlight) => inFlight !== deferred)),
+            }));
+            yield* Deferred.succeed(
+              deferred,
+              Option.getOrElse(result, () => []),
+            );
+          }),
+        ),
+      ),
+    );
+
+  const cachedAvailableEditors = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const nowNanos = yield* Clock.currentTimeNanos;
+      const deferred = yield* Deferred.make<ReadonlyArray<EditorId>, never>();
+      const result: EditorDiscoveryDecision = yield* Ref.modify(
+        editorDiscoveryState,
+        (state): readonly [EditorDiscoveryDecision, EditorDiscoveryState] => {
+          if (Option.isSome(state.cache) && state.cache.value.expiresAtNanos > nowNanos) {
+            return [{ _tag: "cached", editors: state.cache.value.editors }, state];
+          }
+          if (Option.isSome(state.inFlight)) {
+            return [{ _tag: "waiting", deferred: state.inFlight.value }, state];
+          }
+          return [
+            { _tag: "starting", deferred },
+            { ...state, inFlight: Option.some(deferred) },
+          ];
+        },
+      );
+
+      switch (result._tag) {
+        case "cached":
+          return result.editors;
+        case "waiting":
+          return yield* restore(Deferred.await(result.deferred));
+        case "starting":
+          yield* runEditorDiscovery(result.deferred).pipe(Effect.forkIn(editorDiscoveryScope));
+          return yield* restore(Deferred.await(result.deferred));
+      }
+    }),
+  );
 
   return ExternalLauncher.of({
     resolveAvailableEditors: () => cachedAvailableEditors,
