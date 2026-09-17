@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
@@ -212,6 +213,7 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: SERVER_VERSION,
+    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,
@@ -222,8 +224,11 @@ export const make = Effect.gen(function* () {
       gitHistory: true,
       issues: true,
       inlineMessageContext: true,
+      requiredWorktreeBootstrap: true,
       threadSettlement: true,
       threadAutoSettlement: true,
+      storageCleanup: true,
+      projectWorktreeCleanup: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       threadSnooze: true,
@@ -238,6 +243,7 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       environmentIcon: true,
+      projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? {

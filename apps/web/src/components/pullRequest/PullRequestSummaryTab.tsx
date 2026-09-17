@@ -17,7 +17,7 @@ import {
   TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -67,10 +67,8 @@ import {
   WorkItemMatchButton,
   WorkItemMatchRows,
 } from "../workItems/WorkItemMatches";
-import {
-  SummaryMetaRow as MetaRow,
-  SummarySection as Section,
-} from "../sourceControl/SummaryMetaRow";
+import { SummaryMetaRow as MetaRow } from "../sourceControl/SummaryMetaRow";
+import { sectionCollapseAnchorScrollTop } from "../sourceControl/summarySectionScroll.logic";
 
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
@@ -232,6 +230,69 @@ function CollapsedComment({
  * two hundred markdown documents, and the ones worth arriving for are the recent ones.
  */
 const COMMENT_PAGE = 30;
+const BOT_COMMENT_PAGE = 10;
+
+function Section({
+  title,
+  count,
+  defaultOpen = true,
+  actions,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const headingRef = useRef<HTMLDivElement>(null);
+  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      const heading = headingRef.current;
+      const section = heading?.closest<HTMLElement>("[data-summary-section]");
+      const scroller = heading?.closest<HTMLElement>("[data-summary-scroll]");
+      if (heading && section && scroller) {
+        const target = sectionCollapseAnchorScrollTop({
+          scrollTop: scroller.scrollTop,
+          viewportTop: scroller.getBoundingClientRect().top,
+          sectionTop: section.getBoundingClientRect().top,
+          headingTop: heading.getBoundingClientRect().top,
+        });
+        if (target !== null) scroller.scrollTop = target;
+      }
+    }
+    setOpen(nextOpen);
+  };
+  return (
+    <section aria-label={title} data-summary-section>
+      <Collapsible open={open} onOpenChange={setOpenWithScrollAnchor}>
+        <div
+          ref={headingRef}
+          className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
+        >
+          <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
+            <span>{title}</span>
+            <ChevronRightIcon
+              aria-hidden
+              className={cn(
+                "size-3.5 text-muted-foreground transition-transform",
+                open && "rotate-90",
+              )}
+            />
+            {count === undefined ? null : (
+              <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+            )}
+          </CollapsibleTrigger>
+          {open ? actions : null}
+        </div>
+        <CollapsiblePanel>
+          <div className="px-4 pb-4">{children}</div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </section>
+  );
+}
 
 export function PullRequestSummaryTab({
   environmentId,
@@ -279,9 +340,6 @@ export function PullRequestSummaryTab({
   });
   const openAiMatch = (match: { readonly url: string }) =>
     void readLocalApi()?.shell.openExternal(match.url);
-  const checksId = useId();
-  const [expandedChecksUrl, setExpandedChecksUrl] = useState<string | null>(null);
-  const showChecks = expandedChecksUrl === detail.url;
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // Windowed by recency regardless of display order: expanding always reaches further back in
   // time, whether the newest comment currently reads first or last.
@@ -289,6 +347,19 @@ export function PullRequestSummaryTab({
   const hiddenCommentCount = detail.comments.length - recentComments.length;
   const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
   const visibleComments = orderPullRequestComments(recentComments, commentOrder);
+  const botComments = visibleComments.filter((comment) => comment.author?.isBot === true);
+  const humanComments = visibleComments.filter((comment) => comment.author?.isBot !== true);
+  const [botCommentPage, setBotCommentPage] = useState({
+    url: detail.url,
+    count: BOT_COMMENT_PAGE,
+    open: false,
+  });
+  const botCommentsOpen = botCommentPage.url === detail.url && botCommentPage.open;
+  const shownBotCommentCount =
+    botCommentPage.url === detail.url ? botCommentPage.count : BOT_COMMENT_PAGE;
+  const displayedBotComments = botComments.slice(0, shownBotCommentCount);
+  const hiddenBotCommentCount = botComments.length - displayedBotComments.length;
+  const displayedComments = [...humanComments, ...(botCommentsOpen ? displayedBotComments : [])];
   const showOldestCommentsButton =
     hiddenCommentCount > 0 ? (
       <Button
@@ -546,7 +617,7 @@ export function PullRequestSummaryTab({
         </div>
       </section>
 
-      <Section title="Description">
+      <Section key={detail.url} title="Description">
         <div className="group">
           {bodyScope === detail.url ? (
             <PullRequestMarkdownEditor
@@ -680,73 +751,55 @@ export function PullRequestSummaryTab({
         )}
       </Section>
 
-      <Section title="Checks" count={detail.checks.length}>
+      <Section key={detail.url} title="Checks" count={detail.checks.length} defaultOpen={false}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
-          <div>
-            <div className="flex items-center gap-1 text-xs">
-              <span className="font-medium text-muted-foreground">Checks</span>
-              <Button
-                size="icon-xs"
-                variant="ghost-muted"
-                aria-label={showChecks ? "Hide checks" : "Show checks"}
-                aria-expanded={showChecks}
-                aria-controls={checksId}
-                onClick={() => setExpandedChecksUrl(showChecks ? null : detail.url)}
-              >
-                <ChevronRightIcon
-                  aria-hidden
-                  className={cn("size-3.5 text-muted-foreground/60", showChecks && "rotate-90")}
-                />
-              </Button>
-            </div>
-            <div id={checksId} className={showChecks ? "mt-2" : "hidden"}>
-              {(showChecks ? detail.checks : []).map((check, index) => {
-                const finding = { kind: "check", check } as const;
-                const failing = check.status === "failure" || check.status === "cancelled";
-                return (
-                  <div
-                    // Position too: the host decides how many runs share a name, and a repeated
-                    // key would be a rendering fault on top of whatever the list already says.
-                    key={`${index}:${check.name}:${check.url ?? ""}`}
-                    className="group flex items-center gap-2 rounded-md pr-1 hover:bg-accent/60"
+          <div className="space-y-0.5">
+            {detail.checks.map((check, index) => {
+              const finding = { kind: "check", check } as const;
+              const failing = check.status === "failure" || check.status === "cancelled";
+              return (
+                <div
+                  // Position too: the host decides how many runs share a name, and a repeated
+                  // key would be a rendering fault on top of whatever the list already says.
+                  key={`${index}:${check.name}:${check.url ?? ""}`}
+                  className="group flex items-center gap-2 rounded-md pr-1 hover:bg-accent/60"
+                >
+                  <button
+                    type="button"
+                    disabled={!check.url}
+                    onClick={() => check.url && openCheck(check.url)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left text-xs leading-5 [&>svg]:mt-0.5",
+                      check.url ? "cursor-pointer" : "cursor-default",
+                    )}
                   >
-                    <button
-                      type="button"
-                      disabled={!check.url}
-                      onClick={() => check.url && openCheck(check.url)}
-                      className={cn(
-                        "flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left text-xs leading-5 [&>svg]:mt-0.5",
-                        check.url ? "cursor-pointer" : "cursor-default",
-                      )}
-                    >
-                      <PullRequestCheckStatusIcon status={check.status} />
-                      <span className="min-w-0 flex-1 wrap-anywhere">{check.name}</span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {pullRequestCheckStatusLabel(check)}
-                      </span>
-                    </button>
-                    {/* Only where there is something to fix. A passing check has no failure to
+                    <PullRequestCheckStatusIcon status={check.status} />
+                    <span className="min-w-0 flex-1 wrap-anywhere">{check.name}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {pullRequestCheckStatusLabel(check)}
+                    </span>
+                  </button>
+                  {/* Only where there is something to fix. A passing check has no failure to
                       reproduce, and the button would be an invitation to waste a thread. */}
-                    {onFixFinding && failing ? (
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        className="shrink-0"
-                        disabled={pendingFinding !== null && pendingFinding !== undefined}
-                        onClick={() => onFixFinding(finding)}
-                      >
-                        <HammerIcon className="size-3" />
-                        {pendingFinding === pullRequestFindingKey(finding)
-                          ? "Preparing..."
-                          : fixCheckLabel}
-                      </Button>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
+                  {onFixFinding && failing ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="shrink-0"
+                      disabled={pendingFinding !== null && pendingFinding !== undefined}
+                      onClick={() => onFixFinding(finding)}
+                    >
+                      <HammerIcon className="size-3" />
+                      {pendingFinding === pullRequestFindingKey(finding)
+                        ? "Preparing..."
+                        : fixCheckLabel}
+                    </Button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         )}
       </Section>
@@ -793,7 +846,57 @@ export function PullRequestSummaryTab({
             ) : (
               <div className="space-y-3">
                 {commentOrder === "oldest" ? showOldestCommentsButton : null}
-                {visibleComments.map((comment) => {
+                {botComments.length > 0 ? (
+                  <div className="space-y-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      aria-label={`${botComments.length} bot comments`}
+                      onClick={() =>
+                        setBotCommentPage((current) =>
+                          current.url === detail.url
+                            ? { ...current, open: !current.open }
+                            : { url: detail.url, count: BOT_COMMENT_PAGE, open: true },
+                        )
+                      }
+                    >
+                      {botComments.length} bot comments
+                    </Button>
+                    {botCommentsOpen && hiddenBotCommentCount > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() =>
+                          setBotCommentPage((current) => ({
+                            ...current,
+                            count: current.count + BOT_COMMENT_PAGE,
+                          }))
+                        }
+                      >
+                        Show {Math.min(hiddenBotCommentCount, BOT_COMMENT_PAGE)} older bot comment
+                        {hiddenBotCommentCount === 1 ? "" : "s"}
+                      </Button>
+                    ) : null}
+                    {botCommentsOpen && displayedBotComments.length > BOT_COMMENT_PAGE ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() =>
+                          setBotCommentPage((current) => ({
+                            ...current,
+                            count: BOT_COMMENT_PAGE,
+                          }))
+                        }
+                      >
+                        Show {BOT_COMMENT_PAGE} recent bot comments
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {displayedComments.map((comment) => {
                   const thread = threadByCommentId.get(comment.id);
                   const body = visibleBody(comment.body);
                   const outcome = pullRequestReviewOutcome(comment.reviewState);

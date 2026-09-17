@@ -1,10 +1,10 @@
 import { Spinner } from "~/components/ui/spinner";
 import type {
+  PullRequestActor,
   PullRequestCheck,
   PullRequestCheckStatus,
   PullRequestChecksState,
   PullRequestMergeability,
-  PullRequestActor,
   PullRequestState,
 } from "@t3tools/contracts";
 import {
@@ -12,32 +12,21 @@ import {
   CircleDashedIcon,
   CircleDotIcon,
   CircleXIcon,
-  GitMergeIcon,
-  GitPullRequestClosedIcon,
-  GitPullRequestDraftIcon,
-  GitPullRequestIcon,
-  TriangleAlertIcon,
   UserCheckIcon,
 } from "lucide-react";
+import { Children, isValidElement, type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
-import {
-  SourceControlActorAvatar,
-  SourceControlMetaLine,
-} from "../sourceControl/actorPresentation";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { PullRequestReviewOutcome } from "./pullRequestDetail.logic";
-
-export const PullRequestActorAvatar = SourceControlActorAvatar;
-export const PullRequestMetaLine = SourceControlMetaLine;
-
-interface StatePresentation {
-  readonly label: string;
-  readonly toneClassName: string;
-  readonly Icon: typeof GitPullRequestIcon;
-}
+import {
+  PULL_REQUEST_STATE_PRESENTATION,
+  PullRequestGlyph,
+  type PullRequestStatePresentation,
+  type PullRequestGlyphIcon,
+} from "./pullRequestIcons";
 
 export function PullRequestApprovalGlyph() {
   return (
@@ -55,57 +44,69 @@ export function PullRequestApprovalGlyph() {
 }
 
 /**
- * How a pull request's state reads on this page. Open, closed, merged, and draft use the same
- * ink as the thread badge in `ThreadStatusIndicators`, so one pull request cannot look like two
- * different things in two places.
+ * How a pull request's state reads anywhere it appears: the thread badge, the right-panel tab,
+ * the list, and the detail header all resolve through here so one pull request cannot look like
+ * two different things in two places.
  *
- * Draft outranks conflicts: a draft is not heading for a merge yet, so conflicts only surface
- * once it is real work.
+ * Closed and merged take precedence over a stale draft flag.
  */
 export function resolvePullRequestState(input: {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
+}): PullRequestStatePresentation {
+  const key = input.state === "open" && input.isDraft ? "draft" : input.state;
+  return PULL_REQUEST_STATE_PRESENTATION[key];
+}
+
+export interface PullRequestConflictPresentation {
+  readonly label: string;
+  readonly toneClassName: string;
+  readonly Icon: PullRequestGlyphIcon;
+}
+
+export function resolvePullRequestConflict(input: {
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
   readonly mergeability?: PullRequestMergeability;
   readonly baseBranch?: string;
-}): StatePresentation {
-  if (input.state === "merged") {
-    return {
-      label: "Merged",
-      toneClassName: "text-violet-600 dark:text-violet-300/90",
-      Icon: GitMergeIcon,
-    };
-  }
-  if (input.state === "closed") {
-    return {
-      label: "Closed",
-      toneClassName: "text-red-600 dark:text-red-300/90",
-      Icon: GitPullRequestClosedIcon,
-    };
-  }
-  if (input.isDraft) {
-    return {
-      label: "Draft",
-      toneClassName: "text-zinc-500 dark:text-zinc-400/80",
-      Icon: GitPullRequestDraftIcon,
-    };
-  }
-  if (input.mergeability === "conflicting") {
-    return {
-      // "Has conflicts" leaves out the one thing a reader wants when the warning triangle catches
-      // their eye, so name the branch it collides with wherever the caller knows it.
-      label: input.baseBranch ? `Conflicts with ${input.baseBranch}` : "Has conflicts",
-      toneClassName: "text-destructive",
-      Icon: TriangleAlertIcon,
-    };
+}): PullRequestConflictPresentation | null {
+  if (input.state !== "open" || input.isDraft || input.mergeability !== "conflicting") {
+    return null;
   }
   return {
-    label: "Open",
-    toneClassName: "text-emerald-600 dark:text-emerald-300/90",
-    Icon: GitPullRequestIcon,
+    label: input.baseBranch ? `Conflicts with ${input.baseBranch}` : "Has conflicts",
+    toneClassName: "text-destructive",
+    Icon: PullRequestGlyph.conflicting,
   };
 }
 
 export function PullRequestStateGlyph({
+  state,
+  isDraft,
+  className,
+}: {
+  state: PullRequestState;
+  isDraft: boolean;
+  className?: string;
+}) {
+  const presentation = resolvePullRequestState({ state, isDraft });
+  return (
+    <Tooltip>
+      {/* The list row is itself a button, so the trigger stays a span: an interactive one would
+          nest a control inside that button and steal the row's click target. */}
+      <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+        <presentation.Icon
+          role="img"
+          aria-label={presentation.label}
+          className={cn("size-4 shrink-0", presentation.toneClassName, className)}
+        />
+      </TooltipTrigger>
+      <TooltipPopup>{presentation.label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function PullRequestConflictGlyph({
   state,
   isDraft,
   mergeability,
@@ -118,16 +119,15 @@ export function PullRequestStateGlyph({
   baseBranch?: string;
   className?: string;
 }) {
-  const presentation = resolvePullRequestState({
+  const presentation = resolvePullRequestConflict({
     state,
     isDraft,
-    ...(mergeability ? { mergeability } : {}),
-    ...(baseBranch ? { baseBranch } : {}),
+    ...(mergeability === undefined ? {} : { mergeability }),
+    ...(baseBranch === undefined ? {} : { baseBranch }),
   });
+  if (presentation === null) return null;
   return (
     <Tooltip>
-      {/* The list row is itself a button, so the trigger stays a span: an interactive one would
-          nest a control inside that button and steal the row's click target. */}
       <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
         <presentation.Icon
           role="img"
@@ -343,6 +343,39 @@ export function PullRequestReviewOutcomeBadge({
   );
 }
 
+export function PullRequestActorAvatar({
+  actor,
+  className,
+}: {
+  actor: PullRequestActor | null;
+  className?: string;
+}) {
+  const login = actor?.login ?? "ghost";
+  const avatarUrl = actor?.avatarUrl ?? null;
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
+  return avatarUrl === null || failedAvatarUrl === avatarUrl ? (
+    // Not every host reports an avatar, and a private host may refuse the browser's request.
+    <span
+      aria-hidden
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground",
+        className,
+      )}
+    >
+      {login.slice(0, 1).toUpperCase()}
+    </span>
+  ) : (
+    <img
+      aria-hidden
+      alt=""
+      src={avatarUrl}
+      loading="lazy"
+      className={cn("size-4 shrink-0 rounded-full bg-muted object-cover", className)}
+      onError={() => setFailedAvatarUrl(avatarUrl)}
+    />
+  );
+}
+
 /** GitHub attributes work from a deleted account to "ghost"; say the same word everywhere. */
 export function PullRequestActorLabel({
   actor,
@@ -391,7 +424,10 @@ export function PullRequestActorLabel({
       >
         {label}
       </TooltipTrigger>
-      <TooltipPopup side="top">{profileUrl ? `Open ${login}'s profile` : login}</TooltipPopup>
+      <TooltipPopup side="top">
+        {actor?.name && actor.name !== login ? `${actor.name} (@${login})` : login}
+        {profileUrl ? " · Open profile" : ""}
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -415,6 +451,45 @@ export function PullRequestDiffStat({
     <span className={cn("inline-flex items-baseline gap-1 tabular-nums", className)}>
       <span className="text-diff-addition-foreground">+{additions.toLocaleString()}</span>
       <span className="text-diff-deletion">-{deletions.toLocaleString()}</span>
+    </span>
+  );
+}
+
+/**
+ * Dot-separated metadata. It owns the separator, and draws one only between the segments that
+ * survive, so a caller can render `{condition ? <span/> : null}` without leaving a stray dot.
+ * `Children.toArray` drops the nullish entries and keys what remains, which a plain array
+ * check would not do for a single child or a fragment. A separator borrows the key of the
+ * segment it precedes, so it stays stable without counting positions.
+ */
+function separatorKey(segment: ReactNode): string {
+  return `separator:${isValidElement(segment) ? String(segment.key) : String(segment)}`;
+}
+
+export function PullRequestMetaLine({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const segments = Children.toArray(children);
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
+      {segments.flatMap((segment, index) =>
+        index === 0
+          ? segment
+          : [
+              <span
+                aria-hidden
+                className="shrink-0 text-muted-foreground/50"
+                key={separatorKey(segment)}
+              >
+                ·
+              </span>,
+              segment,
+            ],
+      )}
     </span>
   );
 }

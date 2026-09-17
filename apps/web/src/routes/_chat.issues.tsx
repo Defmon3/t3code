@@ -106,7 +106,18 @@ import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
 import { toastManager } from "../components/ui/toast";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
+
+function getShortcutContext() {
+  return {
+    terminalFocus: isTerminalFocused(),
+    terminalOpen: false,
+    previewFocus: false,
+    previewOpen: false,
+    modelPickerOpen: false,
+  };
+}
 
 export interface IssuesSearch {
   readonly involvement: IssueInvolvement;
@@ -1469,6 +1480,8 @@ function IssuesRouteView() {
               <PullRequestDetailPanel
                 key={activeSurface.id}
                 environmentId={issueEnvironmentId}
+                shortcutsEnabled
+                getShortcutContext={getShortcutContext}
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
                   repository: activeSurface.repository,

@@ -9,7 +9,7 @@ import {
 import { act, createRef, useLayoutEffect, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef, MaintainScrollAtEndOptions } from "@legendapp/list/react";
 import { formatDayAwareTimestamp } from "../../timestampFormat";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
@@ -147,7 +147,9 @@ function matchMedia() {
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
 let resolvePreviewAnnotationImage: typeof import("./MessagesTimeline").resolvePreviewAnnotationImage;
 
-beforeAll(async () => {
+const ElementStub = class ElementStub {};
+
+function stubDomGlobals() {
   const classList = {
     add: () => {},
     remove: () => {},
@@ -155,6 +157,7 @@ beforeAll(async () => {
     contains: () => false,
   };
 
+  vi.stubGlobal("Element", ElementStub);
   vi.stubGlobal("localStorage", {
     getItem: () => null,
     setItem: () => {},
@@ -162,6 +165,7 @@ beforeAll(async () => {
     clear: () => {},
   });
   vi.stubGlobal("window", {
+    Element: ElementStub,
     matchMedia,
     addEventListener: () => {},
     removeEventListener: () => {},
@@ -178,9 +182,16 @@ beforeAll(async () => {
       offsetHeight: 0,
     },
   });
+}
 
+beforeAll(async () => {
+  stubDomGlobals();
   ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
 }, 30_000);
+
+// The scroll-settling test clears every global stub; mounted timeline rows
+// still touch `window` through the tooltip's focus handling.
+beforeEach(stubDomGlobals);
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
@@ -742,7 +753,6 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("<video");
     expect(markup).toContain('aria-label="demo.mp4"');
-    expect(markup).toContain('controls=""');
     expect(markup).not.toContain("Expand demo.mp4");
   });
 

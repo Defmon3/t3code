@@ -10,22 +10,14 @@ import type {
   PullRequestState,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import {
-  ArrowLeftIcon,
-  EyeIcon,
-  GitPullRequestClosedIcon,
-  GitPullRequestIcon,
-  GitMergeIcon,
-  LayersIcon,
-  LoaderIcon,
-  PenLineIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, EyeIcon, LayersIcon, LoaderIcon, PenLineIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
 import type { DraftId } from "~/composerDraftStore";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 
 import { ListGhost } from "../sourceControl/ListGhosts";
 import { Button } from "../ui/button";
@@ -42,12 +34,13 @@ import {
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import { PullRequestFiltersMenu, type PullRequestFilterOption } from "./PullRequestListFilters";
 import { PullRequestRow, type PullRequestRowTarget } from "./PullRequestRow";
+import { PullRequestGlyph } from "./pullRequestIcons";
 
 const STATE_OPTIONS = [
   { value: "all", label: "All", Icon: LayersIcon },
-  { value: "open", label: "Open", Icon: GitPullRequestIcon },
-  { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
-  { value: "merged", label: "Merged", Icon: GitMergeIcon },
+  { value: "open", label: "Open", Icon: PullRequestGlyph.pullRequest },
+  { value: "closed", label: "Closed", Icon: PullRequestGlyph.closed },
+  { value: "merged", label: "Merged", Icon: PullRequestGlyph.merged },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
 const INVOLVEMENT_OPTIONS = [
@@ -59,6 +52,16 @@ const INVOLVEMENT_OPTIONS = [
 const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE = 30;
 const MAX_LIMIT = 500;
+
+function getShortcutContext() {
+  return {
+    terminalFocus: isTerminalFocused(),
+    terminalOpen: false,
+    previewFocus: false,
+    previewOpen: false,
+    modelPickerOpen: false,
+  };
+}
 
 export interface PullRequestPanelSelection {
   readonly projectId: ProjectId;
@@ -121,6 +124,8 @@ function ProjectPullRequests(props: PullRequestsPanelProps) {
             <PullRequestDetailPanel
               key={`${props.selected.repository}#${props.selected.number}`}
               environmentId={props.environmentId}
+              shortcutsEnabled
+              getShortcutContext={getShortcutContext}
               reference={props.selected}
               context="page"
               chromeVariant="collapse"
