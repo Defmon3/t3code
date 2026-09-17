@@ -230,9 +230,6 @@ const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 const MAX_SEARCH_LABEL_CANDIDATES = 100;
 
-const pullRequestListEntryId = (target: Parameters<typeof pullRequestSurfaceId>[0]) =>
-  pullRequestSurfaceId({ ...target, repository: target.repository.toLowerCase() });
-
 function pullRequestSearchLabels(raw: unknown): Partial<Pick<PullRequestsSearch, "labels">> {
   const values = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : []).slice(
     0,
@@ -1437,16 +1434,6 @@ function PullRequestsRouteView() {
         entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry)),
     );
   }, [groups, sort, statsByRow, typedParsed.text]);
-  const listedPullRequestsBySurface = useMemo(
-    () =>
-      new Map(
-        displayGroups.flatMap((group) =>
-          group.entries.map((entry) => [pullRequestListEntryId(entry), entry] as const),
-        ),
-      ),
-    [displayGroups],
-  );
-
   const linkedSelection = useMemo(
     () =>
       search.repository && search.number && selectedProject
@@ -2031,11 +2018,6 @@ function PullRequestsRouteView() {
                   ? { host: renderedPullRequestSurface.host }
                   : {}),
               }}
-              listEntry={
-                listedPullRequestsBySurface.get(
-                  pullRequestListEntryId(renderedPullRequestSurface),
-                ) ?? null
-              }
               refreshToken={detailRefreshToken}
               // Host actions can change both readiness and diff size, so refresh the counts
               // alongside the list. The panel already refreshes itself after each action.

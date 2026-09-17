@@ -790,6 +790,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["pull request trusted environments shared credentials permissions read actions"],
   },
   {
+    id: "voice-dictation",
+    title: "Voice dictation",
+    to: "/settings/general",
+    searchTerms: ["speech transcription microphone openai groq"],
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",

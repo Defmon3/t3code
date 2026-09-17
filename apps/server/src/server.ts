@@ -23,6 +23,7 @@ import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
+  transcriptionRouteLayer,
   assetRouteLayer,
   attachmentUploadRouteLayer,
   serverEnvironmentHttpApiLayer,
@@ -43,6 +44,7 @@ import * as LinearApi from "./issue/LinearApi.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
@@ -347,6 +349,8 @@ const RepositoryIdentityResolverLayerLive = Layer.effect(
 
 const PullRequestServiceLive = PullRequestService.layer.pipe(
   Layer.provide(PullRequestProviderRegistry.layer),
+  // Where the viewed-file marks live for a host that keeps none of its own.
+  Layer.provide(PullRequestFilesViewed.layer),
   Layer.provide(PullRequestReadCache.layer),
   Layer.provide(SourceControlProviderRegistryLayerLive),
   Layer.provide(SourceControlRateLimit.layer),
@@ -607,6 +611,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
+    transcriptionRouteLayer,
     assetRouteLayer,
     attachmentUploadRouteLayer,
     deviceHubProxyRouteLayer,

@@ -891,7 +891,11 @@ const buildAppUnderTest = (options?: {
     );
 
     const servedRoutesLayer = HttpRouter.serve(
-      makeRoutesLayer.pipe(Layer.provide(serviceLauncherClientLayer)),
+      // Viewed-file marks for a host that keeps none of its own are rows, so the routes want a
+      // database. Its own, in memory: nothing here shares a table with the auth store.
+      makeRoutesLayer.pipe(
+        Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory)),
+      ),
       {
         disableListenLog: true,
         disableLogger: true,
@@ -1805,6 +1809,9 @@ const assertBrowserApiCorsPreflightHeaders = (
     "content-type",
     "dpop",
     "traceparent",
+    "x-t3-transcription-api-key",
+    "x-t3-transcription-model",
+    "x-t3-transcription-provider",
   ]);
 };
 const crossOriginClientOrigin = "http://remote-client.test:3773";
@@ -5520,6 +5527,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "content-type",
         "dpop",
         "traceparent",
+        "x-t3-transcription-api-key",
+        "x-t3-transcription-model",
+        "x-t3-transcription-provider",
       ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

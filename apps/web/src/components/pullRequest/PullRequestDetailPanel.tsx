@@ -10,7 +10,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type PullRequestAction,
   type PullRequestMergeMethod,
-  type PullRequestListEntry,
   type PullRequestUpdateMethod,
   type PullRequestRef,
   type WorkItemMatch,
@@ -145,7 +144,6 @@ import {
   isStackedPullRequestBase,
   pullRequestActionMenuHasGroup,
   pullRequestActionNeedsHostRefresh,
-  pullRequestComposerTarget,
   pullRequestCheckoutCommand,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
@@ -476,7 +474,6 @@ export function PullRequestDetailPanel({
   getShortcutContext,
   threadRef = null,
   reference: requestedReference,
-  listEntry = null,
   refreshToken: forcedRefreshToken = 0,
   onActed,
   onClose,
@@ -502,8 +499,6 @@ export function PullRequestDetailPanel({
    */
   threadRef?: ScopedThreadRef | null;
   reference: PullRequestRef;
-  /** Row fields already loaded by the pull-request list, used while richer detail arrives. */
-  listEntry?: PullRequestListEntry | null;
   /**
    * Bumped by whatever holds the panel when a reader asks for everything on screen to be read
    * again. The panel owns its own reads, so the page cannot refresh them for it — it says when,
@@ -524,10 +519,7 @@ export function PullRequestDetailPanel({
    * again is at best a no-op and at worst git refusing a branch two checkouts.
    */
   context?: "page" | "thread";
-  /**
-   * The open thread's composer. Beside the thread whose own pull request this is, hand-offs
-   * land here instead of opening a new thread — the branch is already under the reader's feet.
-   */
+  /** The open thread's composer. */
   composerDraftTarget?: ScopedThreadRef | DraftId;
   /**
    * Beside a thread, the way back to that thread's list of pull requests. The tab strip can
@@ -556,12 +548,6 @@ export function PullRequestDetailPanel({
     [requestedReference, repositoryIdentity, supportsThreadPullRequests],
   );
   const pullRequestKey = `${reference.projectId}:${reference.host ?? ""}:${reference.repository}#${reference.number}`;
-  const matchingListEntry =
-    listEntry?.projectId === reference.projectId &&
-    listEntry.repository.toLowerCase() === reference.repository.toLowerCase() &&
-    listEntry.number === reference.number
-      ? listEntry
-      : null;
   const [threadPickerOpen, setThreadPickerOpen] = useState(false);
   const [tab, setTab] = useState<DetailTab>("summary");
   const [timelineOrder, setTimelineOrder] = useState<"newest" | "oldest">("newest");
@@ -1086,10 +1072,7 @@ export function PullRequestDetailPanel({
     reviewComments?: ReadonlyArray<ReviewCommentContext>;
   };
 
-  // Beside the thread whose own pull request this is, a task belongs in that thread's composer:
-  // the branch is already checked out under it, so opening a second thread would only scatter
-  // the work.
-  const attachTarget = pullRequestComposerTarget(context, composerDraftTarget);
+  const attachTarget = composerDraftTarget ?? null;
   const handoffLabels = pullRequestHandoffLabels(attachTarget !== null);
 
   const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {

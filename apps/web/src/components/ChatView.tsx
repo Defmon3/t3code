@@ -84,6 +84,7 @@ import {
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { truncate } from "@t3tools/shared/String";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
@@ -221,7 +222,7 @@ import {
   selectThreadPreviewMiniPlayer,
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
-import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
+import { pullRequestPanelContext } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
 import { IssuesPanel } from "./issue/IssuesPanel";
@@ -2278,6 +2279,7 @@ export default function ChatView(props: ChatViewProps) {
       return {
         id: `project-clone:${projectId}`,
         variant: "info",
+        compact: true,
         priority: "activity",
         icon: <DownloadIcon />,
         title: `Cloning ${name}`,
@@ -2301,6 +2303,7 @@ export default function ChatView(props: ChatViewProps) {
     return {
       id: `project-clone:${projectId}`,
       variant: cancelled ? "warning" : "error",
+      compact: true,
       icon: <DownloadIcon />,
       title: cancelled ? `Cancelled cloning ${name}` : `Failed to clone ${name}`,
       description: cancelled ? "Retry to bring in the repository." : activeProjectClone.error,
@@ -4823,7 +4826,9 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadMetadata = activeThreadShell ?? activeThread;
   const linkedThreadPullRequest =
     activeThreadMetadata?.linkedPullRequest ?? activeThreadMetadata?.branchPullRequest ?? null;
-  const activeProjectRepository = activeProject?.repositoryIdentity?.displayName ?? null;
+  const activeProjectRepository = sourceControlRepositorySelector(
+    activeProject?.repositoryIdentity,
+  );
   const linkedThreadPullRequestKey = linkedThreadPullRequest
     ? JSON.stringify([
         linkedThreadPullRequest.projectId,
@@ -9890,22 +9895,15 @@ export default function ChatView(props: ChatViewProps) {
           repository: renderedRightPanelSurface.repository,
           number: renderedRightPanelSurface.number,
         }}
-        context={
-          isThreadOwnPullRequest(
-            {
-              projectId: linkedThreadPullRequest?.projectId ?? null,
-              repository: linkedThreadPullRequest?.repository ?? null,
-              number: linkedThreadPullRequest?.number ?? null,
-            },
-            {
-              projectId: renderedRightPanelSurface.projectId,
-              repository: renderedRightPanelSurface.repository,
-              number: renderedRightPanelSurface.number,
-            },
-          )
-            ? "thread"
-            : "page"
-        }
+        context={pullRequestPanelContext(
+          {
+            projectId: activeThreadMetadata?.projectId ?? null,
+            pullRequests: activeThreadMetadata?.pullRequests,
+            linkedPullRequest: activeThreadMetadata?.linkedPullRequest,
+            branchPullRequest: activeThreadMetadata?.branchPullRequest,
+          },
+          renderedRightPanelSurface,
+        )}
         composerDraftTarget={composerDraftTarget}
         onStateChange={handlePullRequestTabStatusChange}
         onOpenLinkedIssue={openLinkedIssue}

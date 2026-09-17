@@ -72,6 +72,10 @@ const clientSettings: ClientSettings = {
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   pullRequestMergeMethodOverrides: {},
   timestampFormat: "24-hour",
+  voiceTranscriptionEnabled: true,
+  voiceTranscriptionProvider: "openai",
+  voiceTranscriptionApiKey: "",
+  voiceTranscriptionModel: "",
   wordWrap: true,
 };
 
