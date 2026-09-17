@@ -170,6 +170,7 @@ import {
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
+import { VoiceDictationSettings } from "./VoiceDictationSettings";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -2303,6 +2304,8 @@ export function GeneralSettingsPanel() {
           </>
         ) : null}
       </SettingsSection>
+
+      <VoiceDictationSettings />
 
       <SettingsSection id="behavior" title="Behavior">
         <NotificationSettings />

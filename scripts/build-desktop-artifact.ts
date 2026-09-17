@@ -2690,6 +2690,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {
+        NSMicrophoneUsageDescription: "T3 Code uses the microphone for voice dictation.",
         NSScreenCaptureUsageDescription:
           "T3 Code captures the active window when you use the window capture shortcut.",
       },
