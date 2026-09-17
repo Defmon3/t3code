@@ -189,7 +189,7 @@ describe("useGitHistoryRefs", () => {
     renderRefs();
 
     expect(refState.requests).toContainEqual({
-      target: { environmentId, cwd: "C:/workspace", query: "" },
+      target: { environmentId, cwd: "C:/workspace", prefix: "origin/main" },
       options: { limit: 200, namespace: "remote", revision: 0 },
     });
   });

@@ -2043,6 +2043,19 @@ function PullRequestsRouteView() {
                 // Mutations already invalidate the host's affected caches.
                 refreshListAndStats(undefined, panelEnvironmentId);
               }}
+              onOpenLinkedIssue={(link) => {
+                void navigate({
+                  to: "/issues",
+                  search: {
+                    involvement: "all",
+                    state: "all",
+                    repository: link.repository,
+                    number: link.number,
+                    selectedProjectId: renderedPullRequestSurface.projectId as ProjectId,
+                    selectedProvider: link.provider,
+                  },
+                });
+              }}
             />
           </RightPanelTabs>
         ) : null}

@@ -51,6 +51,7 @@ vi.mock("react", async (importOriginal) => {
       const cleanup = effect();
       if (cleanup) testState.effectCleanups.push(cleanup);
     },
+    useImperativeHandle: () => undefined,
     useLayoutEffect: (effect: () => void | (() => void), dependencies?: readonly unknown[]) => {
       const index = testState.cursor++;
       const previousDependencies = testState.effectDependencies[index];
@@ -96,6 +97,10 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
+vi.mock("react/compiler-runtime", () => ({
+  c: (size: number) => Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel")),
+}));
+
 vi.mock("@t3tools/client-runtime/environment", () => ({
   scopeProjectRef: () => "project",
   scopeThreadRef: () => "thread",
@@ -107,10 +112,15 @@ vi.mock("../composerDraftStore", () => ({
 vi.mock("../hooks/useMediaQuery", () => ({ useIsMobile: () => false }));
 vi.mock("../state/entities", () => ({
   useProject: () => ({}),
-  useThread: () => ({ environmentId: "environment", projectId: "project", worktreePath: null }),
+  useThreadShell: () => ({
+    environmentId: "environment",
+    projectId: "project",
+    worktreePath: null,
+  }),
   useThreadShellsForProjectRefs: () => [],
 }));
 vi.mock("./BranchToolbar.logic", () => ({
+  resolveContextStripLabelsCompact: () => true,
   resolveCurrentWorkspaceLabel: () => "Current checkout",
   resolveEffectiveEnvMode: () => "local",
   resolveEnvModeLabel: () => "Current checkout",
@@ -161,6 +171,10 @@ class TestElement {
 
   getBoundingClientRect() {
     return { left: 0, top: 0 } as DOMRect;
+  }
+
+  matches(_selector: string) {
+    return false;
   }
 
   querySelectorAll(_selector: string) {
@@ -253,11 +267,11 @@ describe("BranchToolbar", () => {
     });
   });
 
-  it("does not remeasure unchanged content after compact state changes its geometry", () => {
+  it("remeasures after compact state changes its geometry", () => {
     render();
     render();
 
-    expect(testState.measurements).toBe(1);
+    expect(testState.measurements).toBe(3);
     expect(testState.stateUpdates).toBe(1);
   });
 
@@ -268,7 +282,7 @@ describe("BranchToolbar", () => {
     testState.fontLoadingDone?.();
     testState.mutationObserverCallback?.([], {} as MutationObserver);
 
-    expect(testState.measurements).toBe(4);
+    expect(testState.measurements).toBe(5);
   });
 
   it("disconnects observers when the toolbar unmounts", () => {

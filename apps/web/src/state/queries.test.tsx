@@ -21,7 +21,6 @@ type PageResult =
     };
 
 type PageAtom = {
-  readonly cacheKey: string;
   readonly input: {
     readonly cursor?: string;
   };
@@ -31,7 +30,7 @@ type PageAtom = {
 const refsState = vi.hoisted(() => ({
   atoms: [] as PageAtom[],
   refresh: vi.fn(),
-  results: new Map<string, PageResult>(),
+  results: [] as PageResult[],
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -99,11 +98,10 @@ vi.mock("./threads", () => ({ useEnvironmentThread: () => ({}) }));
 
 vi.mock("./vcs", () => ({
   vcsEnvironment: {
-    listHistoryRefs: ({ cacheKey, input }: Omit<PageAtom, "result">) => {
-      const result = refsState.results.get(`${cacheKey}:${input.cursor ?? "first"}`);
-      if (result === undefined)
-        throw new Error(`Missing result for ${cacheKey}:${input.cursor ?? "first"}`);
-      const atom = { cacheKey, input, result };
+    listHistoryRefs: ({ input }: Omit<PageAtom, "result">) => {
+      const result = refsState.results.shift();
+      if (result === undefined) throw new Error(`Missing result for ${input.cursor ?? "first"}`);
+      const atom = { input, result };
       refsState.atoms.push(atom);
       return atom;
     },
@@ -113,7 +111,7 @@ vi.mock("./vcs", () => ({
 const target = {
   environmentId: "environment" as EnvironmentId,
   cwd: "C:/workspace",
-  query: "",
+  prefix: "",
 };
 
 function page(nextCursor: string | null): PageResult {
@@ -141,42 +139,33 @@ describe("usePaginatedHistoryRefs", () => {
     hooks.reset();
     refsState.atoms = [];
     refsState.refresh.mockReset();
-    refsState.results.clear();
+    refsState.results = [];
   });
 
   it("uses a new page generation when refreshed", () => {
-    refsState.results.set("0:0:first", page("cursor-4"));
-    refsState.results.set("0:1:first", page(null));
+    refsState.results.push(page("cursor-4"), page(null));
 
     const initial = render();
     initial.refresh();
     render();
 
-    expect(refsState.atoms).toEqual([
-      expect.objectContaining({
-        cacheKey: "0:0",
-        input: { cwd: "C:/workspace", limit: 100, namespace: "local" },
-      }),
-      expect.objectContaining({
-        cacheKey: "0:1",
-        input: { cwd: "C:/workspace", limit: 100, namespace: "local", refresh: true },
-      }),
+    expect(refsState.atoms.map((atom) => atom.input)).toEqual([
+      { cwd: "C:/workspace", limit: 100, namespace: "local" },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", refresh: true },
     ]);
   });
 
   it("uses the external revision in cache identity", () => {
-    refsState.results.set("4:0:first", page(null));
-    refsState.results.set("5:0:first", page(null));
+    refsState.results.push(page(null), page(null));
 
     render({ revision: 4 });
     render({ revision: 5 });
 
-    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual(["4:0", "5:0"]);
+    expect(refsState.atoms).toHaveLength(2);
   });
 
   it("retries the failed appended page without duplicating its cursor", () => {
-    refsState.results.set("0:0:first", page("cursor-4"));
-    refsState.results.set("0:0:cursor-4", {
+    refsState.results.push(page("cursor-4"), page("cursor-4"), {
       _tag: "Failure",
       cause: new Error("temporary failure"),
       waiting: false,
@@ -200,30 +189,34 @@ describe("usePaginatedHistoryRefs", () => {
   it("recovers an expired snapshot once per generation, including after a later refresh", () => {
     const expired = (cursor: string) =>
       new VcsSnapshotExpiredError({ operation: "GitVcsDriver.listHistoryRefs", cursor });
-    refsState.results.set("0:0:first", {
-      _tag: "Failure",
-      cause: expired("first"),
-      waiting: false,
-    });
-    refsState.results.set("0:1:first", page(null));
+    refsState.results.push(
+      {
+        _tag: "Failure",
+        cause: expired("first"),
+        waiting: false,
+      },
+      page(null),
+    );
 
     render();
     render();
     render();
 
-    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual(["0:0", "0:1"]);
+    expect(refsState.atoms).toHaveLength(2);
 
     const recovered = render();
     recovered.refresh();
-    refsState.results.set("0:2:first", {
-      _tag: "Failure",
-      cause: expired("second"),
-      waiting: false,
-    });
-    refsState.results.set("0:3:first", page(null));
+    refsState.results.push(
+      {
+        _tag: "Failure",
+        cause: expired("second"),
+        waiting: false,
+      },
+      page(null),
+    );
     render();
     render();
 
-    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual(["0:0", "0:1", "0:2", "0:3"]);
+    expect(refsState.atoms).toHaveLength(4);
   });
 });

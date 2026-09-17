@@ -931,7 +931,7 @@ export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyle
  * This is the `balanced` preset only. `performance` keeps its own 15s cadence
  * for anyone who wants tighter polling, and `battery-saver` disables it.
  */
-export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.minutes(5);
+export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
 
 export const BackgroundActivityProfile = Schema.Literals([

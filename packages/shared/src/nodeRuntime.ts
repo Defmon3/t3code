@@ -3,6 +3,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - FileSystem stat inode values lose Windows precision.
+import * as NodeFSP from "node:fs/promises";
 
 import {
   HostProcessEnvironment,
@@ -57,19 +59,17 @@ export const resolveNodeExecutable = Effect.fn("nodeRuntime.resolveNodeExecutabl
     .realPath(nodePath)
     .pipe(Effect.mapError((cause) => new NodeRuntimeUnavailableError({ feature, cause })));
   if (resolvedPath === executablePath) return yield* new NodeRuntimeUnavailableError({ feature });
-  const [hostInfo, nodeInfo] = yield* Effect.all([
-    fs.stat(executablePath).pipe(Effect.option),
-    fs.stat(nodePath).pipe(Effect.option),
-  ]);
+  const fileIdentity = yield* Effect.tryPromise(() =>
+    Promise.all([
+      NodeFSP.stat(executablePath, { bigint: true }),
+      NodeFSP.stat(nodePath, { bigint: true }),
+    ]),
+  ).pipe(Effect.option);
   if (
-    Option.isSome(hostInfo) &&
-    Option.isSome(nodeInfo) &&
-    hostInfo.value.dev === nodeInfo.value.dev &&
-    Option.isSome(hostInfo.value.ino) &&
-    Option.isSome(nodeInfo.value.ino) &&
-    Number.isSafeInteger(hostInfo.value.ino.value) &&
-    hostInfo.value.ino.value > 0 &&
-    hostInfo.value.ino.value === nodeInfo.value.ino.value
+    Option.isSome(fileIdentity) &&
+    fileIdentity.value[0].dev === fileIdentity.value[1].dev &&
+    fileIdentity.value[0].ino > 0n &&
+    fileIdentity.value[0].ino === fileIdentity.value[1].ino
   ) {
     return yield* new NodeRuntimeUnavailableError({ feature });
   }

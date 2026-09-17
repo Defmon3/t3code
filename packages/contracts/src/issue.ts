@@ -61,6 +61,8 @@ export type IssueState = typeof IssueState.Type;
 export const IssueListState = Schema.Literals(["all", "open", "closed"]);
 export type IssueListState = typeof IssueListState.Type;
 
+export const ISSUE_LIST_QUERY_MAX_LENGTH = 512;
+
 export const IssueListSort = Schema.Literals([
   "best-match",
   "created",
@@ -295,7 +297,9 @@ export const IssueListInput = Schema.Struct({
    * leaves the client can only find what happened to be loaded. A host with no text filter
    * answers unnarrowed rather than pretending.
    */
-  query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  query: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_LIST_QUERY_MAX_LENGTH)),
+  ),
   sort: Schema.optional(IssueListSort),
   order: Schema.optional(IssueListOrder),
 });

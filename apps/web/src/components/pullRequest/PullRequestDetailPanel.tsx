@@ -13,7 +13,6 @@ import {
   type PullRequestListEntry,
   type PullRequestUpdateMethod,
   type PullRequestRef,
-  type PullRequestState,
   type WorkItemMatch,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
@@ -124,6 +123,7 @@ import {
 } from "../sourceControl/ListGhosts";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
+import type { PullRequestTabStatus } from "../RightPanelTabs";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
@@ -493,15 +493,6 @@ export function PullRequestDetailPanel({
   getShortcutContext: () => ShortcutMatchContext;
   onSelectPullRequest?: ((reference: PullRequestRef) => void) | undefined;
   onOpenLinkedIssue?: ((link: IssueLink & { readonly provider: string }) => void) | undefined;
-  onStateChange?:
-    | ((status: {
-        projectId: string;
-        repository: string;
-        number: number;
-        state: PullRequestState;
-        isDraft: boolean;
-      }) => void)
-    | undefined;
   chromeVariant?: "full" | "collapse";
   /**
    * The thread this panel sits beside, if any. Links that are not the pull
@@ -526,6 +517,7 @@ export function PullRequestDetailPanel({
   onActed?: () => void;
   /** Page-owned detail columns use this to clear the selected pull request. */
   onClose?: () => void;
+  onStateChange?: (status: PullRequestTabStatus) => void;
   /**
    * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
    * own pull request, so the branch is already under the reader's feet — and checking it out
@@ -745,6 +737,16 @@ export function PullRequestDetailPanel({
           },
     [activity, coreDetail],
   );
+  useEffect(() => {
+    if (coreDetail === null) return;
+    onStateChange?.({
+      projectId: coreDetail.projectId,
+      repository: coreDetail.repository,
+      number: coreDetail.number,
+      state: coreDetail.state,
+      isDraft: coreDetail.isDraft,
+    });
+  }, [coreDetail, onStateChange]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { copyToClipboard: copyReference } = useCopyToClipboard<string>({
     target: "pull request reference",
@@ -774,16 +776,6 @@ export function PullRequestDetailPanel({
   useEffect(() => {
     if (detail?.autoMergeMethod !== undefined) setMergeMethod(detail.autoMergeMethod);
   }, [detail?.autoMergeMethod, pullRequestKey]);
-  useEffect(() => {
-    if (detail === null) return;
-    onStateChange?.({
-      projectId: detail.projectId,
-      repository: detail.repository,
-      number: detail.number,
-      state: detail.state,
-      isDraft: detail.isDraft,
-    });
-  }, [detail, onStateChange]);
   const repositoryUrl = detail === null ? null : changeRequestRepositoryUrl(detail.url);
   const markdownContext = useMemo(
     () => ({ repositoryUrl: detail?.provider === "github" ? repositoryUrl : null, threadRef }),

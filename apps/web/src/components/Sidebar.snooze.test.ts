@@ -1,6 +1,23 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { resolveSnoozePresets, snoozeWakeDescription } from "./Sidebar.snooze";
+
+const DateTimeFormat = Intl.DateTimeFormat;
+
+beforeEach(() => {
+  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
+    return new DateTimeFormat(locales ?? "en-US", options);
+  });
+  vi.spyOn(Date.prototype, "toLocaleDateString").mockImplementation(
+    function (this: Date, locales, options) {
+      return new DateTimeFormat(locales ?? "en-US", options).format(this);
+    },
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // Local-time constructor so preset math is timezone-stable in tests.
 function localDate(year: number, month: number, day: number, hour: number, minute = 0): Date {

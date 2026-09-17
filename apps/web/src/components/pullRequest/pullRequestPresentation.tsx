@@ -15,7 +15,6 @@ import {
   UserCheckIcon,
 } from "lucide-react";
 import { Children, isValidElement, type ReactNode, useState } from "react";
-
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../ui/badge";

@@ -15,19 +15,21 @@ export function resolveThreadPr(input: {
     return null;
   }
   const pr = gitStatus.pr;
-  const updatedAtValue = pr?.updatedAt;
+  const completedAtValue = pr?.completedAt;
   if (
     pr === null ||
     pr.state === "open" ||
     threadCreatedAt == null ||
-    updatedAtValue === null ||
-    updatedAtValue === undefined
+    completedAtValue === null ||
+    completedAtValue === undefined
   ) {
     return pr;
   }
   const createdAt = Date.parse(threadCreatedAt);
-  const updatedAt = Date.parse(updatedAtValue);
-  return Number.isNaN(createdAt) || Number.isNaN(updatedAt) || updatedAt >= createdAt ? pr : null;
+  const completedAt = Date.parse(completedAtValue);
+  return Number.isNaN(createdAt) || Number.isNaN(completedAt) || completedAt >= createdAt
+    ? pr
+    : null;
 }
 
 /**

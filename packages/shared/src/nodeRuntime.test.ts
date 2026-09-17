@@ -137,7 +137,7 @@ describe("Node runtime selection", () => {
       const platform = yield* HostProcessPlatform;
       const executable = path.join(directory, platform === "win32" ? "t3.exe" : "t3");
       const node = path.join(directory, platform === "win32" ? "node.exe" : "node");
-      yield* fs.writeFileString(executable, "standalone executable fixture");
+      yield* fs.copyFile(process.execPath, executable);
       yield* fs.chmod(executable, 0o755);
       yield* fs.link(executable, node);
       const error = yield* resolveNodeExecutable("Local device support", { PATH: directory }).pipe(

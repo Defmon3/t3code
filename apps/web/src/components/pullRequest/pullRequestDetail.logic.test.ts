@@ -904,6 +904,8 @@ describe("one finding handed over on its own", () => {
     url: "https://github.com/pingdotgg/t3code/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
   };
 
   const reviewThread: PullRequestReviewThread = {
@@ -1187,6 +1189,8 @@ describe("linking a change to the issues it is about", () => {
     url: "https://github.com/pingdotgg/t3code/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
   };
   const relatedIssue = {
     kind: "issue",

@@ -155,7 +155,10 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
         "# @t3code/t3-linux-x64",
       );
       assert.isTrue(yield* fs.exists(path.join(linuxDir, "node_modules/node-pty")));
-      assert.equal(Number((yield* fs.stat(path.join(linuxDir, "t3"))).mode) & 0o111, 0o111);
+      const hostPlatform = yield* HostProcessPlatform;
+      if (hostPlatform !== "win32") {
+        assert.equal(Number((yield* fs.stat(path.join(linuxDir, "t3"))).mode) & 0o111, 0o111);
+      }
 
       const darwinManifest = yield* decodeManifest(
         yield* fs.readFileString(
@@ -193,17 +196,24 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
         { cwd: fixture.outputDir },
       );
       assert.equal(listing.exitCode, 0, listing.stderr);
-      const lines = listing.stdout.split("\n");
-      assert.isTrue(lines.some((line) => line.endsWith(" package/node_modules/node-pty/")));
-      assert.isTrue(lines.some((line) => line.endsWith(" package/package.json")));
+      const lines = listing.stdout
+        .replaceAll("\\", "/")
+        .split("\n")
+        .map((line) => line.trimEnd());
       assert.isTrue(
-        lines.some((line) => /^-rwxr-xr-x .* package\/t3$/.test(line)),
+        lines.some((line) => line.endsWith("package/node_modules/node-pty/")),
         listing.stdout,
       );
+      assert.isTrue(lines.some((line) => line.endsWith("package/package.json")));
+      if (hostPlatform !== "win32") {
+        assert.isTrue(
+          lines.some((line) => /^-rwxr-xr-x .* package\/t3$/.test(line)),
+          listing.stdout,
+        );
+      }
 
       // NODE_PATH stands in for node_modules: require.resolve finds the
       // platform package there exactly as it would after `npm install`.
-      const hostPlatform = yield* HostProcessPlatform;
       const hostArch = yield* HostProcessArchitecture;
       const env = { ...process.env, NODE_PATH: fixture.outputDir } as Record<string, string>;
       if (KEYS.some((key) => key === `${hostPlatform}-${hostArch}`)) {

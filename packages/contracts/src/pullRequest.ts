@@ -10,7 +10,11 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { SourceControlProviderKind, sourceControlHostOf } from "./sourceControl.ts";
+import {
+  SourceControlActor,
+  SourceControlProviderKind,
+  sourceControlHostOf,
+} from "./sourceControl.ts";
 import { IssueLink } from "./issue.ts";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
@@ -122,12 +126,9 @@ export const PullRequestBaseComparison = Schema.Literals(["up-to-date", "behind"
 export type PullRequestBaseComparison = typeof PullRequestBaseComparison.Type;
 
 export const PullRequestActor = Schema.Struct({
+  ...SourceControlActor.fields,
   /** Present when the host identifies an automated account. */
   isBot: Schema.optional(Schema.Boolean),
-  login: TrimmedNonEmptyString,
-  name: Schema.NullOr(Schema.String),
-  /** Null where a host does not report one, which is what the initials fall back to. */
-  avatarUrl: Schema.NullOr(Schema.String),
 });
 export type PullRequestActor = typeof PullRequestActor.Type;
 
@@ -1218,7 +1219,6 @@ export function pullRequestHostOf(
   }
   return sourceControlHostOf(identity, kind);
 }
-
 /**
  * `author:me` names whoever is signed in to the host being read, GitHub's `@me` spelled either
  * way. A host's own search would answer it, but the page and the server both re-check an author

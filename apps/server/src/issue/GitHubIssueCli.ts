@@ -424,6 +424,13 @@ function searchPhrase(query: string): string {
   return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+const GITHUB_SEARCH_QUALIFIER =
+  /^(?:\()*-?(?:author|assignee|mentions|commenter|involves|label|no|is|type|state|reason|milestone|project|repo|org|user|created|updated|closed|comments|reactions|interactions|linked|team):\S+/i;
+
+function searchText(query: string): string {
+  return GITHUB_SEARCH_QUALIFIER.test(query) ? query : searchPhrase(query);
+}
+
 /**
  * The narrowings `gh issue list` has flags of its own for. Involvement is one of them: GitHub
  * matches an assignee, an author and a mention itself, so none of the three has to be spelled as a
@@ -484,7 +491,7 @@ function searchTerms(input: {
   const query = input.query?.trim() ?? "";
   return [
     "is:issue",
-    ...(query.length === 0 ? [] : [searchPhrase(query)]),
+    ...(query.length === 0 ? [] : [searchText(query)]),
     // The instant the last slice ended on, and everything before it. Inclusive, because rows
     // sharing one instant are ordinary and the caller drops the ones it has already sent — asking
     // for strictly older would lose the rest of them instead.
