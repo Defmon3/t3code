@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import type { IssuesSurface } from "~/rightPanelStore";
 import { issueEnvironment } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
@@ -40,6 +41,11 @@ import {
 import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
 import { type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
+import {
+  DEFAULT_ISSUE_PANEL_PREFERENCES,
+  issuePanelPreferencesKey,
+  IssuePanelPreferencesSchema,
+} from "./issuePanelPreferences";
 
 // The same vocabulary the issues page filters by, minus the two questions a panel already knows
 // the answer to: it lists one project, on one host.
@@ -119,15 +125,14 @@ function ProjectIssues({
 }: IssuesPanelProps) {
   // Held here rather than in the list, so reading an issue and coming back does not throw away
   // the search that found it — the list is unmounted while the issue is open.
-  const [query, setQuery] = useState("");
+  const [preferences, setPreferences] = useLocalStorage(
+    issuePanelPreferencesKey(environmentId, projectId),
+    DEFAULT_ISSUE_PANEL_PREFERENCES,
+    IssuePanelPreferencesSchema,
+  );
   const [page, setPage] = useState<PanelPage>({ key: "", size: PAGE_SIZE, cursors: null });
-  const [filters, setFilters] = useState<{
-    readonly state: IssueListState;
-    readonly involvement: IssueInvolvement;
-    readonly label: string | undefined;
-    readonly sort: IssueListSort;
-    readonly order: IssueListOrder;
-  }>({ state: "open", involvement: "all", label: undefined, sort: "updated", order: "desc" });
+  const { query, ...storedFilters } = preferences;
+  const filters: PanelFilters = { ...storedFilters, label: preferences.label };
 
   if (selected) {
     return (
@@ -170,11 +175,11 @@ function ProjectIssues({
       projectId={projectId}
       onSelect={onSelect}
       query={query}
-      onQuery={setQuery}
+      onQuery={(query) => setPreferences((current) => ({ ...current, query }))}
       page={page}
       onPage={setPage}
       filters={filters}
-      onFilters={setFilters}
+      onFilters={(filters) => setPreferences((current) => ({ ...current, ...filters }))}
     />
   );
 }

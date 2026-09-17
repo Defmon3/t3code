@@ -1,10 +1,4 @@
-import {
-  ArrowLeftIcon,
-  ChartNoAxesColumnIcon,
-  CircleDotIcon,
-  GitPullRequestIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, CircleDotIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -34,6 +28,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
+import { issuesWorkspaceNavigation } from "./issuesWorkspaceNavigation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -173,7 +168,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [closeMobileSidebar, navigate]);
   const handleIssuesClick = useCallback(() => {
     closeMobileSidebar();
-    void navigate({ to: "/issues", search: { involvement: "all", state: "open" } });
+    void navigate(issuesWorkspaceNavigation());
   }, [closeMobileSidebar, navigate]);
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
