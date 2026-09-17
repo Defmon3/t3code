@@ -353,6 +353,30 @@ layer("GitHubIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("passes GitHub qualifiers and boolean expressions through unchanged", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const query =
+        "is:issue state:open (author:Defmon3 OR author:Argus-commit-bot OR assignee:Defmon3 ) -label:question -label:status/fixed-in-branch -label:status/picked-up -label:group/child -label:group/parent -label:postponed";
+
+      yield* cli.listIssues({
+        ...repository,
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query,
+      });
+
+      assert.strictEqual(searchOfCall(0), `is:issue ${query} sort:updated-desc`);
+      expect(argsOfCall(0)).toContain("--repo");
+      expect(argsOfCall(0)).toContain("github.com/acme/web");
+      expect(argsOfCall(0)).toContain("--state");
+      expect(argsOfCall(0)).toContain("open");
+    }),
+  );
+
   it.effect("searches for no phrase at all when the reader typed only spaces", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));

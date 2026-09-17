@@ -15,7 +15,7 @@ import type { ElementType, ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
-import { ProjectFavicon } from "../ProjectFavicon";
+import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import {
   Menu,
   MenuGroupLabel,
@@ -203,6 +203,8 @@ export function ListProjectFilterGroup({
     readonly id: ProjectId;
     readonly title: string;
     readonly workspaceRoot: string;
+    readonly faviconPath?: ProjectFaviconProject["faviconPath"];
+    readonly projectIcon?: ProjectFaviconProject["projectIcon"];
   }>;
   projectId: ProjectId | undefined;
   /**
@@ -248,8 +250,13 @@ export function ListProjectFilterGroup({
                   <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
                 ) : (
                   <ProjectFavicon
-                    environmentId={environmentId}
-                    cwd={project.workspaceRoot}
+                    project={{
+                      environmentId,
+                      workspaceRoot: project.workspaceRoot,
+                      title: project.title,
+                      faviconPath: project.faviconPath,
+                      projectIcon: project.projectIcon,
+                    }}
                     fallbackIcon={FolderGit2Icon}
                     className="size-3.5 shrink-0"
                   />

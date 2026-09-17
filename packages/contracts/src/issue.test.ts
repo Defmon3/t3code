@@ -8,6 +8,7 @@ import {
   IssueDetail,
   IssueListInput,
   IssueListResult,
+  ISSUE_LIST_QUERY_MAX_LENGTH,
   IssueTemplateList,
   issueTemplateAnswersComplete,
   IssueUpdateInput,
@@ -134,8 +135,19 @@ describe("IssueListInput", () => {
   });
 
   it("bounds a search, because it travels into a command and a query string", () => {
-    expect(decodeListInput({ state: "open", query: "p".repeat(200) }).query).toHaveLength(200);
-    expect(() => decodeListInput({ state: "open", query: "p".repeat(201) })).toThrow();
+    expect(
+      decodeListInput({ state: "open", query: "p".repeat(ISSUE_LIST_QUERY_MAX_LENGTH) }).query,
+    ).toHaveLength(ISSUE_LIST_QUERY_MAX_LENGTH);
+    expect(() =>
+      decodeListInput({ state: "open", query: "p".repeat(ISSUE_LIST_QUERY_MAX_LENGTH + 1) }),
+    ).toThrow();
+  });
+
+  it("accepts a full GitHub issue query", () => {
+    const query =
+      "is:issue state:open (author:Defmon3 OR author:Argus-commit-bot OR assignee:Defmon3 ) -label:question -label:status/fixed-in-branch -label:status/picked-up -label:group/child -label:group/parent -label:postponed";
+
+    expect(decodeListInput({ state: "open", query }).query).toBe(query);
   });
 
   it("takes back the continuation a result handed out, keyed the way it arrived", () => {

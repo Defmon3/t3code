@@ -52,6 +52,8 @@ export type IssueState = typeof IssueState.Type;
 export const IssueListState = Schema.Literals(["all", "open", "closed"]);
 export type IssueListState = typeof IssueListState.Type;
 
+export const ISSUE_LIST_QUERY_MAX_LENGTH = 512;
+
 export const IssueListSort = Schema.Literals([
   "best-match",
   "created",
@@ -286,7 +288,9 @@ export const IssueListInput = Schema.Struct({
    * leaves the client can only find what happened to be loaded. A host with no text filter
    * answers unnarrowed rather than pretending.
    */
-  query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  query: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_LIST_QUERY_MAX_LENGTH)),
+  ),
   sort: Schema.optional(IssueListSort),
   order: Schema.optional(IssueListOrder),
 });
@@ -843,7 +847,7 @@ export function issueProviderRequirement(
  * the provider rather than from whatever the CLI printed, so it stays a stable sentence the UI
  * can show as-is; the underlying failure travels in `cause`.
  */
-export class IssueUnavailableError extends Schema.TaggedErrorClass<IssueUnavailableError>()(
+export class IssueUnavailableError extends Schema.TaggedError<IssueUnavailableError>()(
   "IssueUnavailableError",
   {
     reason: IssueUnavailableReason,
@@ -874,7 +878,7 @@ export class IssueUnavailableError extends Schema.TaggedErrorClass<IssueUnavaila
   }
 }
 
-export class IssueOperationError extends Schema.TaggedErrorClass<IssueOperationError>()(
+export class IssueOperationError extends Schema.TaggedError<IssueOperationError>()(
   "IssueOperationError",
   {
     operation: Schema.String,

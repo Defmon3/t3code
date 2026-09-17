@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
+import { ISSUE_LIST_QUERY_MAX_LENGTH, sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   IssueProviderKind,
@@ -54,11 +54,7 @@ import { IssueRow } from "../components/issue/IssueRow";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
-import {
-  RightPanelTabs,
-  type IssueTabStatus,
-  type PullRequestTabStatus,
-} from "../components/RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus } from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -73,7 +69,6 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
   issueSurfaceId,
-  pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
@@ -87,6 +82,7 @@ import { issueEnvironment } from "../state/issues";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { isElectron } from "../env";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn } from "~/lib/utils";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
 
@@ -195,7 +191,9 @@ export const Route = createFileRoute("/_chat/issues")({
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
       ...(sort === undefined ? {} : { sort }),
       ...(raw.order === "asc" || raw.order === "desc" ? { order: raw.order } : {}),
-      ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+      ...(typeof raw.q === "string" && raw.q
+        ? { q: raw.q.slice(0, ISSUE_LIST_QUERY_MAX_LENGTH) }
+        : {}),
     };
   },
   component: IssuesRouteView,
@@ -267,18 +265,6 @@ function IssuesRouteView() {
         : { ...current, [id]: status },
     );
   }, []);
-  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
-    Record<string, PullRequestTabStatus>
-  >({});
-  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
-    const id = pullRequestSurfaceId(status);
-    setPullRequestTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
-
   const updateSearch = useCallback(
     (patch: {
       [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
@@ -1238,6 +1224,7 @@ function IssuesRouteView() {
             // so fall back to a reasonable width.
             defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
             surfaces={rightPanelState.surfaces}
+            environmentId={issueEnvironmentId}
             activeSurfaceId={activeSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
             previewSessions={EMPTY_PREVIEW_SESSIONS}
@@ -1250,27 +1237,33 @@ function IssuesRouteView() {
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
+            onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
+            onAddPullRequests={() => undefined}
             onAddIssue={() => undefined}
             onAddAgents={() => undefined}
+            onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}
+            pullRequestsAvailable={false}
             agentsAvailable={false}
+            deviceAvailable={false}
             liveAgentCount={0}
-            pullRequestStatuses={pullRequestTabStatuses}
             issueStatuses={issueTabStatuses}
           >
             {activeSurface.kind === "pull-request" ? (
               <PullRequestDetailPanel
                 key={activeSurface.id}
                 environmentId={issueEnvironmentId}
+                getShortcutContext={getShortcutContext}
+                shortcutsEnabled
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
                   repository: activeSurface.repository,
@@ -1285,7 +1278,6 @@ function IssuesRouteView() {
                   authoredQuery.refresh();
                   assignedQuery.refresh();
                 }}
-                onStateChange={handlePullRequestTabStatusChange}
                 onOpenLinkedIssue={(link) => {
                   if (rightPanelRef === null) return;
                   const target = {
@@ -1675,4 +1667,13 @@ function IssuesColumn({
       </div>
     </div>
   );
+}
+function getShortcutContext() {
+  return {
+    terminalFocus: isTerminalFocused(),
+    terminalOpen: false,
+    previewFocus: false,
+    previewOpen: false,
+    modelPickerOpen: false,
+  };
 }
