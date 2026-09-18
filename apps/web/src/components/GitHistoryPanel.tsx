@@ -1,7 +1,20 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, GitCommitChangedFile, GitHistoryCommit } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  GitCommitChangedFile,
+  GitHistoryCommit,
+  VcsGetHistoryResult,
+  VcsHistorySyncInput,
+} from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
-import { FileIcon, GitBranchIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import {
+  FileIcon,
+  GitBranchIcon,
+  HammerIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  XIcon,
+} from "lucide-react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -17,6 +30,8 @@ import {
 } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { toastManager } from "./ui/toast";
+import { useAtomCommand } from "../state/use-atom-command";
 import { layoutGitHistoryGraph } from "../lib/gitHistoryGraph";
 import { cn } from "../lib/utils";
 import { useClientSettings } from "../hooks/useSettings";
@@ -34,6 +49,12 @@ import {
 } from "./git-history/GitHistoryCommitList";
 import { PaneResizeHandle } from "./git-history/GitHistoryPaneResizeHandle";
 import { GitRefsPane } from "./git-history/GitHistoryRefsPane";
+import { requiresDefaultBranchConfirmation } from "./GitActionsControl.logic";
+import {
+  gitHistorySolvePrompt,
+  isGitHistorySolveOffer,
+  selectedHistoryRef,
+} from "./git-history/GitHistorySyncToolbar.logic";
 import type {
   CommitRefKind,
   GitHistoryRow,
@@ -43,6 +64,15 @@ import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Sheet, SheetPopup, SheetTitle } from "./ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 
 const HISTORY_PAGE_SIZE = 100;
 const MAX_HISTORY_PAGES = 10;
@@ -52,6 +82,16 @@ const REFS_PANE_MIN_WIDTH = 176;
 const REFS_PANE_MAX_WIDTH = 480;
 const DETAILS_PANE_MIN_WIDTH = 256;
 const DETAILS_PANE_MAX_WIDTH = 720;
+
+type GitHistorySyncRequest = {
+  readonly environmentId: EnvironmentId;
+  readonly input: VcsHistorySyncInput;
+};
+
+type DefaultBranchPushConfirmation = GitHistorySyncRequest & {
+  readonly upstreamName: string;
+  readonly targetKey: string;
+};
 
 function isHistorySnapshotExpired(cause: Cause.Cause<unknown>): boolean {
   const error = Option.getOrNull(Cause.findErrorOption(cause));
@@ -73,6 +113,7 @@ interface GitHistoryPanelProps {
   cwd: string;
   issueUrlPrefix?: string;
   active?: boolean;
+  onSolveGitSync?: (prompt: string) => void;
 }
 
 export function isWideHistoryLayout(width: number): boolean {
@@ -133,12 +174,102 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   );
   const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd, vcsHistoryRevision);
   const { selectedRevision } = historyRefs;
-  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? (selectedRevision === null ? "all" : "unresolved")}:${vcsHistoryRevision}`;
+  const syncHistory = useAtomCommand(vcsEnvironment.historySync, { reportFailure: false });
+  const [syncPendingAction, setSyncPendingAction] = useState<"fetch" | "pull" | "push" | null>(
+    null,
+  );
+  const [defaultBranchPushConfirmation, setDefaultBranchPushConfirmation] =
+    useState<DefaultBranchPushConfirmation | null>(null);
+  const [solvePrompt, setSolvePrompt] = useState<string | null>(null);
+  const selectedRef = useMemo(
+    () =>
+      selectedHistoryRef(selectedRevision, [
+        ...historyRefs.localRefs,
+        ...historyRefs.remoteRefs,
+        ...historyRefs.tagRefs,
+      ]),
+    [historyRefs.localRefs, historyRefs.remoteRefs, historyRefs.tagRefs, selectedRevision],
+  );
+  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? (selectedRevision === null ? "all" : "unresolved")}`;
+  const isDefaultBranchPushConfirmationCurrent =
+    defaultBranchPushConfirmation !== null &&
+    defaultBranchPushConfirmation.targetKey === targetKey &&
+    defaultBranchPushConfirmation.upstreamName === selectedRef?.upstreamName;
+  useEffect(() => {
+    if (defaultBranchPushConfirmation !== null && !isDefaultBranchPushConfirmationCurrent) {
+      setDefaultBranchPushConfirmation(null);
+    }
+  }, [defaultBranchPushConfirmation, isDefaultBranchPushConfirmationCurrent]);
+  const runSync = useCallback(
+    async (request: GitHistorySyncRequest) => {
+      setSyncPendingAction(request.input.action);
+      const result = await syncHistory({
+        environmentId: request.environmentId,
+        input: request.input,
+      });
+      setSyncPendingAction(null);
+      if (AsyncResult.isSuccess(result)) {
+        toastManager.add({ type: "success", title: `Git ${request.input.action} completed` });
+        return;
+      }
+      const error = String(Cause.squash(result.cause));
+      if (
+        (request.input.action === "pull" || request.input.action === "push") &&
+        isGitHistorySolveOffer(error)
+      ) {
+        setSolvePrompt(
+          gitHistorySolvePrompt({
+            cwd: request.input.cwd,
+            action: request.input.action,
+            refName: request.input.refName,
+            upstreamName: selectedRef?.upstreamName ?? "unknown",
+            error,
+          }),
+        );
+        return;
+      }
+      toastManager.add({
+        type: "error",
+        title: `Git ${request.input.action} failed`,
+        description: error,
+      });
+    },
+    [selectedRef?.upstreamName, syncHistory],
+  );
+  const onSync = useCallback(
+    (action: "fetch" | "pull" | "push") => {
+      if (selectedRef === null || selectedRef.isTag || syncPendingAction !== null) return;
+      const request = {
+        environmentId: props.environmentId,
+        input: {
+          cwd: props.cwd,
+          action,
+          namespace: selectedRef.isRemote ? "remote" : "local",
+          refName: selectedRef.name,
+        },
+      } satisfies GitHistorySyncRequest;
+      if (
+        action === "push" &&
+        requiresDefaultBranchConfirmation(action, selectedRef.isDefault) &&
+        selectedRef.upstreamName !== undefined
+      ) {
+        setDefaultBranchPushConfirmation({
+          ...request,
+          upstreamName: selectedRef.upstreamName,
+          targetKey,
+        });
+        return;
+      }
+      void runSync(request);
+    },
+    [props.cwd, props.environmentId, runSync, selectedRef, syncPendingAction, targetKey],
+  );
+  const paginationKey = `${targetKey}:${vcsHistoryRevision}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
     cursors: ReadonlyArray<string | undefined>;
-  }>({ targetKey, cursors: INITIAL_CURSORS });
-  const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_CURSORS;
+  }>({ targetKey: paginationKey, cursors: INITIAL_CURSORS });
+  const cursors = pagination.targetKey === paginationKey ? pagination.cursors : INITIAL_CURSORS;
   const pageAtoms = useMemo(
     () =>
       selectedRevision === undefined
@@ -167,9 +298,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const pagesAtom = useMemo(
     () =>
       Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
-        Atom.withLabel(`web:vcs-history-pages:${targetKey}`),
+        Atom.withLabel(`web:vcs-history-pages:${paginationKey}`),
       ),
-    [pageAtoms, targetKey],
+    [pageAtoms, paginationKey],
   );
   const results = useAtomValue(pagesAtom);
   const values = useMemo(
@@ -180,6 +311,19 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       }),
     [results],
   );
+  const [retainedHistory, setRetainedHistory] = useState<{
+    readonly targetKey: string;
+    readonly values: ReadonlyArray<VcsGetHistoryResult>;
+  } | null>(null);
+  useEffect(() => {
+    if (values.length > 0) setRetainedHistory({ targetKey, values });
+  }, [targetKey, values]);
+  const displayedValues =
+    values.length > 0
+      ? values
+      : retainedHistory?.targetKey === targetKey
+        ? retainedHistory.values
+        : [];
   const failed = results.find((result) => result._tag === "Failure");
   const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
   const recoveredSnapshot = useRef<{
@@ -202,25 +346,25 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       recoveredSnapshot.current?.generation !== historyQueryGeneration
     ) {
       recoveredSnapshot.current = { targetKey, generation: historyQueryGeneration + 1 };
-      setPagination({ targetKey, cursors: INITIAL_CURSORS });
+      setPagination({ targetKey: paginationKey, cursors: INITIAL_CURSORS });
       setHistoryQueryGeneration((generation) => generation + 1);
     }
-  }, [failed, historyQueryGeneration, targetKey, values.length]);
+  }, [failed, historyQueryGeneration, paginationKey, targetKey, values.length]);
   const isPending = results.some((result) => result.waiting);
   const refSelectionError = selectedRevision === undefined ? historyRefs.refPaginationError : null;
   const isInitialLoad =
     refSelectionError === null &&
-    (selectedRevision === undefined || (values.length === 0 && isPending));
+    (selectedRevision === undefined || (displayedValues.length === 0 && isPending));
   const history = useMemo(() => {
     const commitsByHash = new Map<string, GitHistoryCommit>();
-    for (const value of values) {
+    for (const value of displayedValues) {
       for (const commit of value.commits) {
         if (!commitsByHash.has(commit.hash)) commitsByHash.set(commit.hash, commit);
       }
     }
     return [...commitsByHash.values()];
-  }, [values]);
-  const isRepo = values[0]?.isRepo ?? true;
+  }, [displayedValues]);
+  const isRepo = displayedValues[0]?.isRepo ?? true;
   const lastPage = values.at(-1) ?? null;
   const nextCursor = lastPage?.nextCursor ?? null;
   const hasMoreFromServer = lastPage?.hasMore === true && nextCursor !== null;
@@ -246,7 +390,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDetails({
           environmentId: props.environmentId,
-          input: { cwd: props.cwd, hash: selectedHash, queryGeneration: vcsHistoryRevision },
+          input: { cwd: props.cwd, hash: selectedHash },
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
@@ -266,7 +410,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setCommitFilesCapped(false);
     commitFilesRecoveryInFlight.current = false;
     receivedCommitFilesPages.current.clear();
-  }, [props.cwd, props.environmentId, selectedHash, vcsHistoryRevision]);
+  }, [props.cwd, props.environmentId, selectedHash]);
   const commitFilesQuery = useEnvironmentQuery(
     selectedHash === null
       ? null
@@ -276,7 +420,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             cwd: props.cwd,
             hash: selectedHash,
             limit: 100,
-            queryGeneration: commitFilesQueryGeneration + vcsHistoryRevision,
+            queryGeneration: commitFilesQueryGeneration,
             ...(commitFilesCursor ? { cursor: commitFilesCursor } : {}),
           },
         }),
@@ -323,7 +467,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           input: {
             cwd: props.cwd,
             hash: commitDiffRequest.hash,
-            queryGeneration: vcsHistoryRevision,
             ...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {}),
           },
         }),
@@ -365,12 +508,14 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     (label: string, revision: string) => {
       selectHistoryRef(label, revision);
       setMobilePane(null);
+      setDefaultBranchPushConfirmation(null);
     },
     [selectHistoryRef],
   );
   const selectAllRefs = useCallback(() => {
     selectAllHistoryRefs();
     setMobilePane(null);
+    setDefaultBranchPushConfirmation(null);
   }, [selectAllHistoryRefs]);
   const sharedRefTreeProps = {
     filterActive: normalizedRefFilter.length > 0,
@@ -402,10 +547,12 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     onLoadMoreRefs,
     onRetryRefs,
     refPaginationError,
+    selectedRef,
+    onSync: (action: "fetch" | "pull" | "push") => void onSync(action),
+    syncPendingAction,
   } satisfies Omit<ComponentProps<typeof GitRefsPane>, "className" | "id" | "onClose">;
 
   useEffect(() => {
-    setPagination({ targetKey, cursors: INITIAL_CURSORS });
     setFilter("");
     setSelectedHash(null);
     setCommitDiffRequest(null);
@@ -464,18 +611,19 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
 
   const refresh = useCallback(() => {
     setHistoryQueryGeneration((generation) => generation + 1);
-    setPagination({ targetKey, cursors: INITIAL_CURSORS });
+    setPagination({ targetKey: paginationKey, cursors: INITIAL_CURSORS });
     refreshRefs();
-  }, [refreshRefs, targetKey]);
+  }, [paginationKey, refreshRefs]);
   const loadNext = useCallback(() => {
     if (!hasMore || nextCursor === null) return;
     setPagination((current) => {
-      const currentCursors = current.targetKey === targetKey ? current.cursors : INITIAL_CURSORS;
+      const currentCursors =
+        current.targetKey === paginationKey ? current.cursors : INITIAL_CURSORS;
       return currentCursors.includes(nextCursor)
-        ? { targetKey, cursors: currentCursors }
-        : { targetKey, cursors: [...currentCursors, nextCursor] };
+        ? { targetKey: paginationKey, cursors: currentCursors }
+        : { targetKey: paginationKey, cursors: [...currentCursors, nextCursor] };
     });
-  }, [hasMore, nextCursor, targetKey]);
+  }, [hasMore, nextCursor, paginationKey]);
   const retryFailedPage = useCallback(() => {
     const failedIndex = results.findIndex((result) => result._tag === "Failure");
     const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
@@ -816,6 +964,66 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           </SheetPopup>
         </Sheet>
       ) : null}
+      <AlertDialog
+        open={isDefaultBranchPushConfirmationCurrent}
+        onOpenChange={(open) => {
+          if (!open) setDefaultBranchPushConfirmation(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Push to default branch?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Push {defaultBranchPushConfirmation?.input.refName} to{" "}
+              {defaultBranchPushConfirmation?.upstreamName}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              onClick={() => {
+                if (
+                  defaultBranchPushConfirmation !== null &&
+                  defaultBranchPushConfirmation.targetKey === targetKey &&
+                  defaultBranchPushConfirmation.upstreamName === selectedRef?.upstreamName
+                ) {
+                  void runSync(defaultBranchPushConfirmation);
+                }
+                setDefaultBranchPushConfirmation(null);
+              }}
+            >
+              Push
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      <AlertDialog
+        open={solvePrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) setSolvePrompt(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Git sync needs resolution</AlertDialogTitle>
+            <AlertDialogDescription>
+              Open a draft task for an agent to resolve this Git conflict.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              onClick={() => {
+                if (solvePrompt) props.onSolveGitSync?.(solvePrompt);
+                setSolvePrompt(null);
+              }}
+            >
+              <HammerIcon className="size-3.5" />
+              Solve
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </section>
   );
 }

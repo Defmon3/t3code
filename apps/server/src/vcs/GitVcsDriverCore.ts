@@ -2391,6 +2391,169 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
+  const syncHistoryRef: GitVcsDriver.GitVcsDriver["Service"]["syncHistoryRef"] = Effect.fn(
+    "GitVcsDriver.syncHistoryRef",
+  )(function* (input) {
+    if (input.namespace === "remote") {
+      if (input.action !== "fetch") {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.syncHistoryRef",
+            cwd: input.cwd,
+            args: [],
+          }),
+          detail: "Pull and push require a local branch with an upstream configured.",
+        });
+      }
+      const remoteNames = yield* listRemoteNames(input.cwd);
+      const remoteRef = parseRemoteRefWithRemoteNames(input.refName, remoteNames);
+      if (!remoteRef) {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.syncHistoryRef",
+            cwd: input.cwd,
+            args: [],
+          }),
+          detail: "The selected remote ref does not belong to a configured remote.",
+        });
+      }
+      yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.fetchRemote",
+        input.cwd,
+        ["fetch", "--quiet", remoteRef.remoteName],
+        { timeoutMs: 30_000, fallbackErrorDetail: `git fetch ${remoteRef.remoteName} failed` },
+      );
+      return { action: "fetch" as const, refName: input.refName };
+    }
+    const localRef = `refs/heads/${input.refName}`;
+    const localRefDetails = yield* runGitStdout("GitVcsDriver.syncHistoryRef.localRef", input.cwd, [
+      "for-each-ref",
+      "--format=%(upstream:short)%09%(upstream:remotename)%09%(worktreepath)",
+      localRef,
+    ]).pipe(Effect.map((stdout) => stdout.trim().split("\t")));
+    const [upstreamRef = "", remoteName = "", worktreePath = ""] = localRefDetails;
+    const isLocalBranch =
+      upstreamRef.length > 0 ||
+      remoteName.length > 0 ||
+      worktreePath.length > 0 ||
+      (yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.verifyLocal",
+        input.cwd,
+        ["show-ref", "--verify", "--quiet", localRef],
+        { allowNonZeroExit: true },
+      ).pipe(Effect.map((result) => result.exitCode === 0)));
+
+    if (!isLocalBranch) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.syncHistoryRef",
+          cwd: input.cwd,
+          args: [],
+        }),
+        detail: "The selected local branch does not exist.",
+      });
+    }
+
+    if (remoteName.length === 0 || upstreamRef.length === 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.syncHistoryRef",
+          cwd: input.cwd,
+          args: [],
+        }),
+        detail: "The selected branch has no upstream configured.",
+      });
+    }
+
+    if (input.action === "fetch") {
+      yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.fetch",
+        input.cwd,
+        ["fetch", "--quiet", remoteName],
+        {
+          timeoutMs: 30_000,
+          fallbackErrorDetail: `git fetch ${remoteName} failed`,
+        },
+      );
+      return { action: "fetch" as const, refName: input.refName };
+    }
+
+    if (input.action === "push") {
+      const upstreamBranch = upstreamRef.slice(remoteName.length + 1);
+      yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.push",
+        input.cwd,
+        ["push", remoteName, `${localRef}:refs/heads/${upstreamBranch}`],
+        { timeoutMs: null, fallbackErrorDetail: "git push failed" },
+      );
+      return { action: "push" as const, refName: input.refName };
+    }
+
+    yield* executeGit(
+      "GitVcsDriver.syncHistoryRef.fetchUpstream",
+      input.cwd,
+      ["fetch", "--quiet", remoteName],
+      {
+        timeoutMs: 30_000,
+        fallbackErrorDetail: `git fetch ${remoteName} failed`,
+      },
+    );
+
+    if (worktreePath.length > 0 && path.normalize(worktreePath) !== path.normalize(input.cwd)) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.syncHistoryRef",
+          cwd: input.cwd,
+          args: [],
+        }),
+        detail: `Cannot fast-forward ${input.refName}; it is checked out in another worktree (${worktreePath}).`,
+      });
+    }
+    const currentBranch = yield* runGitStdout(
+      "GitVcsDriver.syncHistoryRef.currentBranch",
+      input.cwd,
+      ["branch", "--show-current"],
+      true,
+    ).pipe(Effect.map((stdout) => stdout.trim()));
+    if (currentBranch === input.refName) {
+      yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.pull",
+        input.cwd,
+        ["merge", "--ff-only", upstreamRef],
+        {
+          timeoutMs: 30_000,
+          fallbackErrorDetail: "git fast-forward failed",
+        },
+      );
+    } else {
+      const fastForward = yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.checkFastForward",
+        input.cwd,
+        ["merge-base", "--is-ancestor", localRef, upstreamRef],
+        { allowNonZeroExit: true },
+      ).pipe(Effect.map((result) => result.exitCode === 0));
+      if (!fastForward) {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.syncHistoryRef",
+            cwd: input.cwd,
+            args: [],
+          }),
+          detail: `Cannot fast-forward ${input.refName}; it has diverged from ${upstreamRef}.`,
+        });
+      }
+      yield* executeGit(
+        "GitVcsDriver.syncHistoryRef.updateRef",
+        input.cwd,
+        ["update-ref", localRef, upstreamRef],
+        {
+          fallbackErrorDetail: "git update-ref failed",
+        },
+      );
+    }
+    return { action: "pull" as const, refName: input.refName };
+  });
+
   const readRangeContext: GitVcsDriver.GitVcsDriver["Service"]["readRangeContext"] = Effect.fn(
     "readRangeContext",
   )(function* (cwd, baseRef) {
@@ -4002,6 +4165,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     pushCurrentBranch: (cwd, fallbackBranch, options) =>
       withListRefsInvalidation(cwd, pushCurrentBranch(cwd, fallbackBranch, options)),
     pullCurrentBranch: (cwd) => withListRefsInvalidation(cwd, pullCurrentBranch(cwd)),
+    syncHistoryRef: (input) => withListRefsInvalidation(input.cwd, syncHistoryRef(input)),
     readRangeContext,
     getReviewDiffPreview,
     getReviewDiffFileContents,

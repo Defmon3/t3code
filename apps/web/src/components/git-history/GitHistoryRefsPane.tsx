@@ -5,10 +5,14 @@ import {
   ArrowUpIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  DownloadIcon,
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  UploadIcon,
   SearchIcon,
   StarIcon,
   TagIcon,
@@ -19,7 +23,9 @@ import { type CSSProperties, useMemo } from "react";
 import type { GitRefTreeNode } from "../../lib/gitRefTree";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { RefTreeProps } from "./GitHistoryVisualTypes";
+import { resolveGitHistorySyncActions } from "./GitHistorySyncToolbar.logic";
 
 type RefPaneRow =
   | { readonly kind: "all"; readonly key: "all" }
@@ -191,6 +197,9 @@ export function GitRefsPane(props: {
   refPaginationError: string | null;
   onRetryRefs: () => void;
   onClose?: () => void;
+  selectedRef?: VcsHistoryRef | null;
+  onSync?: (action: "fetch" | "pull" | "push") => void;
+  syncPendingAction?: "fetch" | "pull" | "push" | null;
 }) {
   const rows = useMemo(
     () =>
@@ -453,6 +462,92 @@ export function GitRefsPane(props: {
             );
           }}
         />
+      </div>
+      <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border/60 bg-background/80 p-2">
+        {resolveGitHistorySyncActions(props.selectedRef ?? null).map(
+          ({ action, count, disabled, tooltip }) => {
+            const Icon =
+              action === "fetch" ? RefreshCwIcon : action === "pull" ? DownloadIcon : UploadIcon;
+            const actionPending = props.syncPendingAction === action;
+            const actionDisabled =
+              disabled ||
+              (props.syncPendingAction !== undefined && props.syncPendingAction !== null);
+            const actionLabel = action[0]?.toUpperCase() + action.slice(1);
+            const pendingLabel = action === "fetch" ? "Fetching" : `${actionLabel}ing`;
+            return (
+              <Tooltip key={action}>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="flex shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                      tabIndex={actionDisabled ? 0 : undefined}
+                    />
+                  }
+                >
+                  <Button
+                    size="icon-sm"
+                    variant="outline"
+                    disabled={actionDisabled}
+                    onClick={() => props.onSync?.(action)}
+                    aria-busy={actionPending || undefined}
+                    aria-label={`${actionPending ? pendingLabel : actionLabel} selected branch`}
+                    className={cn(
+                      "relative [--control-icon-color:currentColor]",
+                      actionPending
+                        ? action === "push"
+                          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-400 shadow-xs disabled:opacity-100"
+                          : "border-sky-500/50 bg-sky-500/15 text-sky-400 shadow-xs disabled:opacity-100"
+                        : actionDisabled
+                          ? "border-transparent bg-transparent text-muted-foreground disabled:opacity-25"
+                          : action === "push"
+                            ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-400 shadow-xs hover:bg-emerald-500/25"
+                            : "border-sky-500/50 bg-sky-500/15 text-sky-400 shadow-xs hover:bg-sky-500/25",
+                    )}
+                  >
+                    {actionPending ? (
+                      <LoaderCircleIcon
+                        className={cn(
+                          "size-3.5 animate-spin",
+                          action === "push" ? "text-emerald-400" : "text-sky-400",
+                        )}
+                      />
+                    ) : (
+                      <Icon
+                        className={cn(
+                          "size-3.5",
+                          actionDisabled
+                            ? "text-muted-foreground"
+                            : action === "push"
+                              ? "text-emerald-400"
+                              : "text-sky-400",
+                        )}
+                      />
+                    )}
+                    {count > 0 ? (
+                      <span
+                        className={cn(
+                          "absolute -right-1 -bottom-1 rounded bg-muted px-0.5 text-[0.55rem] tabular-nums",
+                          actionDisabled
+                            ? "text-muted-foreground"
+                            : action === "push"
+                              ? "text-emerald-400"
+                              : "text-sky-400",
+                        )}
+                      >
+                        {count > 99 ? "99+" : count}
+                      </span>
+                    ) : null}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  {actionPending
+                    ? `${pendingLabel} selected branch.`
+                    : `${actionLabel}: ${tooltip}`}
+                </TooltipPopup>
+              </Tooltip>
+            );
+          },
+        )}
       </div>
     </aside>
   );

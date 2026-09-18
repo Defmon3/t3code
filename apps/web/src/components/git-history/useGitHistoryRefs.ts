@@ -195,9 +195,11 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     favoriteBranches: favoriteBranchSet,
     favoriteRefs,
     hasMoreRefs:
-      (refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
-      (remote.data?.nextCursor !== null && remote.data?.nextCursor !== undefined) ||
-      (tags.data?.nextCursor !== null && tags.data?.nextCursor !== undefined),
+      (refs.canLoadNext && refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
+      (remote.canLoadNext &&
+        remote.data?.nextCursor !== null &&
+        remote.data?.nextCursor !== undefined) ||
+      (tags.canLoadNext && tags.data?.nextCursor !== null && tags.data?.nextCursor !== undefined),
     isFetchingMoreRefs:
       refs.isFetchingNextPage || remote.isFetchingNextPage || tags.isFetchingNextPage,
     isRefSnapshotComplete:

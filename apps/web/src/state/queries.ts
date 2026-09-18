@@ -224,18 +224,12 @@ export function usePaginatedHistoryRefs(
   const revision = options?.revision ?? 0;
   const [queryGeneration, setQueryGeneration] = useState(0);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const targetKey =
+  const scopeKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([
-          target.environmentId,
-          target.cwd,
-          query,
-          limit,
-          namespace,
-          revision,
-          refreshGeneration,
-        ])
+      ? JSON.stringify([target.environmentId, target.cwd, query, limit, namespace])
       : null;
+  const targetKey =
+    scopeKey === null ? null : JSON.stringify([scopeKey, revision, refreshGeneration]);
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
     readonly cursors: ReadonlyArray<string | undefined>;
@@ -290,7 +284,7 @@ export function usePaginatedHistoryRefs(
       }),
     [results],
   );
-  const data = useMemo<VcsListHistoryRefsResult | null>(() => {
+  const liveData = useMemo<VcsListHistoryRefsResult | null>(() => {
     const first = values[0] ?? null;
     const last = values.at(-1) ?? null;
     if (first === null || last === null) return null;
@@ -307,6 +301,14 @@ export function usePaginatedHistoryRefs(
       isComplete: last.isComplete,
     };
   }, [values]);
+  const [retainedData, setRetainedData] = useState<{
+    readonly scopeKey: string;
+    readonly data: VcsListHistoryRefsResult;
+  } | null>(null);
+  useEffect(() => {
+    if (scopeKey !== null && liveData !== null) setRetainedData({ scopeKey, data: liveData });
+  }, [liveData, scopeKey]);
+  const data = liveData ?? (retainedData?.scopeKey === scopeKey ? retainedData.data : null);
   const failed = results.find((result) => result._tag === "Failure");
   const expiredPage =
     failed?._tag === "Failure" && Schema.is(VcsSnapshotExpiredError)(Cause.squash(failed.cause));
@@ -341,7 +343,12 @@ export function usePaginatedHistoryRefs(
     }
   }, [pageAtoms, results]);
   const loadNext = useCallback(() => {
-    if (targetKey === null || data?.nextCursor === null || data?.nextCursor === undefined) {
+    if (
+      liveData === null ||
+      targetKey === null ||
+      data?.nextCursor === null ||
+      data?.nextCursor === undefined
+    ) {
       return;
     }
     setPagination((current) => {
@@ -351,7 +358,7 @@ export function usePaginatedHistoryRefs(
         ? { targetKey, cursors: currentCursors }
         : { targetKey, cursors: [...currentCursors, data.nextCursor!] };
     });
-  }, [data?.nextCursor, targetKey]);
+  }, [data?.nextCursor, liveData, targetKey]);
 
   return {
     data,
@@ -359,6 +366,7 @@ export function usePaginatedHistoryRefs(
     error,
     isPending: results.some((result) => result.waiting),
     isFetchingNextPage,
+    canLoadNext: liveData !== null,
     refresh,
     retry,
     loadNext,

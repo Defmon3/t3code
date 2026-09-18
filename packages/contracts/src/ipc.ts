@@ -8,6 +8,8 @@ import type {
   VcsListRefsResult,
   VcsPullInput,
   VcsPullResult,
+  VcsHistorySyncInput,
+  VcsHistorySyncResult,
   VcsRemoveWorktreeInput,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
@@ -1357,6 +1359,7 @@ export interface EnvironmentApi {
     switchRef: (input: VcsSwitchRefInput) => Promise<VcsSwitchRefResult>;
     init: (input: VcsInitInput) => Promise<void>;
     pull: (input: VcsPullInput) => Promise<VcsPullResult>;
+    historySync: (input: VcsHistorySyncInput) => Promise<VcsHistorySyncResult>;
     refreshStatus: (input: VcsStatusInput) => Promise<VcsStatusResult>;
     onStatus: (
       input: VcsStatusInput,
