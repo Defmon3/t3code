@@ -2126,7 +2126,6 @@ function PullRequestsRouteView() {
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
-            onAddIssue={() => undefined}
             onAddAgents={() => undefined}
             onAddDevice={() => undefined}
             browserAvailable={false}
@@ -2134,8 +2133,6 @@ function PullRequestsRouteView() {
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
-            issueAvailable={false}
-            pullRequestsAvailable={false}
             agentsAvailable={false}
             deviceAvailable={false}
             liveAgentCount={0}
