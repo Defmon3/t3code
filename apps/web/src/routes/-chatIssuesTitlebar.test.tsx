@@ -11,14 +11,51 @@ import { MenuItem, MenuRadioItem } from "../components/ui/menu";
 import {
   CompactFilterMenu,
   hasLinearManagementState,
+  issueListScopePreferencePatch,
   issueSelectionSearchPatch,
   isIssueEntryOpen,
   IssuesColumn,
   mergeIssueProviderSummaries,
   stabilizeLinearProviderSummary,
 } from "./_chat.issues";
+import {
+  DEFAULT_ISSUE_PANEL_PREFERENCES,
+  resolveIssuePanelPreferences,
+} from "../components/issue/issuePanelPreferences";
 
 describe("IssuesColumn", () => {
+  it("saves explicit route filter choices without saving searches or project switches", () => {
+    const saved = {
+      ...DEFAULT_ISSUE_PANEL_PREFERENCES,
+      sort: "created" as const,
+      order: "asc" as const,
+    };
+
+    expect(
+      resolveIssuePanelPreferences(saved, issueListScopePreferencePatch({ state: "closed" }) ?? {}),
+    ).toMatchObject({ state: "closed", sort: "created", order: "asc" });
+    expect(
+      resolveIssuePanelPreferences(
+        saved,
+        issueListScopePreferencePatch({ sort: undefined }, { sort: "updated" }) ?? {},
+      ),
+    ).toMatchObject({ sort: "updated", order: "asc" });
+    expect(
+      resolveIssuePanelPreferences(
+        saved,
+        issueListScopePreferencePatch({ order: undefined }, { order: "desc" }) ?? {},
+      ),
+    ).toMatchObject({ sort: "created", order: "desc" });
+    expect(issueListScopePreferencePatch({ q: "  exact search text  " })).toBeNull();
+    expect(
+      issueListScopePreferencePatch(
+        { projectId: "project_1" as ProjectId, sort: undefined, order: undefined },
+        { sort: "updated", order: "desc" },
+      ),
+    ).toBeNull();
+    expect(issueListScopePreferencePatch({ host: "github.com" }, null)).toBeNull();
+  });
+
   it("marks only the opened issue as current", () => {
     const opened = {
       projectId: "project_1" as ProjectId,

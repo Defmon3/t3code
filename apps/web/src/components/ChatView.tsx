@@ -213,7 +213,6 @@ import {
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
-import { IssuesPanel } from "./issue/IssuesPanel";
 import { IssuesUnavailableState } from "./issue/IssuesUnavailableState";
 import { pullRequestPanelContext } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
@@ -2031,8 +2030,10 @@ export default function ChatView(props: ChatViewProps) {
   const activeIssueSurfaceId =
     activeRightPanelSurface?.kind === "issue"
       ? activeRightPanelSurface.id
-      : activeRightPanelSurface?.kind === "issues" && activeRightPanelSurface.selected
-        ? issueSurfaceId(activeRightPanelSurface.selected)
+      : activeRightPanelSurface?.kind === "repository" &&
+          activeRightPanelSurface.view === "issues" &&
+          activeRightPanelSurface.selectedIssue
+        ? issueSurfaceId(activeRightPanelSurface.selectedIssue)
         : undefined;
   const handleIssueTabStatusChange = useCallback(
     (status: IssueTabStatus) => {
@@ -4606,15 +4607,30 @@ export default function ChatView(props: ChatViewProps) {
     useRightPanelStore.getState().openRepository(activeThreadRef, "pull-requests");
   }, [activeThreadRef, pullRequestsSurfaceAvailable]);
   const addRepositorySurface = useCallback(() => {
-    if (!activeThreadRef || (!(isGitRepo && supportsGitHistory) && !pullRequestsSurfaceAvailable))
+    const issuesAvailable = supportsIssues && activeProject !== null;
+    if (
+      !activeThreadRef ||
+      (!(isGitRepo && supportsGitHistory) && !pullRequestsSurfaceAvailable && !issuesAvailable)
+    )
       return;
     useRightPanelStore
       .getState()
       .openRepository(
         activeThreadRef,
-        isGitRepo && supportsGitHistory ? "history" : "pull-requests",
+        isGitRepo && supportsGitHistory
+          ? "history"
+          : pullRequestsSurfaceAvailable
+            ? "pull-requests"
+            : "issues",
       );
-  }, [activeThreadRef, isGitRepo, pullRequestsSurfaceAvailable, supportsGitHistory]);
+  }, [
+    activeProject,
+    activeThreadRef,
+    isGitRepo,
+    pullRequestsSurfaceAvailable,
+    supportsGitHistory,
+    supportsIssues,
+  ]);
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -4864,7 +4880,7 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         panels.openProactive(
           activeThreadRef,
-          { id: "repository", kind: "repository", view: "pull-requests" },
+          { id: "repository", kind: "repository", view: "pull-requests", selectedIssue: null },
           userActionRevision,
         );
       } else if (
@@ -5993,22 +6009,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [composerOverlayElement],
   );
-  // Which issue is not something the chooser can know, so it opens the browser and the reader
-  // picks inside it — in the same tab, rather than as one more of them.
-  const addIssueSurface = useCallback(() => {
-    if (!activeThreadRef) return;
-    useRightPanelStore.getState().openIssues(activeThreadRef);
-  }, [activeThreadRef]);
-  const selectIssueInPanel = useCallback(
-    (
-      target: { projectId: string; provider?: string; repository: string; number: number } | null,
-    ) => {
-      if (!activeThreadRef) return;
-      useRightPanelStore.getState().selectIssueInPanel(activeThreadRef, target);
-    },
-    [activeThreadRef],
-  );
-  const issueSurfaceAvailable = supportsIssues && activeProject !== null;
   const publishComposerOverlayHeight = useCallback(
     (height: number) => {
       const nextHeight = Math.ceil(height);
@@ -9731,9 +9731,28 @@ export default function ChatView(props: ChatViewProps) {
           environmentId={environmentId}
           cwd={isGitRepo ? gitCwd : null}
           threadRef={activeThreadRef}
+          issueContext={
+            activeProject && activeProjectRef
+              ? {
+                  projectId: activeProject.id,
+                  handoffTarget: {
+                    kind: "existing-thread",
+                    projectRef: activeProjectRef,
+                    draftId: composerDraftTarget,
+                  },
+                }
+              : null
+          }
+          selectedIssue={renderedRightPanelSurface.selectedIssue ?? null}
           view={renderedRightPanelSurface.view}
           active={rightPanelOpen}
           gitHistoryAvailable={supportsGitHistory && isGitRepo}
+          issuesAvailable={supportsIssues && activeProject !== null && activeProjectRef !== null}
+          onSelectIssue={(selected) =>
+            useRightPanelStore.getState().selectRepositoryIssue(activeThreadRef, selected)
+          }
+          onIssueStateChange={handleIssueTabStatusChange}
+          onOpenLinkedPullRequest={openLinkedPullRequest}
           onViewChange={(view) =>
             useRightPanelStore.getState().selectRepositoryView(activeThreadRef, view)
           }
@@ -9792,12 +9811,10 @@ export default function ChatView(props: ChatViewProps) {
         }
         onOpenLinkedIssue={openLinkedIssue}
       />
-    ) : (renderedRightPanelSurface?.kind === "issue" ||
-        renderedRightPanelSurface?.kind === "issues") &&
+    ) : renderedRightPanelSurface?.kind === "issue" &&
       issuesSurfaceCapabilityState === "loading" ? (
       <DetailGhost label="Loading issues" />
-    ) : (renderedRightPanelSurface?.kind === "issue" ||
-        renderedRightPanelSurface?.kind === "issues") &&
+    ) : renderedRightPanelSurface?.kind === "issue" &&
       issuesSurfaceCapabilityState === "unavailable" ? (
       <IssuesUnavailableState
         title="Issues unavailable"
@@ -9827,19 +9844,6 @@ export default function ChatView(props: ChatViewProps) {
         }}
         onStateChange={handleIssueTabStatusChange}
         onOpenLinkedPullRequest={openLinkedPullRequest}
-      />
-    ) : renderedRightPanelSurface?.kind === "issues" && activeProject && activeProjectRef ? (
-      <IssuesPanel
-        environmentId={activeThread.environmentId}
-        projectId={activeProject.id}
-        selected={renderedRightPanelSurface.selected}
-        onSelect={selectIssueInPanel}
-        handoffTarget={{
-          kind: "existing-thread",
-          projectRef: activeProjectRef,
-          draftId: composerDraftTarget,
-        }}
-        onStateChange={handleIssueTabStatusChange}
       />
     ) : renderedRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
@@ -10505,17 +10509,18 @@ export default function ChatView(props: ChatViewProps) {
           onAddRepository={addRepositorySurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
-          onAddIssue={addIssueSurface}
           onAddAgents={addAgentsSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
-          repositoryAvailable={(isGitRepo && supportsGitHistory) || pullRequestsSurfaceAvailable}
+          repositoryAvailable={
+            (isGitRepo && supportsGitHistory) ||
+            pullRequestsSurfaceAvailable ||
+            (supportsIssues && activeProject !== null)
+          }
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
-          issueAvailable={issueSurfaceAvailable}
-          pullRequestsAvailable={pullRequestsSurfaceAvailable}
           agentsAvailable
           issueStatuses={issueTabStatuses}
           deviceAvailable={activeThreadRef !== null}
@@ -10567,17 +10572,18 @@ export default function ChatView(props: ChatViewProps) {
             onAddRepository={addRepositorySurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
-            onAddIssue={addIssueSurface}
             onAddAgents={addAgentsSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
-            repositoryAvailable={(isGitRepo && supportsGitHistory) || pullRequestsSurfaceAvailable}
+            repositoryAvailable={
+              (isGitRepo && supportsGitHistory) ||
+              pullRequestsSurfaceAvailable ||
+              (supportsIssues && activeProject !== null)
+            }
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
-            issueAvailable={issueSurfaceAvailable}
-            pullRequestsAvailable={pullRequestsSurfaceAvailable}
             agentsAvailable
             issueStatuses={issueTabStatuses}
             deviceAvailable={activeThreadRef !== null}

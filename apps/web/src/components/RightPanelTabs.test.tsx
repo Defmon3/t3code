@@ -121,7 +121,6 @@ function renderTabs(
       onAddPullRequest={() => undefined}
       onAddRepository={() => undefined}
       repositoryAvailable={false}
-      onAddIssue={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
@@ -132,8 +131,6 @@ function renderTabs(
       diffAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
-      issueAvailable={false}
-      pullRequestsAvailable={false}
       agentsAvailable={false}
       deviceAvailable={false}
     >
