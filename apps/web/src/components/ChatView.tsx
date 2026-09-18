@@ -223,7 +223,6 @@ import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavaila
 import { RightPanelTabs, type IssueTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
-import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
@@ -634,7 +633,7 @@ const selectAutoShowFloatingPreview = (settings: { browserAutoShowFloatingPrevie
 const DevicePanel = lazy(() =>
   import("./device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
-const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
+const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -4591,10 +4590,6 @@ export default function ChatView(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
-  const addGitHistorySurface = useCallback(() => {
-    if (!activeThreadRef || !isGitRepo || !supportsGitHistory) return;
-    useRightPanelStore.getState().open(activeThreadRef, "git-history");
-  }, [activeThreadRef, isGitRepo, supportsGitHistory]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -4613,8 +4608,18 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread && supportsThreadPullRequests && visiblePullRequestCount > 0;
   const addPullRequestsSurface = useCallback(() => {
     if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
-    useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
+    useRightPanelStore.getState().openRepository(activeThreadRef, "pull-requests");
   }, [activeThreadRef, pullRequestsSurfaceAvailable]);
+  const addRepositorySurface = useCallback(() => {
+    if (!activeThreadRef || (!(isGitRepo && supportsGitHistory) && !pullRequestsSurfaceAvailable))
+      return;
+    useRightPanelStore
+      .getState()
+      .openRepository(
+        activeThreadRef,
+        isGitRepo && supportsGitHistory ? "history" : "pull-requests",
+      );
+  }, [activeThreadRef, isGitRepo, pullRequestsSurfaceAvailable, supportsGitHistory]);
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -4864,7 +4869,7 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         panels.openProactive(
           activeThreadRef,
-          { id: "pull-requests", kind: "pull-requests" },
+          { id: "repository", kind: "repository", view: "pull-requests" },
           userActionRevision,
         );
       } else if (
@@ -9750,17 +9755,19 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
-    ) : renderedRightPanelSurface?.kind === "git-history" &&
-      supportsGitHistory &&
-      isGitRepo &&
-      gitCwd !== null ? (
+    ) : renderedRightPanelSurface?.kind === "repository" ? (
       <Suspense fallback={null}>
-        <GitHistoryPanel
+        <RepositoryPanel
           environmentId={environmentId}
-          cwd={gitCwd}
+          cwd={isGitRepo ? gitCwd : null}
+          threadRef={activeThreadRef}
+          view={renderedRightPanelSurface.view}
           active={rightPanelOpen}
-          stateStore={gitHistoryPanelStore}
-          stateScopeKey={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
+          gitHistoryAvailable={supportsGitHistory && isGitRepo}
+          gitHistoryPanelStore={gitHistoryPanelStore}
+          onViewChange={(view) =>
+            useRightPanelStore.getState().selectRepositoryView(activeThreadRef, view)
+          }
         />
       </Suspense>
     ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
@@ -9865,8 +9872,6 @@ export default function ChatView(props: ChatViewProps) {
         }}
         onStateChange={handleIssueTabStatusChange}
       />
-    ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
-      <ThreadPullRequestsPanel threadRef={activeThreadRef} />
     ) : renderedRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
@@ -10528,17 +10533,16 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
-          onAddGitHistory={addGitHistorySurface}
+          onAddRepository={addRepositorySurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddIssue={addIssueSurface}
-          onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
-          gitHistoryAvailable={isGitRepo && supportsGitHistory}
+          repositoryAvailable={(isGitRepo && supportsGitHistory) || pullRequestsSurfaceAvailable}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           issueAvailable={issueSurfaceAvailable}
@@ -10591,17 +10595,16 @@ export default function ChatView(props: ChatViewProps) {
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
-            onAddGitHistory={addGitHistorySurface}
+            onAddRepository={addRepositorySurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddIssue={addIssueSurface}
-            onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
-            gitHistoryAvailable={isGitRepo && supportsGitHistory}
+            repositoryAvailable={(isGitRepo && supportsGitHistory) || pullRequestsSurfaceAvailable}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             issueAvailable={issueSurfaceAvailable}
