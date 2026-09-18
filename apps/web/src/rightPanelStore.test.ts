@@ -140,6 +140,7 @@ describe("rightPanelStore", () => {
       id: "repository",
       kind: "repository",
       view: "pull-requests",
+      selectedIssue: null,
     });
   });
 
@@ -159,21 +160,17 @@ describe("rightPanelStore", () => {
       id: "repository",
       kind: "repository",
       view: "pull-requests",
+      selectedIssue: null,
     });
   });
 
   it.each([
-    { choice: "issues", choose: () => useRightPanelStore.getState().openIssues(refA) },
     {
       choice: "issue",
       choose: () =>
         useRightPanelStore
           .getState()
           .openIssue(refA, { projectId: "project-a", repository: "pingdotgg/t3code", number: 1 }),
-    },
-    {
-      choice: "issue selection",
-      choose: () => useRightPanelStore.getState().selectIssueInPanel(refA, null),
     },
     { choice: "file", choose: () => useRightPanelStore.getState().openFile(refA, "src/app.ts") },
     {
@@ -483,6 +480,54 @@ describe("rightPanelStore", () => {
       { id: "repository", kind: "repository", view: "pull-requests" },
       { id: "files", kind: "files" },
     ]);
+  });
+
+  it("merges a selected standalone Issues tab into Repository in its original position", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "issues",
+            surfaces: [
+              { id: "files", kind: "files" },
+              { id: "repository", kind: "repository", view: "history" },
+              {
+                id: "issues",
+                kind: "issues",
+                selected: {
+                  projectId: "project-a",
+                  provider: "linear",
+                  repository: "ENG",
+                  number: 12224,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "repository",
+          surfaces: [
+            { id: "files", kind: "files" },
+            {
+              id: "repository",
+              kind: "repository",
+              view: "issues",
+              selectedIssue: {
+                projectId: "project-a",
+                provider: "linear",
+                repository: "ENG",
+                number: 12224,
+              },
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("drops malformed persisted surfaces", () => {
@@ -1021,59 +1066,63 @@ describe("rightPanelStore", () => {
     );
   });
 
-  it("keeps the issue browser one tab while the issue it shows changes", () => {
+  it("keeps an issue selection while Repository changes views", () => {
     const target = {
       projectId: "project-a",
       provider: "github",
       repository: "pingdotgg/t3code",
       number: 4909,
     };
-    useRightPanelStore.getState().openIssues(refA);
+    const store = useRightPanelStore.getState();
+    store.openRepository(refA, "issues");
+    store.selectRepositoryIssue(refA, target);
+    store.openRepository(refA, "history");
+
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "issues",
-      surfaces: [{ id: "issues", kind: "issues", selected: null }],
+      activeSurfaceId: "repository",
+      surfaces: [{ id: "repository", kind: "repository", view: "history", selectedIssue: target }],
     });
 
-    useRightPanelStore.getState().selectIssueInPanel(refA, target);
-    // Reopening from the chooser must not throw away what the reader is reading.
-    useRightPanelStore.getState().openIssues(refA);
+    const revision = store.getUserActionRevision(refA);
+    expect(
+      store.openProactive(
+        refA,
+        { id: "repository", kind: "repository", view: "pull-requests" },
+        revision,
+      ),
+    ).toBe(true);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "issues",
-      surfaces: [{ id: "issues", kind: "issues", selected: target }],
-    });
-
-    useRightPanelStore.getState().selectIssueInPanel(refA, null);
-    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      id: "issues",
-      kind: "issues",
-      selected: null,
+      activeSurfaceId: "repository",
+      surfaces: [
+        { id: "repository", kind: "repository", view: "pull-requests", selectedIssue: target },
+      ],
     });
   });
 
-  it("leaves per-issue surfaces alone when the browser's issue changes", () => {
+  it("leaves per-issue surfaces alone when Repository selects an issue", () => {
     const opened = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
     const browsed = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4910 };
     useRightPanelStore.getState().openIssue(refA, opened);
-    useRightPanelStore.getState().openIssues(refA);
-    useRightPanelStore.getState().selectIssueInPanel(refA, browsed);
+    useRightPanelStore.getState().openRepository(refA, "issues");
+    useRightPanelStore.getState().selectRepositoryIssue(refA, browsed);
 
     const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
     expect(state.surfaces).toEqual([
       { id: issueSurfaceId(opened), kind: "issue", ...opened },
-      { id: "issues", kind: "issues", selected: browsed },
+      { id: "repository", kind: "repository", view: "issues", selectedIssue: browsed },
     ]);
-    expect(state.activeSurfaceId).toBe("issues");
+    expect(state.activeSurfaceId).toBe("repository");
   });
 
-  it("forgets a persisted browser selection that no longer names an issue", () => {
+  it("forgets a malformed persisted issue selection", () => {
     expect(
       migratePersistedRightPanelState({
         byThreadKey: {
           "env-1:thread-A": {
             isOpen: true,
-            activeSurfaceId: "issues",
+            activeSurfaceId: "repository",
             surfaces: [
               { id: "issues", kind: "issues", selected: { repository: "pingdotgg/t3code" } },
             ],
@@ -1084,8 +1133,47 @@ describe("rightPanelStore", () => {
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: true,
-          activeSurfaceId: "issues",
-          surfaces: [{ id: "issues", kind: "issues", selected: null }],
+          activeSurfaceId: "repository",
+          surfaces: [
+            { id: "repository", kind: "repository", view: "history", selectedIssue: null },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps a repository issue selection when a legacy Issues surface has no selection", () => {
+    const selectedIssue = {
+      projectId: "project-a",
+      provider: "github",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    };
+
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "issues",
+            surfaces: [
+              {
+                id: "repository",
+                kind: "repository",
+                view: "history",
+                selectedIssue,
+              },
+              { id: "issues", kind: "issues", selected: null },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "repository",
+          surfaces: [{ id: "repository", kind: "repository", view: "issues", selectedIssue }],
         },
       },
     });

@@ -222,13 +222,15 @@ even when its changes look independent. Stack actions require an environment tha
 
 ### Browse Repository History
 
-Open the right panel menu and choose **Repository** to explore history and linked pull requests without leaving your thread. Select **History** to browse a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository.
+Open the right panel menu and choose **Repository** to explore history, issues, and linked pull requests without leaving your thread. Select **History** to browse a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository. Select **Issues** to search and filter your project's tracker, then open, update, or hand off an issue from the same thread. Select **Pull Requests** to review the pull requests linked to the thread.
+
+Your issue filters and sort choices are remembered separately for each project and connected environment. Search text is temporary.
 
 History is currently available in web and desktop project views. Mobile keeps its existing Git status and actions, but does not yet include this dense history workspace.
 
 - Search by commit subject, author, ref, or hash. Use the clear control or `Escape` to reset a search.
 - Select a commit to view its metadata and changed files, then open the same diff view used elsewhere in T3 Code. History diffs use Git's normal patch output, so they match the familiar command-line review view.
-- Copy a full commit hash from a row. When a GitHub repository is connected, issue references in commit subjects open the matching issue.
+- Copy a full commit hash from a row.
 - Branch rows show ahead and behind counts when an upstream is configured.
 
 For large repositories, history is loaded in pages and the commit list is virtualized. The initial browsing window is intentionally bounded so the right panel remains responsive; select a branch or search to narrow the result.

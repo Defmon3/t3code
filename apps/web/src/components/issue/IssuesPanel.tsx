@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   IssueInvolvement,
+  IssueLinkedPullRequest,
   IssueListOrder,
   IssueListSort,
   IssueListEntry,
@@ -19,7 +20,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { IssuesSurface } from "~/rightPanelStore";
+import type { RepositoryItemSelection } from "~/rightPanelStore";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { issueEnvironment } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
@@ -40,6 +42,12 @@ import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
 import { IssuesUnavailableState } from "./IssuesUnavailableState";
+import {
+  DEFAULT_ISSUE_PANEL_PREFERENCES,
+  issuePanelPreferencesKey,
+  IssuePanelPreferencesSchema,
+  normalizeIssueSearchQuery,
+} from "./issuePanelPreferences";
 
 // The same vocabulary the issues page filters by, minus the two questions a panel already knows
 // the answer to: it lists one project, on one host.
@@ -77,11 +85,6 @@ interface PanelPage {
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
-/**
- * What `IssueListInput` accepts as a query. Past it the read is refused outright, so a pasted wall
- * of text searches its opening rather than coming back as an error about its length.
- */
-const MAX_QUERY_LENGTH = 200;
 const PAGE_SIZE = 30;
 /** The listing's own ceiling. Past it the search is the way to find something, not more rows. */
 const MAX_LIMIT = 500;
@@ -90,11 +93,12 @@ interface IssuesPanelProps {
   environmentId: EnvironmentId;
   /** The thread's project, which is the only repository this panel lists. */
   projectId: ProjectId;
-  selected: IssuesSurface["selected"];
+  selected: RepositoryItemSelection | null;
   /** Null returns the panel to the list it was picked from. */
-  onSelect: (target: NonNullable<IssuesSurface["selected"]> | null) => void;
+  onSelect: (target: RepositoryItemSelection | null) => void;
   handoffTarget: IssueHandoffTarget;
   onStateChange: (status: IssueTabStatus) => void;
+  onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
 }
 
 /**
@@ -117,18 +121,18 @@ function ProjectIssues({
   onSelect,
   handoffTarget,
   onStateChange,
+  onOpenLinkedPullRequest,
 }: IssuesPanelProps) {
   // Held here rather than in the list, so reading an issue and coming back does not throw away
   // the search that found it — the list is unmounted while the issue is open.
+  const [preferences, setPreferences] = useLocalStorage(
+    issuePanelPreferencesKey(environmentId, projectId),
+    DEFAULT_ISSUE_PANEL_PREFERENCES,
+    IssuePanelPreferencesSchema,
+  );
   const [query, setQuery] = useState("");
   const [page, setPage] = useState<PanelPage>({ key: "", size: PAGE_SIZE, cursors: null });
-  const [filters, setFilters] = useState<{
-    readonly state: IssueListState;
-    readonly involvement: IssueInvolvement;
-    readonly label: string | undefined;
-    readonly sort: IssueListSort;
-    readonly order: IssueListOrder;
-  }>({ state: "open", involvement: "all", label: undefined, sort: "updated", order: "desc" });
+  const filters: PanelFilters = { ...preferences, label: preferences.label };
 
   if (selected) {
     return (
@@ -158,6 +162,7 @@ function ProjectIssues({
             }}
             handoffTarget={handoffTarget}
             onStateChange={onStateChange}
+            {...(onOpenLinkedPullRequest ? { onOpenLinkedPullRequest } : {})}
             // The panel is the narrowest place this reads, so the metadata folds into the top row
             // once the content scrolls — the same bargain the issues page makes.
             chromeVariant="collapse"
@@ -176,7 +181,7 @@ function ProjectIssues({
       page={page}
       onPage={setPage}
       filters={filters}
-      onFilters={setFilters}
+      onFilters={(nextFilters) => setPreferences((current) => ({ ...current, ...nextFilters }))}
     />
   );
 }
@@ -194,7 +199,7 @@ function IssueBrowserList({
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
-  onSelect: (target: NonNullable<IssuesSurface["selected"]>) => void;
+  onSelect: (target: RepositoryItemSelection) => void;
   query: string;
   onQuery: (query: string) => void;
   page: PanelPage;
@@ -202,10 +207,10 @@ function IssueBrowserList({
   filters: PanelFilters;
   onFilters: (filters: PanelFilters) => void;
 }) {
-  const typed = query.trim().slice(0, MAX_QUERY_LENGTH);
+  const searchQuery = normalizeIssueSearchQuery(query);
   // Searching asks the host, which takes a round trip, so the text is held for a moment before it
   // is sent — the same bargain the issues page makes.
-  const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
+  const sent = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
 
   // The label is narrowed on the rows rather than on the host, so it is no part of the question
   // and no reason to start the list again.
@@ -272,7 +277,7 @@ function IssueBrowserList({
     const hostOrdered =
       filters.sort === "best-match" &&
       answered.providers.some((provider) => !provider.sorts.includes("best-match"))
-        ? rankIssueMatches(answered.entries, sent)
+        ? rankIssueMatches(answered.entries, searchQuery)
         : answered.entries;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey || sentCursors === null) {
@@ -292,7 +297,7 @@ function IssueBrowserList({
         viewers: answered.viewers,
       };
     });
-  }, [answered, filterKey, filters.order, filters.sort, sent, sentCursors]);
+  }, [answered, filterKey, filters.order, filters.sort, searchQuery, sentCursors]);
 
   // Involvement and the label are narrowed here as well as asked for: a host that cannot express
   // "mentioned" answers unnarrowed, and no host is asked about a label at all.
@@ -306,8 +311,8 @@ function IssueBrowserList({
     );
     const queried = filterIssueQueryResults(
       byInvolvement,
-      typed,
-      typed === sent && !listQuery.isPending,
+      searchQuery,
+      searchQuery === sent && !listQuery.isPending,
       searchingHosts,
     );
     return filters.label === undefined
@@ -322,7 +327,7 @@ function IssueBrowserList({
     ordered,
     searchingHosts,
     sent,
-    typed,
+    searchQuery,
   ]);
 
   /** From what is held rather than from the read in flight, which has not answered yet. */
@@ -413,7 +418,7 @@ function IssueBrowserList({
         <ListSearchInput
           label="Search issues"
           value={query}
-          busy={typed.length > 0 && (typed !== sent || listQuery.isPending)}
+          busy={searchQuery.length > 0 && (searchQuery !== sent || listQuery.isPending)}
           onChange={onQuery}
         />
         <div className="flex shrink-0 items-center gap-1">
@@ -446,7 +451,7 @@ function IssueBrowserList({
           ) : entries.length === 0 ? (
             <div className="space-y-2 px-2">
               <p className="text-sm text-muted-foreground">
-                {typed.length > 0
+                {searchQuery.length > 0
                   ? "No issue here matches that."
                   : narrowed
                     ? "No issue here matches these filters."

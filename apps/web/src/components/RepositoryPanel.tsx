@@ -1,14 +1,19 @@
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
 import { Activity, lazy, Suspense, useRef, useState, type KeyboardEvent } from "react";
 
-import type { RepositoryView } from "~/rightPanelStore";
+import type { IssueSelection, RepositoryView } from "~/rightPanelStore";
 
+import type { IssueHandoffTarget } from "./issue/IssueDetailPanel";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
+import type { IssueTabStatus } from "./RightPanelTabs";
 import { Button } from "./ui/button";
 
 const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
+const IssuesPanel = lazy(() =>
+  import("./issue/IssuesPanel").then(({ IssuesPanel }) => ({ default: IssuesPanel })),
+);
 
-const views = ["history", "pull-requests"] as const;
+const views = ["history", "issues", "pull-requests"] as const;
 
 export function repositoryViewFromKey(view: RepositoryView, key: string): RepositoryView | null {
   const index = views.indexOf(view);
@@ -19,24 +24,38 @@ export function repositoryViewFromKey(view: RepositoryView, key: string): Reposi
   return null;
 }
 
-export default function RepositoryPanel(props: {
+interface RepositoryPanelProps {
   readonly environmentId: EnvironmentId;
   readonly cwd: string | null;
   readonly threadRef: ScopedThreadRef;
+  readonly issueContext: { projectId: ProjectId; handoffTarget: IssueHandoffTarget } | null;
+  readonly selectedIssue: IssueSelection | null;
   readonly view: RepositoryView;
   readonly active: boolean;
   readonly gitHistoryAvailable: boolean;
+  readonly issuesAvailable: boolean;
   readonly onViewChange: (view: RepositoryView) => void;
-}) {
+  readonly onSelectIssue: (selected: IssueSelection | null) => void;
+  readonly onIssueStateChange: (status: IssueTabStatus) => void;
+  readonly onOpenLinkedPullRequest: (link: {
+    repository: string;
+    number: number;
+    url: string;
+  }) => void;
+}
+
+export default function RepositoryPanel(props: RepositoryPanelProps) {
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
   const [historyActivated, setHistoryActivated] = useState(props.view === "history");
+  const [issuesActivated, setIssuesActivated] = useState(props.view === "issues");
   if (props.view === "history" && !historyActivated) setHistoryActivated(true);
-  const select = (view: RepositoryView) => props.onViewChange(view);
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, view: RepositoryView) => {
+  if (props.view === "issues" && !issuesActivated) setIssuesActivated(true);
+
+  const move = (event: KeyboardEvent<HTMLButtonElement>, view: RepositoryView) => {
     const next = repositoryViewFromKey(view, event.key);
-    if (next === null) return;
+    if (!next) return;
     event.preventDefault();
-    select(next);
+    props.onViewChange(next);
     tabs.current[views.indexOf(next)]?.focus();
   };
 
@@ -63,10 +82,10 @@ export default function RepositoryPanel(props: {
             aria-selected={props.view === view}
             aria-controls={`repository-panel-${view}`}
             tabIndex={props.view === view ? 0 : -1}
-            onClick={() => select(view)}
-            onKeyDown={(event) => onKeyDown(event, view)}
+            onClick={() => props.onViewChange(view)}
+            onKeyDown={(event) => move(event, view)}
           >
-            {view === "history" ? "History" : "Pull Requests"}
+            {view === "history" ? "History" : view === "issues" ? "Issues" : "Pull Requests"}
           </Button>
         ))}
       </div>
@@ -78,7 +97,7 @@ export default function RepositoryPanel(props: {
             aria-labelledby="repository-tab-history"
             className="min-h-0 flex-1"
           >
-            {props.gitHistoryAvailable && props.cwd !== null ? (
+            {props.gitHistoryAvailable && props.cwd ? (
               <Suspense fallback={null}>
                 <GitHistoryPanel
                   environmentId={props.environmentId}
@@ -89,6 +108,36 @@ export default function RepositoryPanel(props: {
             ) : (
               <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
                 Update the environment server to browse Git History.
+              </div>
+            )}
+          </div>
+        </Activity>
+      ) : null}
+      {issuesActivated ? (
+        <Activity mode={props.view === "issues" ? "visible" : "hidden"}>
+          <div
+            id="repository-panel-issues"
+            role="tabpanel"
+            aria-labelledby="repository-tab-issues"
+            className="min-h-0 flex-1"
+          >
+            {props.issuesAvailable && props.issueContext ? (
+              <Suspense fallback={null}>
+                <IssuesPanel
+                  environmentId={props.environmentId}
+                  projectId={props.issueContext.projectId}
+                  selected={props.selectedIssue}
+                  onSelect={props.onSelectIssue}
+                  handoffTarget={props.issueContext.handoffTarget}
+                  onStateChange={props.onIssueStateChange}
+                  onOpenLinkedPullRequest={props.onOpenLinkedPullRequest}
+                />
+              </Suspense>
+            ) : (
+              <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                {props.issuesAvailable
+                  ? "Open a project thread to browse issues."
+                  : "Update the environment server to browse issues."}
               </div>
             )}
           </div>

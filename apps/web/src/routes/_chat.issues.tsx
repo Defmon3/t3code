@@ -41,6 +41,15 @@ import {
 } from "../components/issue/issueList.logic";
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
+import {
+  DEFAULT_ISSUE_PANEL_PREFERENCES,
+  issuePanelPreferencePatch,
+  issuePanelPreferencesKey,
+  IssuePanelPreferencesSchema,
+  normalizeIssueSearchQuery,
+  type IssuePanelPreferencePatch,
+  resolveIssuePanelPreferences,
+} from "../components/issue/issuePanelPreferences";
 import { LinearIcon } from "../components/Icons";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import {
@@ -75,6 +84,7 @@ import { Button } from "../components/ui/button";
 import { MenuItem, MenuSeparator } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
+import { useLocalStorage } from "../hooks/useLocalStorage";
 import { usePrimarySettings } from "../hooks/useSettings";
 import {
   selectActiveRightPanelSurface,
@@ -101,8 +111,8 @@ import { toastManager } from "../components/ui/toast";
 import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
 export interface IssuesSearch {
-  readonly involvement: IssueInvolvement;
-  readonly state: IssueListState;
+  readonly involvement?: IssueInvolvement;
+  readonly state?: IssueListState;
   /** Scopes the list. Separate from the selection so one cannot silently change the other. */
   readonly projectId?: ProjectId;
   /**
@@ -124,6 +134,10 @@ export interface IssuesSearch {
   readonly sort?: IssueListSort;
   readonly order?: IssueListOrder;
 }
+
+type IssuesSearchPatch = {
+  [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
+};
 
 export function issueSelectionSearchPatch(target: {
   readonly projectId: ProjectId;
@@ -256,6 +270,7 @@ function issueListSort(value: unknown): IssueListSort | undefined {
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
+
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
  * its "is there more" probe, and GitHub serves a hundred per request — so asking for ninety-nine
@@ -277,13 +292,15 @@ export const Route = createFileRoute("/_chat/issues")({
   validateSearch: (raw: Record<string, unknown>): IssuesSearch => {
     const sort = issueListSort(raw.sort);
     return {
-      involvement:
-        raw.involvement === "assigned" ||
-        raw.involvement === "authored" ||
-        raw.involvement === "mentioned"
-          ? raw.involvement
-          : "all",
-      state: raw.state === "closed" || raw.state === "all" ? raw.state : "open",
+      ...(raw.involvement === "all" ||
+      raw.involvement === "assigned" ||
+      raw.involvement === "authored" ||
+      raw.involvement === "mentioned"
+        ? { involvement: raw.involvement }
+        : {}),
+      ...(raw.state === "open" || raw.state === "closed" || raw.state === "all"
+        ? { state: raw.state }
+        : {}),
       ...(typeof raw.repository === "string" && raw.repository
         ? { repository: raw.repository.slice(0, 200) }
         : {}),
@@ -303,11 +320,18 @@ export const Route = createFileRoute("/_chat/issues")({
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
       ...(sort === undefined ? {} : { sort }),
       ...(raw.order === "asc" || raw.order === "desc" ? { order: raw.order } : {}),
-      ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+      ...(typeof raw.q === "string" && raw.q ? { q: raw.q } : {}),
     };
   },
   component: IssuesRouteView,
 });
+
+export function issueListScopePreferencePatch(
+  patch: IssuesSearchPatch,
+  preferencePatch: IssuePanelPreferencePatch | null = issuePanelPreferencePatch(patch),
+): IssuePanelPreferencePatch | null {
+  return "projectId" in patch ? null : preferencePatch;
+}
 
 function IssuesRouteView() {
   const search = Route.useSearch();
@@ -371,6 +395,15 @@ function IssuesRouteView() {
     () => resolveProjectScope(search.projectId, projects, projectsKnown),
     [projects, projectsKnown, search.projectId],
   );
+  const canSavePreferences = environmentId !== null && scopedProjectId !== undefined;
+  const preferencesKey = canSavePreferences
+    ? issuePanelPreferencesKey(environmentId, scopedProjectId)
+    : "t3.issues.panel.preferences:unscoped";
+  const [preferences, setPreferences] = useLocalStorage(
+    preferencesKey,
+    DEFAULT_ISSUE_PANEL_PREFERENCES,
+    IssuePanelPreferencesSchema,
+  );
   const rightPanelRef = useMemo(
     () => (environmentId === null ? null : scopeThreadRef(environmentId, ISSUES_PANEL_ID)),
     [environmentId],
@@ -409,8 +442,8 @@ function IssuesRouteView() {
         search: (previous: IssuesSearch): IssuesSearch => {
           const next = { ...previous, ...patch };
           return {
-            involvement: next.involvement ?? previous.involvement,
-            state: next.state ?? previous.state,
+            ...(next.involvement === undefined ? {} : { involvement: next.involvement }),
+            ...(next.state === undefined ? {} : { state: next.state }),
             ...(next.repository ? { repository: next.repository } : {}),
             ...(next.number ? { number: next.number } : {}),
             ...(next.projectId ? { projectId: next.projectId } : {}),
@@ -435,27 +468,36 @@ function IssuesRouteView() {
     selectedProjectId: undefined,
     selectedProvider: undefined,
   };
-  const updateListScope = (patch: {
-    [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
-  }) => {
+  const updateListScope = (
+    patch: IssuesSearchPatch,
+    preferencePatch?: IssuePanelPreferencePatch | null,
+  ) => {
     if (rightPanelRef !== null) {
       // Hide the old selection while retaining peer issue tabs for parallel reading.
       useRightPanelStore.getState().close(rightPanelRef);
     }
+    savePreferences(issueListScopePreferencePatch(patch, preferencePatch));
     updateSearch({ ...patch, ...clearedSelection });
   };
 
   // Searching asks the hosts, which takes a round trip, so the text is held for a moment before
   // it is sent. Until it lands, the rows already on screen are narrowed locally: the answer is
   // late but the page is not.
-  const typedQuery = (search.q ?? "").trim();
-  const sentQuery = useDebouncedValue(typedQuery, SEARCH_DEBOUNCE_MS);
-  const querySettled = typedQuery === sentQuery;
-  const sort: IssueListSort = search.sort ?? (sentQuery ? "best-match" : "updated");
-  const order: IssueListOrder = search.order ?? "desc";
+  const searchQuery = normalizeIssueSearchQuery(search.q ?? "");
+  const sentQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
+  const querySettled = searchQuery === sentQuery;
+  const resolvedPreferences = resolveIssuePanelPreferences(preferences, search);
+  const { state, involvement, label } = resolvedPreferences;
+  const sort: IssueListSort = search.sort ?? (sentQuery ? "best-match" : preferences.sort);
+  const order: IssueListOrder = search.order ?? preferences.order;
+
+  const savePreferences = (preferencePatch: IssuePanelPreferencePatch | null) => {
+    if (!canSavePreferences || preferencePatch === null) return;
+    setPreferences((current) => resolveIssuePanelPreferences(current, preferencePatch));
+  };
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${sort}:${order}`;
+  const scopeKey = `${environmentId ?? ""}:${state}:${involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${sort}:${order}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -481,11 +523,11 @@ function IssuesRouteView() {
       : issueEnvironment.list({
           environmentId: issueEnvironmentId,
           input: {
-            state: search.state,
+            state,
             // The hosts narrow by involvement themselves — GitHub by author and assignee, and so
             // on — so asking them is the difference between a page of results and a page of
             // everything with the answer somewhere further down it.
-            involvement: search.involvement,
+            involvement,
             limit: pageSize,
             sort,
             order,
@@ -513,11 +555,11 @@ function IssuesRouteView() {
       : issueEnvironment.list({
           environmentId: issueEnvironmentId,
           input: {
-            state: search.state,
-            involvement: search.involvement,
+            state,
+            involvement,
             limit: PAGE_SIZE,
-            sort: search.sort ?? "updated",
-            order: search.order ?? "desc",
+            sort: search.sort ?? preferences.sort,
+            order: search.order ?? preferences.order,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -530,21 +572,18 @@ function IssuesRouteView() {
   // are read for one. These are the same atoms the Authored and Assigned tabs ask for, so
   // switching to either is answered from cache.
   const partitionsWanted =
-    search.involvement === "all" &&
-    typedQuery.length === 0 &&
-    sort === "updated" &&
-    order === "desc";
+    involvement === "all" && searchQuery.length === 0 && sort === "updated" && order === "desc";
   const authoredQuery = useEnvironmentQuery(
     issueEnvironmentId === null || !partitionsWanted
       ? null
       : issueEnvironment.list({
           environmentId: issueEnvironmentId,
           input: {
-            state: search.state,
+            state,
             involvement: "authored",
             limit: PAGE_SIZE,
-            sort: search.sort ?? "updated",
-            order: search.order ?? "desc",
+            sort: search.sort ?? preferences.sort,
+            order: search.order ?? preferences.order,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -556,11 +595,11 @@ function IssuesRouteView() {
       : issueEnvironment.list({
           environmentId: issueEnvironmentId,
           input: {
-            state: search.state,
+            state,
             involvement: "assigned",
             limit: PAGE_SIZE,
-            sort: search.sort ?? "updated",
-            order: search.order ?? "desc",
+            sort: search.sort ?? preferences.sort,
+            order: search.order ?? preferences.order,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -693,12 +732,12 @@ function IssuesRouteView() {
       return null;
     }
     const entries = narrowIssuesToFilters(loaded.data.entries, {
-      state: search.state,
+      state,
       projectId: scopedProjectId,
       host: search.host,
     });
     return entries.length === 0 ? null : { ...loaded.data, entries };
-  }, [environmentId, loaded, scopeKey, scopedProjectId, search.host, search.state]);
+  }, [environmentId, loaded, scopeKey, scopedProjectId, search.host, state]);
   // With nothing typed and nothing to carry on from, the answer is taken from the read that is
   // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
   // text has gone — the data cannot say which question it belongs to, but the read it came from
@@ -832,31 +871,31 @@ function IssuesRouteView() {
 
   const entries = useMemo(() => {
     const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
-    const involvementEntries = filterIssuesByInvolvement(known, viewers, search.involvement);
+    const involvementEntries = filterIssuesByInvolvement(known, viewers, involvement);
     // The hosts search more than the row shows — a body, a comment — so once their answer is in,
     // narrowing it again here would throw away matches the reader asked for. The local pass
     // stands in for the answer that has not arrived yet, and for the hosts that answered without
     // searching at all: their rows arrive whole and would otherwise sit under a search that
     // never touched them.
     const labelled =
-      search.label === undefined
+      label === undefined
         ? involvementEntries
         : involvementEntries.filter((entry) =>
-            entry.labels.some((entryLabel) => entryLabel.name === search.label),
+            entry.labels.some((entryLabel) => entryLabel.name === label),
           );
-    if (typedQuery.length === 0) return labelled;
+    if (searchQuery.length === 0) return labelled;
     const answeredLocally = querySettled && !showingCarried;
-    return filterIssueQueryResults(labelled, typedQuery, answeredLocally, searchingHosts);
+    return filterIssueQueryResults(labelled, searchQuery, answeredLocally, searchingHosts);
   }, [
     filterKey,
     listData,
     ordered,
     querySettled,
-    search.involvement,
-    search.label,
+    involvement,
+    label,
     searchingHosts,
     showingCarried,
-    typedQuery,
+    searchQuery,
     viewers,
   ]);
 
@@ -867,9 +906,9 @@ function IssuesRouteView() {
   const labelOptions = useMemo(() => {
     const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
     const names = new Set(known.flatMap((entry) => entry.labels.map((label) => label.name)));
-    if (search.label !== undefined) names.add(search.label);
+    if (label !== undefined) names.add(label);
     return [...names].sort((left, right) => left.localeCompare(right));
-  }, [filterKey, listData, ordered, search.label]);
+  }, [filterKey, label, listData, ordered]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -921,12 +960,7 @@ function IssuesRouteView() {
   ]);
 
   const groups = useMemo(() => {
-    if (
-      search.involvement !== "all" ||
-      sort !== "updated" ||
-      order !== "desc" ||
-      typedQuery.length > 0
-    ) {
+    if (involvement !== "all" || sort !== "updated" || order !== "desc" || searchQuery.length > 0) {
       return [{ key: "others" as const, label: "", entries }];
     }
     // Until both partitions have answered, the snapshot's stand in — they are yesterday's
@@ -948,8 +982,7 @@ function IssuesRouteView() {
       authored,
       assigned,
       (entry) =>
-        search.label === undefined ||
-        entry.labels.some((entryLabel) => entryLabel.name === search.label),
+        label === undefined || entry.labels.some((entryLabel) => entryLabel.name === label),
     );
   }, [
     assignedQuery.data?.entries,
@@ -960,10 +993,10 @@ function IssuesRouteView() {
     order,
     partitionsWanted,
     scopeKey,
-    search.involvement,
-    search.label,
+    involvement,
+    label,
     sort,
-    typedQuery.length,
+    searchQuery.length,
     viewers,
   ]);
 
@@ -1125,7 +1158,7 @@ function IssuesRouteView() {
     <ListSearchInput
       label="Search issues"
       value={search.q ?? ""}
-      busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
+      busy={searchQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateSearch({ q: query || undefined })}
     />
   );
@@ -1158,7 +1191,7 @@ function IssuesRouteView() {
   // so that case waits with the skeletons rather than answering for the hosts. A search says so
   // in its own words and is left to.
   const carriedToNothing =
-    showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
+    showingCarried && listQuery.isPending && entries.length === 0 && searchQuery.length === 0;
   const listBody = (
     <>
       {!capabilityKnown ? (
@@ -1179,14 +1212,14 @@ function IssuesRouteView() {
           hasProjects={!projectsKnown || projects.length > 0}
           refreshing={refreshing}
           onRefresh={() => void refreshFromHost()}
-          query={typedQuery}
+          query={searchQuery}
           filtered={
-            search.state !== "open" ||
-            search.involvement !== "all" ||
+            state !== "open" ||
+            involvement !== "all" ||
             scopedProjectId !== undefined ||
             search.host !== undefined
           }
-          searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
+          searching={searchQuery.length > 0 && (!querySettled || showingCarried)}
           canLoadMore={listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)}
           loadingMore={loadingMore}
           onClearQuery={() => updateSearch({ q: undefined })}
@@ -1289,19 +1322,25 @@ function IssuesRouteView() {
         sort={sort}
         order={order}
         onSort={(nextSort) =>
-          updateListScope({
-            sort: nextSort === "updated" && sentQuery.length === 0 ? undefined : nextSort,
-          })
+          updateListScope(
+            {
+              sort: nextSort === "updated" && sentQuery.length === 0 ? undefined : nextSort,
+            },
+            { sort: nextSort },
+          )
         }
         onOrder={(nextOrder) =>
-          updateListScope({ order: nextOrder === "desc" ? undefined : nextOrder })
+          updateListScope(
+            { order: nextOrder === "desc" ? undefined : nextOrder },
+            { order: nextOrder },
+          )
         }
       />
       <IssueFiltersMenu
-        state={search.state}
+        state={state}
         stateOptions={STATE_TABS}
         onState={(state) => updateListScope({ state })}
-        involvement={search.involvement}
+        involvement={involvement}
         involvementOptions={INVOLVEMENT_TABS}
         onInvolvement={(involvement) => updateListScope({ involvement })}
         projectFilter={{
@@ -1312,7 +1351,7 @@ function IssuesRouteView() {
           onProject: (projectId) =>
             updateListScope({ projectId, sort: undefined, order: undefined }),
         }}
-        label={search.label}
+        label={label}
         labels={labelOptions}
         onLabel={(label) => updateListScope({ label })}
       />
@@ -1322,8 +1361,8 @@ function IssuesRouteView() {
     refreshing,
     onRefresh: () => void refreshFromHost(),
     searchValue: search.q ?? "",
-    involvement: search.involvement,
-    state: search.state,
+    involvement,
+    state,
     host: search.host,
     hostMenuOptions,
     hostMenuAction: {
@@ -1333,7 +1372,7 @@ function IssuesRouteView() {
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
     onState: (state: IssueListState) => updateListScope({ state }),
     onHost: (host: string | undefined) =>
-      updateListScope({ host, sort: undefined, order: undefined }),
+      updateListScope({ host, sort: undefined, order: undefined }, null),
     searchInput,
     filtersMenu,
     rightPanelControl: !issuesSupported || rightPanelState.isOpen ? null : panelToggleControls,
@@ -1409,7 +1448,6 @@ function IssuesRouteView() {
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
-            onAddIssue={() => undefined}
             onAddAgents={() => undefined}
             onAddDevice={() => undefined}
             browserAvailable={false}
@@ -1417,8 +1455,6 @@ function IssuesRouteView() {
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
-            issueAvailable={false}
-            pullRequestsAvailable={false}
             agentsAvailable={false}
             deviceAvailable={false}
             liveAgentCount={0}
