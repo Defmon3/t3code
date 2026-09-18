@@ -1809,12 +1809,12 @@ function OpenCommandPaletteDialog(props: {
       actionItems.push({
         kind: "action",
         value: "action:open-thread-pull-requests",
-        searchTerms: ["pull requests", "linked", "stack", "prs"],
+        searchTerms: ["repository", "pull requests", "linked", "stack", "prs"],
         title: "Show linked pull requests",
         disabled: visibleThreadPullRequests(activeThread.pullRequests).length === 0,
         icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
         run: async () => {
-          useRightPanelStore.getState().open(threadRef, "pull-requests");
+          useRightPanelStore.getState().openRepository(threadRef, "pull-requests");
         },
       });
     }

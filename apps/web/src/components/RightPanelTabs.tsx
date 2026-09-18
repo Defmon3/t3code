@@ -117,10 +117,9 @@ interface RightPanelTabsProps {
   onAddBrowserInProfile: (profileId: string) => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
-  onAddGitHistory?: (() => void) | undefined;
+  onAddRepository?: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
-  onAddPullRequests: () => void;
   onAddAgents: () => void;
   /**
    * Picking an issue needs a project to pick from, which only a thread has: the list pages reuse
@@ -132,7 +131,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
-  gitHistoryAvailable?: boolean | undefined;
+  repositoryAvailable?: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
@@ -174,10 +173,9 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
-  gitHistory: "Git History is only available for Git repositories on updated servers.",
+  gitHistory: "Repository is available for Git repositories or threads with linked pull requests.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
-  pullRequests: "No linked pull requests are available for this thread.",
   agents: "Agents are only available from a thread.",
   device: "Devices are only available from a thread.",
 } as const;
@@ -200,10 +198,9 @@ const SURFACE_UNAVAILABLE_HINTS = {
   terminal: "Available when a project is open.",
   files: "Available when a project is open.",
   diff: "Available for Git repositories.",
-  gitHistory: "Available for Git repositories on updated servers.",
+  gitHistory: "Available for Git repositories or threads with linked pull requests.",
   pullRequest: "No pull request on this branch yet.",
   issue: "Available for projects with a host.",
-  pullRequests: "No linked pull requests available.",
   agents: "Available from a thread.",
   device: "Available from a thread.",
 } as const;
@@ -341,17 +338,16 @@ function RightPanelEmptyState(props: {
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
   onAddDiff: () => void;
-  onAddGitHistory?: (() => void) | undefined;
+  onAddRepository?: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
-  onAddPullRequests: () => void;
   onAddAgents: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
-  gitHistoryAvailable?: boolean | undefined;
+  repositoryAvailable?: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
@@ -401,13 +397,13 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "History",
-      description: "Browse commits and branches.",
+      label: "Repository",
+      description: "Browse history and linked pull requests.",
       icon: GitBranch,
       shortcut: "H",
-      available: props.gitHistoryAvailable ?? false,
+      available: props.repositoryAvailable ?? false,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.gitHistory,
-      onClick: props.onAddGitHistory ?? (() => undefined),
+      onClick: props.onAddRepository ?? (() => undefined),
       badgeCount: 0,
     },
     {
@@ -427,15 +423,6 @@ function RightPanelEmptyState(props: {
       available: props.issueAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.issue,
       onClick: props.onAddIssue,
-      badgeCount: 0,
-    },
-    {
-      label: "Linked pull requests",
-      icon: PullRequestGlyph.link,
-      shortcut: "L",
-      available: props.pullRequestsAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
-      onClick: props.onAddPullRequests,
       badgeCount: 0,
     },
     {
@@ -662,8 +649,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
-    case "git-history":
-      return "History";
+    case "repository":
+      return "Repository";
     case "files":
       return "Files";
     case "file":
@@ -681,8 +668,6 @@ function surfaceTitle(
     // The strip says what the tab is showing, which for the browser is either of two things.
     case "issues":
       return surface.selected ? `#${surface.selected.number}` : "Issues";
-    case "pull-requests":
-      return "Pull requests";
     case "agents":
       return "Agents";
     case "device":
@@ -747,7 +732,7 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
-    case "git-history":
+    case "repository":
       return <GitBranch className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
@@ -790,8 +775,6 @@ function SurfaceIcon({
         />
       );
     }
-    case "pull-requests":
-      return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
     case "device":
@@ -974,12 +957,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddDiff,
     },
     {
-      label: "History",
+      label: "Repository",
       icon: GitBranch,
       shortcut: "H",
-      available: props.gitHistoryAvailable ?? false,
+      available: props.repositoryAvailable ?? false,
       disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
-      onClick: props.onAddGitHistory ?? (() => undefined),
+      onClick: props.onAddRepository ?? (() => undefined),
     },
     {
       label: "Pull request",
@@ -996,14 +979,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.issueAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.issue,
       onClick: props.onAddIssue,
-    },
-    {
-      label: "Linked pull requests",
-      icon: PullRequestGlyph.link,
-      shortcut: "L",
-      available: props.pullRequestsAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.pullRequests,
-      onClick: props.onAddPullRequests,
     },
     {
       label: "Agents",
@@ -1492,17 +1467,16 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
-            onAddGitHistory={props.onAddGitHistory}
+            onAddRepository={props.onAddRepository}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
-            onAddPullRequests={props.onAddPullRequests}
             onAddAgents={props.onAddAgents}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
-            gitHistoryAvailable={props.gitHistoryAvailable}
+            repositoryAvailable={props.repositoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}
