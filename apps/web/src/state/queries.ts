@@ -9,24 +9,30 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
-import type {
+import {
+  VcsSnapshotExpiredError,
   EnvironmentId,
   OrchestrationThread,
   ProjectContentMatch,
   ProjectEntryKind,
+  VcsHistoryRef,
+  VcsListHistoryRefsResult,
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentCatalog } from "../connection/catalog";
 import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
 import { projectContentSearch, projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
+import { usePaginatedSnapshotPages } from "./snapshotPages";
 import { vcsEnvironment } from "./vcs";
 
 const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
@@ -36,13 +42,23 @@ const PROJECT_CONTENT_SEARCH_LIMIT = 500;
 const THREAD_SEARCH_DEBOUNCE_MS = 200;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
+const EMPTY_HISTORY_REFS: ReadonlyArray<VcsHistoryRef> = [];
 const EMPTY_CONTENT_MATCHES: ReadonlyArray<ProjectContentMatch> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> = Object.freeze([]);
+const isVcsSnapshotExpiredError = Schema.is(VcsSnapshotExpiredError);
 const EMPTY_THREAD_SEARCH_ATOM = Atom.make({
   matches: EMPTY_THREAD_SEARCH_MATCHES,
   isLoading: false,
 }).pipe(Atom.withLabel("web:thread-search:empty"));
+
+export function makeVcsSnapshotCacheKey(generation: number, revision: number): string {
+  return JSON.stringify([generation, revision]);
+}
+
+export function isVcsSnapshotExpiredCause(cause: Cause.Cause<unknown>): boolean {
+  return isVcsSnapshotExpiredError(Cause.squash(cause));
+}
 
 const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
   getSearchAtom: (environmentId, query) =>
@@ -201,6 +217,99 @@ export function usePaginatedBranches(target: VcsRefTarget) {
     isFetchingNextPage,
     refresh,
     loadNext,
+  };
+}
+
+export function usePaginatedHistoryRefs(
+  target: VcsRefTarget,
+  options?: {
+    readonly limit?: number;
+    readonly namespace?: "local" | "remote" | "tag";
+    readonly revision?: number;
+  },
+) {
+  const environmentId = target.environmentId;
+  const cwd = target.cwd;
+  const query = target.query?.trim() ?? "";
+  const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
+  const namespace = options?.namespace ?? "local";
+  const revision = options?.revision ?? 0;
+  const connection = useEnvironmentQuery(
+    environmentId === null ? null : environmentCatalog.stateAtom(environmentId),
+  ).data;
+  const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
+  const targetKey =
+    environmentId !== null && cwd !== null
+      ? JSON.stringify([
+          environmentId,
+          cwd,
+          query,
+          limit,
+          namespace,
+          revision,
+          connectionGeneration,
+        ])
+      : null;
+  const makePageAtom = useMemo(() => {
+    if (environmentId === null || cwd === null) return null;
+    return (cursor: string | undefined, generation: number, refreshFirstPage: boolean) =>
+      vcsEnvironment.listHistoryRefs({
+        environmentId,
+        cacheKey: makeVcsSnapshotCacheKey(generation, revision),
+        input: {
+          cwd,
+          ...(query.length > 0 ? { query } : {}),
+          ...(cursor === undefined ? {} : { cursor }),
+          limit,
+          namespace,
+          ...(cursor === undefined && refreshFirstPage ? { refresh: true } : {}),
+        },
+      });
+  }, [cwd, environmentId, limit, namespace, query, revision]);
+  const pagination = usePaginatedSnapshotPages({
+    targetKey,
+    label: "web:vcs-history-ref-pages",
+    makePageAtom,
+    getNextCursor: (page) => page.nextCursor,
+    isExpiredError: isVcsSnapshotExpiredCause,
+  });
+  const { values } = pagination;
+  const data = useMemo<VcsListHistoryRefsResult | null>(() => {
+    const first = values[0] ?? null;
+    const last = values.at(-1) ?? null;
+    if (first === null || last === null) return null;
+    const refs = new Map<string, VcsHistoryRef>();
+    for (const value of values) {
+      for (const ref of value.refs) refs.set(ref.name, ref);
+    }
+    return {
+      refs: [...refs.values()],
+      currentRef: first.currentRef,
+      isRepo: first.isRepo,
+      repositoryKey: first.repositoryKey,
+      nextCursor: last.nextCursor,
+      isComplete: last.isComplete,
+    };
+  }, [values]);
+  const failed = pagination.failed;
+  const error =
+    failed?._tag === "Failure"
+      ? (() => {
+          const cause = Cause.squash(failed.cause);
+          return cause instanceof Error && cause.message.trim().length > 0
+            ? cause.message
+            : "Failed to load refs.";
+        })()
+      : null;
+  return {
+    data,
+    refs: data?.refs ?? EMPTY_HISTORY_REFS,
+    error,
+    isPending: pagination.isPending,
+    isFetchingNextPage: pagination.isFetchingNextPage,
+    refresh: pagination.refresh,
+    retry: pagination.retry,
+    loadNext: pagination.loadNext,
   };
 }
 

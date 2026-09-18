@@ -18,6 +18,7 @@ import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcSubscriptionAtomFamily,
+  createEnvironmentRpcQueryAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -29,6 +30,7 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
@@ -272,13 +274,41 @@ export function createVcsEnvironmentAtoms<R, E>(
   const invalidateRefs = (
     target: { readonly environmentId: EnvironmentId; readonly input: { readonly cwd: string } },
     registry: AtomRegistry.AtomRegistry,
+    invalidateHistory = true,
   ) =>
-    invalidateCachedVcsRefs(registry, {
-      environmentId: target.environmentId,
-      cwd: target.input.cwd,
-    });
+    invalidateCachedVcsRefs(
+      registry,
+      {
+        environmentId: target.environmentId,
+        cwd: target.input.cwd,
+      },
+      invalidateHistory,
+    );
 
   return {
+    historyRevisionAtom: vcsHistoryRevisionAtom,
+    listHistoryRefs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:list-history-refs",
+      tag: WS_METHODS.vcsListHistoryRefs,
+      revalidateOnReconnect: (input) => input.cursor === undefined,
+    }),
+    getHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-history",
+      tag: WS_METHODS.vcsGetHistory,
+      revalidateOnReconnect: (input) => input.cursor === undefined,
+    }),
+    getCommitDetails: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-details",
+      tag: WS_METHODS.vcsGetCommitDetails,
+    }),
+    listCommitFiles: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:list-commit-files",
+      tag: WS_METHODS.vcsListCommitFiles,
+    }),
+    getCommitDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-diff",
+      tag: WS_METHODS.vcsGetCommitDiff,
+    }),
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
@@ -306,7 +336,7 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.vcsRefreshStatus,
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
-      onSettled: invalidateRefs,
+      onSettled: (target, registry) => invalidateRefs(target, registry, false),
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",
