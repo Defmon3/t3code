@@ -8,6 +8,7 @@ import {
   componentElement,
   componentTree,
   commit,
+  effectQueue,
   environmentId,
   flushEffects,
   gitRef,
@@ -80,6 +81,40 @@ describe("GitHistoryPanel filters and details", () => {
         (element) => element.props["aria-label"] === "Filter Git history",
       )?.props.value,
     ).toBe("");
+  });
+
+  it("keeps search and selected commit state when Activity resumes History", () => {
+    historyState.pages.set(
+      undefined,
+      page([
+        commit(primaryCommitHash, "Provider neutral"),
+        commit(secondaryCommitHash, "Other change"),
+      ]),
+    );
+    const initial = renderPanel();
+    flushEffects();
+    const filter = visitElements(
+      initial,
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    expect(filter).not.toBeNull();
+    if (filter === null) throw new Error("Git history filter is missing.");
+    (filter.props.onChange as (event: { readonly target: { readonly value: string } }) => void)({
+      target: { value: "provider neutral" },
+    });
+    const row = historyList(renderPanel()).props.renderItem({
+      item: historyList(renderPanel()).props.data[0]!,
+    });
+    (row.props.onSelect as (hash: string) => void)(primaryCommitHash);
+
+    effectQueue.dependencies.length = 0;
+    renderPanel();
+    flushEffects();
+
+    expect(historyList(renderPanel()).props.data.map((item) => item.commit.hash)).toEqual([
+      primaryCommitHash,
+    ]);
+    expect(componentElement(renderPanel(), "CommitDetailsPane").props.hasSelection).toBe(true);
   });
 
   it("keeps a history search to the loaded page until the user requests older commits", () => {
