@@ -3782,6 +3782,16 @@ const makeWsRpcLayer = <E, R>(
             ),
             { "rpc.aggregate": "git" },
           ),
+        [WS_METHODS.vcsHistorySync]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsHistorySync,
+            gitWorkflow
+              .syncHistoryRef(input)
+              .pipe(
+                Effect.tap(() => refreshGitStatus(input.cwd).pipe(Effect.ignore({ log: true }))),
+              ),
+            { "rpc.aggregate": "git" },
+          ),
         [WS_METHODS.gitRunStackedAction]: (input) =>
           observeRpcStream(
             WS_METHODS.gitRunStackedAction,

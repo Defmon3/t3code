@@ -3870,5 +3870,114 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.notEqual(originMain.exitCode, 0);
       }),
     );
+
+    it.effect("pushes a selected local branch to its configured upstream without force", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.createRef({ cwd, refName: "feature/sync" });
+        yield* driver.switchRef({ cwd, refName: "feature/sync" });
+        yield* writeTextFile(cwd, "sync.txt", "sync\n");
+        yield* driver.prepareCommitContext(cwd);
+        yield* driver.commit(cwd, "sync", "");
+        yield* git(cwd, ["push", "-u", "origin", "HEAD:refs/heads/remote-sync"]);
+        yield* writeTextFile(cwd, "sync.txt", "sync again\n");
+        yield* driver.prepareCommitContext(cwd);
+        yield* driver.commit(cwd, "sync again", "");
+
+        const result = yield* driver.syncHistoryRef({
+          cwd,
+          action: "push",
+          namespace: "local",
+          refName: "feature/sync",
+        });
+
+        assert.deepEqual(result, { action: "push", refName: "feature/sync" });
+        assert.equal(
+          yield* git(remote, ["rev-parse", "refs/heads/remote-sync"]),
+          yield* git(cwd, ["rev-parse", "feature/sync"]),
+        );
+      }),
+    );
+
+    it.effect("fast-forwards a selected branch without checking it out", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        const other = yield* makeTmpDir("git-other-");
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["branch", "feature/sync"]);
+        yield* git(cwd, ["push", "-u", "origin", "feature/sync:refs/heads/remote-sync"]);
+        yield* git(other, ["clone", remote, "."]);
+        yield* git(other, ["config", "user.email", "test@test.com"]);
+        yield* git(other, ["config", "user.name", "Test"]);
+        yield* git(other, ["switch", "-c", "remote-sync", "origin/remote-sync"]);
+        yield* writeTextFile(other, "remote.txt", "remote\n");
+        yield* git(other, ["add", "."]);
+        yield* git(other, ["commit", "-m", "remote commit"]);
+        yield* git(other, ["push", "origin", "remote-sync"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const result = yield* driver.syncHistoryRef({
+          cwd,
+          action: "pull",
+          namespace: "local",
+          refName: "feature/sync",
+        });
+
+        assert.deepEqual(result, { action: "pull", refName: "feature/sync" });
+        assert.equal(yield* git(cwd, ["branch", "--show-current"]), initialBranch);
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "feature/sync"]),
+          yield* git(cwd, ["rev-parse", "origin/remote-sync"]),
+        );
+      }),
+    );
+
+    it.effect("refuses a divergent selected branch without moving it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        const other = yield* makeTmpDir("git-other-");
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["switch", "-c", "feature/sync"]);
+        yield* git(cwd, ["push", "-u", "origin", "HEAD:refs/heads/remote-sync"]);
+        yield* git(other, ["clone", remote, "."]);
+        yield* git(other, ["config", "user.email", "test@test.com"]);
+        yield* git(other, ["config", "user.name", "Test"]);
+        yield* git(other, ["switch", "-c", "remote-sync", "origin/remote-sync"]);
+        yield* writeTextFile(other, "remote.txt", "remote\n");
+        yield* git(other, ["add", "."]);
+        yield* git(other, ["commit", "-m", "remote commit"]);
+        yield* git(other, ["push", "origin", "remote-sync"]);
+        yield* writeTextFile(cwd, "local.txt", "local\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "local commit"]);
+        const before = yield* git(cwd, ["rev-parse", "feature/sync"]);
+        yield* git(cwd, ["switch", initialBranch]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver
+          .syncHistoryRef({
+            cwd,
+            action: "pull",
+            namespace: "local",
+            refName: "feature/sync",
+          })
+          .pipe(Effect.flip);
+
+        assert.include(error.detail, "has diverged");
+        assert.equal(yield* git(cwd, ["rev-parse", "feature/sync"]), before);
+        assert.equal(yield* git(cwd, ["branch", "--show-current"]), initialBranch);
+      }),
+    );
   });
 });

@@ -346,6 +346,15 @@ export class GitVcsDriver extends Context.Service<
       input: VcsGetCommitDiffInput,
     ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
+    readonly syncHistoryRef: (input: {
+      readonly cwd: string;
+      readonly action: "fetch" | "pull" | "push";
+      readonly namespace: "local" | "remote";
+      readonly refName: string;
+    }) => Effect.Effect<
+      { readonly action: "fetch" | "pull" | "push"; readonly refName: string },
+      GitCommandError
+    >;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
       options?: CreateWorktreeOptions,

@@ -120,6 +120,17 @@ export const VcsPullInput = Schema.Struct({
 });
 export type VcsPullInput = typeof VcsPullInput.Type;
 
+export const VcsHistorySyncAction = Schema.Literals(["fetch", "pull", "push"]);
+export type VcsHistorySyncAction = typeof VcsHistorySyncAction.Type;
+
+export const VcsHistorySyncInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  action: VcsHistorySyncAction,
+  namespace: Schema.Literals(["local", "remote"]),
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsHistorySyncInput = typeof VcsHistorySyncInput.Type;
+
 export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
@@ -461,6 +472,12 @@ export const VcsPullResult = Schema.Struct({
   upstreamRef: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 export type VcsPullResult = typeof VcsPullResult.Type;
+
+export const VcsHistorySyncResult = Schema.Struct({
+  action: VcsHistorySyncAction,
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsHistorySyncResult = typeof VcsHistorySyncResult.Type;
 
 // RPC / domain errors
 export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitCommandError", {

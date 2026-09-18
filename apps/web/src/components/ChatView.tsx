@@ -4095,6 +4095,18 @@ export default function ChatView(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const appendGitHistorySolvePrompt = useCallback(
+    (prompt: string) => {
+      const current =
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      setComposerDraftPrompt(
+        composerDraftTarget,
+        current.trim().length > 0 ? `${current.trimEnd()}\n\n${prompt}` : prompt,
+      );
+      scheduleComposerFocus();
+    },
+    [composerDraftTarget, scheduleComposerFocus, setComposerDraftPrompt],
+  );
   const useArtifactTemplate = useCallback(
     (template: CodexArtifactTemplate) => {
       const composer = composerRef.current;
@@ -9857,6 +9869,7 @@ export default function ChatView(props: ChatViewProps) {
           onIssueStateChange={handleIssueTabStatusChange}
           onPullRequestStateChange={handlePullRequestTabStatusChange}
           onOpenLinkedIssue={openLinkedIssue}
+          onSolveGitSync={appendGitHistorySolvePrompt}
         />
       </Suspense>
     ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (

@@ -15,6 +15,7 @@ interface RepositoryPanelProps {
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
   readonly issueUrlPrefix?: string;
+  readonly onSolveGitSync?: (prompt: string) => void;
   readonly gitHistoryCapabilityState: "unavailable" | "ready";
   readonly issuesCapabilityState: "loading" | "unavailable" | "ready";
   readonly pullRequestsCapabilityState: "loading" | "unavailable" | "ready";
@@ -86,6 +87,7 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
             cwd={props.cwd}
             active={mode === "history"}
             {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
+            {...(props.onSolveGitSync ? { onSolveGitSync: props.onSolveGitSync } : {})}
           />
         </div>
       ) : mode === "history" ? (
