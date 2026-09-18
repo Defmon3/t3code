@@ -24,6 +24,7 @@ import {
   ChevronRight,
   FileDiff,
   Files,
+  GitBranch,
   Globe2,
   Plus,
   TerminalSquare,
@@ -116,6 +117,7 @@ interface RightPanelTabsProps {
   onAddBrowserInProfile: (profileId: string) => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory?: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
@@ -130,6 +132,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable?: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
@@ -171,6 +174,7 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  gitHistory: "Git History is only available for Git repositories on updated servers.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
   pullRequests: "No linked pull requests are available for this thread.",
@@ -196,6 +200,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   terminal: "Available when a project is open.",
   files: "Available when a project is open.",
   diff: "Available for Git repositories.",
+  gitHistory: "Available for Git repositories on updated servers.",
   pullRequest: "No pull request on this branch yet.",
   issue: "Available for projects with a host.",
   pullRequests: "No linked pull requests available.",
@@ -336,6 +341,7 @@ function RightPanelEmptyState(props: {
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory?: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
@@ -345,6 +351,7 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  gitHistoryAvailable?: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
@@ -391,6 +398,16 @@ function RightPanelEmptyState(props: {
       available: props.diffAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.diff,
       onClick: props.onAddDiff,
+      badgeCount: 0,
+    },
+    {
+      label: "History",
+      description: "Browse commits and branches.",
+      icon: GitBranch,
+      shortcut: "H",
+      available: props.gitHistoryAvailable ?? false,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.gitHistory,
+      onClick: props.onAddGitHistory ?? (() => undefined),
       badgeCount: 0,
     },
     {
@@ -645,6 +662,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "History";
     case "files":
       return "Files";
     case "file":
@@ -728,6 +747,8 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitBranch className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -951,6 +972,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
+    },
+    {
+      label: "History",
+      icon: GitBranch,
+      shortcut: "H",
+      available: props.gitHistoryAvailable ?? false,
+      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
+      onClick: props.onAddGitHistory ?? (() => undefined),
     },
     {
       label: "Pull request",
@@ -1463,6 +1492,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddGitHistory={props.onAddGitHistory}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
@@ -1472,6 +1502,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
+            gitHistoryAvailable={props.gitHistoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}

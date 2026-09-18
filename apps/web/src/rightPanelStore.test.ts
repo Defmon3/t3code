@@ -138,6 +138,15 @@ describe("rightPanelStore", () => {
     },
   );
 
+  it("opens Git History as a singleton surface", () => {
+    useRightPanelStore.getState().open(refA, "git-history");
+
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "git-history",
+      kind: "git-history",
+    });
+  });
+
   it.each([
     { choice: "issues", choose: () => useRightPanelStore.getState().openIssues(refA) },
     {

@@ -7,7 +7,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import type { ConnectionAttemptError } from "../connection/model.ts";
+import type { ConnectionAttemptError, SupervisorConnectionState } from "../connection/model.ts";
 import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
 import {
   type EnvironmentRpcInput,
@@ -53,6 +53,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  readonly revalidateOnReconnect?: (input: Input) => boolean;
   readonly refreshTrigger?: (target: {
     readonly environmentId: EnvironmentIdType;
     readonly input: Input;
@@ -430,8 +431,9 @@ export async function settlePromise<A>(
 export function environmentRpcKey<Input>(target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }): string {
-  return JSON.stringify([target.environmentId, target.input]);
+  return JSON.stringify([target.environmentId, target.input, target.cacheKey]);
 }
 
 function parseEnvironmentRpcKey<Input>(key: string): {
@@ -482,6 +484,23 @@ export function followStreamInEnvironment<A, E, R>(
   );
 }
 
+function unavailableEnvironmentRpc(
+  environmentId: EnvironmentIdType,
+  connectionState: Pick<SupervisorConnectionState, "phase" | "lastFailure">,
+): Effect.Effect<never, ConnectionAttemptError | EnvironmentRpcUnavailableError> {
+  if (connectionState.lastFailure !== null) {
+    return Effect.fail(connectionState.lastFailure);
+  }
+  return Effect.fail(
+    new EnvironmentRpcUnavailableError({
+      environmentId,
+      message: `Environment ${environmentId} is ${
+        connectionState.phase === "available" ? "not connected" : connectionState.phase
+      }.`,
+    }),
+  );
+}
+
 export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: EnvironmentQueryAtomOptions<
@@ -493,6 +512,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
 ): (target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
   const connectionAtom = Atom.family((environmentId: EnvironmentIdType) =>
     runtime.atom(
@@ -519,6 +539,42 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         A,
         E | ConnectionAttemptError | EnvironmentNotRegisteredError | EnvironmentRpcUnavailableError
       >((get) => {
+        if (!(options.revalidateOnReconnect?.(target.input) ?? true)) {
+          return runInEnvironment(
+            target.environmentId,
+            EnvironmentSupervisor.pipe(
+              Effect.flatMap((supervisor) =>
+                Stream.zipLatest(
+                  SubscriptionRef.changes(supervisor.state),
+                  SubscriptionRef.changes(supervisor.session),
+                ).pipe(
+                  Stream.filter(
+                    ([state, session]) =>
+                      (state.phase === "connected" && Option.isSome(session)) ||
+                      state.phase === "available" ||
+                      state.phase === "offline" ||
+                      state.phase === "blocked",
+                  ),
+                  Stream.take(1),
+                  Stream.runHead,
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () => Effect.never,
+                      onSome: ([state]): Effect.Effect<
+                        A,
+                        E | ConnectionAttemptError | EnvironmentRpcUnavailableError,
+                        EnvironmentSupervisor | EnvironmentRegistry | AtomRegistry.AtomRegistry | R
+                      > =>
+                        state.phase === "connected"
+                          ? options.execute(target.input)
+                          : unavailableEnvironmentRpc(target.environmentId, state),
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
         const connection = Option.getOrNull(
           AsyncResult.value(get(connectionAtom(target.environmentId))),
         );
@@ -537,17 +593,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
           case "available":
           case "offline":
           case "blocked":
-            if (connectionState.lastFailure !== null) {
-              return Effect.fail(connectionState.lastFailure);
-            }
-            return Effect.fail(
-              new EnvironmentRpcUnavailableError({
-                environmentId: target.environmentId,
-                message: `Environment ${target.environmentId} is ${
-                  connectionState.phase === "available" ? "not connected" : connectionState.phase
-                }.`,
-              }),
-            );
+            return unavailableEnvironmentRpc(target.environmentId, connectionState);
         }
       })
       .pipe(
@@ -624,6 +670,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    readonly revalidateOnReconnect?: (input: EnvironmentRpcInput<TTag>) => boolean;
     readonly refreshTrigger?: (target: {
       readonly environmentId: EnvironmentIdType;
       readonly input: EnvironmentRpcInput<TTag>;
@@ -637,6 +684,9 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
+    ...(options.revalidateOnReconnect === undefined
+      ? {}
+      : { revalidateOnReconnect: options.revalidateOnReconnect }),
     ...(options.refreshTrigger === undefined ? {} : { refreshTrigger: options.refreshTrigger }),
     execute: (input: EnvironmentRpcInput<TTag>) =>
       options.execute?.(input) ?? request(options.tag, input),
