@@ -81,8 +81,14 @@ function queryConnectionState(
 
 const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness")(function* <A, E>(
   execute: Effect.Effect<A, E>,
+  options: {
+    readonly initialState?: SupervisorConnectionState;
+    readonly revalidateOnReconnect?: boolean;
+  } = {},
 ) {
-  const supervisorState = yield* SubscriptionRef.make(queryConnectionState());
+  const supervisorState = yield* SubscriptionRef.make(
+    options.initialState ?? queryConnectionState(),
+  );
   const supervisorSession = yield* SubscriptionRef.make(Option.some(QUERY_RPC_SESSION));
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: QUERY_ENVIRONMENT,
@@ -107,9 +113,13 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
   const runtime = Atom.runtime(
     Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
   );
+  const revalidateOnReconnect = options.revalidateOnReconnect;
   const family = createEnvironmentQueryAtomFamily(runtime, {
     label: "test.environment-query",
     staleTimeMs: 60_000,
+    ...(revalidateOnReconnect === undefined
+      ? {}
+      : { revalidateOnReconnect: () => revalidateOnReconnect }),
     execute: () => execute,
   });
 
@@ -264,6 +274,12 @@ describe("environmentRpcKey", () => {
 
     expect(environmentRpcKey(originalTarget)).not.toBe(environmentRpcKey(nextTarget));
     expect(environmentRpcKey(originalTarget)).toBe(environmentRpcKey({ ...originalTarget }));
+    expect(environmentRpcKey({ ...originalTarget, cacheKey: 1 })).not.toBe(
+      environmentRpcKey(originalTarget),
+    );
+    expect(environmentRpcKey({ ...originalTarget, cacheKey: 1 })).not.toBe(
+      environmentRpcKey({ ...originalTarget, cacheKey: 2 }),
+    );
     expect(
       environmentRpcKey({
         environmentId: EnvironmentId.make("environment-2"),
@@ -545,6 +561,139 @@ describe("environment query lifecycle", () => {
             suspendOnWaiting: true,
           }),
         ).toBe("updated");
+      }),
+    ),
+  );
+
+  it.effect("settles a non-revalidating query as unavailable while offline", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeEnvironmentQueryHarness(Effect.succeed("connected"), {
+          initialState: queryConnectionState({
+            network: "offline",
+            phase: "offline",
+            stage: null,
+            lastFailure: null,
+          }),
+          revalidateOnReconnect: false,
+        });
+        const registry = yield* mountEnvironmentQuery(harness.atom);
+
+        const result = yield* AtomRegistry.getResult(registry, harness.atom, {
+          suspendOnWaiting: true,
+        }).pipe(Effect.exit);
+
+        expect(Exit.isFailure(result)).toBe(true);
+        if (Exit.isFailure(result)) {
+          expect(Cause.squash(result.cause)).toMatchObject({
+            _tag: "EnvironmentRpcUnavailableError",
+            environmentId: QUERY_ENVIRONMENT.environmentId,
+            message: `Environment ${QUERY_ENVIRONMENT.environmentId} is offline.`,
+          });
+        }
+      }),
+    ),
+  );
+
+  it.effect("does not revalidate a cursor query after reconnecting", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let executions = 0;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.sync(() => {
+            executions += 1;
+            return "cached";
+          }),
+          { revalidateOnReconnect: false },
+        );
+        const registry = yield* mountEnvironmentQuery(harness.atom);
+
+        expect(
+          yield* AtomRegistry.getResult(registry, harness.atom, {
+            suspendOnWaiting: true,
+          }),
+        ).toBe("cached");
+
+        yield* SubscriptionRef.set(
+          harness.supervisorState,
+          queryConnectionState({ phase: "connecting", stage: "opening" }),
+        );
+        yield* Effect.yieldNow;
+        yield* SubscriptionRef.set(
+          harness.supervisorState,
+          queryConnectionState({ generation: 2 }),
+        );
+        yield* Effect.yieldNow;
+
+        expect(executions).toBe(1);
+        expect(registry.get(harness.atom)).toMatchObject({
+          _tag: "Success",
+          value: "cached",
+          waiting: false,
+        });
+      }),
+    ),
+  );
+
+  it.effect("settles a non-revalidating query that goes offline while reconnecting", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeEnvironmentQueryHarness(Effect.succeed("connected"), {
+          initialState: queryConnectionState({ phase: "connecting", stage: "opening" }),
+          revalidateOnReconnect: false,
+        });
+        const registry = yield* mountEnvironmentQuery(harness.atom);
+
+        yield* SubscriptionRef.set(
+          harness.supervisorState,
+          queryConnectionState({
+            network: "offline",
+            phase: "offline",
+            stage: null,
+            lastFailure: null,
+          }),
+        );
+
+        const result = yield* AtomRegistry.getResult(registry, harness.atom, {
+          suspendOnWaiting: true,
+        }).pipe(Effect.exit);
+
+        expect(Exit.isFailure(result)).toBe(true);
+        if (Exit.isFailure(result)) {
+          expect(Cause.squash(result.cause)).toMatchObject({
+            _tag: "EnvironmentRpcUnavailableError",
+            environmentId: QUERY_ENVIRONMENT.environmentId,
+            message: `Environment ${QUERY_ENVIRONMENT.environmentId} is offline.`,
+          });
+        }
+      }),
+    ),
+  );
+
+  it.effect("waits for a live session before executing a non-revalidating query", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let executions = 0;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.sync(() => {
+            executions += 1;
+            return "connected";
+          }),
+          { revalidateOnReconnect: false },
+        );
+        yield* SubscriptionRef.set(harness.supervisorSession, Option.none());
+        const registry = yield* mountEnvironmentQuery(harness.atom);
+
+        yield* Effect.yieldNow;
+        expect(executions).toBe(0);
+
+        yield* SubscriptionRef.set(harness.supervisorSession, Option.some(QUERY_RPC_SESSION));
+        expect(
+          yield* AtomRegistry.getResult(registry, harness.atom, {
+            suspendOnWaiting: true,
+          }),
+        ).toBe("connected");
+        expect(executions).toBe(1);
       }),
     ),
   );
