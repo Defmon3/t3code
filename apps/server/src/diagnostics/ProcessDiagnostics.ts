@@ -6,7 +6,7 @@ import type {
   ServerProcessSignal,
   ServerSignalProcessResult,
 } from "@t3tools/contracts";
-import { isTestCommand } from "@t3tools/shared/testCommand";
+import { formatTestCommand, isTestCommand } from "@t3tools/shared/testCommand";
 import * as NodeOS from "node:os";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -276,7 +276,8 @@ function aggregateTestProcessResources(
     if (
       current.pid !== process.pid &&
       testPids.has(current.pid) &&
-      rootsDiffer(rootByPid.get(process.pid), rootByPid.get(current.pid))
+      rootsDiffer(rootByPid.get(process.pid), rootByPid.get(current.pid)) &&
+      !sameLogicalTestCommand(process, current)
     ) {
       continue;
     }
@@ -301,17 +302,33 @@ function hasTestProcessAncestor(
   let parentPid = process.ppid;
   while (parentPid > 0 && !visited.has(parentPid)) {
     visited.add(parentPid);
+    const parent = processesByPid.get(parentPid);
+    if (!parent || parent.ppid === parentPid) return false;
     if (
       testPids.has(parentPid) &&
-      !rootsDiffer(rootByPid.get(process.pid), rootByPid.get(parentPid))
+      (!rootsDiffer(rootByPid.get(process.pid), rootByPid.get(parentPid)) ||
+        sameLogicalTestCommand(process, parent))
     ) {
       return true;
     }
-    const parent = processesByPid.get(parentPid);
-    if (!parent || parent.ppid === parentPid) return false;
     parentPid = parent.ppid;
   }
   return false;
+}
+
+function sameLogicalTestCommand(
+  left: ResourceMonitorDiscoveredProcessSample,
+  right: ResourceMonitorDiscoveredProcessSample,
+): boolean {
+  const leftCommand = formatTestCommand(left.command, left.argv);
+  const rightCommand = formatTestCommand(right.command, right.argv);
+  return (
+    leftCommand !== null &&
+    rightCommand !== null &&
+    leftCommand.label === rightCommand.label &&
+    leftCommand.args.length === rightCommand.args.length &&
+    leftCommand.args.every((argument, index) => argument === rightCommand.args[index])
+  );
 }
 
 export const make = Effect.fn("makeProcessDiagnostics")(function* (
