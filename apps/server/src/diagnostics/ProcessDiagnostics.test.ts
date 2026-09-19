@@ -399,6 +399,79 @@ describe("ProcessDiagnostics", () => {
     }),
   );
 
+  it.effect("coalesces a nested verification helper across registered roots", () =>
+    Effect.gen(function* () {
+      const telemetryLayer = makeTelemetryLayer(makeNativeSnapshot([]), undefined, {
+        discoverProcesses: () =>
+          Effect.succeed([
+            {
+              pid: 4_242,
+              ppid: 1,
+              startTimeMs: 2_000,
+              runTimeMs: 4_000,
+              name: "python",
+              command: "python scripts/checks/check-all.py --branch",
+              argv: ["python.exe", "scripts/checks/check-all.py", "--branch"],
+              cwd: "C:\\workspace\\main",
+              status: "Running",
+              cpuPercent: 0.5,
+              cpuTimeMs: 60,
+              residentBytes: 2_048,
+              virtualBytes: 4_096,
+              ioReadBytes: 300,
+              ioWriteBytes: 400,
+              ioSemantics: "storage" as const,
+            },
+            {
+              pid: 4_243,
+              ppid: 4_242,
+              startTimeMs: 2_001,
+              runTimeMs: 3_000,
+              name: "python",
+              command: "python scripts/checks/check-dotnet-build.py src/Argus.Api/Argus.Api.csproj",
+              argv: [
+                "python.exe",
+                "scripts/checks/check-dotnet-build.py",
+                "src/Argus.Api/Argus.Api.csproj",
+              ],
+              cwd: "C:\\workspace\\other",
+              status: "Running",
+              cpuPercent: 1,
+              cpuTimeMs: 30,
+              residentBytes: 1_024,
+              virtualBytes: 2_048,
+              ioReadBytes: 100,
+              ioWriteBytes: 200,
+              ioSemantics: "storage" as const,
+            },
+          ]),
+      });
+      const layer = Layer.effect(
+        ProcessDiagnostics.ProcessDiagnostics,
+        ProcessDiagnostics.make({ logicalCpuCount: 4 }),
+      ).pipe(Layer.provideMerge(telemetryLayer));
+      const diagnostics = yield* Effect.service(ProcessDiagnostics.ProcessDiagnostics).pipe(
+        Effect.flatMap((processDiagnostics) =>
+          processDiagnostics.read({ roots: ["C:\\workspace\\main", "C:\\workspace\\other"] }),
+        ),
+        Effect.provide(layer),
+      );
+
+      expect(diagnostics.processes).toMatchObject([
+        {
+          pid: 4_242,
+          cwd: "C:\\workspace\\main",
+          cpuPercent: 0.375,
+          cpuTimeMs: 90,
+          rssBytes: 3_072,
+        },
+      ]);
+      expect(diagnostics.processCount).toBe(1);
+      expect(diagnostics.totalCpuPercent).toBe(0.375);
+      expect(diagnostics.totalRssBytes).toBe(3_072);
+    }),
+  );
+
   it.effect(
     "keeps nested tests from another registered root separate without double-counting resources",
     () =>

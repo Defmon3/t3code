@@ -277,7 +277,8 @@ function aggregateTestProcessResources(
       current.pid !== process.pid &&
       testPids.has(current.pid) &&
       rootsDiffer(rootByPid.get(process.pid), rootByPid.get(current.pid)) &&
-      !sameLogicalTestCommand(process, current)
+      !sameLogicalTestCommand(process, current) &&
+      !isVerificationCommandRunner(process)
     ) {
       continue;
     }
@@ -307,7 +308,8 @@ function hasTestProcessAncestor(
     if (
       testPids.has(parentPid) &&
       (!rootsDiffer(rootByPid.get(process.pid), rootByPid.get(parentPid)) ||
-        sameLogicalTestCommand(process, parent))
+        sameLogicalTestCommand(process, parent) ||
+        isVerificationCommandRunner(parent))
     ) {
       return true;
     }
@@ -329,6 +331,10 @@ function sameLogicalTestCommand(
     leftCommand.args.length === rightCommand.args.length &&
     leftCommand.args.every((argument, index) => argument === rightCommand.args[index])
   );
+}
+
+function isVerificationCommandRunner(process: ResourceMonitorDiscoveredProcessSample): boolean {
+  return formatTestCommand(process.command, process.argv)?.label.endsWith("check-all.py") ?? false;
 }
 
 export const make = Effect.fn("makeProcessDiagnostics")(function* (
