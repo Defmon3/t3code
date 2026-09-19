@@ -81,9 +81,6 @@ export interface ProjectionPendingApprovalRepositoryShape {
     input: GetProjectionPendingApprovalInput,
   ) => Effect.Effect<Option.Option<ProjectionPendingApproval>, ProjectionRepositoryError>;
 
-  /**
-   * Delete a pending approval row by request id.
-   */
   readonly deleteByRequestId: (
     input: DeleteProjectionPendingApprovalInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

@@ -7,11 +7,12 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpServer } from "effect/unstable/http";
+import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as HookApprovalRegistry from "./HookApprovalRegistry.ts";
 
 const server = HttpServer.HttpServer.of({
-  address: { _tag: "TcpAddress", hostname: "::1", port: 43123 },
+  address: NetAddress.inetAddressFromIpStringUnsafe("::1", 43123),
   serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
 });
 const makeRegistry = (options: HookApprovalRegistry.HookApprovalRegistryOptions = {}) =>

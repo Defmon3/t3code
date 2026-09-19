@@ -1,7 +1,4 @@
-import * as Cache from "effect/Cache";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import type {
   IssueLink,
   PullRequestActor,
@@ -12,7 +9,6 @@ import type {
 } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
-import { PinnedGitHubCredential } from "../sourceControl/GitHubCli.ts";
 import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
@@ -199,35 +195,6 @@ const rendersEmpty = (body: string): boolean =>
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
-  const repositoryAccessCache = yield* Cache.makeWith(
-    (key: string) => {
-      const [cwd, repository, host] = JSON.parse(key) as [string, string, string];
-      return cli.getRepositoryAccess({ cwd, repository, host });
-    },
-    {
-      capacity: 128,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.minutes(10) : Duration.zero),
-    },
-  );
-  const getRepositoryAccess = (input: {
-    readonly cwd: string;
-    readonly repository: string;
-    readonly host: string;
-  }) =>
-    PinnedGitHubCredential.pipe(
-      Effect.flatMap((credential) =>
-        Cache.get(
-          repositoryAccessCache,
-          JSON.stringify([
-            input.cwd,
-            input.repository,
-            input.host,
-            credential?.credentialFingerprint ?? null,
-          ]),
-        ),
-      ),
-    );
-
   const fail = (operation: string) => (error: GitHubPullRequestCli.GitHubPullRequestCliError) =>
     new PullRequestProviderError({
       provider: "github",
@@ -237,15 +204,6 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
-  /**
-   * The issues the pull request's own words name, resolved before any of them is shown: a number
-   * in a body is not proof that an issue exists, and a dead row in this section is worse than an
-   * absent one.
-   *
-   * Weaker than what GitHub itself reported, so a lookup that fails leaves the section with the
-   * host's own links rather than taking the detail down with it. What the host already reported is
-   * dropped first, which is what keeps an ordinary `Closes #12` from costing a request at all.
-   */
   const citedIssues = (
     input: { readonly cwd: string; readonly repository: string; readonly host: string },
     pullRequest: { readonly title: string; readonly body: string },
@@ -377,115 +335,92 @@ export const make = Effect.gen(function* () {
     getChangeRequestStack: (input) =>
       cli.getPullRequestStack(input).pipe(Effect.mapError(fail("getChangeRequestStack"))),
 
+    getChangeRequestPreview: (input) =>
+      cli.getPullRequestPreview(input).pipe(Effect.mapError(fail("getChangeRequestPreview"))),
+
     getChangeRequest: (input) =>
-      Effect.all(
-        [
-          cli.getPullRequestDetail(input).pipe(
-            Effect.flatMap((pullRequest) =>
-              Effect.all({
-                // Only an open pull request can be behind anything worth saying so about, and
-                // only one whose head repository is known can be compared at all.
-                comparison:
-                  pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
-                    ? Effect.succeed(null)
-                    : cli
-                        .getPullRequestBaseComparison({
-                          ...input,
-                          headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
-                        })
-                        .pipe(Effect.orElseSucceed(() => null)),
-                // GitHub omits a fork workflow that has not been approved from the normal check
-                // rollup. Read the action-required runs by head revision so "all passed" cannot
-                // be shown while a whole workflow is still waiting to start.
-                workflowApprovals:
-                  pullRequest.state !== "open" || pullRequest.isCrossRepository !== true
-                    ? Effect.succeed({
-                        runs: [] as ReadonlyArray<GitHubWorkflowRunApproval>,
-                        unavailable: false,
-                      })
-                    : pullRequest.headSha == null || pullRequest.headRepositoryOwner == null
-                      ? Effect.succeed({
-                          runs: [] as ReadonlyArray<GitHubWorkflowRunApproval>,
-                          unavailable: true,
-                        })
-                      : cli
-                          .listWorkflowRunsRequiringApproval({
-                            ...input,
-                            headSha: pullRequest.headSha,
-                            headBranch: pullRequest.headBranch,
-                            headRepositoryOwner: pullRequest.headRepositoryOwner,
-                            isCrossRepository: true,
-                          })
-                          .pipe(
-                            Effect.matchEffect({
-                              onFailure: (error) =>
-                                error._tag === "GitHubCliRateLimitError" ||
-                                error._tag === "SourceControlRateLimitPausedError"
-                                  ? Effect.fail(error)
-                                  : Effect.succeed({
-                                      runs: [] as ReadonlyArray<GitHubWorkflowRunApproval>,
-                                      unavailable: true,
-                                    }),
-                              onSuccess: (runs) => Effect.succeed({ runs, unavailable: false }),
-                            }),
-                          ),
-              }).pipe(Effect.map((extra) => ({ pullRequest, ...extra }))),
-            ),
-          ),
-          getRepositoryAccess({
-            cwd: input.cwd,
-            repository: input.repository,
-            host: input.host,
-          }),
-          // A small permissions query replaces the deeply paginated review-thread walk on the
-          // core path. Writes ask again immediately before mutating, so this is presentation.
-          cli.getViewerAccess(input),
-          // A section of links is worth less than the pull request it hangs off: an install that
-          // answers nothing useful here leaves the section empty rather than blanking the detail.
-          cli
+      cli.getPullRequestDetail(input).pipe(
+        Effect.flatMap((pullRequest) => {
+          // Fork workflows awaiting approval are absent from the normal check rollup.
+          const approvals =
+            pullRequest.state !== "open" || pullRequest.isCrossRepository !== true
+              ? Effect.succeed({
+                  runs: [] as ReadonlyArray<GitHubWorkflowRunApproval>,
+                  unavailable: false,
+                })
+              : pullRequest.headSha == null || pullRequest.headRepositoryOwner == null
+                ? Effect.succeed({
+                    runs: [] as ReadonlyArray<GitHubWorkflowRunApproval>,
+                    unavailable: true,
+                  })
+                : cli
+                    .listWorkflowRunsRequiringApproval({
+                      ...input,
+                      headSha: pullRequest.headSha,
+                      headBranch: pullRequest.headBranch,
+                      headRepositoryOwner: pullRequest.headRepositoryOwner,
+                      isCrossRepository: true,
+                    })
+                    .pipe(
+                      Effect.matchEffect({
+                        onFailure: (error) =>
+                          error._tag === "GitHubCliRateLimitError" ||
+                          error._tag === "SourceControlRateLimitPausedError"
+                            ? Effect.fail(error)
+                            : Effect.succeed({
+                                runs: [] as ReadonlyArray<GitHubWorkflowRunApproval>,
+                                unavailable: true,
+                              }),
+                        onSuccess: (runs) => Effect.succeed({ runs, unavailable: false }),
+                      }),
+                    );
+          const linkedIssues = cli
             .listLinkedIssues(input)
-            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: false }))),
-        ],
-        { concurrency: 4 },
-      ).pipe(
-        Effect.mapError(fail("getChangeRequest")),
-        Effect.flatMap(([detail, repository, viewerAccess, linkedIssues]) =>
-          citedIssues(input, detail.pullRequest, linkedIssues.links).pipe(
-            Effect.map((cited): ProviderChangeRequestDetail => ({
-              ...detail.pullRequest,
-              author: withAvatar(detail.pullRequest.author, new Map<string, string>(), input.host),
-              checks: withWorkflowApprovals(
-                detail.pullRequest.checks,
-                detail.workflowApprovals.runs,
-                detail.workflowApprovals.unavailable,
+            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: false })));
+          return Effect.all(
+            { workflowApprovals: approvals, linkedIssues },
+            { concurrency: 2 },
+          ).pipe(
+            Effect.flatMap(({ workflowApprovals, linkedIssues }) =>
+              citedIssues(input, pullRequest, linkedIssues.links).pipe(
+                Effect.map((cited): ProviderChangeRequestDetail => ({
+                  ...pullRequest,
+                  author: withAvatar(pullRequest.author, new Map<string, string>(), input.host),
+                  checks: withWorkflowApprovals(
+                    pullRequest.checks,
+                    workflowApprovals.runs,
+                    workflowApprovals.unavailable,
+                  ),
+                  ...(workflowApprovals.unavailable
+                    ? {}
+                    : { workflowApprovalsRequired: workflowApprovals.runs.length }),
+                  reviewers: pullRequest.reviewRequestLogins.map((login) => ({
+                    login,
+                    name: null,
+                    avatarUrl: null,
+                  })),
+                  mergeCapabilities: pullRequest.viewerAccess.mergeCapabilities,
+                  viewerPermissions: gitHubViewerPermissions({
+                    ...pullRequest.viewerAccess,
+                    canUpdateBranch: pullRequest.comparison?.viewerCanUpdate === true,
+                  }),
+                  linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
+                  linkedIssuesTruncated: linkedIssues.truncated,
+                  baseComparison:
+                    pullRequest.comparison === null || pullRequest.comparison.behindBy === null
+                      ? "unknown"
+                      : pullRequest.comparison.behindBy > 0
+                        ? "behind"
+                        : "up-to-date",
+                  ...(pullRequest.comparison?.behindBy == null
+                    ? {}
+                    : { behindBy: pullRequest.comparison.behindBy }),
+                })),
               ),
-              ...(detail.workflowApprovals.unavailable
-                ? {}
-                : { workflowApprovalsRequired: detail.workflowApprovals.runs.length }),
-              reviewers: detail.pullRequest.reviewRequestLogins.map((login) => ({
-                login,
-                name: null,
-                avatarUrl: null,
-              })),
-              mergeCapabilities: repository.mergeCapabilities,
-              viewerPermissions: gitHubViewerPermissions({
-                ...viewerAccess,
-                canUpdateBranch: detail.comparison?.viewerCanUpdate === true,
-              }),
-              linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
-              linkedIssuesTruncated: linkedIssues.truncated,
-              baseComparison:
-                detail.comparison === null || detail.comparison.behindBy === null
-                  ? "unknown"
-                  : detail.comparison.behindBy > 0
-                    ? "behind"
-                    : "up-to-date",
-              ...(detail.comparison?.behindBy == null
-                ? {}
-                : { behindBy: detail.comparison.behindBy }),
-            })),
-          ),
-        ),
+            ),
+          );
+        }),
+        Effect.mapError(fail("getChangeRequest")),
       ),
 
     getChangeRequestActivity: (input) =>

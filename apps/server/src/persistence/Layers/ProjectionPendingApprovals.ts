@@ -6,8 +6,8 @@ import * as Schema from "effect/Schema";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
-  GetProjectionPendingApprovalInput,
   DeleteProjectionPendingApprovalInput,
+  GetProjectionPendingApprovalInput,
   ListProjectionPendingApprovalsInput,
   ProjectionPendingApproval,
   ProjectionPendingApprovalRepository,
@@ -98,21 +98,21 @@ const makeProjectionPendingApprovalRepository = Effect.gen(function* () {
       `,
   });
 
-  const deleteProjectionPendingApprovalRow = SqlSchema.void({
-    Request: DeleteProjectionPendingApprovalInput,
-    execute: ({ requestId }) =>
-      sql`
-        DELETE FROM projection_pending_approvals
-        WHERE request_id = ${requestId}
-      `,
-  });
-
   const deleteProjectionPendingApprovalRowsByThread = SqlSchema.void({
     Request: ListProjectionPendingApprovalsInput,
     execute: ({ threadId }) =>
       sql`
         DELETE FROM projection_pending_approvals
         WHERE thread_id = ${threadId}
+      `,
+  });
+
+  const deleteProjectionPendingApprovalRow = SqlSchema.void({
+    Request: DeleteProjectionPendingApprovalInput,
+    execute: ({ requestId }) =>
+      sql`
+        DELETE FROM projection_pending_approvals
+        WHERE request_id = ${requestId}
       `,
   });
 

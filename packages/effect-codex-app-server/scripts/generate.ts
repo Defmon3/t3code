@@ -421,7 +421,7 @@ function addAsyncQuestionFields(value: Schema.Json): Schema.Json {
     return {
       ...value,
       properties: {
-        ...properties,
+        ...Object.fromEntries(Object.entries(properties).filter(([key]) => key !== "type")),
         delivery: { anyOf: [{ type: "string", enum: ["async"] }, { type: "null" }] },
         questions: {
           anyOf: [
@@ -441,6 +441,7 @@ function addAsyncQuestionFields(value: Schema.Json): Schema.Json {
             { type: "null" },
           ],
         },
+        type: itemType,
       },
     };
   }
@@ -775,7 +776,8 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
   for (const [name, schema] of Object.entries(aggregateSchemas).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    generator.addSchema(name, addAsyncQuestionFields(schema) as never);
+    aggregateSchemas[name] = addAsyncQuestionFields(schema);
+    generator.addSchema(name, aggregateSchemas[name] as never);
   }
 
   const generatedEntries = new Map<string, string>();

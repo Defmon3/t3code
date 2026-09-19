@@ -12,7 +12,6 @@ import {
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestIcon,
-  PencilIcon,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -40,6 +39,7 @@ import {
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { PullRequestEditButton } from "./PullRequestEditButton";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
   PullRequestDiffStat,
@@ -167,15 +167,11 @@ function ConversationCard({
       }
       actions={
         editable !== null && !editing ? (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="-mt-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+          <PullRequestEditButton
+            className="-mt-1"
             aria-label="Edit comment"
             onClick={() => setEditing(true)}
-          >
-            <PencilIcon className="size-3" />
-          </Button>
+          />
         ) : null
       }
       body={

@@ -17,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpServer } from "effect/unstable/http";
+import * as NetAddress from "effect/unstable/net/NetAddress";
 
 interface Credential {
   readonly threadId: ThreadId;
@@ -89,9 +90,9 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
 ) {
   const crypto = yield* Crypto.Crypto;
   const server = yield* HttpServer.HttpServer;
-  if (server.address._tag !== "TcpAddress")
+  if (server.address._tag !== "InetAddressV4" && server.address._tag !== "InetAddressV6")
     return yield* Effect.die(new Error("Hook approval endpoint requires a TCP HTTP server"));
-  const endpoint = `http://${endpointHost(server.address.hostname)}:${server.address.port}/hook-approvals`;
+  const endpoint = `http://${endpointHost(NetAddress.formatIp(server.address.address))}:${server.address.port}/hook-approvals`;
   const state = yield* SubscriptionRef.make<State>({
     credentials: new Map(),
     pending: new Map(),

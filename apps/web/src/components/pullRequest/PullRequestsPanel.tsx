@@ -18,6 +18,7 @@ import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
 import type { DraftId } from "~/composerDraftStore";
 import { isTerminalFocused } from "~/lib/terminalFocus";
+import { isElectron } from "~/env";
 
 import { ListGhost } from "../sourceControl/ListGhosts";
 import { Button } from "../ui/button";
@@ -60,6 +61,8 @@ function getShortcutContext() {
     previewFocus: false,
     previewOpen: false,
     modelPickerOpen: false,
+    isWeb: !isElectron,
+    isDesktop: isElectron,
   };
 }
 

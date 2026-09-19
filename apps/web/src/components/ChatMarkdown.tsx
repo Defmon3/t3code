@@ -2903,6 +2903,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
               environmentId,
               input: {
                 projectId: pullRequestProject.id,
+                host: pullRequestCandidate.authority ?? pullRequestCandidate.host,
                 repository:
                   sourceControlRepositorySelector(pullRequestProject.repositoryIdentity) ??
                   pullRequestCandidate.repository,

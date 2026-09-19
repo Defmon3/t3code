@@ -1,6 +1,6 @@
 import { HookApprovalHttpRequest, type HookApprovalHttpResponse } from "@t3tools/contracts";
+import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -40,7 +40,7 @@ export const handleHookApprovalRequest = Effect.fn("HookApprovalHttp.handleHookA
     if (!(yield* hookApprovals.isTokenActive(token))) return unauthorized;
 
     const input = yield* HttpServerRequest.schemaBodyJson(HookApprovalHttpRequest).pipe(
-      Effect.provideService(HttpServerRequest.MaxBodySize, FileSystem.Size(MAX_REQUEST_BODY_BYTES)),
+      Effect.provideService(HttpServerRequest.MaxBodySize, ByteSize.bytes(MAX_REQUEST_BODY_BYTES)),
       Effect.orElseSucceed(() => undefined),
     );
     if (!input) return malformedRequest;
