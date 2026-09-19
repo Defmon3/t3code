@@ -7,6 +7,7 @@ export type { TestCommandDisplay } from "@t3tools/shared/testCommand";
 
 export interface ProcessPanelEntry {
   readonly pid: number;
+  readonly startTimeMs: number;
   readonly ppid: number;
   readonly childPids: readonly number[];
   readonly command: string;

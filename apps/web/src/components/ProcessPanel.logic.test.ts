@@ -18,6 +18,7 @@ const project = {
 function process(overrides: Partial<ProcessPanelEntry>): ProcessPanelEntry {
   return {
     pid: 1,
+    startTimeMs: 1_000,
     ppid: 0,
     childPids: [],
     command: "vitest run",

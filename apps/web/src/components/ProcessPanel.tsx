@@ -1,8 +1,12 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import * as Option from "effect/Option";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { ProjectFavicon } from "./ProjectFavicon";
 import {
@@ -10,15 +14,19 @@ import {
   formatTestCommand,
   processPanelNotice,
   processPanelStatus,
+  type ProcessPanelEntry,
   type ProcessPanelProject,
   type ProcessPanelThread,
 } from "./ProcessPanel.logic";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { ensureLocalApi } from "~/localApi";
 import { formatDuration } from "~/session-logic";
 import { serverEnvironment } from "~/state/server";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentQuery } from "~/state/query";
+import { toastManager } from "./ui/toast";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -65,6 +73,14 @@ export function ProcessPanel(input: {
       input: { scope: "registered-project-tests" },
     }),
   );
+  const signalServerProcess = useAtomCommand(serverEnvironment.signalProcess, {
+    reportFailure: false,
+  });
+  const [signalingProcessKeys, setSignalingProcessKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const signalingProcessKeysRef = useRef<ReadonlySet<string>>(new Set());
+  const refresh = query.refresh;
   const groups = useMemo(
     () =>
       deriveProcessPanelGroups({
@@ -88,6 +104,68 @@ export function ProcessPanel(input: {
     diagnosticsError: diagnosticsError?.message ?? null,
     hasStaleData: query.data?.stale === true,
   });
+  const killProcess = useCallback(
+    async (process: ProcessPanelEntry) => {
+      const processKey = `${process.pid}:${process.startTimeMs}`;
+      if (signalingProcessKeysRef.current.has(processKey)) return;
+
+      const nextSignalingKeys = new Set(signalingProcessKeysRef.current).add(processKey);
+      signalingProcessKeysRef.current = nextSignalingKeys;
+      setSignalingProcessKeys(nextSignalingKeys);
+      const clearSignaling = () => {
+        const next = new Set(signalingProcessKeysRef.current);
+        next.delete(processKey);
+        signalingProcessKeysRef.current = next;
+        setSignalingProcessKeys(next);
+      };
+
+      try {
+        const confirmed = await ensureLocalApi().dialogs.confirm(
+          `Kill test process ${process.pid}? This cannot be handled by the process.`,
+          { variant: "destructive" },
+        );
+        if (!confirmed) return;
+
+        const result = await signalServerProcess({
+          environmentId: input.environmentId,
+          input: { pid: process.pid, startTimeMs: process.startTimeMs, signal: "SIGKILL" },
+        });
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) return;
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not kill test process",
+            description:
+              error instanceof Error ? error.message : "Failed to kill the test process.",
+          });
+          return;
+        }
+        if (!result.value.signaled) {
+          toastManager.add({
+            type: "error",
+            title: "Could not kill test process",
+            description: Option.getOrElse(
+              result.value.message,
+              () => "The test process may have already exited.",
+            ),
+          });
+          refresh();
+          return;
+        }
+        refresh();
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not kill test process",
+          description: error instanceof Error ? error.message : "Failed to kill the test process.",
+        });
+      } finally {
+        clearSignaling();
+      }
+    },
+    [input.environmentId, refresh, signalServerProcess],
+  );
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto" aria-label="Running tests">
@@ -195,6 +273,20 @@ export function ProcessPanel(input: {
                             target={`PID ${process.pid}`}
                             value={String(process.pid)}
                           />
+                          <Button
+                            aria-label={`Kill test process ${process.pid}`}
+                            disabled={signalingProcessKeys.has(
+                              `${process.pid}:${process.startTimeMs}`,
+                            )}
+                            onClick={() => void killProcess(process)}
+                            size="micro"
+                            type="button"
+                            variant="destructive-outline"
+                          >
+                            {signalingProcessKeys.has(`${process.pid}:${process.startTimeMs}`)
+                              ? "Killing…"
+                              : "Kill"}
+                          </Button>
                         </div>
                         <div className="mt-0.5 text-muted-foreground">
                           {process.cpuPercent.toFixed(1)}% CPU · {formatBytes(process.rssBytes)} RSS
