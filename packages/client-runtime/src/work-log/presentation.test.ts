@@ -11,6 +11,7 @@ import {
   toolGroupAction,
   toolGroupSummaryKind,
   type WorkLogPresentationEntry,
+  workEntryGeneratedImagePath,
   workEntryViewedImagePath,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
@@ -538,6 +539,23 @@ describe("workEntryViewedImagePath", () => {
       workEntryViewedImagePath({ ...entry, itemType: "image_view", detail: "a.png\nb.png" }),
     ).toBeNull();
     expect(workEntryViewedImagePath({ ...entry, detail: "a.png" })).toBeNull();
+  });
+});
+
+describe("workEntryGeneratedImagePath", () => {
+  const entry = {
+    label: "Generated image",
+    itemType: "image_view",
+    toolLifecycleStatus: "completed",
+    toolTitle: "Generated image",
+    tone: "tool",
+    viewedImagePath: "/workspace/generated.png",
+  } as const;
+
+  it("returns completed generated image paths but leaves ordinary image views expansion-only", () => {
+    expect(workEntryGeneratedImagePath(entry)).toBe("/workspace/generated.png");
+    expect(workEntryGeneratedImagePath({ ...entry, toolTitle: "Image view" })).toBeNull();
+    expect(workEntryGeneratedImagePath({ ...entry, toolLifecycleStatus: "inProgress" })).toBeNull();
   });
 });
 

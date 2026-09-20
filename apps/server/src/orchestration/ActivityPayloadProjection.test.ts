@@ -195,6 +195,37 @@ describe("projectActivityPayload", () => {
     expect(textRead.payload).not.toMatchObject({ data: { imagePath: expect.anything() } });
   });
 
+  it("projects Codex image paths without forwarding generated image data", () => {
+    const generatedPath = "/workspace/generated image.png";
+    const generatedImage = "data:image/png;base64," + "a".repeat(10_000);
+    const generated = projectActivityPayload(
+      activity({
+        itemType: "image_view",
+        data: {
+          item: {
+            type: "imageGeneration",
+            savedPath: `  ${generatedPath}  `,
+            result: generatedImage,
+          },
+        },
+      }),
+    );
+    const viewed = projectActivityPayload(
+      activity({
+        itemType: "image_view",
+        data: { item: { type: "imageView", path: "/workspace/reference image.webp" } },
+      }),
+    );
+
+    expect(generated.payload).toMatchObject({ data: { imagePath: generatedPath } });
+    expect((generated.payload as { data: unknown }).data).toEqual({ imagePath: generatedPath });
+    expect((viewed.payload as { data: unknown }).data).toEqual({
+      imagePath: "/workspace/reference image.webp",
+    });
+    expect(JSON.stringify(generated.payload)).not.toContain(generatedImage);
+    expect(JSON.stringify(generated.payload).length).toBeLessThan(300);
+  });
+
   it("slims Codex-shaped mcp_tool_call items to rendered fields plus a result summary", () => {
     const projected = projectActivityPayload(
       activity({

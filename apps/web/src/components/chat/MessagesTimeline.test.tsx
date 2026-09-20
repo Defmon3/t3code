@@ -146,7 +146,7 @@ function matchMedia() {
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
 let resolvePreviewAnnotationImage: typeof import("./MessagesTimeline").resolvePreviewAnnotationImage;
 
-const ElementStub = class ElementStub {};
+function ElementStub() {}
 
 function stubDomGlobals() {
   const classList = {
@@ -285,6 +285,33 @@ function buildSnapShotTimelineEntry(previewUrl?: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("renders a completed generated image without expanding its work row", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "generated-image-entry",
+            kind: "work",
+            createdAt: MESSAGE_CREATED_AT,
+            entry: {
+              id: "generated-image",
+              createdAt: MESSAGE_CREATED_AT,
+              label: "Generated image",
+              tone: "tool",
+              itemType: "image_view",
+              toolLifecycleStatus: "completed",
+              toolTitle: "Generated image",
+              viewedImagePath: "/workspace/generated.png",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("generated.png");
+  });
+
   it("renders previous and next controls with the minimap", () => {
     const first = buildUserTimelineEntry("First turn");
     const secondBase = buildUserTimelineEntry("Second turn");

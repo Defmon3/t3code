@@ -66,7 +66,6 @@ import {
   makeCodexSessionRuntime,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
-  type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -740,6 +739,9 @@ function itemTitle(
     if (computerUseTitle) return computerUseTitle;
     return `${item.server} · ${item.tool}`;
   }
+  if (item?.type === "imageGeneration") {
+    return "Generated image";
+  }
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -769,6 +771,13 @@ function itemTitle(
 }
 
 function itemDetail(itemType: CanonicalItemType, item: CodexLifecycleItem): string | undefined {
+  if (item.type === "imageGeneration") {
+    return trimText(item.savedPath);
+  }
+  if (item.type === "imageView") {
+    return trimText(item.path);
+  }
+
   const itemRecord = item as Record<string, unknown>;
   const action = itemRecord.action as Record<string, unknown> | undefined;
   const actionQueries = Array.isArray(action?.queries) ? action.queries : [];
@@ -1022,9 +1031,14 @@ function mapItemLifecycle(
           ? item.status
           : "completed"
         : undefined;
+  let lifecyclePayload: ProviderEvent["payload"] = payload;
+  if (item.type === "imageGeneration") {
+    const { result: _result, ...imageItem } = item;
+    lifecyclePayload = { ...payload, item: imageItem };
+  }
 
   return {
-    ...runtimeEventBase(event, canonicalThreadId),
+    ...runtimeEventBase({ ...event, payload: lifecyclePayload }, canonicalThreadId),
     type: lifecycle,
     payload: {
       itemType,
@@ -1032,7 +1046,7 @@ function mapItemLifecycle(
       ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
       ...toolPresentation,
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      data: lifecyclePayload,
     },
   };
 }
