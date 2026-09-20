@@ -334,7 +334,8 @@ function sameLogicalTestCommand(
 }
 
 function isVerificationCommandRunner(process: ResourceMonitorDiscoveredProcessSample): boolean {
-  return formatTestCommand(process.command, process.argv)?.label.endsWith("check-all.py") ?? false;
+  const label = formatTestCommand(process.command, process.argv)?.label;
+  return label !== undefined && /(?:^|[\\/])check-(?:all|fast|full|lane)\.py$/i.test(label);
 }
 
 export const make = Effect.fn("makeProcessDiagnostics")(function* (

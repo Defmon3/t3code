@@ -399,7 +399,7 @@ describe("ProcessDiagnostics", () => {
     }),
   );
 
-  it.effect("coalesces a nested verification helper across registered roots", () =>
+  it.effect("coalesces a nested tier verification helper across registered roots", () =>
     Effect.gen(function* () {
       const telemetryLayer = makeTelemetryLayer(makeNativeSnapshot([]), undefined, {
         discoverProcesses: () =>
@@ -410,8 +410,8 @@ describe("ProcessDiagnostics", () => {
               startTimeMs: 2_000,
               runTimeMs: 4_000,
               name: "python",
-              command: "python scripts/checks/check-all.py --branch",
-              argv: ["python.exe", "scripts/checks/check-all.py", "--branch"],
+              command: "python scripts/checks/check-full.py",
+              argv: ["python.exe", "scripts/checks/check-full.py"],
               cwd: "C:\\workspace\\main",
               status: "Running",
               cpuPercent: 0.5,
