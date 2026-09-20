@@ -122,7 +122,7 @@ function PullRequestRowImpl({
         {/* The conflict warning rides the corner of the lifecycle glyph, over the arrow's
           merge circle, so the leading slot stays one icon wide and titles line up whether or
           not a row is blocked. The background fill cuts it out of the glyph beneath. */}
-        <span className="relative inline-flex shrink-0">
+        <span className="relative mt-0.75 inline-flex shrink-0 self-start">
           <PullRequestStateGlyph state={entry.state} isDraft={entry.isDraft} />
           {/* The wrapper takes the offset, not the icon, so the tooltip trigger inside keeps the
             badge's size and anchors the popup to it. */}
