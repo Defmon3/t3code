@@ -152,6 +152,17 @@ function projectViewedImagePath(data: Record<string, unknown>): string | undefin
     return directPath;
   }
 
+  const item = asRecord(data.item);
+  const itemPath =
+    item?.type === "imageGeneration"
+      ? asTrimmedString(item.savedPath)
+      : item?.type === "imageView"
+        ? asTrimmedString(item.path)
+        : null;
+  if (itemPath && isWorkspaceImagePreviewPath(itemPath)) {
+    return itemPath;
+  }
+
   const toolName = asTrimmedString(data.toolName)?.toLowerCase();
   if (toolName !== "read" && toolName !== "read file") {
     return undefined;
@@ -468,7 +479,9 @@ export function projectActivityPayload(
   }
 
   const changedFiles: string[] = [];
-  collectChangedFiles(data, changedFiles, new Set<string>(), 0);
+  if (asRecord(data.item)?.type !== "imageView") {
+    collectChangedFiles(data, changedFiles, new Set<string>(), 0);
+  }
   if (changedFiles.length > 0) {
     // Both clients discover file names by walking objects with path-like keys.
     projectedData.files = changedFiles.map((path) => ({ path }));

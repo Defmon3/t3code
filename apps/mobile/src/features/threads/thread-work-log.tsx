@@ -52,6 +52,7 @@ import {
 import {
   resolveWorkEntryToolPresentation,
   type ToolGroupSummaryKind,
+  workEntryGeneratedImagePath,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
@@ -749,6 +750,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
   const canExpand = row.canExpand;
   const fullDetail = expanded ? row.getFullDetail() : null;
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
+  const generatedImagePath = workEntryGeneratedImagePath(row.workEntry);
   const toolPresentation = resolveWorkEntryToolPresentation(row.workEntry);
   const previewText = workEntryRowLabel(row.workEntry);
   const answerPreview = row.workEntry.questionAnswer
@@ -879,7 +881,14 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
         </View>
       </Pressable>
 
-      {expanded && (fullDetail || viewedImagePath || row.workEntry.questionAnswer) ? (
+      {generatedImagePath ? (
+        <View className="ml-7 pb-1.5 pl-3">
+          {props.renderImage({ href: generatedImagePath, alt: null, title: null })}
+        </View>
+      ) : null}
+
+      {expanded &&
+      (fullDetail || (viewedImagePath && !generatedImagePath) || row.workEntry.questionAnswer) ? (
         <Animated.View
           entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
           exiting={WORK_LOG_DETAIL_EXIT_TRANSITION}
@@ -892,7 +901,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
               answer={row.workEntry.questionAnswer}
             />
           ) : null}
-          {viewedImagePath ? (
+          {viewedImagePath && !generatedImagePath ? (
             <View className="pb-1.5">
               {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
             </View>

@@ -515,6 +515,14 @@ export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): strin
     : null;
 }
 
+export function workEntryGeneratedImagePath(entry: WorkLogPresentationEntry): string | null {
+  return entry.itemType === "image_view" &&
+    entry.toolTitle === "Generated image" &&
+    entry.toolLifecycleStatus === "completed"
+    ? workEntryViewedImagePath(entry)
+    : null;
+}
+
 export interface ViewedImageAsset {
   readonly resource: Extract<AssetResource, { readonly _tag: "media-file" }>;
   readonly alt: string;

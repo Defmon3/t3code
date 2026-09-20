@@ -58,6 +58,11 @@ If you do not want to answer, dismiss the question from its panel. Dismissing
 closes it without sending anything to Codex. This requires a Codex version that
 supports async questions.
 
+## View generated images
+
+Completed Codex image generations appear inline on web, desktop, and mobile. If
+the saved image file is missing or cannot be read, it appears as unavailable.
+
 ## Approve app access
 
 Codex tools can request access to another app. Respond to the named app's request

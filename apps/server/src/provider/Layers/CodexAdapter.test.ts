@@ -90,22 +90,24 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   public readonly compactThread = Effect.void;
 
-  public readonly interruptTurnImpl = vi.fn((_turnId?: TurnId): Promise<void> =>
-    Promise.resolve(undefined),
+  public readonly interruptTurnImpl = vi.fn(
+    (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
 
-  public readonly readThreadImpl = vi.fn((): Promise<CodexThreadSnapshot> =>
-    Promise.resolve({
-      threadId: "provider-thread-1",
-      turns: [],
-    }),
+  public readonly readThreadImpl = vi.fn(
+    (): Promise<CodexThreadSnapshot> =>
+      Promise.resolve({
+        threadId: "provider-thread-1",
+        turns: [],
+      }),
   );
 
-  public readonly rollbackThreadImpl = vi.fn((_numTurns: number): Promise<CodexThreadSnapshot> =>
-    Promise.resolve({
-      threadId: "provider-thread-1",
-      turns: [],
-    }),
+  public readonly rollbackThreadImpl = vi.fn(
+    (_numTurns: number): Promise<CodexThreadSnapshot> =>
+      Promise.resolve({
+        threadId: "provider-thread-1",
+        turns: [],
+      }),
   );
 
   public readonly uploadFeedbackImpl = vi.fn((_reason?: string) =>
@@ -1333,6 +1335,76 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       NodeAssert.equal(firstEvent.value.turnId, "turn-1");
       NodeAssert.equal(firstEvent.value.payload.itemType, "assistant_message");
     }),
+  );
+
+  it.effect(
+    "maps Codex image lifecycle entries to image paths without retaining generated data",
+    () =>
+      Effect.gen(function* () {
+        const { adapter, runtime } = yield* startLifecycleRuntime();
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+          Effect.forkChild,
+        );
+        const generatedImage = "data:image/png;base64," + "a".repeat(10_000);
+
+        for (const item of [
+          {
+            id: "image-generation-1",
+            result: generatedImage,
+            revisedPrompt: null,
+            savedPath: "  /workspace/generated image.png  ",
+            status: "completed",
+            type: "imageGeneration",
+          },
+          {
+            id: "image-view-1",
+            path: "/workspace/reference image.png",
+            type: "imageView",
+          },
+        ] as const) {
+          const id = item.id;
+          yield* runtime.emit({
+            id: asEventId(`evt-${id}`),
+            kind: "notification",
+            provider: ProviderDriverKind.make("codex"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            method: "item/completed",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("turn-1"),
+            itemId: asItemId(id),
+            payload: {
+              completedAtMs: 1_778_000_000_000,
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item,
+            },
+          });
+        }
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        NodeAssert.deepStrictEqual(
+          events.map((event) => {
+            if (event.type !== "item.completed") {
+              return event.type;
+            }
+            return [event.payload.itemType, event.payload.title, event.payload.detail];
+          }),
+          [
+            ["image_view", "Generated image", "/workspace/generated image.png"],
+            ["image_view", "Image view", "/workspace/reference image.png"],
+          ],
+        );
+        const generatedEvent = events[0];
+        NodeAssert.equal(generatedEvent?.type, "item.completed");
+        if (generatedEvent?.type !== "item.completed") {
+          return;
+        }
+        NodeAssert.equal(
+          JSON.stringify(generatedEvent.payload.data).includes(generatedImage),
+          false,
+        );
+        NodeAssert.equal(JSON.stringify(generatedEvent.raw).includes(generatedImage), false);
+      }),
   );
 
   it.effect("labels MCP lifecycle entries with server and tool names", () =>

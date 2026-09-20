@@ -22,6 +22,7 @@ import { replaceComposerContextReferences } from "@t3tools/shared/composerContex
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
   resolveWorkEntryToolPresentation,
+  workEntryGeneratedImagePath,
   resolveViewedImageAsset,
   workEntryViewedImagePath,
   summarizeToolGroup,
@@ -148,10 +149,8 @@ import {
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
-import { useAtomValue } from "@effect/atom-react";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useProject, useThread } from "../../state/entities";
-import { serverEnvironment } from "../../state/server";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   readTimelinePosition,
@@ -3059,9 +3058,6 @@ function AssistantChangedFilesSectionInner({
       ? { environmentId: thread.environmentId, projectId: thread.projectId }
       : null,
   );
-  const serverConfig = useAtomValue(
-    serverEnvironment.configValueAtom(ctx.activeThreadEnvironmentId),
-  );
   const onFileContextMenu = useFileContextMenuHandler(ctx.activeThreadEnvironmentId);
 
   return (
@@ -4506,6 +4502,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     ? getQuestionAnswerPreview(workEntry.questionAnswer)
     : null;
   const viewedImagePath = workEntryViewedImagePath(workEntry);
+  const generatedImagePath = workEntryGeneratedImagePath(workEntry);
   const viewedImage =
     viewedImagePath && threadRef
       ? resolveViewedImageAsset(viewedImagePath, {
@@ -4648,7 +4645,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </span>
         </div>
       </div>
-      {expanded && viewedImage && threadRef ? (
+      {(expanded || generatedImagePath) && viewedImage && threadRef ? (
         <div
           className="mt-1 ms-7 cursor-default"
           onClick={stopRowToggle}
