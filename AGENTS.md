@@ -70,7 +70,7 @@ This fork keeps custom work independently portable and combines it only in one c
 
 ### Custom-main input registry
 
-This registry, not merge ancestry or branch-name pattern matching, defines the maintained inputs. Update it whenever an input is added, retired, or accepted upstream. The current count is **29**.
+This registry, not merge ancestry or branch-name pattern matching, defines the maintained inputs. Update it whenever an input is added, retired, or accepted upstream. The current count is **30**.
 
 - Local-only input: `custom-tweaks`
 - Independently portable feature input: `feat/git-history`
@@ -96,6 +96,7 @@ This registry, not merge ancestry or branch-name pattern matching, defines the m
   - `component/repository-identity`
   - `component/selective-projection-replay`
   - `component/slow-request-warning`
+  - `component/snoozed-thread-icons`
   - `component/startup-hydration-splash`
   - `component/thread-action-menu`
   - `component/vcs-poll-interval`
