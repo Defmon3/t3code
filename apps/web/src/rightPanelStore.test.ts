@@ -114,11 +114,6 @@ describe("rightPanelStore", () => {
   it.each([
     { order: "diff-first", surface: linkedPullRequest },
     { order: "pull-request-first", surface: linkedPullRequest },
-    { order: "diff-first", surface: { id: "pull-requests", kind: "pull-requests" } as const },
-    {
-      order: "pull-request-first",
-      surface: { id: "pull-requests", kind: "pull-requests" } as const,
-    },
   ])(
     "prioritizes $surface.kind over browser and diff with $order delivery",
     ({ order, surface }) => {
@@ -138,12 +133,32 @@ describe("rightPanelStore", () => {
     },
   );
 
-  it("opens Git History as a singleton surface", () => {
-    useRightPanelStore.getState().open(refA, "git-history");
+  it("opens Repository as a singleton surface", () => {
+    useRightPanelStore.getState().openRepository(refA, "pull-requests");
 
     expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      id: "git-history",
-      kind: "git-history",
+      id: "repository",
+      kind: "repository",
+      view: "pull-requests",
+    });
+  });
+
+  it("updates Repository proactively without advancing the user revision", () => {
+    const store = useRightPanelStore.getState();
+    const revision = store.getUserActionRevision(refA);
+
+    expect(
+      store.openProactive(
+        refA,
+        { id: "repository", kind: "repository", view: "pull-requests" },
+        revision,
+      ),
+    ).toBe(true);
+    expect(store.getUserActionRevision(refA)).toBe(revision);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "repository",
+      kind: "repository",
+      view: "pull-requests",
     });
   });
 
@@ -195,9 +210,6 @@ describe("rightPanelStore", () => {
 
     expect(store.openProactive(refA, completedDiff, revision)).toBe(false);
     expect(store.openProactive(refA, linkedPullRequest, revision)).toBe(false);
-    expect(
-      store.openProactive(refA, { id: "pull-requests", kind: "pull-requests" }, revision),
-    ).toBe(false);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toBe(
       chosen,
     );
@@ -393,6 +405,168 @@ describe("rightPanelStore", () => {
         },
       }),
     ).toEqual({ byThreadKey: { "env-1:thread-A": panelState } });
+  });
+
+  it("migrates separate History and linked pull request tabs into Repository", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "pull-requests",
+            surfaces: [
+              { id: "git-history", kind: "git-history" },
+              { id: "pull-requests", kind: "pull-requests" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "repository",
+          surfaces: [{ id: "repository", kind: "repository", view: "pull-requests" }],
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["git-history", "history"],
+    ["pull-requests", "pull-requests"],
+  ] as const)("preserves the active %s repository view", (activeSurfaceId, view) => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId,
+            surfaces: [
+              { id: "diff", kind: "diff" },
+              { id: activeSurfaceId, kind: activeSurfaceId },
+            ],
+          },
+        },
+      }),
+    ).toMatchObject({
+      byThreadKey: {
+        "env-1:thread-A": {
+          activeSurfaceId: "repository",
+          surfaces: [
+            { id: "diff", kind: "diff" },
+            { id: "repository", kind: "repository", view },
+          ],
+        },
+      },
+    });
+  });
+
+  it("coalesces duplicate legacy repository tabs without moving their first tab", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "pull-requests",
+          surfaces: [
+            { id: "diff", kind: "diff" },
+            { id: "git-history", kind: "git-history" },
+            { id: "pull-requests", kind: "pull-requests" },
+            { id: "pull-requests", kind: "pull-requests" },
+            { id: "files", kind: "files" },
+          ],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([
+      { id: "diff", kind: "diff" },
+      { id: "repository", kind: "repository", view: "pull-requests" },
+      { id: "files", kind: "files" },
+    ]);
+  });
+
+  it("drops malformed persisted surfaces", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "repository",
+            surfaces: [null, { id: "unknown", kind: "unknown" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: { "env-1:thread-A": { isOpen: false, activeSurfaceId: null, surfaces: [] } },
+    });
+  });
+
+  it("preserves valid persisted surface payloads", () => {
+    const attachment = {
+      type: "file",
+      id: "attachment-1",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 1,
+    };
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "repository",
+          surfaces: [
+            { id: "repository", kind: "repository", view: "pull-requests" },
+            { id: "browser:new", kind: "preview", resourceId: null },
+            {
+              id: "device:nucbox:pixel",
+              kind: "device",
+              target: { hostId: "nucbox", deviceId: "pixel", platform: "android", name: "Pixel" },
+              title: "Pixel",
+            },
+            {
+              id: "attachment:attachment-1",
+              kind: "file",
+              relativePath: "notes.txt",
+              revealLine: null,
+              revealRequestId: 2,
+              attachment,
+            },
+            {
+              id: "terminal:term-1",
+              kind: "terminal",
+              resourceId: "term-1",
+              terminalIds: ["term-1"],
+              activeTerminalId: "term-1",
+            },
+          ],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([
+      { id: "repository", kind: "repository", view: "pull-requests" },
+      { id: "browser:new", kind: "preview", resourceId: null },
+      {
+        id: "device:nucbox:pixel",
+        kind: "device",
+        target: { hostId: "nucbox", deviceId: "pixel", platform: "android", name: "Pixel" },
+        title: "Pixel",
+      },
+      {
+        id: "attachment:attachment-1",
+        kind: "file",
+        relativePath: "notes.txt",
+        revealLine: null,
+        revealRequestId: 2,
+        attachment,
+      },
+      {
+        id: "terminal:term-1",
+        kind: "terminal",
+        resourceId: "term-1",
+        terminalIds: ["term-1"],
+        activeTerminalId: "term-1",
+      },
+    ]);
   });
 
   it("drops the issues list's shared panel so a restart opens the page fresh", () => {

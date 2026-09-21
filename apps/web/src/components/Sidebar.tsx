@@ -1504,7 +1504,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     ? resolveThreadPullRequestBadge(thread.pullRequests)
     : null;
   const handlePrStackClick = useCallback(() => {
-    useRightPanelStore.getState().open(threadRef, "pull-requests");
+    useRightPanelStore.getState().openRepository(threadRef, "pull-requests");
     if (!props.isActive) onThreadActivate(threadRef);
   }, [onThreadActivate, props.isActive, threadRef]);
   const prBadge =

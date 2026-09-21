@@ -245,7 +245,7 @@ even when its changes look independent. Stack actions require an environment tha
 
 ### Browse Repository History
 
-Open the right panel menu and choose **History** to explore the repository without leaving your thread. The history view shows a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository.
+Open the right panel menu and choose **Repository** to explore history and linked pull requests without leaving your thread. Select **History** to browse a connected commit graph, branches, remotes, and tags. Select a ref to focus on it, or choose **All refs** to inspect the wider repository.
 
 History is currently available in web and desktop project views. Mobile keeps its existing Git status and actions, but does not yet include this dense history workspace.
 
