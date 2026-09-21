@@ -502,6 +502,7 @@ import {
 } from "../lib/attachmentUploadQueue";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
+import { createGitHistoryPanelStore } from "./git-history/GitHistoryPanelState";
 import { previewEnvironment } from "../state/preview";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -1762,6 +1763,7 @@ export default function ChatView(props: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const [gitHistoryPanelStore] = useState(createGitHistoryPanelStore);
   const isMobileViewport = useMediaQuery("max-sm");
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -9753,7 +9755,13 @@ export default function ChatView(props: ChatViewProps) {
       isGitRepo &&
       gitCwd !== null ? (
       <Suspense fallback={null}>
-        <GitHistoryPanel environmentId={environmentId} cwd={gitCwd} active={rightPanelOpen} />
+        <GitHistoryPanel
+          environmentId={environmentId}
+          cwd={gitCwd}
+          active={rightPanelOpen}
+          stateStore={gitHistoryPanelStore}
+          stateScopeKey={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
+        />
       </Suspense>
     ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <DetailGhost label="Loading pull request" />

@@ -2,10 +2,12 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, GitCommitChangedFile, GitHistoryCommit } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import { FileIcon, GitBranchIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import { useStore } from "zustand";
 import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +35,10 @@ import {
   queryErrorMessage,
 } from "./git-history/GitHistoryCommitList";
 import { PaneResizeHandle } from "./git-history/GitHistoryPaneResizeHandle";
+import {
+  createGitHistoryPanelStore,
+  type GitHistoryPanelStore,
+} from "./git-history/GitHistoryPanelState";
 import { GitRefsPane } from "./git-history/GitHistoryRefsPane";
 import type { CommitRefKind, GitHistoryRow } from "./git-history/GitHistoryVisualTypes";
 import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
@@ -53,6 +59,8 @@ interface GitHistoryPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   active?: boolean;
+  stateStore?: GitHistoryPanelStore;
+  stateScopeKey?: string;
 }
 
 export function isWideHistoryLayout(width: number): boolean {
@@ -110,6 +118,8 @@ function useHistoryPanelLayout(
 
 function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
+  const [fallbackStateStore] = useState(createGitHistoryPanelStore);
+  const stateStore = props.stateStore ?? fallbackStateStore;
   const interfaceFontSize = useClientSettings((settings) => settings.fontSizeInterface);
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const rowHeight = gitHistoryRowHeight(interfaceFontSize);
@@ -134,10 +144,31 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const vcsHistoryRevision = useAtomValue(
     vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId, cwd: props.cwd }),
   );
-  const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd, vcsHistoryRevision);
+  const stateScopeKey = `${props.stateScopeKey ?? ""}:${baseTargetKey}:${connectionGeneration}`;
+  const historyState = useStore(stateStore);
+  const stateMatchesScope = historyState.scopeKey === stateScopeKey;
+  useLayoutEffect(() => {
+    stateStore.getState().setScope(stateScopeKey);
+  }, [stateScopeKey, stateStore]);
+  const historyRefs = useGitHistoryRefs(
+    props.environmentId,
+    props.cwd,
+    vcsHistoryRevision,
+    stateScopeKey,
+    stateMatchesScope
+      ? {
+          selectedRevision: historyState.selectedRevision,
+          onSelectedRevisionChange: stateStore.getState().setSelectedRevision,
+        }
+      : undefined,
+  );
   const { selectedRevision } = historyRefs;
   const refSelectionError = historyRefs.initialLocalRefError;
-  const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}:${connectionGeneration}`;
+  const targetKey = `${stateScopeKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}`;
+  const stateMatchesTarget = stateMatchesScope && historyState.targetKey === targetKey;
+  useLayoutEffect(() => {
+    stateStore.getState().setTarget(targetKey);
+  }, [stateScopeKey, stateStore, targetKey]);
   const makeHistoryPageAtom = useMemo(() => {
     if (selectedRevision === undefined || refSelectionError !== null) return null;
     return (cursor: string | undefined, generation: number) =>
@@ -158,6 +189,8 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     makePageAtom: makeHistoryPageAtom,
     getNextCursor: (page) => (page.hasMore ? page.nextCursor : null),
     isExpiredError: isVcsSnapshotExpiredCause,
+    ...(stateMatchesTarget ? { initialPagination: historyState.historyPagination } : {}),
+    onPaginationChange: stateStore.getState().setHistoryPagination,
   });
   const { results, values } = pagination;
   const failed = pagination.failed;
@@ -184,34 +217,17 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const historyCapped = values.some((value) => value.capped === true) && !hasMoreFromServer;
   const hasMore = hasMoreFromServer;
   const isFetchingNextPage = pagination.isFetchingNextPage;
-  const [filterState, setFilterState] = useState({ targetKey, value: "" });
-  const filter = filterState.targetKey === targetKey ? filterState.value : "";
-  if (filterState.targetKey !== targetKey) setFilterState({ targetKey, value: "" });
-  const setFilter = (value: string) => setFilterState({ targetKey, value });
+  const filter = stateMatchesTarget ? historyState.filter : "";
+  const setFilter = stateStore.getState().setFilter;
   const normalizedFilter = filter.trim().toLocaleLowerCase();
   const deferredFilter = useDeferredValue(normalizedFilter);
   const activeFilter = normalizedFilter.length === 0 ? "" : deferredFilter;
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const [selectionState, setSelectionState] = useState<{
-    readonly targetKey: string;
-    readonly hash: string | null;
-    readonly diffRequest: { readonly hash: string; readonly filePath?: string } | null;
-  }>({ targetKey, hash: null, diffRequest: null });
-  const selection =
-    selectionState.targetKey === targetKey
-      ? selectionState
-      : { targetKey, hash: null, diffRequest: null };
-  if (selectionState.targetKey !== targetKey) setSelectionState(selection);
-  const selectedHash = selection.hash;
+  const selectedHash = stateMatchesTarget ? historyState.selectedHash : null;
   const setSelectedHash = (next: SetStateAction<string | null>) => {
-    setSelectionState((current) => {
-      const previous = current.targetKey === targetKey ? current.hash : null;
-      return {
-        targetKey,
-        hash: typeof next === "function" ? next(previous) : next,
-        diffRequest: null,
-      };
-    });
+    stateStore
+      .getState()
+      .setSelectedHash(typeof next === "function" ? next(historyState.selectedHash) : next);
   };
   const [mobilePaneState, setMobilePaneState] = useState<{
     readonly targetKey: string;
@@ -236,13 +252,9 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const previousMobilePane = useRef<typeof mobilePane>(null);
   const branchesButtonRef = useRef<HTMLButtonElement | null>(null);
   const detailsButtonRef = useRef<HTMLButtonElement | null>(null);
-  const commitDiffRequest = selection.diffRequest;
+  const commitDiffRequest = stateMatchesTarget ? historyState.diffRequest : null;
   const setCommitDiffRequest = (request: typeof commitDiffRequest) => {
-    setSelectionState((current) => ({
-      targetKey,
-      hash: current.targetKey === targetKey ? current.hash : null,
-      diffRequest: request,
-    }));
+    stateStore.getState().setDiffRequest(request);
   };
   const showCommitDiff = (hash: string, filePath?: string) => {
     setMobilePane(null);
@@ -276,14 +288,22 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
         },
       });
   }, [props.cwd, props.environmentId, selectedHash, vcsHistoryRevision]);
+  const commitFilesTargetKey =
+    selectedHash === null ? null : `${stateScopeKey}:${vcsHistoryRevision}:${selectedHash}`;
+  const stateMatchesCommitFiles =
+    stateMatchesTarget && historyState.commitFilesTargetKey === commitFilesTargetKey;
+  useLayoutEffect(() => {
+    stateStore.getState().setCommitFilesTarget(commitFilesTargetKey);
+  }, [commitFilesTargetKey, stateStore]);
   const commitFilesPagination = usePaginatedSnapshotPages({
-    targetKey:
-      selectedHash === null ? null : `${baseTargetKey}:${vcsHistoryRevision}:${selectedHash}`,
+    targetKey: commitFilesTargetKey,
     label: "web:vcs-commit-files-pages",
     makePageAtom: makeCommitFilesPageAtom,
     getNextCursor: (page) => (page.hasMore ? page.nextCursor : null),
     maxPages: 20,
     isExpiredError: isVcsSnapshotExpiredCause,
+    ...(stateMatchesCommitFiles ? { initialPagination: historyState.commitFilesPagination } : {}),
+    onPaginationChange: stateStore.getState().setCommitFilesPagination,
   });
   const selectedCommitFiles = useMemo(() => {
     const files = new Map<string, GitCommitChangedFile>();
@@ -441,10 +461,10 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
         className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3 py-2"
         inert={mobilePane !== null ? true : undefined}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex min-w-0 flex-1 basis-0 items-center gap-2">
           <Badge
             variant="outline"
-            className="min-w-0 max-w-64"
+            className="w-full min-w-0 max-w-64"
             title={selectedRevision?.label ?? "All refs"}
           >
             <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
@@ -465,6 +485,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
               onClick={() => openMobilePane("refs")}
               aria-controls="git-history-refs-panel"
               aria-expanded={mobilePane === "refs"}
+              className="shrink-0"
             >
               <GitBranchIcon className="size-3.5" /> Branches
             </Button>
@@ -476,6 +497,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
               disabled={selectedHash === null}
               aria-controls="git-history-details-panel"
               aria-expanded={mobilePane === "details"}
+              className="shrink-0"
             >
               <FileIcon className="size-3.5" /> Details
             </Button>
@@ -487,6 +509,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           onClick={refresh}
           disabled={isPending}
           aria-label="Refresh Git history"
+          className="shrink-0"
         >
           <RefreshCwIcon className={cn("size-3.5", isPending && "animate-spin")} />
         </Button>

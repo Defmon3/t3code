@@ -8,12 +8,14 @@ import {
   componentElement,
   componentTree,
   commit,
+  effectQueue,
   environmentId,
   flushEffects,
   gitRef,
   historyList,
   historyPageSize,
   historyState,
+  loadMoreHistory,
   newestMatchingCommitHash,
   page,
   primaryCommitHash,
@@ -23,8 +25,103 @@ import {
   workspacePath,
 } from "./GitHistoryPanel.test-fixture";
 import { CommitDiffView } from "./git-history/GitHistoryCommitDiff";
+import { createGitHistoryPanelStore } from "./git-history/GitHistoryPanelState";
 
 describe("GitHistoryPanel filters and details", () => {
+  it("clears retained history state when a mounted panel changes threads in one repository", () => {
+    const stateStore = createGitHistoryPanelStore();
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Thread one")]));
+    renderPanel(stateStore, "thread-one");
+    flushEffects();
+    const filter = visitElements(
+      renderPanel(stateStore, "thread-one"),
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    if (filter === null) throw new Error("Git history filter is missing.");
+    (filter.props.onChange as (event: { readonly target: { readonly value: string } }) => void)({
+      target: { value: "thread" },
+    });
+
+    const secondThread = renderPanel(stateStore, "thread-two");
+    expect(
+      visitElements(secondThread, (element) => element.props["aria-label"] === "Filter Git history")
+        ?.props.value,
+    ).toBe("");
+    const secondFilter = visitElements(
+      renderPanel(stateStore, "thread-two"),
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    if (secondFilter === null) throw new Error("Git history filter is missing.");
+    (
+      secondFilter.props.onChange as (event: {
+        readonly target: { readonly value: string };
+      }) => void
+    )({
+      target: { value: "second" },
+    });
+    expect(
+      visitElements(
+        renderPanel(stateStore, "thread-two"),
+        (element) => element.props["aria-label"] === "Filter Git history",
+      )?.props.value,
+    ).toBe("second");
+  });
+
+  it("restores a filtered page-two diff after the responsive panel remounts", () => {
+    const stateStore = createGitHistoryPanelStore();
+    historyState.pages.set(
+      undefined,
+      page([commit(primaryCommitHash, "Page one")], { hasMore: true, nextCursor: "page-two" }),
+    );
+    historyState.pages.set("page-two", page([commit(secondaryCommitHash, "Page two")]));
+    renderPanel(stateStore);
+    flushEffects();
+
+    const filter = visitElements(
+      renderPanel(stateStore),
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    if (filter === null) throw new Error("Git history filter is missing.");
+    (filter.props.onChange as (event: { readonly target: { readonly value: string } }) => void)({
+      target: { value: "page" },
+    });
+    const refresh = visitElements(
+      renderPanel(stateStore),
+      (element) => element.props["aria-label"] === "Refresh Git history",
+    );
+    if (refresh === null) throw new Error("Git history refresh is missing.");
+    (refresh.props.onClick as () => void)();
+    renderPanel(stateStore);
+    flushEffects();
+    loadMoreHistory(renderPanel(stateStore));
+    renderPanel(stateStore);
+    flushEffects();
+    const row = historyList(renderPanel(stateStore)).props.renderItem({
+      item: historyList(renderPanel(stateStore)).props.data[1]!,
+    });
+    (row.props.onSelect as (hash: string) => void)(secondaryCommitHash);
+    const details = componentElement(renderPanel(stateStore), "CommitDetailsPane");
+    (details.props.onShowDiff as (hash: string) => void)(secondaryCommitHash);
+
+    hooks.reset();
+    const restoredDiff = componentElement(renderPanel(stateStore), "CommitDiffView");
+    expect(restoredDiff.props.hash).toBe(secondaryCommitHash);
+    (restoredDiff.props.onBack as () => void)();
+
+    expect(stateStore.getState().historyPagination.generation).toBe(1);
+    expect(
+      visitElements(
+        renderPanel(stateStore),
+        (element) => element.props["aria-label"] === "Filter Git history",
+      )?.props.value,
+    ).toBe("page");
+
+    expect(historyList(renderPanel(stateStore)).props.data.map((row) => row.commit.hash)).toEqual([
+      primaryCommitHash,
+      secondaryCommitHash,
+    ]);
+  });
+
   it("filters history by commit message", () => {
     historyState.pages.set(
       undefined,
@@ -80,6 +177,40 @@ describe("GitHistoryPanel filters and details", () => {
         (element) => element.props["aria-label"] === "Filter Git history",
       )?.props.value,
     ).toBe("");
+  });
+
+  it("keeps search and selected commit state when Activity resumes History", () => {
+    historyState.pages.set(
+      undefined,
+      page([
+        commit(primaryCommitHash, "Provider neutral"),
+        commit(secondaryCommitHash, "Other change"),
+      ]),
+    );
+    const initial = renderPanel();
+    flushEffects();
+    const filter = visitElements(
+      initial,
+      (element) => element.props["aria-label"] === "Filter Git history",
+    );
+    expect(filter).not.toBeNull();
+    if (filter === null) throw new Error("Git history filter is missing.");
+    (filter.props.onChange as (event: { readonly target: { readonly value: string } }) => void)({
+      target: { value: "provider neutral" },
+    });
+    const row = historyList(renderPanel()).props.renderItem({
+      item: historyList(renderPanel()).props.data[0]!,
+    });
+    (row.props.onSelect as (hash: string) => void)(primaryCommitHash);
+
+    effectQueue.dependencies.length = 0;
+    renderPanel();
+    flushEffects();
+
+    expect(historyList(renderPanel()).props.data.map((item) => item.commit.hash)).toEqual([
+      primaryCommitHash,
+    ]);
+    expect(componentElement(renderPanel(), "CommitDetailsPane").props.hasSelection).toBe(true);
   });
 
   it("keeps a history search to the loaded page until the user requests older commits", () => {
@@ -602,6 +733,7 @@ describe("GitHistoryPanel filters and details", () => {
   });
 
   it("lets the diff load changed files beyond the first page", () => {
+    const stateStore = createGitHistoryPanelStore();
     const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
     historyState.commitDetails = { ...historyCommit, body: "" };
@@ -612,28 +744,41 @@ describe("GitHistoryPanel filters and details", () => {
       hasMore: true,
       capped: false,
     };
+    renderPanel(stateStore);
+    flushEffects();
 
-    const list = historyList(renderPanel());
+    const list = historyList(renderPanel(stateStore));
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
     const selectCommit = visitElements(
       historyRow,
       (element) => element.props["data-commit-hash"] === historyCommit.hash,
     );
     (selectCommit?.props.onClick as (() => void) | undefined)?.();
-    renderPanel();
+    renderPanel(stateStore);
     flushEffects();
-    const detailsPane = componentElement(renderPanel(), "CommitDetailsPane");
+    const detailsPane = componentElement(renderPanel(stateStore), "CommitDetailsPane");
     (detailsPane.props.onShowDiff as ((hash: string, filePath?: string) => void) | undefined)?.(
       historyCommit.hash,
     );
 
-    const diffView = componentElement(renderPanel(), "CommitDiffView");
+    const diffView = componentElement(renderPanel(stateStore), "CommitDiffView");
     expect(diffView.props).toMatchObject({ filesHasMore: true, filesLoading: false });
     const diff = renderComponent(diffView);
     const loadMore = visitElements(diff, (element) => element.props.children === "Load more files");
 
     expect(loadMore).not.toBeNull();
-    expect(loadMore?.props.onClick).toBe(diffView.props.onLoadMoreFiles);
+    if (loadMore === null) throw new Error("Load more files action is missing.");
+    expect(loadMore.props.onClick).toBe(diffView.props.onLoadMoreFiles);
+    (loadMore.props.onClick as () => void)();
+    renderPanel(stateStore);
+    flushEffects();
+
+    hooks.reset();
+    componentElement(renderPanel(stateStore), "CommitDiffView");
+    expect(stateStore.getState().commitFilesPagination.cursors).toEqual([
+      undefined,
+      "files-page-2",
+    ]);
   });
 
   it("lets the diff retry a failed changed-file continuation", () => {

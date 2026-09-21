@@ -10,7 +10,7 @@ const INITIAL_CURSORS = [undefined] as const;
 
 type PageAtom<Value, Error> = Atom.Atom<AsyncResult.AsyncResult<Value, Error>>;
 
-interface PaginationState<Cursor> {
+export interface PaginationState<Cursor> {
   readonly targetKey: string | null;
   readonly cursors: ReadonlyArray<Cursor | undefined>;
   readonly generation: number;
@@ -31,14 +31,21 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
   readonly maxPages?: number;
   readonly isExpiredError?: (cause: Cause.Cause<Error>) => boolean;
   readonly refreshPage?: boolean;
+  readonly initialPagination?: PaginationState<Cursor>;
+  readonly onPaginationChange?: (pagination: PaginationState<Cursor>) => void;
 }) {
+  const onPaginationChange = input.onPaginationChange;
   const expiredRecovery = useRef<string | null>(null);
-  const [pagination, setPagination] = useState<PaginationState<Cursor>>({
-    targetKey: input.targetKey,
-    cursors: INITIAL_CURSORS,
-    generation: 0,
-    refreshFirstPage: false,
-  });
+  const initialPagination =
+    input.initialPagination?.targetKey === input.targetKey
+      ? input.initialPagination
+      : {
+          targetKey: input.targetKey,
+          cursors: INITIAL_CURSORS,
+          generation: 0,
+          refreshFirstPage: false,
+        };
+  const [pagination, setPagination] = useState<PaginationState<Cursor>>(initialPagination);
   const activePagination: PaginationState<Cursor> =
     pagination.targetKey === input.targetKey
       ? pagination
@@ -52,6 +59,9 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
     expiredRecovery.current = null;
     setPagination(activePagination);
   }
+  useEffect(() => {
+    onPaginationChange?.(activePagination);
+  }, [activePagination, onPaginationChange]);
   const pageAtoms = useMemo(() => {
     const makePageAtom = input.makePageAtom;
     return input.targetKey === null || makePageAtom === null

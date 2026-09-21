@@ -249,6 +249,8 @@ Open the right panel menu and choose **History** to explore the repository witho
 
 History is currently available in web and desktop project views. Mobile keeps its existing Git status and actions, but does not yet include this dense history workspace.
 
+In a narrow web window, use **Branches** and **Details** to open those panes over the history list. Resizing the window keeps the current history view open.
+
 - Search by commit subject, author, ref, or hash. Use the clear control or `Escape` to reset a search.
 - Select a commit to view its metadata and changed files, then open the same diff view used elsewhere in T3 Code. History diffs use Git's normal patch output, so they match the familiar command-line review view.
 - Copy a full commit hash from a row. When a GitHub repository is connected, issue references in commit subjects open the matching issue.

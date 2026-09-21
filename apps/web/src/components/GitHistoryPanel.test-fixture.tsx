@@ -121,6 +121,9 @@ vi.mock("react", async (importOriginal) => {
       effectQueue.effects.push(effect);
     },
     useMemo: reactHookHarness.useMemo,
+    useLayoutEffect: (effect: () => void) => {
+      effect();
+    },
     useRef: reactHookHarness.useRef,
     useState: <Value,>(initialValue: Value | (() => Value)) => {
       const [value, setValue] = reactHookHarness.useState(initialValue);
@@ -134,6 +137,11 @@ vi.mock("react", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("zustand", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("zustand")>()),
+  useStore: <State,>(store: { getState: () => State }) => store.getState(),
+}));
 
 vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("../test/reactHookHarness");
@@ -399,16 +407,22 @@ function gitRef(
   };
 }
 
-function renderPanel(): ReactElement<Record<string, unknown>> {
+function renderPanel(
+  stateStore?: import("./git-history/GitHistoryPanelState").GitHistoryPanelStore,
+  stateScopeKey?: string,
+): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
   effectQueue.cursor = 0;
   const boundary = GitHistoryPanel({
     environmentId,
     cwd: workspacePath,
+    ...(stateStore === undefined ? {} : { stateStore }),
+    ...(stateScopeKey === undefined ? {} : { stateScopeKey }),
   }) as ReactElement<Record<string, unknown>>;
-  return (
+  const panel = (
     boundary.type as (props: Record<string, unknown>) => ReactElement<Record<string, unknown>>
   )(boundary.props);
+  return panel;
 }
 
 function flushEffects(): void {

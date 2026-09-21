@@ -41,15 +41,15 @@ export function CommitDiffView(props: {
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/60 px-3">
-        <Button size="xs" variant="ghost" onClick={props.onBack}>
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/60 px-3 @max-[34rem]/history-list:h-auto @max-[34rem]/history-list:min-h-9 @max-[34rem]/history-list:flex-wrap @max-[34rem]/history-list:gap-y-1 @max-[34rem]/history-list:py-1">
+        <Button size="xs" variant="ghost" className="shrink-0" onClick={props.onBack}>
           Back to history
         </Button>
-        <FileDiffIcon className="size-3.5 text-muted-foreground" />
-        <span className="truncate text-xs font-medium">
+        <FileDiffIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">
           {props.filePath ?? `Commit ${props.hash.slice(0, 8)}`}
         </span>
-        <label className="ml-auto flex min-w-0 items-center gap-2 text-[0.625rem] text-muted-foreground">
+        <label className="ml-auto flex min-w-0 items-center gap-2 text-[0.625rem] text-muted-foreground @max-[34rem]/history-list:ml-0 @max-[34rem]/history-list:basis-full">
           <span className="shrink-0">
             {props.filePath
               ? `${Math.max(1, props.files.findIndex((file) => file.path === props.filePath) + 1)} of ${props.files.length}`
@@ -59,7 +59,11 @@ export function CommitDiffView(props: {
             value={props.filePath ?? ""}
             onValueChange={(value) => props.onSelectFile(value || undefined)}
           >
-            <SelectTrigger size="xs" className="max-w-64" aria-label="Select changed file">
+            <SelectTrigger
+              size="xs"
+              className="min-w-0 max-w-64 @max-[34rem]/history-list:w-full"
+              aria-label="Select changed file"
+            >
               <SelectValue>{props.filePath ?? "All changed files"}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
