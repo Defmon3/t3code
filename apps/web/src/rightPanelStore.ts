@@ -31,12 +31,18 @@ const RIGHT_PANEL_KINDS = [
   "terminal",
   "pull-request",
   "issue",
-  "issues",
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
-export type RepositoryView = "history" | "pull-requests";
+export type RepositoryView = "history" | "issues" | "pull-requests";
+export type RepositoryItemSelection = {
+  projectId: string;
+  provider?: string;
+  repository: string;
+  number: number;
+};
+export type IssueSelection = RepositoryItemSelection;
 
 export interface DeviceTabTarget {
   hostId: string;
@@ -58,7 +64,12 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "repository"; kind: "repository"; view: RepositoryView }
+  | {
+      id: "repository";
+      kind: "repository";
+      view: RepositoryView;
+      selectedIssue?: IssueSelection | null;
+    }
   | { id: "files"; kind: "files" }
   | {
       id: `file:${string}` | `attachment:${string}`;
@@ -104,15 +115,6 @@ export type RightPanelSurface =
       repository: string;
       number: number;
     }
-  | {
-      /**
-       * The issue browser: one per thread, like the agents surface. It shows the project's issues,
-       * or the one issue picked out of them — picking changes this tab rather than adding one.
-       */
-      id: "issues";
-      kind: "issues";
-      selected: { projectId: string; provider?: string; repository: string; number: number } | null;
-    }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
@@ -122,7 +124,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v12 adds the device and issue surfaces.
 // v13 adds the issues browser surface and stops persisting the issues list panel.
 // v14 combines Git History and linked pull requests into Repository.
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+// v15 adds Issues to Repository.
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 const PersistedRightPanelState = Schema.Struct({
   byThreadKey: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -156,7 +159,8 @@ const PersistedRightPanelSurface = Schema.Union([
   Schema.Struct({
     id: Schema.Literal("repository"),
     kind: Schema.Literal("repository"),
-    view: Schema.Literals(["history", "pull-requests"]),
+    view: Schema.Literals(["history", "issues", "pull-requests"]),
+    selectedIssue: Schema.optionalKey(Schema.Unknown),
   }),
   Schema.Struct({
     id: Schema.Literal("browser:new"),
@@ -272,7 +276,7 @@ interface RightPanelStoreState {
   ) => boolean;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue" | "issues">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue">,
   ) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
@@ -300,14 +304,10 @@ interface RightPanelStoreState {
       number: number;
     },
   ) => void;
-  openIssues: (ref: ScopedThreadRef) => void;
   openRepository: (ref: ScopedThreadRef, view: RepositoryView) => void;
   selectRepositoryView: (ref: ScopedThreadRef, view: RepositoryView) => void;
   /** What the issue browser is showing: an issue, or null for the list it was picked from. */
-  selectIssueInPanel: (
-    ref: ScopedThreadRef,
-    target: { projectId: string; provider?: string; repository: string; number: number } | null,
-  ) => void;
+  selectRepositoryIssue: (ref: ScopedThreadRef, target: IssueSelection | null) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -329,7 +329,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue" | "issues">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -341,16 +341,13 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<
-    RightPanelKind,
-    "file" | "preview" | "terminal" | "pull-request" | "issue" | "issues"
-  >,
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "issue">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
       return { id: "diff", kind };
     case "repository":
-      return { id: "repository", kind, view: "history" };
+      return { id: "repository", kind, view: "history", selectedIssue: null };
     case "files":
       return { id: "files", kind };
     case "agents":
@@ -469,7 +466,9 @@ function issueSurface(target: {
   };
 }
 
-export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
+function normalizeIssueSelection(value: unknown): IssueSelection | null {
+  return Option.getOrElse(decodePersistedIssueSelection(value), () => null);
+}
 
 export function updateIssueTabStatus<Status extends { state: unknown; stateReason: unknown }>(
   statuses: Readonly<Record<string, Status>>,
@@ -580,23 +579,50 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               (): PersistedThreadRightPanelState => ({}),
             );
             const rawActiveSurfaceId = threadState.activeSurfaceId;
-            const rawSurfaces = threadState.surfaces ?? [];
+            const persistedSurfaces = (threadState.surfaces ?? []).flatMap((rawSurface) =>
+              Option.toArray(decodePersistedRightPanelSurface(rawSurface)),
+            );
+            const persistedRepository = persistedSurfaces.find(
+              (surface) => surface.kind === "repository",
+            );
+            const persistedIssues = persistedSurfaces.find((surface) => surface.kind === "issues");
+            const persistedRepositoryView =
+              persistedRepository?.kind === "repository" ? persistedRepository.view : "history";
             const repositoryView =
-              rawActiveSurfaceId === "pull-requests" ? "pull-requests" : "history";
+              rawActiveSurfaceId === "issues"
+                ? "issues"
+                : rawActiveSurfaceId === "pull-requests"
+                  ? "pull-requests"
+                  : rawActiveSurfaceId === "git-history"
+                    ? "history"
+                    : persistedRepositoryView;
+            const issueSelectionSource =
+              (persistedIssues?.kind === "issues" ? persistedIssues.selected : undefined) ??
+              (persistedRepository?.kind === "repository"
+                ? persistedRepository.selectedIssue
+                : undefined);
+            const repositorySurface: RightPanelSurface = {
+              id: "repository",
+              kind: "repository",
+              view: repositoryView,
+              ...(persistedIssues !== undefined || issueSelectionSource !== undefined
+                ? { selectedIssue: normalizeIssueSelection(issueSelectionSource) }
+                : {}),
+            };
             let repositoryIncluded = false;
-            const surfaces = rawSurfaces.flatMap<RightPanelSurface>((rawSurface) => {
-              const surface = Option.getOrElse(
-                decodePersistedRightPanelSurface(rawSurface),
-                (): PersistedRightPanelSurface | null => null,
-              );
-              if (surface === null) return [];
+            const surfaces = persistedSurfaces.flatMap<RightPanelSurface>((surface) => {
               // Dropped surface kind: plans now render inline in the
               // transcript (v9).
               if (surface.kind === "plan") return [];
-              if (surface.kind === "git-history" || surface.kind === "pull-requests") {
+              if (
+                surface.kind === "git-history" ||
+                surface.kind === "pull-requests" ||
+                surface.kind === "repository" ||
+                surface.kind === "issues"
+              ) {
                 if (repositoryIncluded) return [];
                 repositoryIncluded = true;
-                return [{ id: "repository", kind: "repository", view: repositoryView }];
+                return [repositorySurface];
               }
               if (surface.kind === "file") {
                 const revealLine =
@@ -659,21 +685,8 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                   }),
                 ];
               }
-              if (surface.kind === "issues") {
-                return [
-                  {
-                    id: "issues",
-                    kind: "issues",
-                    selected: Option.getOrElse(
-                      decodePersistedIssueSelection(surface.selected),
-                      () => null,
-                    ),
-                  },
-                ];
-              }
               if (surface.kind === "diff" || surface.kind === "files" || surface.kind === "agents")
                 return [surface];
-              if (surface.kind === "repository") return [surface];
               if (surface.kind === "preview") return [surface];
               if (surface.kind === "device") return [surface];
               if (surface.id !== `terminal:${surface.resourceId}`) return [];
@@ -704,7 +717,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               ? (rawActiveSurfaceId ?? null)
               : rawActiveSurfaceId === "pull-request"
                 ? (surfaces.find((surface) => surface.kind === "pull-request")?.id ?? null)
-                : rawActiveSurfaceId === "git-history" || rawActiveSurfaceId === "pull-requests"
+                : rawActiveSurfaceId === "git-history" ||
+                    rawActiveSurfaceId === "pull-requests" ||
+                    rawActiveSurfaceId === "issues"
                   ? (surfaces.find((surface) => surface.kind === "repository")?.id ?? null)
                   : null;
             // A migration that dropped every surface (e.g. plan-only panels
@@ -764,19 +779,26 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return state;
           }
           opened = true;
-          return automaticUpdate(state, threadKey, (current) =>
-            surface.kind === "repository"
-              ? upsertSurface(
-                  {
-                    ...current,
-                    surfaces: current.surfaces.map((entry) =>
-                      entry.id === surface.id ? surface : entry,
-                    ),
-                  },
-                  surface,
-                )
-              : upsertSurface(current, surface),
-          );
+          return automaticUpdate(state, threadKey, (current) => {
+            if (surface.kind !== "repository") return upsertSurface(current, surface);
+            const existing = current.surfaces.find(
+              (entry): entry is Extract<RightPanelSurface, { kind: "repository" }> =>
+                entry.kind === "repository",
+            );
+            const repositorySurface = {
+              ...surface,
+              selectedIssue: surface.selectedIssue ?? existing?.selectedIssue ?? null,
+            };
+            return upsertSurface(
+              {
+                ...current,
+                surfaces: current.surfaces.map((entry) =>
+                  entry.id === repositorySurface.id ? repositorySurface : entry,
+                ),
+              },
+              repositorySurface,
+            );
+          });
         });
         return opened;
       },
@@ -855,12 +877,6 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             upsertSurface(current, issueSurface(target)),
           ),
         ),
-      openIssues: (ref) =>
-        set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            upsertSurface(current, { id: "issues", kind: "issues", selected: null }),
-          ),
-        ),
       openRepository: (ref, view) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
@@ -868,7 +884,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               (surface): surface is Extract<RightPanelSurface, { kind: "repository" }> =>
                 surface.kind === "repository",
             );
-            const surface = { id: "repository" as const, kind: "repository" as const, view };
+            const surface = {
+              id: "repository" as const,
+              kind: "repository" as const,
+              view,
+              selectedIssue: existing?.selectedIssue ?? null,
+            };
             return upsertSurface(
               {
                 ...current,
@@ -889,12 +910,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             ),
           })),
         ),
-      selectIssueInPanel: (ref, target) =>
+      selectRepositoryIssue: (ref, target) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => ({
             ...current,
             surfaces: current.surfaces.map((surface) =>
-              surface.kind === "issues" ? { ...surface, selected: target } : surface,
+              surface.kind === "repository" ? { ...surface, selectedIssue: target } : surface,
             ),
           })),
         ),

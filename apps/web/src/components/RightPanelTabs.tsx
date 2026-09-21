@@ -45,7 +45,7 @@ import {
 
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
-import { issueSurfaceId, type RightPanelSurface } from "~/rightPanelStore";
+import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Button } from "~/components/ui/button";
@@ -126,12 +126,6 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
-  /**
-   * Picking an issue needs a project to pick from, which only a thread has: the list pages reuse
-   * these tabs to hold surfaces they opened themselves, so for them this card stays out.
-   */
-  onAddIssue: () => void;
-  issueAvailable: boolean;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -139,7 +133,6 @@ interface RightPanelTabsProps {
   repositoryAvailable?: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
-  pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
@@ -178,9 +171,9 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
-  gitHistory: "Repository is available for Git repositories or threads with linked pull requests.",
+  repository:
+    "Repository is available for Git repositories, project issues, or threads with linked pull requests.",
   pullRequest: "This thread's branch has no pull request yet.",
-  issue: "Issues are only available from a project checked out from a host.",
   agents: "Agents are only available from a thread.",
   device: "Devices are only available from a thread.",
 } as const;
@@ -203,9 +196,8 @@ const SURFACE_UNAVAILABLE_HINTS = {
   terminal: "Available when a project is open.",
   files: "Available when a project is open.",
   diff: "Available for Git repositories.",
-  gitHistory: "Available for Git repositories or threads with linked pull requests.",
+  repository: "Available for Git repositories, project issues, or linked pull requests.",
   pullRequest: "No pull request on this branch yet.",
-  issue: "Available for projects with a host.",
   agents: "Available from a thread.",
   device: "Available from a thread.",
 } as const;
@@ -346,7 +338,6 @@ function RightPanelEmptyState(props: {
   onAddRepository?: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
-  onAddIssue: () => void;
   onAddAgents: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
@@ -355,8 +346,6 @@ function RightPanelEmptyState(props: {
   repositoryAvailable?: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
-  issueAvailable: boolean;
-  pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
   deviceAvailable: boolean;
   liveAgentCount: number;
@@ -403,11 +392,11 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Repository",
-      description: "Browse history and linked pull requests.",
+      description: "Browse history, issues, and linked pull requests.",
       icon: GitBranch,
       shortcut: "H",
       available: props.repositoryAvailable ?? false,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.gitHistory,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.repository,
       onClick: props.onAddRepository ?? (() => undefined),
       badgeCount: 0,
     },
@@ -418,16 +407,6 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
       onClick: props.onAddPullRequest,
-      badgeCount: 0,
-    },
-    {
-      label: "Issue",
-      description: "Browse this project's issues.",
-      icon: CircleDot,
-      shortcut: "I",
-      available: props.issueAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.issue,
-      onClick: props.onAddIssue,
       badgeCount: 0,
     },
     {
@@ -670,9 +649,6 @@ function surfaceTitle(
     case "pull-request":
     case "issue":
       return `#${surface.number}`;
-    // The strip says what the tab is showing, which for the browser is either of two things.
-    case "issues":
-      return surface.selected ? `#${surface.selected.number}` : "Issues";
     case "agents":
       return "Agents";
     case "device":
@@ -760,17 +736,11 @@ function SurfaceIcon({
           seed={pullRequestStatusSeeds?.[surface.id]}
         />
       );
-    case "issue":
-    case "issues": {
+    case "issue": {
       // Until the panel has read the issue, the tab wears the neutral glyph rather than
       // claiming a state it has not been told. The browser wears the state of whichever issue
       // it is showing, and the plain glyph while it is listing.
-      const statusKey =
-        surface.kind === "issue"
-          ? surface.id
-          : surface.selected
-            ? issueSurfaceId(surface.selected)
-            : null;
+      const statusKey = surface.id;
       const state = (statusKey === null ? null : issueStatuses?.[statusKey]) ?? null;
       const presentation = state === null ? null : resolveIssueState(state);
       const Icon = presentation?.Icon ?? CircleDot;
@@ -973,7 +943,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       icon: GitBranch,
       shortcut: "H",
       available: props.repositoryAvailable ?? false,
-      disabledReason: SURFACE_DISABLED_REASONS.gitHistory,
+      disabledReason: SURFACE_DISABLED_REASONS.repository,
       onClick: props.onAddRepository ?? (() => undefined),
     },
     {
@@ -983,14 +953,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
       onClick: props.onAddPullRequest,
-    },
-    {
-      label: "Issue",
-      icon: CircleDot,
-      shortcut: "I",
-      available: props.issueAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.issue,
-      onClick: props.onAddIssue,
     },
     {
       label: "Agents",
@@ -1482,7 +1444,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddRepository={props.onAddRepository}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
-            onAddIssue={props.onAddIssue}
             onAddAgents={props.onAddAgents}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
@@ -1491,8 +1452,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             repositoryAvailable={props.repositoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
-            issueAvailable={props.issueAvailable}
-            pullRequestsAvailable={props.pullRequestsAvailable}
             agentsAvailable={props.agentsAvailable}
             deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
