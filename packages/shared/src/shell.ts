@@ -3,10 +3,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { HostProcessEnvironment, HostProcessPlatform } from "./hostProcess.ts";
@@ -511,6 +513,52 @@ export const CommandResolutionCache = Context.Reference<Map<string, CommandResol
   },
 );
 
+interface PathDirectoryListing {
+  readonly modified: number | null | undefined;
+  readonly names: ReadonlySet<string> | undefined;
+}
+
+// mtime of a PATH directory; null when missing, undefined when unreadable.
+const directoryMtime = (directory: string) =>
+  FileSystem.FileSystem.use((fileSystem) => fileSystem.stat(directory)).pipe(
+    Effect.map((info) =>
+      info.type === "Directory" ? Option.getOrUndefined(info.mtime)?.getTime() : undefined,
+    ),
+    Effect.catch((error) => Effect.succeed(error.reason._tag === "NotFound" ? null : undefined)),
+  );
+
+// Dated before it is read, so an entry added in between changes the mtime seen
+// on the next check. Without names, lookups probe candidates directly.
+const listPathDirectory = Effect.fnUntraced(function* (
+  directory: string,
+): Effect.fn.Return<PathDirectoryListing, never, FileSystem.FileSystem> {
+  const modified = yield* directoryMtime(directory);
+  if (modified == null) return { modified, names: modified === null ? new Set() : undefined };
+  const entries = yield* FileSystem.FileSystem.use((fileSystem) =>
+    fileSystem.readDirectory(directory),
+  ).pipe(Effect.orElseSucceed(() => undefined));
+  return { modified, names: entries && new Set(entries) };
+});
+
+const PathDirectoryListings = Context.Reference<
+  Cache.Cache<string, PathDirectoryListing, never, FileSystem.FileSystem> | undefined
+>("@t3tools/shared/shell/PathDirectoryListings", { defaultValue: () => undefined });
+
+/**
+ * Run a batch of command lookups (e.g. editor discovery) that lists each PATH
+ * directory once, relisting it if its mtime changes, and probes only listed
+ * names instead of every PATH x PATHEXT candidate per command.
+ */
+export const withPathDirectoryListings = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const listings = yield* Cache.make({
+      capacity: 1024,
+      lookup: listPathDirectory,
+      requireServicesAt: "lookup",
+    });
+    return yield* effect.pipe(Effect.provideService(PathDirectoryListings, listings));
+  });
+
 function cacheCommandResolution(
   cache: Map<string, CommandResolutionCacheEntry>,
   cacheKey: string,
@@ -603,25 +651,31 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     pathEntries.push(pathEntry);
   }
 
+  const listings = yield* PathDirectoryListings;
   for (const pathEntry of pathEntries) {
-    let candidates = commandCandidates;
-    if (platform === "win32") {
-      // Fall back to direct probes when a directory is searchable but not listable.
-      const entries = yield* fileSystem
-        .readDirectory(pathEntry)
-        .pipe(Effect.orElseSucceed(() => null));
-      if (entries !== null) {
-        const names = new Map(entries.map((entry) => [entry.toUpperCase(), entry]));
-        candidates = commandCandidates.flatMap((candidate) => {
-          const exactMatch = entries.find((entry) => entry === candidate);
-          const match = exactMatch ?? names.get(candidate.toUpperCase());
-          return match === undefined ? [] : [match];
-        });
-      }
+    let listing = listings && (yield* Cache.get(listings, pathEntry));
+    if (listings && listing?.names && listing.modified !== (yield* directoryMtime(pathEntry))) {
+      yield* Cache.invalidate(listings, pathEntry);
+      listing = yield* Cache.get(listings, pathEntry);
     }
-
-    for (const candidate of candidates) {
-      const candidatePath = path.join(pathEntry, candidate);
+    const names =
+      !listings && platform === "win32"
+        ? yield* fileSystem.readDirectory(pathEntry).pipe(
+            Effect.map((entries) => new Set(entries)),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : listing?.names;
+    const windowsNames =
+      platform === "win32" && names
+        ? new Map(Array.from(names, (entry) => [entry.toLowerCase(), entry]))
+        : undefined;
+    for (const candidate of commandCandidates) {
+      const matchedName = names?.has(candidate)
+        ? candidate
+        : windowsNames?.get(candidate.toLowerCase());
+      if (names && matchedName === undefined) continue;
+      const executableName = matchedName ?? candidate;
+      const candidatePath = path.join(pathEntry, executableName);
       if (yield* isExecutableFile(candidatePath, platform, windowsPathExtensions)) {
         cacheCommandResolution(cache, cacheKey, candidatePath, nowNanos);
         return candidatePath;
@@ -642,7 +696,8 @@ export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function
   });
 });
 
-export const resolveSpawnCommand = Effect.fn("shell.resolveSpawnCommand")(function* (
+// Untraced because it runs before most spawns and returns at once off Windows.
+export const resolveSpawnCommand = Effect.fnUntraced(function* (
   command: string,
   args: ReadonlyArray<string>,
   options: CommandAvailabilityOptions = {},

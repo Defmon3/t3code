@@ -22,7 +22,6 @@ vi.mock("../SidebarStageBackdrop", () => ({
   resolveEnvironmentIdentificationPillLabel: (_stageLabel: string, isCustomBuild: boolean) =>
     isCustomBuild ? "Custom" : null,
   resolveSidebarStageBackdropVariant: () => null,
-  resolveSidebarStageFocusRingOffsetClass: () => "",
   SidebarStageBackdrop: () => null,
   useEnvironmentStageLabel: () => "Latest",
 }));

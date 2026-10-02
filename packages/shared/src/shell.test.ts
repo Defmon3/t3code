@@ -25,6 +25,7 @@ import {
   resolveWindowsEnvironment,
   SpawnExecutableResolution,
   WindowsShellEnvironment,
+  withPathDirectoryListings,
   type WindowsShellEnvironmentReader,
 } from "./shell.ts";
 
@@ -357,28 +358,46 @@ effectIt.layer(NodeServices.layer)("resolveCommandPath", (it) => {
     }),
   );
 
-  it.effect("matches listed Windows commands case-insensitively", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fileSystem.makeTempDirectory({ prefix: "t3-shell-resolution-" });
+  it.effect.each([false, true])(
+    "matches listed Windows commands with directory caching %s",
+    (cached) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tempDir = yield* fileSystem.makeTempDirectory({ prefix: "t3-shell-resolution-" });
 
-      return yield* Effect.gen(function* () {
-        yield* fileSystem.makeDirectory(path.join(tempDir, "provider-tool.COM"));
-        const executable = path.join(tempDir, "provider-tool.eXe");
-        yield* fileSystem.writeFileString(executable, "MZ");
-
-        expect(
-          yield* resolveCommandPath("provider-tool", {
-            env: { PATH: tempDir, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
-          }).pipe(Effect.provideService(HostProcessPlatform, "win32")),
-        ).toBe(executable);
-      }).pipe(
-        Effect.ensuring(
-          fileSystem.remove(tempDir, { recursive: true, force: true }).pipe(Effect.orDie),
-        ),
-      );
-    }),
+        return yield* Effect.gen(function* () {
+          yield* fileSystem.makeDirectory(path.join(tempDir, "provider-tool.COM"));
+          const executable = path.join(tempDir, "provider-tool.eXe");
+          yield* fileSystem.writeFileString(executable, "MZ");
+          let directoryReads = 0;
+          const lookups = Effect.gen(function* () {
+            for (const command of ["provider-tool", "PROVIDER-TOOL.EXE"]) {
+              expect(
+                yield* resolveCommandPath(command, {
+                  env: { PATH: tempDir, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+                }),
+              ).toBe(executable);
+            }
+          });
+          yield* (cached ? withPathDirectoryListings(lookups) : lookups).pipe(
+            Effect.provideService(HostProcessPlatform, "win32"),
+            Effect.provideService(CommandResolutionCache, new Map()),
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fileSystem,
+              readDirectory: (directory) => {
+                directoryReads += 1;
+                return fileSystem.readDirectory(directory);
+              },
+            }),
+          );
+          expect(directoryReads).toBe(cached ? 1 : 2);
+        }).pipe(
+          Effect.ensuring(
+            fileSystem.remove(tempDir, { recursive: true, force: true }).pipe(Effect.orDie),
+          ),
+        );
+      }),
   );
 
   // Records every path the scan stats, without ever reporting a match, so the
@@ -496,6 +515,40 @@ effectIt.layer(NodeServices.layer)("resolveCommandPath", (it) => {
       expect(probed.filter((filePath) => /\.(COM|EXE|BAT|CMD)$/.test(filePath))).toHaveLength(4);
       expect(probed.filter((filePath) => /\.(com|exe|bat|cmd)$/.test(filePath))).toHaveLength(4);
     }),
+  );
+
+  it.effect("probes only listed PATH names and relists a directory that changes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const first = yield* fs.makeTempDirectoryScoped();
+      const second = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(first, "cursor.CMD"), "");
+      yield* fs.writeFileString(path.join(second, "cursor.EXE"), "");
+      const env = { PATH: `${first};${second}`, PATHEXT: ".EXE;.CMD" };
+      const probed: Array<string> = [];
+      yield* Effect.gen(function* () {
+        expect(yield* resolveCommandPath("cursor", { env })).toBe(path.join(first, "cursor.CMD"));
+        expect(yield* isCommandAvailable("absent", { env })).toBe(false);
+        yield* fs.writeFileString(path.join(second, "late.EXE"), "");
+        yield* fs.utimes(second, 4_102_444_800, 4_102_444_800); // seconds: 2100-01-01
+        expect(yield* resolveCommandPath("late", { env })).toBe(path.join(second, "late.EXE"));
+      }).pipe(
+        withPathDirectoryListings,
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          stat: (file) => {
+            // Record candidate probes, not the per-lookup directory mtime checks.
+            if (file !== first && file !== second) probed.push(file);
+            return fs.stat(file);
+          },
+        }),
+      );
+      expect(probed).toEqual([path.join(first, "cursor.CMD"), path.join(second, "late.EXE")]);
+    }).pipe(
+      Effect.provideService(HostProcessPlatform, "win32"),
+      Effect.provideService(CommandResolutionCache, new Map()),
+    ),
   );
 });
 

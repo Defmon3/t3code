@@ -33,7 +33,7 @@ import {
 } from "./ProjectSkillShortcutBar.logic";
 
 export const projectSkillShortcutBarClassName =
-  "flex h-auto min-h-9 w-full flex-wrap items-center gap-1 overflow-visible rounded-t-[19px] border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
+  "flex h-auto min-h-9 w-full flex-wrap items-center gap-1 overflow-visible rounded-t-2xl border-b border-border/65 bg-muted/20 px-3 py-1 sm:px-4";
 
 export const projectSkillShortcutButtonClassName =
   "min-w-0 max-w-[min(100%,20rem)] shrink-0 truncate rounded-md border border-border/70 bg-background px-2 py-1 text-xs font-medium hover:bg-accent";
@@ -199,8 +199,8 @@ function SortableShortcut(props: {
           Click to send · Alt-click to add to composer · Right-click to customize
         </TooltipPopup>
       </Tooltip>
-      <PopoverPopup align="start" side="top" className="w-auto" viewportClassName="p-2">
-        <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <PopoverPopup align="start" side="top" padding="compact">
+        <div className="mb-1.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
           Button color
         </div>
         <div className="grid grid-cols-5 gap-1.5">

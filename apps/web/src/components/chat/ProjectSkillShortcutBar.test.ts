@@ -32,7 +32,7 @@ describe("project skill shortcuts", () => {
     expect(projectSkillShortcutButtonClassName).toContain("max-w-[min(100%,20rem)]");
     expect(projectSkillShortcutButtonClassName).toContain("truncate");
     expect(projectSkillShortcutBarClassName).toContain("w-full");
-    expect(projectSkillShortcutBarClassName).toContain("rounded-t-[19px]");
+    expect(projectSkillShortcutBarClassName).toContain("rounded-t-2xl");
   });
 
   it("renders an icon-only accessible add control on the full-width empty bar", () => {

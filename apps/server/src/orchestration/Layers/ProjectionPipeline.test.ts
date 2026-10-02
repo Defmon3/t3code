@@ -21,6 +21,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
@@ -109,6 +110,66 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-curs
               updatedAt: createdAt,
             })),
         );
+      }),
+    );
+  },
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-cleanup-span-")))(
+  "OrchestrationProjectionPipeline attachment cleanup span",
+  (it) => {
+    it.effect("runs attachment cleanup only for events that remove attachments", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        let cleanupSpans = 0;
+        const tracer = Tracer.make({
+          span: (options) => {
+            if (options.name === "applyAttachmentSideEffects") cleanupSpans += 1;
+            return new Tracer.NativeSpan(options);
+          },
+        });
+        const now = "2026-01-01T00:00:00.000Z";
+        const projectId = ProjectId.make("project-cleanup-span");
+        const threadId = ThreadId.make("thread-cleanup-span");
+
+        const projectCreated = yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.make("evt-cleanup-span-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-cleanup-span-project"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Cleanup span project",
+            workspaceRoot: "/tmp/project-cleanup-span",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* projectionPipeline.projectEvent(projectCreated).pipe(Effect.withTracer(tracer));
+        assert.strictEqual(cleanupSpans, 0);
+
+        const threadDeleted = yield* eventStore.append({
+          type: "thread.deleted",
+          eventId: EventId.make("evt-cleanup-span-thread-delete"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-cleanup-span-thread-delete"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: { threadId, deletedAt: now },
+        });
+        yield* projectionPipeline.projectEvent(threadDeleted).pipe(Effect.withTracer(tracer));
+        assert.strictEqual(cleanupSpans, 1);
       }),
     );
   },
@@ -616,6 +677,32 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           activeOrderKey: null,
         },
       ]);
+      for (const disabledAt of ["2026-01-01T00:00:03.000Z", null]) {
+        const event = yield* eventStore.append({
+          type: "thread.auto-settle-set",
+          eventId: EventId.make(
+            disabledAt === null ? "evt-auto-settle-enable" : "evt-auto-settle-disable",
+          ),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          occurredAt: "2026-01-01T00:00:03.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            autoSettleDisabledAt: disabledAt,
+            updatedAt: "2026-01-01T00:00:03.000Z",
+          },
+        });
+        yield* projectionPipeline.projectEvent(event);
+        const rows = yield* sql<{ readonly disabledAt: string | null }>`
+          SELECT auto_settle_disabled_at AS "disabledAt"
+          FROM projection_threads WHERE thread_id = 'thread-1'
+        `;
+        assert.deepEqual(rows, [{ disabledAt }]);
+      }
     }),
   );
 });

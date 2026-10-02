@@ -1,7 +1,7 @@
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, CircleDotIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback, useMemo } from "react";
-import { Link, useCanGoBack, useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -15,14 +15,12 @@ import {
   resolveEnvironmentIdentificationPillLabel,
   formatBuildIdentityLabel,
   resolveSidebarStageBackdropVariant,
-  resolveSidebarStageFocusRingOffsetClass,
   SidebarStageBackdrop,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
 import {
   SidebarFooter,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -30,6 +28,8 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
+import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { issuesWorkspaceNavigation } from "./issuesWorkspaceNavigation";
@@ -63,20 +63,18 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     : null;
 
   return (
-    <SidebarHeader
+    // The titlebar row, not a padded SidebarHeader: it aligns to the window controls.
+    <div
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center overflow-hidden px-3 py-0 md:px-0",
+        "@container/sidebar-header relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 px-3 md:px-0",
         isElectron && "drag-region",
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
       <SidebarTrigger
-        className={cn(
-          "relative z-10 md:hidden",
-          backdropVariant &&
-            "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
-          backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
-        )}
+        // Over the stage artwork: the media viewer's control-on-imagery treatment.
+        variant={backdropVariant ? "media-navigation" : "ghost"}
+        className="relative top-auto z-10 translate-y-0 md:hidden"
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
       {buildIdentityLabel ? (
@@ -84,7 +82,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           <TooltipTrigger
             render={
               <Badge
-                className="relative z-10 ml-1 shrink-0 rounded-full px-1 text-[.5rem] tracking-tighter text-muted-foreground"
+                className="relative z-10 ml-1 shrink-0"
                 data-environment-identification="pill"
                 size="sm"
                 tabIndex={0}
@@ -94,7 +92,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
               </Badge>
             }
           />
-          <TooltipPopup className="max-w-none whitespace-pre-line font-mono text-xs" side="bottom">
+          <TooltipPopup variant="code" className="max-w-none whitespace-pre-line" side="bottom">
             {buildIdentityLabel}
             {`\nVersion ${APP_VERSION}`}
             {APP_BUILD_TIME ? `\nBuilt ${APP_BUILD_TIME}` : ""}
@@ -102,7 +100,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-    </SidebarHeader>
+    </div>
   );
 });
 
@@ -158,21 +156,10 @@ function SidebarUtilityItem({
 
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
-  const canGoBack = useCanGoBack();
+  const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
-  const currentFooterPage = useLocation({
-    select: (location) =>
-      /^\/settings(?:\/|$)/.test(location.pathname)
-        ? "settings"
-        : /^\/projects\/[^/]+\/?$/.test(location.pathname)
-          ? "project-settings"
-          : location.pathname === "/usage"
-            ? "usage"
-            : location.pathname === "/pull-requests"
-              ? "pull-requests"
-              : location.pathname === "/issues"
-                ? "issues"
-                : null,
+  const isOnUtilityPage = useLocation({
+    select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const { environments } = useEnvironments();
   const routeTarget = useParams({
@@ -225,16 +212,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
-    if (canGoBack) {
-      window.history.back();
-      return;
-    }
-    void navigate({ to: "/" });
-  }, [canGoBack, closeMobileSidebar, navigate]);
+    void navigateToMainApp();
+  }, [closeMobileSidebar, navigateToMainApp]);
 
   return (
     <SidebarMenu className="flex-row items-center">
-      {currentFooterPage ? (
+      {isOnUtilityPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
             <ArrowLeftIcon />
@@ -276,7 +259,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="px-[var(--sidebar-content-inset)] py-1">
+    <SidebarFooter>
+      <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

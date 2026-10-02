@@ -6,6 +6,7 @@ import {
   buildComposerPathMenuItems,
   ComposerCommandMenu,
   composerIssueReference,
+  composerSuggestionOptionId,
   serializeComposerIssueMention,
 } from "./ComposerCommandMenu";
 
@@ -30,10 +31,35 @@ const issue = {
   commentCount: 0,
 } satisfies IssueListEntry;
 
+describe("composerSuggestionOptionId", () => {
+  it("keeps whitespace, escape-like paths, and malformed UTF-16 distinct", () => {
+    const paths = [
+      "docs/my file.md",
+      "docs/my_file.md",
+      "docs/my%20file.md",
+      "docs/my\tfile.md",
+      "docs/\ud800.md",
+      "docs/\ud801.md",
+      "docs/\udc00.md",
+      "docs/\ufffd.md",
+      "docs/\\ud800.md",
+      "docs/\ud83d\ude80.md",
+    ];
+    const ids = paths.map((path) => composerSuggestionOptionId("suggestions", `path:file:${path}`));
+
+    expect(new Set(ids).size).toBe(paths.length);
+    for (const id of ids) expect(id).not.toMatch(/\s|[\ud800-\udfff]/u);
+    expect(composerSuggestionOptionId("other-composer", paths[0]!)).not.toBe(
+      composerSuggestionOptionId("suggestions", paths[0]!),
+    );
+  });
+});
+
 describe("ComposerCommandMenu", () => {
   it("renders slash commands with their descriptions", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "slash:model",
@@ -59,6 +85,7 @@ describe("ComposerCommandMenu", () => {
   it("shows the app source for an app skill", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "skill:codex:browser",
@@ -93,6 +120,7 @@ describe("ComposerCommandMenu", () => {
   it("shows the repo source for a slash skill", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "skill:codex:ask-matt",
@@ -141,6 +169,7 @@ describe("ComposerCommandMenu", () => {
   it("renders issue results with their state and reference", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "issue:github:acme/app:12",

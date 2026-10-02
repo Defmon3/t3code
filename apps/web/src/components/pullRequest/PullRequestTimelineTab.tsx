@@ -5,14 +5,7 @@ import type {
   PullRequestRef,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import {
-  ExternalLinkIcon,
-  FileCode2Icon,
-  GitCommitHorizontalIcon,
-  GitMergeIcon,
-  GitPullRequestClosedIcon,
-  GitPullRequestIcon,
-} from "lucide-react";
+import { ExternalLinkIcon, FileCode2Icon, GitCommitHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -37,6 +30,7 @@ import {
   type PullRequestTimelineEvent,
 } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
+import { PullRequestGlyph } from "./pullRequestIcons";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestEditButton } from "./PullRequestEditButton";
@@ -91,9 +85,7 @@ function friendlyReviewState(value: string): string {
 
 function ReviewStateBadge({ state }: { state: string }) {
   return (
-    <span className="text-[10px] font-medium text-muted-foreground">
-      {friendlyReviewState(state)}
-    </span>
+    <span className="text-3xs font-medium text-muted-foreground">{friendlyReviewState(state)}</span>
   );
 }
 
@@ -101,8 +93,8 @@ function OpenOnHostButton({ url, onOpen }: { url: string | null; onOpen: (url: s
   return url === null ? null : (
     <Button
       size="icon-xs"
-      variant="ghost"
-      className="-mr-1 -mt-1 shrink-0 text-muted-foreground"
+      variant="ghost-muted"
+      className="-mr-1 -mt-1 shrink-0"
       aria-label="Open activity on host"
       onClick={() => onOpen(url)}
     >
@@ -239,7 +231,7 @@ function CommitEvent({
           <div className="truncate text-xs font-semibold text-foreground transition-colors group-hover:text-primary">
             {event.body ?? "Untitled commit"}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-3xs text-muted-foreground">
             <code className="font-mono">{event.id.slice(0, 7)}</code>
             <span>{formatRelativeTimeLabel(event.at)}</span>
           </div>
@@ -248,7 +240,7 @@ function CommitEvent({
           <PullRequestDiffStat
             additions={event.additions}
             deletions={event.deletions}
-            className="ml-auto shrink-0 font-mono text-[10px]"
+            className="ml-auto shrink-0 font-mono text-3xs"
           />
         ) : null}
       </div>
@@ -260,16 +252,16 @@ function LifecycleEvent({ event }: { event: PullRequestTimelineEvent }) {
   const presentation =
     event.kind === "opened"
       ? {
-          icon: <GitPullRequestIcon className="size-3.5" />,
+          icon: <PullRequestGlyph.pullRequest className="size-3.5" />,
           label: "Pull request opened",
         }
       : event.kind === "merged"
         ? {
-            icon: <GitMergeIcon className="size-3.5" />,
+            icon: <PullRequestGlyph.merged className="size-3.5" />,
             label: "Pull request merged",
           }
         : {
-            icon: <GitPullRequestClosedIcon className="size-3.5" />,
+            icon: <PullRequestGlyph.closed className="size-3.5" />,
             label: "Pull request closed",
           };
 
@@ -281,7 +273,7 @@ function LifecycleEvent({ event }: { event: PullRequestTimelineEvent }) {
           {event.actor ? <ActorName actor={event.actor} /> : null}
           <span className="font-semibold text-foreground">{presentation.label}</span>
         </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
+        <div className="mt-0.5 text-2xs text-muted-foreground">
           {formatRelativeTimeLabel(event.at)}
         </div>
       </div>
@@ -351,7 +343,7 @@ function ReviewVerdictEvent({
               is invisible until hovered but still occupies `h-6`, and under a verdict — usually a
               single line with no body — a row of that reserved on its own reads as a hole. */}
           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <PullRequestMetaLine className="flex-wrap text-[11px] text-muted-foreground">
+            <PullRequestMetaLine className="flex-wrap text-2xs text-muted-foreground">
               <span>{formatRelativeTimeLabel(event.at)}</span>
               {event.path ? (
                 <span className="inline-flex min-w-0 items-center gap-1">
@@ -479,7 +471,7 @@ export function PullRequestTimelineTab({
 
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-            <GitPullRequestIcon className="mb-2 size-5" />
+            <PullRequestGlyph.pullRequest className="mb-2 size-5" />
             <p className="text-xs">No activity yet.</p>
           </div>
         ) : null}

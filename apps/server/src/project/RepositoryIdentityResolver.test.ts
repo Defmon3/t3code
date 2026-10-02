@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { SourceControlProviderError } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -18,6 +19,11 @@ import { TestClock } from "effect/testing";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
+
+const repositoryRoot = NodeURL.fileURLToPath(new URL("../../../../", import.meta.url)).replace(
+  /[\\/]$/,
+  "",
+);
 
 const normalizePathSeparators = (value: string) => value.replaceAll("\\", "/");
 const normalizeResolvedPath = (value: string) => normalizePathSeparators(value);
@@ -45,7 +51,7 @@ const makeRepositoryIdentityResolverTestLayer = (options: {
 
 it.effect("coalesces concurrent standard repositories into one Git process", () =>
   Effect.gen(function* () {
-    const cwd = process.cwd();
+    const cwd = repositoryRoot;
     const invocations = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
     const processRunner = ProcessRunner.ProcessRunner.of({
       run: (input) =>
@@ -115,7 +121,7 @@ it.effect("returns an unknown identity when repository discovery exceeds its dea
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
   it.effect("refreshes the Git root only when requested", () => {
     const calls: Array<ReadonlyArray<string>> = [];
-    const cwd = process.cwd();
+    const cwd = repositoryRoot;
     let rootPath = cwd;
     let remoteUrl = "git@github.com:T3Tools/t3code.git";
     let refinements = 0;
@@ -166,6 +172,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     return Effect.gen(function* () {
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const first = yield* resolver.resolve(cwd);
+      yield* TestClock.adjust(Duration.minutes(10));
       const second = yield* resolver.resolve(cwd);
 
       expect(first?.canonicalKey).toBe("github.com/t3tools/t3code");
@@ -189,12 +196,12 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       const unavailable = yield* resolver.resolve(rootPath, { refresh: true });
       expect(unavailable?.webUrl).toBeUndefined();
       expect(unavailable?.canonicalKey).toBe("ssh.forge.test/team/repo");
-    }).pipe(Effect.provide(resolverLayer));
+    }).pipe(Effect.provide(Layer.merge(TestClock.layer(), resolverLayer)));
   });
 
   it.effect("resolves standard repository identity with filesystem discovery", () => {
     const calls: Array<ReadonlyArray<string>> = [];
-    const cwd = process.cwd();
+    const cwd = repositoryRoot;
     const processRunner = Layer.succeed(ProcessRunner.ProcessRunner, {
       run: (input) =>
         Effect.sync(() => {
@@ -355,6 +362,24 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
         normalizeResolvedPath(resolvedRepoRoot),
       );
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
+  it.effect("retries filesystem repository discovery after the negative TTL", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-late-repository-test-",
+      });
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      expect(yield* resolver.resolve(cwd)).toBeNull();
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@github.com:T3Tools/t3code.git"]);
+      expect(yield* resolver.resolve(cwd)).toBeNull();
+      yield* TestClock.adjust(Duration.minutes(1));
+
+      expect((yield* resolver.resolve(cwd))?.canonicalKey).toBe("github.com/t3tools/t3code");
+    }).pipe(Effect.provide(Layer.merge(TestClock.layer(), RepositoryIdentityResolver.layer))),
   );
 
   it.effect("returns null for non-git folders and repos without remotes", () =>

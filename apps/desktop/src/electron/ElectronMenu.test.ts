@@ -167,8 +167,8 @@ describe("ElectronMenu", () => {
       yield* electronMenu.showContextMenu({
         window: makeWindow(),
         items: [
-          { id: "unsettle", label: "Un-settle thread", icon: "undo" },
-          { id: "unsnooze", label: "Wake thread", icon: "alarm-clock" },
+          { id: "unsettle", label: "Un-settle thread", icon: "undo", checked: true },
+          { id: "unsnooze", label: "Wake thread", icon: "alarm-clock", checked: false },
         ],
         position: Option.none(),
       });
@@ -180,6 +180,10 @@ describe("ElectronMenu", () => {
       assert.isTrue(generatedIcons.some((svg) => svg.includes("m5 3-3 3")));
       assert.isDefined(buildFromTemplateMock.mock.calls[0]?.[0][0]?.icon);
       assert.isDefined(buildFromTemplateMock.mock.calls[0]?.[0][1]?.icon);
+      assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][0]?.type, "checkbox");
+      assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][0]?.checked, true);
+      assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][1]?.type, "checkbox");
+      assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][1]?.checked, false);
     }).pipe(Effect.provide(TestLayer)),
   );
 

@@ -76,7 +76,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(value = detail) {
+function render(value = detail, checksStale = false, onRefreshChecks = () => {}) {
   return (
     <PullRequestSummaryTab
       environmentId={EnvironmentId.make("environment")}
@@ -85,10 +85,37 @@ function render(value = detail) {
       detail={value}
       activityPending={false}
       activityError={null}
+      checksStale={checksStale}
+      onRefreshChecks={onRefreshChecks}
       onRefresh={() => {}}
     />
   );
 }
+
+it("replaces stale check details with an explicit refresh action", () => {
+  const refresh = vi.fn();
+  act(() => {
+    renderer = create(render(detail, true, refresh));
+  });
+
+  click("Checks");
+
+  expect(
+    renderer.root.findAllByType("span").some((span) => span.children.includes("Unit tests")),
+  ).toBe(false);
+  expect(
+    renderer.root
+      .findAllByType("span")
+      .some((span) => span.children.includes("Check details are out of date.")),
+  ).toBe(true);
+  act(() =>
+    renderer.root
+      .findAllByType("button")
+      .find((button) => button.children.includes("Refresh"))!
+      .props.onClick(),
+  );
+  expect(refresh).toHaveBeenCalledOnce();
+});
 
 function heading(title: string) {
   const section = renderer.root

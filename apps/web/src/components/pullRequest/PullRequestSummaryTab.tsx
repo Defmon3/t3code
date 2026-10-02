@@ -34,8 +34,9 @@ import {
   PullRequestActorAvatar,
   PullRequestActorLabel,
   PullRequestCheckStatusIcon,
-  PullRequestReviewOutcomeBadge,
   pullRequestCheckStatusLabel,
+  PullRequestLabelChip,
+  PullRequestReviewOutcomeBadge,
   pullRequestReviewOutcomeLabel,
   pullRequestReviewOutcomeRingClassName,
   pullRequestReviewOutcomeStaleLabel,
@@ -60,7 +61,6 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { ConversationGhost as PullRequestConversationGhost } from "../sourceControl/ListGhosts";
-import { pullRequestLabelColor } from "./pullRequestList.logic";
 import { LINK_ISSUES_HANDOFF_KIND } from "./pullRequestDetail.logic";
 import {
   useWorkItemMatches,
@@ -292,6 +292,7 @@ export function PullRequestSummaryTab({
   reference,
   detail,
   activityPending,
+  checksStale = false,
   activityError,
   pendingFinding,
   fixFindingLabel = "Fix in a thread",
@@ -300,12 +301,14 @@ export function PullRequestSummaryTab({
   onLinkIssues,
   onOpenLinkedIssue,
   onRefresh,
+  onRefreshChecks = onRefresh,
 }: {
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
   activityPending: boolean;
+  checksStale?: boolean;
   activityError: string | null;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
@@ -315,6 +318,7 @@ export function PullRequestSummaryTab({
   onLinkIssues?: (match: WorkItemMatch) => void;
   onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   onRefresh: () => void;
+  onRefreshChecks?: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
   // rather than wherever the last one had been read back to.
@@ -523,14 +527,7 @@ export function PullRequestSummaryTab({
                           <PullRequestActorLabel
                             actor={entry.actor}
                             tooltip={false}
-                            className={cn(
-                              "gap-0 [&>span:last-child]:sr-only",
-                              // Only where the wrapper is not already drawing one, or the opaque
-                              // separator would cover the verdict in the band they share.
-                              entry.outcome
-                                ? undefined
-                                : "[&>img]:ring-2 [&>img]:ring-background [&>span:first-child]:ring-2 [&>span:first-child]:ring-background",
-                            )}
+                            variant="avatar"
                           />
                           {/* Colour alone says nothing to a reader who cannot see it, and the
                               login beside this is already in the accessible name. */}
@@ -579,22 +576,14 @@ export function PullRequestSummaryTab({
                 {detail.labels.length === 0 ? (
                   <span className="text-muted-foreground">None</span>
                 ) : (
-                  detail.labels.map((label) => {
-                    const dot = pullRequestLabelColor(label.color);
-                    return (
-                      <span
-                        key={label.name}
-                        className="inline-flex max-w-48 items-center gap-1.5 rounded-full bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
-                      >
-                        <span
-                          aria-hidden
-                          className="size-2 shrink-0 rounded-full bg-muted-foreground"
-                          {...(dot ? { style: { backgroundColor: dot } } : {})}
-                        />
-                        <span className="truncate">{label.name}</span>
-                      </span>
-                    );
-                  })
+                  detail.labels.map((label) => (
+                    <PullRequestLabelChip
+                      key={label.name}
+                      label={label}
+                      size="default"
+                      className="max-w-48"
+                    />
+                  ))
                 )}
                 {detail.capabilities.labels === true ? (
                   <PullRequestLabelPicker
@@ -738,8 +727,20 @@ export function PullRequestSummaryTab({
         )}
       </Section>
 
-      <Section key={detail.url} title="Checks" count={detail.checks.length} defaultOpen={false}>
-        {detail.checks.length === 0 ? (
+      <Section
+        key={detail.url}
+        title="Checks"
+        {...(checksStale ? {} : { count: detail.checks.length })}
+        defaultOpen={false}
+      >
+        {checksStale ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Check details are out of date.</span>
+            <Button size="xs" variant="ghost" onClick={onRefreshChecks}>
+              Refresh
+            </Button>
+          </div>
+        ) : detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
           <div className="space-y-0.5">
@@ -797,8 +798,8 @@ export function PullRequestSummaryTab({
         actions={
           <Button
             size="xs"
-            variant="ghost"
-            className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+            variant="ghost-muted"
+            className="shrink-0"
             aria-label={
               commentOrder === "newest"
                 ? "Show oldest comments first"
@@ -823,7 +824,7 @@ export function PullRequestSummaryTab({
         ) : (
           <>
             {detail.commentsTruncated ? (
-              <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
+              <p className="mb-2 rounded-md border border-warning/30 bg-warning-surface px-2 py-1.5 text-xs">
                 This conversation is longer than this page reads in one go. The most recent{" "}
                 {detail.comments.length} are here; open it on the host to read the rest.
               </p>

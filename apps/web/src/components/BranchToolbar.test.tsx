@@ -170,7 +170,7 @@ class TestElement {
   }
 
   getBoundingClientRect() {
-    return { left: 0, top: 0 } as DOMRect;
+    return { left: 0, top: 0, width: 10 } as DOMRect;
   }
 
   matches(_selector: string) {
@@ -179,6 +179,10 @@ class TestElement {
 
   querySelectorAll(_selector: string) {
     return [] as TestElement[];
+  }
+
+  querySelector(_selector: string) {
+    return null;
   }
 }
 
@@ -210,6 +214,7 @@ function render() {
     threadId: "thread",
     showGitControls: true,
     onEnvModeChange: vi.fn(),
+    envMode: "local",
     startFromOrigin: false,
     onStartFromOriginChange: vi.fn(),
     envLocked: false,
@@ -232,6 +237,7 @@ describe("BranchToolbar", () => {
     testState.stateUpdates = 0;
     Object.assign(globalThis, {
       HTMLElement: TestElement,
+      NodeFilter: { SHOW_TEXT: 4 },
       ResizeObserver: class {
         constructor(callback: ResizeObserverCallback) {
           testState.resizeObserverCallback = callback;
@@ -255,6 +261,20 @@ describe("BranchToolbar", () => {
         observe() {}
       },
       document: {
+        createRange: () => ({
+          selectNodeContents: () => undefined,
+          getBoundingClientRect: () => ({ width: 10 }),
+        }),
+        createTreeWalker: () => {
+          let visited = false;
+          return {
+            nextNode: () => {
+              if (visited) return null;
+              visited = true;
+              return { textContent: "Current checkout" };
+            },
+          };
+        },
         fonts: {
           addEventListener: (_event: string, callback: () => void) => {
             testState.fontLoadingDone = callback;

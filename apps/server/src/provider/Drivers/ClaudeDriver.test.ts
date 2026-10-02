@@ -11,6 +11,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as ClaudeAdapter from "../Layers/ClaudeAdapter.ts";
+import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { ClaudeDriver } from "./ClaudeDriver.ts";
@@ -21,6 +22,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(ModelManifest.layerTest),
+  Layer.provideMerge(ResetCreditCoordinator.layerTest),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
       shouldRunScopeWork: () => Effect.succeed(false),
