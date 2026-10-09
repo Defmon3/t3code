@@ -11,6 +11,17 @@ import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
 
 import {
+  VcsSnapshotExpiredError,
+  type VcsListHistoryRefsInput,
+  type VcsGetHistoryInput,
+  type VcsGetCommitDetailsInput,
+  type VcsListCommitFilesInput,
+  type VcsGetCommitDiffInput,
+  type VcsListHistoryRefsResult,
+  type VcsGetHistoryResult,
+  type VcsGetCommitDetailsResult,
+  type VcsListCommitFilesResult,
+  type VcsGetCommitDiffResult,
   GitCommandError,
   VcsProcessExitError,
   type VcsSwitchRefInput,
@@ -349,6 +360,35 @@ export class GitVcsDriver extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    readonly listHistoryRefs: (
+      input: VcsListHistoryRefsInput,
+    ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+
+    readonly getHistory: (
+      input: VcsGetHistoryInput,
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
+
+    readonly getCommitDetails: (
+      input: VcsGetCommitDetailsInput,
+    ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+
+    readonly listCommitFiles: (
+      input: VcsListCommitFilesInput,
+    ) => Effect.Effect<VcsListCommitFilesResult, GitCommandError | VcsSnapshotExpiredError>;
+
+    readonly getCommitDiff: (
+      input: VcsGetCommitDiffInput,
+    ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
+
+    readonly syncHistoryRef: (input: {
+      readonly cwd: string;
+      readonly action: "fetch" | "pull" | "push";
+      readonly namespace: "local" | "remote";
+      readonly refName: string;
+    }) => Effect.Effect<
+      { readonly action: "fetch" | "pull" | "push"; readonly refName: string },
+      GitCommandError
+    >;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,

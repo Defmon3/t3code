@@ -16,6 +16,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
 import {
+  createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcCommand,
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
@@ -29,6 +30,7 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
@@ -279,6 +281,34 @@ export function createVcsEnvironmentAtoms<R, E>(
     });
 
   return {
+    historyRevisionAtom: vcsHistoryRevisionAtom,
+    listHistoryRefs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:ListHistoryRefs",
+      tag: WS_METHODS.vcsListHistoryRefs,
+    }),
+    getHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:GetHistory",
+      tag: WS_METHODS.vcsGetHistory,
+    }),
+    getCommitDetails: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:GetCommitDetails",
+      tag: WS_METHODS.vcsGetCommitDetails,
+    }),
+    listCommitFiles: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:ListCommitFiles",
+      tag: WS_METHODS.vcsListCommitFiles,
+    }),
+    getCommitDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:GetCommitDiff",
+      tag: WS_METHODS.vcsGetCommitDiff,
+    }),
+    historySync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:history-sync",
+      tag: WS_METHODS.vcsHistorySync,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+      onSettled: invalidateRefs,
+    }),
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
@@ -361,3 +391,4 @@ export function createVcsEnvironmentAtoms<R, E>(
 export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
+export { vcsHistoryRevisionAtom } from "./vcsRefInvalidation.ts";

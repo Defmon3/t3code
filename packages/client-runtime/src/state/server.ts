@@ -1072,6 +1072,11 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
+    processDiscovery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:process-discovery",
+      tag: WS_METHODS.serverGetProcessDiagnostics,
+      refreshAfterSettledIntervalMs: 2_000,
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,

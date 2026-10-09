@@ -168,6 +168,11 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeResourceTelemetry]: AuthDiagnosticsReadScope,
   [WS_METHODS.vcsRefreshStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.gitResolvePullRequest]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsListHistoryRefs]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsGetHistory]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsGetCommitDetails]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsListCommitFiles]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsGetCommitDiff]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsListRefs]: AuthOrchestrationReadScope,
   [WS_METHODS.reviewGetDiffPreview]: AuthFilesystemReadScope,
   [WS_METHODS.reviewGetDiffFileContents]: AuthFilesystemReadScope,
@@ -205,6 +210,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
+  [WS_METHODS.hookApprovalsSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.hookApprovalsRespond]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

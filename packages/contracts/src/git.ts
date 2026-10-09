@@ -11,6 +11,10 @@ import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceC
 import { VcsDriverKind } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
+const GIT_HISTORY_MAX_LIMIT = 200;
+
+const GitCommitHash = Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i));
+
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
 
 // Domain Types
@@ -506,3 +510,176 @@ export const GitActionProgressEvent = Schema.Union([
   GitActionFailedEvent,
 ]);
 export type GitActionProgressEvent = typeof GitActionProgressEvent.Type;
+
+export const VcsHistoryRef = Schema.Struct({
+  name: TrimmedNonEmptyStringSchema,
+  isRemote: Schema.optional(Schema.Boolean),
+  isTag: Schema.optional(Schema.Boolean),
+  remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
+  upstreamName: Schema.optional(TrimmedNonEmptyStringSchema),
+  current: Schema.Boolean,
+  isDefault: Schema.Boolean,
+  worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  aheadCount: Schema.optional(NonNegativeInt),
+  behindCount: Schema.optional(NonNegativeInt),
+});
+
+export type VcsHistoryRef = typeof VcsHistoryRef.Type;
+
+export const VcsHistorySyncAction = Schema.Literals(["fetch", "pull", "push"]);
+
+export type VcsHistorySyncAction = typeof VcsHistorySyncAction.Type;
+
+export const VcsHistorySyncInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  action: VcsHistorySyncAction,
+  namespace: Schema.Literals(["local", "remote"]),
+  refName: TrimmedNonEmptyStringSchema,
+});
+
+export type VcsHistorySyncInput = typeof VcsHistorySyncInput.Type;
+
+export const VcsListHistoryRefsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  namespace: Schema.optional(Schema.Literals(["local", "remote", "tag"])),
+  refresh: Schema.optional(Schema.Boolean),
+  queryGeneration: Schema.optional(NonNegativeInt),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
+  ),
+});
+
+export type VcsListHistoryRefsInput = typeof VcsListHistoryRefsInput.Type;
+
+export const VcsGetHistoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  revision: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(1024))),
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  queryGeneration: Schema.optional(NonNegativeInt),
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_HISTORY_MAX_LIMIT))),
+});
+
+export type VcsGetHistoryInput = typeof VcsGetHistoryInput.Type;
+
+export const VcsGetCommitDetailsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  hash: GitCommitHash,
+  queryGeneration: Schema.optional(NonNegativeInt),
+});
+
+export type VcsGetCommitDetailsInput = typeof VcsGetCommitDetailsInput.Type;
+
+export const VcsListCommitFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  hash: GitCommitHash,
+  cursor: Schema.optional(TrimmedNonEmptyStringSchema),
+  queryGeneration: Schema.optional(NonNegativeInt),
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
+});
+
+export type VcsListCommitFilesInput = typeof VcsListCommitFilesInput.Type;
+
+export const VcsGetCommitDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  hash: GitCommitHash,
+  filePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  queryGeneration: Schema.optional(NonNegativeInt),
+  ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
+});
+
+export type VcsGetCommitDiffInput = typeof VcsGetCommitDiffInput.Type;
+
+export const VcsListHistoryRefsResult = Schema.Struct({
+  refs: Schema.Array(VcsHistoryRef),
+  currentRef: Schema.NullOr(VcsHistoryRef),
+  isRepo: Schema.Boolean,
+  hasPrimaryRemote: Schema.Boolean,
+  nextCursor: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  isComplete: Schema.Boolean,
+});
+
+export type VcsListHistoryRefsResult = typeof VcsListHistoryRefsResult.Type;
+
+export const GitHistoryCommit = Schema.Struct({
+  hash: GitCommitHash,
+  parentHashes: Schema.Array(GitCommitHash),
+  subject: Schema.String,
+  authorName: TrimmedNonEmptyStringSchema,
+  authorEmail: TrimmedNonEmptyStringSchema,
+  authoredAt: Schema.String,
+  refs: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+
+export type GitHistoryCommit = typeof GitHistoryCommit.Type;
+
+export const GitCommitChangedFile = Schema.Struct({
+  status: Schema.Literals(["A", "M", "D", "R", "C", "T", "U", "X", "B"]),
+  path: TrimmedNonEmptyStringSchema,
+});
+
+export type GitCommitChangedFile = typeof GitCommitChangedFile.Type;
+
+export const GitCommitDetails = Schema.Struct({
+  hash: GitCommitHash,
+  parentHashes: Schema.Array(GitCommitHash),
+  subject: Schema.String,
+  body: Schema.String,
+  authorName: TrimmedNonEmptyStringSchema,
+  authorEmail: TrimmedNonEmptyStringSchema,
+  authoredAt: Schema.String,
+  refs: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+
+export type GitCommitDetails = typeof GitCommitDetails.Type;
+
+export const VcsGetHistoryResult = Schema.Struct({
+  commits: Schema.Array(GitHistoryCommit),
+  isRepo: Schema.Boolean,
+  nextCursor: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  hasMore: Schema.Boolean,
+});
+
+export type VcsGetHistoryResult = typeof VcsGetHistoryResult.Type;
+
+export const VcsGetCommitDetailsResult = Schema.Struct({
+  commit: Schema.NullOr(GitCommitDetails),
+  isRepo: Schema.Boolean,
+});
+
+export type VcsGetCommitDetailsResult = typeof VcsGetCommitDetailsResult.Type;
+
+export const VcsListCommitFilesResult = Schema.Struct({
+  files: Schema.Array(GitCommitChangedFile),
+  isRepo: Schema.Boolean,
+  nextCursor: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  hasMore: Schema.Boolean,
+  capped: Schema.Boolean,
+});
+
+export type VcsListCommitFilesResult = typeof VcsListCommitFilesResult.Type;
+
+export const VcsGetCommitDiffResult = Schema.Struct({
+  diff: Schema.String,
+  truncated: Schema.Boolean,
+  isRepo: Schema.Boolean,
+});
+
+export type VcsGetCommitDiffResult = typeof VcsGetCommitDiffResult.Type;
+
+export const VcsHistorySyncResult = Schema.Struct({
+  action: VcsHistorySyncAction,
+  refName: TrimmedNonEmptyStringSchema,
+});
+
+export type VcsHistorySyncResult = typeof VcsHistorySyncResult.Type;
+
+export class VcsSnapshotExpiredError extends Schema.TaggedError<VcsSnapshotExpiredError>()(
+  "VcsSnapshotExpiredError",
+  { operation: Schema.String, cursor: TrimmedNonEmptyStringSchema },
+) {
+  override get message(): string {
+    return `Git browsing snapshot expired for ${this.operation}.`;
+  }
+}

@@ -307,6 +307,10 @@
       "types": "./src/nodeRuntime.ts",
       "import": "./src/nodeRuntime.ts"
     },
+    "./testCommand": {
+      "types": "./src/testCommand.ts",
+      "import": "./src/testCommand.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"

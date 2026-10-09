@@ -323,7 +323,10 @@ describe("Grok launch permission mode", () => {
     Effect.gen(function* () {
       const launches: Array<ReadonlyArray<string>> = [];
       const childProcessSpawner = ChildProcessSpawner.make((command) => {
-        if (command._tag === "StandardCommand") launches.push(command.args);
+        if (command._tag === "StandardCommand") {
+          launches.push(command.args);
+          assert.equal(command.options.env?.T3_HOOK_APPROVAL_TOKEN, "grok-hook-token");
+        }
         return Effect.fail(
           PlatformError.systemError({
             _tag: "NotFound",
@@ -347,6 +350,7 @@ describe("Grok launch permission mode", () => {
       });
       yield* adapter
         .openSession({
+          hookApprovalEnvironment: { T3_HOOK_APPROVAL_TOKEN: "grok-hook-token" },
           threadId: ThreadId.make("grok-launch-test"),
           providerSessionId: ProviderSessionId.make("grok-launch-test"),
           modelSelection: { instanceId, model: "grok-build" },

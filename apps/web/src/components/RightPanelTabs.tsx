@@ -22,6 +22,8 @@ import {
   FileDiff,
   Files,
   Globe2,
+  GitBranch,
+  Activity,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -124,6 +126,10 @@ interface RightPanelTabsProps {
   onAddBrowserInProfile: (profileId: string) => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory?: (() => void) | undefined;
+  onAddProcesses?: (() => void) | undefined;
+  gitHistoryAvailable?: boolean | undefined;
+  processesAvailable?: boolean | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
@@ -321,6 +327,10 @@ function RightPanelEmptyState(props: {
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddGitHistory?: (() => void) | undefined;
+  onAddProcesses?: (() => void) | undefined;
+  gitHistoryAvailable?: boolean | undefined;
+  processesAvailable?: boolean | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
@@ -369,6 +379,30 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.diff,
       onClick: props.onAddDiff,
     },
+    ...(props.onAddGitHistory
+      ? [
+          {
+            label: "Git History",
+            icon: GitBranch,
+            shortcut: "G",
+            available: props.gitHistoryAvailable === true,
+            disabledReason: "Select a Git repository to view its history.",
+            onClick: props.onAddGitHistory,
+          },
+        ]
+      : []),
+    ...(props.onAddProcesses
+      ? [
+          {
+            label: "Processes",
+            icon: Activity,
+            shortcut: "R",
+            available: props.processesAvailable === true,
+            disabledReason: "Connect to an environment to view its processes.",
+            onClick: props.onAddProcesses,
+          },
+        ]
+      : []),
     {
       label: "Pull request",
       icon: PullRequestGlyph.pullRequest,
@@ -587,6 +621,10 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "Git History";
+    case "processes":
+      return "Processes";
     case "files":
       return "Files";
     case "file":
@@ -662,6 +700,10 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitBranch className="size-3 shrink-0" />;
+    case "processes":
+      return <Activity className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -896,6 +938,30 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
     },
+    ...(props.onAddGitHistory
+      ? [
+          {
+            label: "Git History",
+            icon: GitBranch,
+            shortcut: "G",
+            available: props.gitHistoryAvailable === true,
+            disabledReason: "Select a Git repository to view its history.",
+            onClick: props.onAddGitHistory,
+          },
+        ]
+      : []),
+    ...(props.onAddProcesses
+      ? [
+          {
+            label: "Processes",
+            icon: Activity,
+            shortcut: "R",
+            available: props.processesAvailable === true,
+            disabledReason: "Connect to an environment to view its processes.",
+            onClick: props.onAddProcesses,
+          },
+        ]
+      : []),
     {
       label: "Pull request",
       icon: PullRequestGlyph.pullRequest,
@@ -1399,6 +1465,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddGitHistory={props.onAddGitHistory}
+            onAddProcesses={props.onAddProcesses}
+            gitHistoryAvailable={props.gitHistoryAvailable}
+            processesAvailable={props.processesAvailable}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}

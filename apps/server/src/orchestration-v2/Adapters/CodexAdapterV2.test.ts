@@ -1,3 +1,4 @@
+import * as HookApprovalRegistry from "../../hooks/HookApprovalRegistry.ts";
 import * as NodeOS from "node:os";
 
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
@@ -793,8 +794,13 @@ describe("CodexAdapterV2 process spawning", () => {
   it.effect("expands ~ in the configured binary path before spawning", () =>
     Effect.gen(function* () {
       const spawnedCommands: Array<string> = [];
+      const spawnedEnvironments: Array<Readonly<Record<string, string | undefined>> | undefined> =
+        [];
       const spawner = ChildProcessSpawner.make((command) => {
-        if (ChildProcess.isStandardCommand(command)) spawnedCommands.push(command.command);
+        if (ChildProcess.isStandardCommand(command)) {
+          spawnedCommands.push(command.command);
+          spawnedEnvironments.push(command.options.env);
+        }
         return Effect.fail(
           PlatformError.systemError({ _tag: "NotFound", module: "ChildProcess", method: "spawn" }),
         );
@@ -811,6 +817,7 @@ describe("CodexAdapterV2 process spawning", () => {
           Layer.mergeAll(
             CodexAdapterV2.layerAppServerClientFactory,
             ServerConfig.layerTest(process.cwd(), { prefix: "t3-codex-binary-home-" }),
+            Layer.mock(HookApprovalRegistry.HookApprovalRegistry)({}),
           ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -820,16 +827,24 @@ describe("CodexAdapterV2 process spawning", () => {
         ),
       );
 
+      assert.isFalse(
+        (yield* adapter.getCapabilities()).sessions.supportsMultipleProviderThreadsPerSession,
+      );
       yield* adapter
         .openSession({
           threadId: ThreadId.make("thread-binary-home"),
           providerSessionId: ProviderSessionId.make("provider-session-binary-home"),
           modelSelection: CODEX_TEST_MODEL_SELECTION,
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          hookApprovalEnvironment: {
+            T3_HOOK_APPROVAL_TOKEN: "codex-hook-token",
+            T3_HOOK_APPROVAL_URL: "http://127.0.0.1:3773/hook-approvals",
+          },
         })
         .pipe(Effect.scoped, Effect.exit);
 
       assert.deepEqual(spawnedCommands, [path.join(NodeOS.homedir(), "bin", "codex")]);
+      assert.equal(spawnedEnvironments[0]?.T3_HOOK_APPROVAL_TOKEN, "codex-hook-token");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer)),
       Effect.provideService(HostProcessPlatform, "linux"),

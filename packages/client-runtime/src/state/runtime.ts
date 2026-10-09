@@ -68,6 +68,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  readonly refreshAfterSettledIntervalMs?: number;
   readonly refreshTrigger?: (target: {
     readonly environmentId: EnvironmentIdType;
     readonly input: Input;
@@ -594,17 +595,77 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         Atom.setIdleTTL(idleTtlMs),
       );
     const intervalQuery =
-      options.refreshIntervalMs === undefined
-        ? queryAtom
-        : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
+      options.refreshAfterSettledIntervalMs !== undefined
+        ? withSettledRefresh(
+            queryAtom,
+            options.refreshAfterSettledIntervalMs,
+            Atom.map(connectionAtom(target.environmentId), (result) => {
+              const connection = Option.getOrNull(AsyncResult.value(result));
+              return (
+                connection !== null &&
+                connection[0].phase === "connected" &&
+                Option.isSome(connection[1])
+              );
+            }),
+          )
+        : options.refreshIntervalMs === undefined
+          ? queryAtom
+          : queryAtom.pipe(Atom.withRefresh(options.refreshIntervalMs));
     const refreshTrigger = options.refreshTrigger?.(target);
     return (
       refreshTrigger === undefined
         ? intervalQuery
         : intervalQuery.pipe(refreshOnSignalWhileRead(refreshTrigger))
-    ).pipe(Atom.setIdleTTL(idleTtlMs), Atom.withLabel(`${options.label}:${key}`));
+    ).pipe(
+      Atom.setIdleTTL(options.refreshAfterSettledIntervalMs === undefined ? idleTtlMs : 0),
+      Atom.withLabel(`${options.label}:${key}`),
+    );
   });
   return (target) => family(environmentRpcKey(target));
+}
+
+function withSettledRefresh<A, E>(
+  queryAtom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
+  refreshIntervalMs: number,
+  isRefreshEnabledAtom?: Atom.Atom<boolean>,
+): Atom.Atom<AsyncResult.AsyncResult<A, E>> {
+  let refreshDelayAtom: Atom.Atom<AsyncResult.AsyncResult<void, never>> | undefined;
+  return Atom.transform(
+    queryAtom,
+    (get, source) => {
+      const result = get(source);
+      if (
+        (isRefreshEnabledAtom !== undefined && !get(isRefreshEnabledAtom)) ||
+        result.waiting ||
+        AsyncResult.isInitial(result)
+      ) {
+        refreshDelayAtom = undefined;
+        return result;
+      }
+      if (refreshDelayAtom === undefined) {
+        let delayAtom: Atom.Atom<AsyncResult.AsyncResult<void, never>> | undefined;
+        delayAtom = Atom.make(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                if (refreshDelayAtom === delayAtom) {
+                  refreshDelayAtom = undefined;
+                }
+              }),
+            );
+            yield* Effect.sleep(refreshIntervalMs);
+          }),
+        ).pipe(Atom.setIdleTTL(0));
+        refreshDelayAtom = delayAtom;
+      }
+      if (AsyncResult.isSuccess(get(refreshDelayAtom))) {
+        refreshDelayAtom = undefined;
+        get.refresh(source);
+      }
+      return result;
+    },
+    { initialValueTarget: queryAtom },
+  );
 }
 
 export function createEnvironmentSubscriptionAtomFamily<R, ER, Input, A, E>(
@@ -678,6 +739,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    readonly refreshAfterSettledIntervalMs?: number;
     readonly refreshTrigger?: (target: {
       readonly environmentId: EnvironmentIdType;
       readonly input: EnvironmentRpcInput<TTag>;
@@ -692,6 +754,9 @@ export function createEnvironmentRpcQueryAtomFamily<
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
     ...(options.refreshTrigger === undefined ? {} : { refreshTrigger: options.refreshTrigger }),
+    ...(options.refreshAfterSettledIntervalMs === undefined
+      ? {}
+      : { refreshAfterSettledIntervalMs: options.refreshAfterSettledIntervalMs }),
     execute: (
       input: EnvironmentRpcInput<TTag>,
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,

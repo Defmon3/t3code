@@ -29,6 +29,17 @@ const snapshot: PreviewSessionSnapshot = {
 };
 
 describe("closedViewStore", () => {
+  it.each([
+    { id: "git-history", kind: "git-history" },
+    { id: "processes", kind: "processes" },
+  ] as const)("preserves closed $kind tabs across rehydration", async (surface) => {
+    useClosedViewStore.getState().remember({ kind: "panel-tab", threadRef: refA, surface });
+    await useClosedViewStore.persist.rehydrate();
+    expect(useClosedViewStore.getState().entries).toHaveLength(1);
+    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
+      surface,
+    });
+  });
   it.each([null, {}, { entries: null }, { entries: {} }, { entries: "invalid" }])(
     "rehydrates malformed older history %j as empty history",
     async (state) => {

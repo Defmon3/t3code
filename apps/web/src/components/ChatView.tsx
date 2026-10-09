@@ -2,6 +2,15 @@ import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/Th
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
+  createPendingHookApprovals,
+  findPendingHookApproval,
+  mergePendingHookApprovals,
+  hookApprovalDecisionForProviderDecision,
+  hookApprovalsForThread,
+  hookApprovalResponseTarget,
+} from "@t3tools/client-runtime/state/hook-approvals";
+import { hookApprovalEnvironment, pendingHookApprovalRequestsAtom } from "../state/hookApprovals";
+import {
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
   shouldDockDraftHeroForSubmission,
@@ -434,6 +443,9 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { ProjectSkillShortcutBar } from "./chat/ProjectSkillShortcutBar";
+import { resolveProjectSkillShortcutText } from "./chat/ProjectSkillShortcutBar.logic";
+import { projectEnvironment } from "../state/projects";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -491,6 +503,7 @@ import { ThreadStatusLine } from "./chat/ThreadStatusLine";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
+import { hasGitHistoryCapability } from "../gitHistoryCapability";
 import {
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
@@ -700,6 +713,12 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
+const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
+const ProcessPanelForEnvironment = lazy(() =>
+  import("./ProcessPanelForEnvironment").then((module) => ({
+    default: module.ProcessPanelForEnvironment,
+  })),
+);
 const selectAutoShowFloatingPreview = (settings: { browserAutoShowFloatingPreview: boolean }) =>
   settings.browserAutoShowFloatingPreview;
 const DevicePanel = lazy(() =>
@@ -1601,6 +1620,7 @@ export default function ChatView(props: ChatViewProps) {
   const updateProjectScriptSettings = useAtomCommand(serverEnvironment.updateSettings, {
     reportFailure: false,
   });
+  const updateQuickSlots = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
@@ -1646,6 +1666,11 @@ export default function ChatView(props: ChatViewProps) {
   const respondToThreadApproval = useOrchestrationCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
+  const respondToHookApproval = useAtomCommand(hookApprovalEnvironment.respond, {
+    label: "respond to custom hook approval",
+    reportFailure: false,
+  });
+  const hookApprovalRequests = useAtomValue(pendingHookApprovalRequestsAtom);
   const respondToThreadUserInput = useOrchestrationCommand(threadEnvironment.respondToUserInput, {
     reportFailure: false,
   });
@@ -3299,9 +3324,20 @@ export default function ChatView(props: ChatViewProps) {
         : derivePendingThreadRequests(serverProjection),
     [serverProjection],
   );
+  const pendingHookApprovals = useMemo(
+    () =>
+      createPendingHookApprovals(
+        hookApprovalsForThread(hookApprovalRequests, environmentId, activeThreadId),
+        pendingRequests.approvals.map((approval) => approval.requestId),
+      ),
+    [hookApprovalRequests, environmentId, activeThreadId, pendingRequests.approvals],
+  );
   const pendingApprovals = useMemo(
-    () => derivePendingApprovals(pendingRequests.approvals),
-    [pendingRequests.approvals],
+    () =>
+      derivePendingApprovals(
+        mergePendingHookApprovals(pendingRequests.approvals, pendingHookApprovals),
+      ),
+    [pendingRequests.approvals, pendingHookApprovals],
   );
   const pendingUserInputs = useMemo(
     () => derivePendingUserInputs(pendingRequests.userInputs),
@@ -5444,6 +5480,19 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const addGitHistorySurface = useCallback(() => {
+    if (
+      !activeThreadRef ||
+      !isGitRepo ||
+      !hasGitHistoryCapability(serverConfig?.environment.capabilities)
+    )
+      return;
+    useRightPanelStore.getState().open(activeThreadRef, "git-history");
+  }, [activeThreadRef, isGitRepo, serverConfig]);
+  const addProcessesSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "processes");
+  }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const visiblePullRequests = visibleThreadPullRequests(
@@ -10108,14 +10157,26 @@ export default function ChatView(props: ChatViewProps) {
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
-      const result = await respondToThreadApproval({
-        environmentId,
-        input: {
-          threadId: activeThreadId,
-          requestId,
-          decision,
-        },
-      });
+      const hookApproval = findPendingHookApproval(pendingHookApprovals, requestId);
+      const hookDecision = hookApprovalDecisionForProviderDecision(decision);
+      if (hookApproval !== null && hookDecision === null) {
+        setThreadError(activeThreadId, "Unsupported custom hook approval decision.");
+        setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+        return;
+      }
+      const result =
+        hookApproval !== null && hookDecision !== null
+          ? await respondToHookApproval(
+              hookApprovalResponseTarget(hookApproval.request, hookDecision),
+            )
+          : await respondToThreadApproval({
+              environmentId,
+              input: {
+                threadId: activeThreadId,
+                requestId,
+                decision,
+              },
+            });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
@@ -10126,7 +10187,15 @@ export default function ChatView(props: ChatViewProps) {
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, pendingApprovals, respondToThreadApproval, setThreadError],
+    [
+      activeThreadId,
+      environmentId,
+      pendingApprovals,
+      pendingHookApprovals,
+      respondToHookApproval,
+      respondToThreadApproval,
+      setThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
@@ -10977,6 +11046,30 @@ export default function ChatView(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
+    ) : renderedRightPanelSurface?.kind === "git-history" && gitCwd ? (
+      <Suspense fallback={null}>
+        <GitHistoryPanel
+          environmentId={activeThreadRef.environmentId}
+          cwd={gitCwd}
+          active={rightPanelOpen}
+          onSolveGitSync={(prompt) => {
+            const current =
+              useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+            setComposerDraftPrompt(
+              composerDraftTarget,
+              current.trim().length > 0 ? `${current.trimEnd()}\n\n${prompt}` : prompt,
+            );
+            scheduleComposerFocus();
+          }}
+        />
+      </Suspense>
+    ) : renderedRightPanelSurface?.kind === "processes" ? (
+      <Suspense fallback={null}>
+        <ProcessPanelForEnvironment
+          environmentId={activeThreadRef.environmentId}
+          active={rightPanelOpen}
+        />
+      </Suspense>
     ) : renderedRightPanelSurface?.kind === "diff" ? (
       <Suspense fallback={null}>
         <DiffPanel
@@ -11562,6 +11655,44 @@ export default function ChatView(props: ChatViewProps) {
                           ) : null}
                           {!composerMounted ? null : (
                             <ChatComposer
+                              surfaceTopSlot={
+                                activeProject ? (
+                                  <ProjectSkillShortcutBar
+                                    key={JSON.stringify([environmentId, activeProject.id])}
+                                    shortcuts={activeProject.skillShortcuts ?? []}
+                                    colors={activeProject.skillShortcutColors ?? {}}
+                                    disabled={!canOperateThread}
+                                    onChange={async (skillShortcuts, skillShortcutColors) => {
+                                      const result = await updateQuickSlots({
+                                        environmentId,
+                                        input: {
+                                          projectId: activeProject.id,
+                                          skillShortcuts,
+                                          skillShortcutColors,
+                                        },
+                                      });
+                                      if (result._tag === "Failure") {
+                                        throw squashAtomCommandFailure(result);
+                                      }
+                                    }}
+                                    onInvoke={(shortcut) => {
+                                      const text = resolveProjectSkillShortcutText(
+                                        shortcut,
+                                        selectedProvider,
+                                      );
+                                      promptRef.current = text;
+                                      setComposerDraftPrompt(composerDraftTarget, text);
+                                      void onSend();
+                                    }}
+                                    onInsert={(shortcut) => {
+                                      composerRef.current?.insertTextAtEnd(
+                                        resolveProjectSkillShortcutText(shortcut, selectedProvider),
+                                        { ensureLeadingBoundary: true },
+                                      );
+                                    }}
+                                  />
+                                ) : null
+                              }
                               canOperateThread={canOperateThread}
                               reportedModelSelection={reportedModelSelection}
                               multipleModelSelections={multipleModelSelections}
@@ -11937,6 +12068,12 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
+          onAddGitHistory={addGitHistorySurface}
+          onAddProcesses={addProcessesSurface}
+          gitHistoryAvailable={
+            isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)
+          }
+          processesAvailable={activeThreadRef !== null}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
@@ -11995,6 +12132,12 @@ export default function ChatView(props: ChatViewProps) {
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
+            onAddGitHistory={addGitHistorySurface}
+            onAddProcesses={addProcessesSurface}
+            gitHistoryAvailable={
+              isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)
+            }
+            processesAvailable={activeThreadRef !== null}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}

@@ -991,6 +991,10 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           providerSessionId: ProviderSessionId.make("provider-session-claude-accept-edits"),
           modelSelection: CLAUDE_TEST_MODEL_SELECTION,
           runtimePolicy,
+          hookApprovalEnvironment: {
+            T3_HOOK_APPROVAL_TOKEN: "claude-hook-token",
+            T3_HOOK_APPROVAL_URL: "http://127.0.0.1:3773/hook-approvals",
+          },
         });
         const providerThread = yield* runtime.ensureThread({
           threadId,
@@ -1010,6 +1014,11 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           }),
         );
         assert.equal(openedOptions?.permissionMode, "acceptEdits");
+        assert.equal(openedOptions?.env?.T3_HOOK_APPROVAL_TOKEN, "claude-hook-token");
+        assert.equal(
+          openedOptions?.env?.T3_HOOK_APPROVAL_URL,
+          "http://127.0.0.1:3773/hook-approvals",
+        );
         const canUseTool = openedOptions?.canUseTool;
         assert.isFunction(canUseTool);
 
@@ -2828,7 +2837,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       if (terminal.status !== "failed") return;
       assert.include(terminal.failure.message, "run `claude auth login`");
       assert.include(terminal.failure.message, configDir);
-      assert.include(terminal.failure.message, cwd);
+      assert.include(terminal.failure.message, JSON.stringify((yield* Path.Path).resolve(cwd)));
       assert.notInclude(terminal.failure.message, "repeated API errors");
     }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );

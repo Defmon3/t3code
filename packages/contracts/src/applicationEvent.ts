@@ -14,7 +14,12 @@ import {
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import type { OrchestrationV2StoredEvent } from "./orchestrationV2.ts";
-import { ProjectScript, StoredProjectIcon } from "./project.ts";
+import {
+  ProjectSkillShortcuts,
+  ProjectSkillShortcutColors,
+  ProjectScript,
+  StoredProjectIcon,
+} from "./project.ts";
 
 /**
  * Which client dispatched the command that produced this event (#7774).
@@ -52,6 +57,8 @@ export const ApplicationProjectCreatedPayload = Schema.Struct({
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(StoredProjectIcon)),
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -69,6 +76,8 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(StoredProjectIcon)),
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });

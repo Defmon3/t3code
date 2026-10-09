@@ -171,6 +171,8 @@ export const make = Effect.gen(function* () {
     defaultThreadEnvMode: row.defaultThreadEnvMode,
     autoPull: row.autoPull,
     projectIcon: row.projectIcon,
+    skillShortcuts: row.skillShortcuts ?? [],
+    skillShortcutColors: row.skillShortcutColors ?? {},
     scripts: row.scripts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -383,6 +385,10 @@ export const make = Effect.gen(function* () {
         ...(input.defaultThreadEnvMode === undefined
           ? {}
           : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
+        ...(input.skillShortcuts === undefined ? {} : { skillShortcuts: input.skillShortcuts }),
+        ...(input.skillShortcutColors === undefined
+          ? {}
+          : { skillShortcutColors: input.skillShortcutColors }),
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
       });
       if (workspaceRoot !== previousRoot) {

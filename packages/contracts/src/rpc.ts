@@ -22,6 +22,11 @@ import {
   ChatGptHandoffState,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import {
+  HookApprovalRequest,
+  HookApprovalRespondError,
+  HookApprovalRespondInput,
+} from "./hookApproval.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -124,6 +129,19 @@ import {
   VcsCreateWorktreeInput,
   VcsCreateWorktreeResult,
   VcsInitInput,
+  VcsHistorySyncInput,
+  VcsHistorySyncResult,
+  VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
+  VcsGetHistoryInput,
+  VcsGetHistoryResult,
+  VcsGetCommitDetailsInput,
+  VcsGetCommitDetailsResult,
+  VcsListCommitFilesInput,
+  VcsListCommitFilesResult,
+  VcsGetCommitDiffInput,
+  VcsGetCommitDiffResult,
+  VcsSnapshotExpiredError,
   VcsListRefsInput,
   VcsListRefsResult,
   GitManagerServiceError,
@@ -409,6 +427,12 @@ export const WS_METHODS = {
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
+  vcsHistorySync: "vcs.historySync",
+  vcsListHistoryRefs: "vcs.listHistoryRefs",
+  vcsGetHistory: "vcs.getHistory",
+  vcsGetCommitDetails: "vcs.getCommitDetails",
+  vcsListCommitFiles: "vcs.listCommitFiles",
+  vcsGetCommitDiff: "vcs.getCommitDiff",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -502,6 +526,8 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
+  hookApprovalsSubscribe: "hookApprovals.subscribe",
+  hookApprovalsRespond: "hookApprovals.respond",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -828,7 +854,7 @@ const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnos
 });
 
 const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({ scope: Schema.optionalKey(Schema.Literal("registered-project-tests")) }),
   success: ServerProcessDiagnosticsResult,
   error: EnvironmentAuthorizationError,
 });
@@ -1333,6 +1359,42 @@ const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullReque
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsHistorySyncRpc = Rpc.make(WS_METHODS.vcsHistorySync, {
+  payload: VcsHistorySyncInput,
+  success: VcsHistorySyncResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsListHistoryRefsRpc = Rpc.make(WS_METHODS.vcsListHistoryRefs, {
+  payload: VcsListHistoryRefsInput,
+  success: VcsListHistoryRefsResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetHistoryRpc = Rpc.make(WS_METHODS.vcsGetHistory, {
+  payload: VcsGetHistoryInput,
+  success: VcsGetHistoryResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetCommitDetailsRpc = Rpc.make(WS_METHODS.vcsGetCommitDetails, {
+  payload: VcsGetCommitDetailsInput,
+  success: VcsGetCommitDetailsResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsListCommitFilesRpc = Rpc.make(WS_METHODS.vcsListCommitFiles, {
+  payload: VcsListCommitFilesInput,
+  success: VcsListCommitFilesResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetCommitDiffRpc = Rpc.make(WS_METHODS.vcsGetCommitDiff, {
+  payload: VcsGetCommitDiffInput,
+  success: VcsGetCommitDiffResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
@@ -1752,6 +1814,18 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsHookApprovalsSubscribeRpc = Rpc.make(WS_METHODS.hookApprovalsSubscribe, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(HookApprovalRequest),
+  stream: true,
+  error: EnvironmentAuthorizationError,
+});
+const WsHookApprovalsRespondRpc = Rpc.make(WS_METHODS.hookApprovalsRespond, {
+  payload: HookApprovalRespondInput,
+  success: Schema.Void,
+  error: Schema.Union([HookApprovalRespondError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -1857,6 +1931,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  WsHookApprovalsSubscribeRpc,
+  WsHookApprovalsRespondRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
@@ -1929,6 +2005,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsVcsHistorySyncRpc,
+  WsVcsListHistoryRefsRpc,
+  WsVcsGetHistoryRpc,
+  WsVcsGetCommitDetailsRpc,
+  WsVcsListCommitFilesRpc,
+  WsVcsGetCommitDiffRpc,
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,

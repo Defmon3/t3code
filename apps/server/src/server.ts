@@ -3,6 +3,12 @@ import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
+import * as HookApprovalHttp from "./hooks/HookApprovalHttp.ts";
+import { synchronizeHookApprovalPhase } from "./hooks/HookApprovalPhase.ts";
+import * as EventSink from "./orchestration-v2/EventSink.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -234,7 +240,9 @@ const layerUsage = UsageService.layer.pipe(
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer,
   layerResourceTelemetry,
-  ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
+  ProcessDiagnostics.layer.pipe(
+    Layer.provide(Layer.merge(layerResourceTelemetry, layerNativeTelemetry)),
+  ),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
 );
 
@@ -528,6 +536,32 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const hooks = yield* HookApprovalRegistry.HookApprovalRegistry;
+      const sink = yield* EventSink.EventSinkV2;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      let previous: ReadonlyArray<HookApprovalRegistry.HookApprovalPending> = [];
+      yield* hooks.subscribePending().pipe(
+        Stream.runForEach((current) =>
+          synchronizeHookApprovalPhase(previous, current, {
+            write: sink.write,
+            dispatch: orchestrator.dispatch,
+            derive: allocator.derive,
+          }).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                previous = current;
+              }),
+            ),
+          ),
+        ),
+        Effect.orDie,
+        Effect.forkScoped,
+      );
+    }),
+  ).pipe(Layer.provideMerge(Layer.merge(RuntimeLayer.layerEventSink, IdAllocator.layer))),
   AgentAwarenessRelay.layer,
   // Asks T3 Connect to deliver webhooks it held while this environment was offline.
   HeldHooksWaker.layer,
@@ -676,6 +710,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
+    HookApprovalHttp.hookApprovalHttpRouteLayer,
   ),
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here. The orchestrator toolkit resolves
@@ -1060,6 +1095,7 @@ const layerMakeServer = Layer.unwrap(
       // The connect routes and the startup/shutdown link work share one instance.
       Layer.provide(CloudLink.layer),
       Layer.provideMerge(layerRuntimeServices),
+      Layer.provideMerge(HookApprovalRegistry.layer),
       Layer.provideMerge(
         McpSessionRegistry.layer.pipe(
           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),

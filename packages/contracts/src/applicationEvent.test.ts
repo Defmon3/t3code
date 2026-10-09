@@ -25,6 +25,8 @@ describe("application project events", () => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
+          skillShortcuts: ["review"],
+          skillShortcutColors: { review: "violet" },
           scripts: [],
           createdAt: "2026-06-24T12:00:00.000Z",
           updatedAt: "2026-06-24T12:00:00.000Z",
@@ -33,6 +35,10 @@ describe("application project events", () => {
 
       expect(event.type).toBe("project.created");
       expect(event.payload.projectId).toBe("project-1");
+      if (event.type === "project.created") {
+        expect(event.payload.skillShortcuts).toEqual(["review"]);
+        expect(event.payload.skillShortcutColors).toEqual({ review: "violet" });
+      }
     }),
   );
 

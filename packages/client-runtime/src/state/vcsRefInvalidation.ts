@@ -1,3 +1,4 @@
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as PartitionedSemaphore from "effect/PartitionedSemaphore";
@@ -25,10 +26,25 @@ const stateByEnvironment = Atom.family((environmentId: EnvironmentId) =>
     persistedCacheReadable: true,
   }).pipe(Atom.keepAlive, Atom.withLabel(`environment-data:vcs:list-refs-state:${environmentId}`)),
 );
+const historyRevisionByRepository = Atom.family((targetKey: string) =>
+  Atom.make<number>(0).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`environment-data:vcs:history-revision:${targetKey}`),
+  ),
+);
+
 const persistenceLock = PartitionedSemaphore.makeUnsafe<EnvironmentId>({ permits: 1 });
 
 export function vcsRefsCacheStateAtom(target: VcsRefsInvalidationTarget) {
   return stateByEnvironment(target.environmentId);
+}
+
+export function vcsHistoryRevisionAtom(
+  target: CachedVcsRefsInvalidationTarget,
+): Atom.Writable<number> {
+  return historyRevisionByRepository(
+    JSON.stringify([target.environmentId, normalizeProjectPathForComparison(target.cwd)]),
+  );
 }
 
 export function invalidateVcsRefs(
@@ -78,6 +94,7 @@ export const invalidateCachedVcsRefs = Effect.fn("VcsRefsState.invalidateCached"
         ),
       );
       invalidateVcsRefs(registry, target, persistedCacheReadable);
+      registry.update(vcsHistoryRevisionAtom(target), (revision) => revision + 1);
     }),
   );
 });

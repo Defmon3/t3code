@@ -79,6 +79,25 @@ const failureOf = (result: ReturnType<typeof plan>) => {
 };
 
 describe("planProjectCommand", () => {
+  it("records quick slot replacements and explicit clearing in metadata events", () => {
+    const skillShortcuts = ["$review", "/deploy"];
+    const skillShortcutColors = { "/deploy": "green" } as const;
+    const event = Result.getOrThrow(update({ skillShortcuts, skillShortcutColors }));
+    assert.equal(event.type, "project.meta-updated");
+    assert.deepEqual(event.payload, {
+      projectId,
+      skillShortcuts,
+      skillShortcutColors,
+      updatedAt: DateTime.formatIso(now),
+    });
+    const cleared = Result.getOrThrow(update({ skillShortcuts: [], skillShortcutColors: {} }));
+    assert.deepEqual(cleared.payload, {
+      projectId,
+      skillShortcuts: [],
+      skillShortcutColors: {},
+      updatedAt: DateTime.formatIso(now),
+    });
+  });
   it("creates projects with empty scripts and no model default", () => {
     const result = plan({
       type: "project.create",

@@ -96,6 +96,51 @@ const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* 
   return yield* Effect.die(`Project ${projectId} was not enriched in time.`);
 });
 
+it.layer(layerTest)("Project quick slots", (it) => {
+  it.effect("persists quick slots and colors across updates and shell snapshots", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:quick-slots");
+      const created = yield* service.create({
+        commandId: CommandId.make("slots:create"),
+        projectId,
+        title: "Slots",
+        workspaceRoot: "/work/slots",
+      });
+      assert.deepEqual(created.skillShortcuts, []);
+      const shortcuts = ["$review", "/deploy", "x".repeat(255)];
+      const colors = { "/deploy": "green" } as const;
+      const updated = yield* service.update({
+        commandId: CommandId.make("slots:update"),
+        projectId,
+        skillShortcuts: shortcuts,
+        skillShortcutColors: colors,
+      });
+      assert.deepEqual(updated.skillShortcuts, shortcuts);
+      assert.deepEqual(updated.skillShortcutColors, colors);
+      yield* service.update({
+        commandId: CommandId.make("slots:rename"),
+        projectId,
+        title: "Renamed",
+      });
+      const reloaded = Option.getOrThrow(yield* service.getById(projectId));
+      assert.deepEqual(reloaded.skillShortcuts, shortcuts);
+      assert.deepEqual(reloaded.skillShortcutColors, colors);
+      const shell = Option.getOrThrow(yield* service.getShell(projectId));
+      assert.deepEqual(shell.skillShortcuts, shortcuts);
+      assert.deepEqual(shell.skillShortcutColors, colors);
+      const cleared = yield* service.update({
+        commandId: CommandId.make("slots:clear"),
+        projectId,
+        skillShortcuts: [],
+        skillShortcutColors: {},
+      });
+      assert.deepEqual(cleared.skillShortcuts, []);
+      assert.deepEqual(cleared.skillShortcutColors, {});
+    }),
+  );
+});
+
 it.layer(layerTest)("ProjectService", (it) => {
   it.effect("creates, updates, resolves, snapshots, and soft-deletes projects", () =>
     Effect.gen(function* () {

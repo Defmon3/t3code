@@ -2108,9 +2108,15 @@ export function makeAcpAdapterV2(
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
-            ...(mcpContext.processEnvironment === undefined
+            ...(mcpContext.processEnvironment === undefined &&
+            input.hookApprovalEnvironment === undefined
               ? {}
-              : { processEnvironment: mcpContext.processEnvironment }),
+              : {
+                  processEnvironment: {
+                    ...mcpContext.processEnvironment,
+                    ...input.hookApprovalEnvironment,
+                  },
+                }),
             ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
             interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
             clientCapabilities: {

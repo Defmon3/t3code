@@ -2,6 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  VcsGetCommitDetailsInput,
+  VcsListHistoryRefsInput,
+  VcsListRefsInput,
+  VcsListRefsResult,
   VcsCreateWorktreeInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -165,5 +169,56 @@ describe("GitRunStackedActionResult", () => {
     if (parsed.toast.cta.kind === "run_action") {
       expect(parsed.toast.cta.action.kind).toBe("create_pr");
     }
+  });
+});
+
+const decodeListRefsInput = Schema.decodeUnknownSync(VcsListRefsInput);
+
+const decodeListRefsResult = Schema.decodeUnknownSync(VcsListRefsResult);
+
+const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsInput);
+
+const decodeCommitDetailsInput = Schema.decodeUnknownSync(VcsGetCommitDetailsInput);
+
+describe("VCS ref contracts", () => {
+  it("preserves the numeric cursor and result shape of vcs.listRefs", () => {
+    expect(decodeListRefsInput({ cwd: "/repo", cursor: 20, query: "release" })).toEqual({
+      cwd: "/repo",
+      cursor: 20,
+      query: "release",
+    });
+    expect(
+      decodeListRefsResult({
+        refs: [],
+        isRepo: true,
+        hasPrimaryRemote: false,
+        nextCursor: 20,
+        totalCount: 25,
+      }).totalCount,
+    ).toBe(25);
+  });
+
+  it("uses an opaque cursor only for vcs.listHistoryRefs", () => {
+    expect(
+      decodeListHistoryRefsInput({
+        cwd: "/repo",
+        cursor: "opaque-cursor",
+        query: "Release",
+        namespace: "tag",
+      }),
+    ).toEqual({
+      cwd: "/repo",
+      cursor: "opaque-cursor",
+      query: "Release",
+      namespace: "tag",
+    });
+    expect(() => decodeListRefsInput({ cwd: "/repo", cursor: "opaque-cursor" })).toThrow();
+  });
+});
+
+describe("Git commit hashes", () => {
+  it("accepts SHA-1 and SHA-256 object hashes", () => {
+    expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "a".repeat(40) }).hash).toHaveLength(40);
+    expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "b".repeat(64) }).hash).toHaveLength(64);
   });
 });

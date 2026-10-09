@@ -115,6 +115,10 @@
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
     },
+    "./state/hook-approvals": {
+      "types": "./src/state/hookApprovals.ts",
+      "default": "./src/state/hookApprovals.ts"
+    },
     "./state/assets": {
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"

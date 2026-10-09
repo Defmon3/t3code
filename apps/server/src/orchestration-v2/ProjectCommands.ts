@@ -6,6 +6,7 @@ import {
   type ProjectIconOverride,
   ProjectId,
   type ProjectScript,
+  type ProjectSkillShortcutColors,
   SCRIPT_RUN_COMMAND_PATTERN,
   type ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -34,6 +35,8 @@ export interface ProjectMetaUpdateCommand {
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly autoPull?: boolean;
+  readonly skillShortcuts?: ReadonlyArray<string>;
+  readonly skillShortcutColors?: ProjectSkillShortcutColors;
   readonly faviconPath?: string | null;
   readonly projectIcon?: ProjectIconOverride | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
@@ -222,6 +225,12 @@ export function planProjectCommand(input: {
           ...(command.autoPull === undefined ? {} : { autoPull: command.autoPull }),
           ...(command.faviconPath === undefined ? {} : { faviconPath: command.faviconPath }),
           ...(command.projectIcon === undefined ? {} : { projectIcon: command.projectIcon }),
+          ...(command.skillShortcuts === undefined
+            ? {}
+            : { skillShortcuts: command.skillShortcuts }),
+          ...(command.skillShortcutColors === undefined
+            ? {}
+            : { skillShortcutColors: command.skillShortcutColors }),
           ...(command.scripts === undefined ? {} : { scripts: command.scripts }),
           updatedAt: occurredAt,
         },

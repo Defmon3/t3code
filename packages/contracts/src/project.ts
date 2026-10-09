@@ -20,6 +20,27 @@ const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
 const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 512;
 
+export const ProjectSkillShortcut = TrimmedNonEmptyString.check(Schema.isMaxLength(255));
+export const ProjectSkillShortcuts = Schema.Array(ProjectSkillShortcut).check(Schema.isUnique());
+export const PROJECT_SKILL_SHORTCUT_COLORS = [
+  "red",
+  "orange",
+  "amber",
+  "lime",
+  "green",
+  "cyan",
+  "blue",
+  "violet",
+  "pink",
+  "rose",
+] as const;
+export const ProjectSkillShortcutColor = Schema.Literals(PROJECT_SKILL_SHORTCUT_COLORS);
+export type ProjectSkillShortcutColor = typeof ProjectSkillShortcutColor.Type;
+export const ProjectSkillShortcutColors = Schema.Record(
+  ProjectSkillShortcut,
+  ProjectSkillShortcutColor,
+);
+export type ProjectSkillShortcutColors = typeof ProjectSkillShortcutColors.Type;
 export const ProjectScriptIcon = Schema.Literals([
   "play",
   "test",
@@ -173,6 +194,8 @@ export const Project = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   // Opt-in because background sync performs network I/O and may move the checkout.
   autoPull: Schema.optional(Schema.Boolean),
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -206,6 +229,8 @@ export const ProjectCreatePayload = Schema.Struct({
 export type ProjectCreatePayload = typeof ProjectCreatePayload.Type;
 
 export const ProjectUpdatePayload = Schema.Struct({
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),

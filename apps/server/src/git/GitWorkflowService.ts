@@ -3,6 +3,19 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import {
+  VcsSnapshotExpiredError,
+  type VcsHistorySyncInput,
+  type VcsListHistoryRefsInput,
+  type VcsGetHistoryInput,
+  type VcsGetCommitDetailsInput,
+  type VcsListCommitFilesInput,
+  type VcsGetCommitDiffInput,
+  type VcsListHistoryRefsResult,
+  type VcsGetHistoryResult,
+  type VcsGetCommitDetailsResult,
+  type VcsListCommitFilesResult,
+  type VcsGetCommitDiffResult,
+  type VcsHistorySyncResult,
   GitManagerError,
   GitCommandError,
   type VcsSwitchRefInput,
@@ -53,6 +66,29 @@ export class GitWorkflowService extends Context.Service<
     readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
+    readonly syncHistoryRef: (
+      input: VcsHistorySyncInput,
+    ) => Effect.Effect<VcsHistorySyncResult, GitCommandError>;
+
+    readonly listHistoryRefs: (
+      input: VcsListHistoryRefsInput,
+    ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+
+    readonly getHistory: (
+      input: VcsGetHistoryInput,
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
+
+    readonly getCommitDetails: (
+      input: VcsGetCommitDetailsInput,
+    ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+
+    readonly listCommitFiles: (
+      input: VcsListCommitFilesInput,
+    ) => Effect.Effect<VcsListCommitFilesResult, GitCommandError | VcsSnapshotExpiredError>;
+
+    readonly getCommitDiff: (
+      input: VcsGetCommitDiffInput,
+    ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
@@ -155,6 +191,38 @@ function nonRepositoryListRefs(): VcsListRefsResult {
 }
 
 /** @public Service construction is part of the canonical Effect module API. */
+function nonRepositoryListHistoryRefs(): VcsListHistoryRefsResult {
+  return {
+    refs: [],
+    currentRef: null,
+    isRepo: false,
+    hasPrimaryRemote: false,
+    nextCursor: null,
+    isComplete: true,
+  };
+}
+
+function nonRepositoryHistory(): VcsGetHistoryResult {
+  return {
+    commits: [],
+    isRepo: false,
+    nextCursor: null,
+    hasMore: false,
+  };
+}
+
+function nonRepositoryCommitDetails(): VcsGetCommitDetailsResult {
+  return { commit: null, isRepo: false };
+}
+
+function nonRepositoryCommitFiles(): VcsListCommitFilesResult {
+  return { files: [], isRepo: false, nextCursor: null, hasMore: false, capped: false };
+}
+
+function nonRepositoryCommitDiff(): VcsGetCommitDiffResult {
+  return { diff: "", truncated: false, isRepo: false };
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
@@ -339,6 +407,49 @@ export const make = Effect.gen(function* () {
       "GitWorkflowService.preparePullRequestThread",
       gitManager.preparePullRequestThread,
     ),
+    syncHistoryRef: (input) =>
+      ensureGitCommand("GitWorkflowService.syncHistoryRef", input.cwd).pipe(
+        Effect.andThen(git.syncHistoryRef(input)),
+      ),
+
+    listHistoryRefs: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.listHistoryRefs", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.listHistoryRefs(input)
+            : Effect.succeed(nonRepositoryListHistoryRefs()),
+        ),
+      ),
+
+    getHistory: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getHistory", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getHistory(input) : Effect.succeed(nonRepositoryHistory()),
+        ),
+      ),
+
+    getCommitDetails: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDetails", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository
+            ? git.getCommitDetails(input)
+            : Effect.succeed(nonRepositoryCommitDetails()),
+        ),
+      ),
+
+    listCommitFiles: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.listCommitFiles", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.listCommitFiles(input) : Effect.succeed(nonRepositoryCommitFiles()),
+        ),
+      ),
+
+    getCommitDiff: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDiff", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.getCommitDiff(input) : Effect.succeed(nonRepositoryCommitDiff()),
+        ),
+      ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>

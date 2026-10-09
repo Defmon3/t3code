@@ -1,6 +1,7 @@
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import * as HookApprovalRegistry from "../../hooks/HookApprovalRegistry.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -817,6 +818,7 @@ export function buildCodexTurnStartParams(input: {
 }
 
 function providerSession(input: {
+  readonly capabilities: OrchestrationV2ProviderCapabilities;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
   readonly providerInstanceId: ProviderInstanceId;
   readonly cwd: string | null;
@@ -830,7 +832,7 @@ function providerSession(input: {
     status: "ready",
     cwd: input.cwd ?? process.cwd(),
     model: input.model,
-    capabilities: CodexProviderCapabilitiesV2,
+    capabilities: input.capabilities,
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
@@ -1586,6 +1588,7 @@ export const createCodexAdapterV2 = (
     const idAllocator = yield* IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
     const homeLayout = yield* resolveCodexHomeLayout(config);
+    const hookApprovals = yield* Effect.serviceOption(HookApprovalRegistry.HookApprovalRegistry);
 
     yield* materializeCodexShadowHome(homeLayout).pipe(
       Effect.mapError(
@@ -1607,6 +1610,7 @@ export const createCodexAdapterV2 = (
     } satisfies CodexSettings;
 
     return makeCodexAdapterV2({
+      threadHookApprovals: Option.isSome(hookApprovals),
       instanceId,
       settings,
       environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
@@ -1657,6 +1661,7 @@ const layer: Layer.Layer<
 );
 
 export interface CodexAdapterV2Options {
+  readonly threadHookApprovals?: boolean;
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
@@ -1685,11 +1690,20 @@ export interface CodexAdapterV2Options {
 export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): ProviderAdapterV2Shape {
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests;
+  const capabilities = adapterOptions.threadHookApprovals
+    ? {
+        ...CodexProviderCapabilitiesV2,
+        sessions: {
+          ...CodexProviderCapabilitiesV2.sessions,
+          supportsMultipleProviderThreadsPerSession: false,
+        },
+      }
+    : CodexProviderCapabilitiesV2;
 
   return ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
-    getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+    getCapabilities: () => Effect.succeed(capabilities),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: (input) =>
       Effect.gen(function* () {
@@ -1713,7 +1727,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment: {
+            ...(resolvedRuntime?.environment ?? adapterOptions.environment),
+            ...input.hookApprovalEnvironment,
+          },
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<
@@ -1794,6 +1811,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         );
         const now = yield* DateTime.now;
         const session = providerSession({
+          capabilities,
           providerSessionId: input.providerSessionId,
           providerInstanceId: adapterOptions.instanceId,
           cwd: input.runtimePolicy.cwd,

@@ -765,6 +765,7 @@ describe("AcpAdapterV2", () => {
       yield* adapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make("provider-session-acp-self-contained-mcp-bridge"),
+        hookApprovalEnvironment: { T3_HOOK_APPROVAL_TOKEN: "acp-hook-token" },
         modelSelection,
         runtimePolicy,
       });
@@ -776,6 +777,7 @@ describe("AcpAdapterV2", () => {
       assert.equal(mcpServer.command, process.execPath);
       assert.deepEqual(mcpServer.args, ["acp-mcp-bridge"]);
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_NODE, process.execPath);
+      assert.equal(runtimeInput?.processEnvironment?.T3_HOOK_APPROVAL_TOKEN, "acp-hook-token");
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_ENTRYPOINT, undefined);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );

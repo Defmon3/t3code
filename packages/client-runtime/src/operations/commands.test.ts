@@ -181,6 +181,8 @@ describe("V2 environment commands", () => {
       const projectIcon = { kind: "emoji", emoji: "🌲" } as const;
       yield* updateProject({
         projectId,
+        skillShortcuts: ["$review", "/deploy"],
+        skillShortcutColors: { "/deploy": "green" },
         autoPull: true,
         projectIcon,
         faviconPath: "/workspace/project/icon.png",
@@ -188,6 +190,8 @@ describe("V2 environment commands", () => {
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
       yield* updateProject({
         projectId,
+        skillShortcuts: [],
+        skillShortcutColors: {},
         autoPull: false,
         projectIcon: null,
         faviconPath: null,
@@ -199,6 +203,8 @@ describe("V2 environment commands", () => {
           type: "project.update",
           commandId: "00000000-0000-4000-8000-000000000000",
           projectId,
+          skillShortcuts: ["$review", "/deploy"],
+          skillShortcutColors: { "/deploy": "green" },
           autoPull: true,
           projectIcon,
           faviconPath: "/workspace/project/icon.png",
@@ -208,6 +214,8 @@ describe("V2 environment commands", () => {
           type: "project.update",
           commandId: "00000000-0000-4000-8000-000000000000",
           projectId,
+          skillShortcuts: [],
+          skillShortcutColors: {},
           autoPull: false,
           projectIcon: null,
           faviconPath: null,

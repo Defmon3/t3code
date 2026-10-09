@@ -6,6 +6,8 @@ import {
   StoredProjectIcon,
   ProjectId,
   ProjectScript,
+  ProjectSkillShortcuts,
+  ProjectSkillShortcutColors,
   ThreadEnvMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -38,6 +40,8 @@ export const ProjectRow = Schema.Struct({
   autoPull: Schema.Boolean,
   faviconPath: Schema.NullOr(Schema.String),
   projectIcon: Schema.NullOr(StoredProjectIcon),
+  skillShortcuts: Schema.optional(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -50,6 +54,8 @@ const ProjectDbRow = Schema.Struct({
   defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
   autoPull: Schema.BooleanFromBit,
   projectIcon: Schema.NullOr(Schema.fromJsonString(StoredProjectIcon)),
+  skillShortcuts: Schema.fromJsonString(ProjectSkillShortcuts),
+  skillShortcutColors: Schema.fromJsonString(ProjectSkillShortcutColors),
   scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
 });
 
@@ -65,6 +71,8 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     autoPull: row.autoPull,
     faviconPath: row.faviconPath,
     projectIcon: row.projectIcon,
+    skillShortcuts: row.skillShortcuts ?? [],
+    skillShortcutColors: row.skillShortcutColors ?? {},
     scripts: row.scripts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -122,6 +130,8 @@ export const make = Effect.gen(function* () {
         auto_pull AS "autoPull",
         favicon_path AS "faviconPath",
         project_icon_json AS "projectIcon",
+        skill_shortcuts_json AS "skillShortcuts",
+        skill_shortcut_colors_json AS "skillShortcutColors",
         scripts_json AS "scripts",
         created_at AS "createdAt",
         updated_at AS "updatedAt",
@@ -140,7 +150,11 @@ export const make = Effect.gen(function* () {
   });
 
   const upsertRow = (row: ProjectRow) =>
-    encodeRow(row).pipe(
+    encodeRow({
+      ...row,
+      skillShortcuts: row.skillShortcuts ?? [],
+      skillShortcutColors: row.skillShortcutColors ?? {},
+    }).pipe(
       Effect.flatMap(
         (encoded) => sql`
           INSERT INTO projection_projects (
@@ -152,6 +166,8 @@ export const make = Effect.gen(function* () {
             auto_pull,
             favicon_path,
             project_icon_json,
+            skill_shortcuts_json,
+            skill_shortcut_colors_json,
             scripts_json,
             created_at,
             updated_at,
@@ -166,6 +182,8 @@ export const make = Effect.gen(function* () {
             ${encoded.autoPull},
             ${encoded.faviconPath},
             ${encoded.projectIcon},
+            ${encoded.skillShortcuts},
+            ${encoded.skillShortcutColors},
             ${encoded.scripts},
             ${encoded.createdAt},
             ${encoded.updatedAt},
@@ -180,6 +198,8 @@ export const make = Effect.gen(function* () {
             auto_pull = excluded.auto_pull,
             favicon_path = excluded.favicon_path,
             project_icon_json = excluded.project_icon_json,
+            skill_shortcuts_json = excluded.skill_shortcuts_json,
+            skill_shortcut_colors_json = excluded.skill_shortcut_colors_json,
             scripts_json = excluded.scripts_json,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
@@ -226,6 +246,8 @@ export const make = Effect.gen(function* () {
           autoPull: false,
           faviconPath: payload.faviconPath ?? null,
           projectIcon: payload.projectIcon ?? null,
+          skillShortcuts: payload.skillShortcuts ?? [],
+          skillShortcutColors: payload.skillShortcutColors ?? {},
           scripts: payload.scripts,
           createdAt: payload.createdAt,
           updatedAt: payload.updatedAt,
@@ -256,6 +278,10 @@ export const make = Effect.gen(function* () {
         ...(payload.autoPull === undefined ? {} : { autoPull: payload.autoPull }),
         ...(payload.faviconPath === undefined ? {} : { faviconPath: payload.faviconPath }),
         ...(payload.projectIcon === undefined ? {} : { projectIcon: payload.projectIcon }),
+        ...(payload.skillShortcuts === undefined ? {} : { skillShortcuts: payload.skillShortcuts }),
+        ...(payload.skillShortcutColors === undefined
+          ? {}
+          : { skillShortcutColors: payload.skillShortcutColors }),
         ...(payload.scripts === undefined ? {} : { scripts: payload.scripts }),
         updatedAt: payload.updatedAt,
       }).pipe(mapError("apply"));

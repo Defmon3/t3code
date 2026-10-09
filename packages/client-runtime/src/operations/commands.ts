@@ -15,7 +15,9 @@ import {
   type PlanId,
   type ProjectId,
   type ProjectIconOverride,
+  type ProjectMutation,
   type ProjectScript,
+  type ProjectSkillShortcutColors,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderUserInputAnswers,
@@ -55,6 +57,8 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly workspaceRoot?: string;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly autoPull?: boolean;
+  readonly skillShortcuts?: ReadonlyArray<string>;
+  readonly skillShortcutColors?: ProjectSkillShortcutColors;
   readonly projectIcon?: ProjectIconOverride | null;
   readonly faviconPath?: string | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
@@ -308,32 +312,7 @@ const persistAttachments = Effect.fn("EnvironmentCommands.persistAttachments")(f
 });
 
 const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
-  mutation:
-    | {
-        readonly type: "project.create";
-        readonly commandId: CommandId;
-        readonly projectId: ProjectId;
-        readonly title: string;
-        readonly workspaceRoot: string;
-        readonly createWorkspaceRootIfMissing?: boolean;
-        readonly defaultModelSelection?: ModelSelection | null;
-        readonly scripts?: ReadonlyArray<ProjectScript>;
-      }
-    | {
-        readonly type: "project.update";
-        readonly commandId: CommandId;
-        readonly projectId: ProjectId;
-        readonly title?: string;
-        readonly workspaceRoot?: string;
-        readonly defaultModelSelection?: ModelSelection | null;
-        readonly scripts?: ReadonlyArray<ProjectScript>;
-      }
-    | {
-        readonly type: "project.delete";
-        readonly commandId: CommandId;
-        readonly projectId: ProjectId;
-        readonly force?: boolean;
-      },
+  mutation: ProjectMutation,
 ) {
   return yield* request(WS_METHODS.projectsMutate, mutation);
 });
@@ -375,6 +354,10 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
     ...(input.defaultThreadEnvMode === undefined
       ? {}
       : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
+    ...(input.skillShortcuts === undefined ? {} : { skillShortcuts: input.skillShortcuts }),
+    ...(input.skillShortcutColors === undefined
+      ? {}
+      : { skillShortcutColors: input.skillShortcutColors }),
     ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
   });
 });

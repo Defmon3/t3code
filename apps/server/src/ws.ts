@@ -124,6 +124,8 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
+import { HookApprovalRespondError } from "@t3tools/contracts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -216,6 +218,7 @@ import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAut
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import { makeRegisteredProjectProcessDiscovery } from "./diagnostics/ProcessDiscoveryCollector.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -1226,6 +1229,7 @@ const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
+      const hookApprovals = yield* HookApprovalRegistry.HookApprovalRegistry;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -1321,6 +1325,7 @@ const layerWsRpc = (
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
+      const processDiscoveryCollector = yield* makeRegisteredProjectProcessDiscovery();
       const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
@@ -1815,6 +1820,20 @@ const layerWsRpc = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [WS_METHODS.hookApprovalsSubscribe]: () => hookApprovals.subscribe(),
+        [WS_METHODS.hookApprovalsRespond]: (input) =>
+          hookApprovals.respond(input).pipe(
+            Effect.flatMap((responded) =>
+              responded
+                ? Effect.void
+                : Effect.fail(
+                    new HookApprovalRespondError({
+                      reason: "request_not_pending",
+                      message: "This hook approval is no longer pending.",
+                    }),
+                  ),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -2407,7 +2426,18 @@ const layerWsRpc = (
             traceFilePath: config.serverTracePath,
             maxFiles: config.traceMaxFiles,
           }),
-        [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
+        [WS_METHODS.serverGetProcessDiagnostics]: (input) =>
+          input.scope === "registered-project-tests"
+            ? processDiscoveryCollector
+                .read()
+                .pipe(
+                  Effect.catch(() =>
+                    processDiagnostics.unavailable(
+                      "Process discovery could not load registered projects.",
+                    ),
+                  ),
+                )
+            : processDiagnostics.read({}),
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
@@ -2844,6 +2874,13 @@ const layerWsRpc = (
           gitWorkflow
             .preparePullRequestThread(input)
             .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+        [WS_METHODS.vcsHistorySync]: (input) =>
+          gitWorkflow.syncHistoryRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+        [WS_METHODS.vcsListHistoryRefs]: (input) => gitWorkflow.listHistoryRefs(input),
+        [WS_METHODS.vcsGetHistory]: (input) => gitWorkflow.getHistory(input),
+        [WS_METHODS.vcsGetCommitDetails]: (input) => gitWorkflow.getCommitDetails(input),
+        [WS_METHODS.vcsListCommitFiles]: (input) => gitWorkflow.listCommitFiles(input),
+        [WS_METHODS.vcsGetCommitDiff]: (input) => gitWorkflow.getCommitDiff(input),
         [WS_METHODS.vcsListRefs]: (input) => gitWorkflow.listRefs(input),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),

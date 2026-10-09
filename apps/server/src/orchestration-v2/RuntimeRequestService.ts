@@ -3,6 +3,7 @@ import {
   ProviderSessionId,
   ProviderUserInputAnswers,
   RuntimeRequestId,
+  HookApprovalRequestId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -13,6 +14,7 @@ import * as Schema from "effect/Schema";
 
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as HookApprovalRegistry from "../hooks/HookApprovalRegistry.ts";
 
 export class RuntimeRequestResponseExecutionError extends Schema.TaggedError<RuntimeRequestResponseExecutionError>()(
   "RuntimeRequestResponseExecutionError",
@@ -72,6 +74,7 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const hookApprovals = yield* Effect.serviceOption(HookApprovalRegistry.HookApprovalRegistry);
 
     return RuntimeRequestServiceV2.of({
       respond: (input) =>
@@ -105,6 +108,32 @@ export const layer: Layer.Layer<
               providerSessionId: input.providerSessionId,
               requestId: input.requestId,
             });
+          }
+          if (input.requestId.startsWith("custom-hook:")) {
+            const decision =
+              input.decision === "accept"
+                ? "allow"
+                : input.decision === "acceptForSession"
+                  ? "allow-session"
+                  : input.decision === "decline"
+                    ? "deny"
+                    : undefined;
+            if (
+              Option.isNone(hookApprovals) ||
+              decision === undefined ||
+              !(yield* hookApprovals.value.respond({
+                requestId: HookApprovalRequestId.make(input.requestId.slice("custom-hook:".length)),
+                decision,
+              }))
+            ) {
+              return yield* new RuntimeRequestResponseExecutionError({
+                reason: "request-not-ready",
+                threadId: input.threadId,
+                providerSessionId: input.providerSessionId,
+                requestId: input.requestId,
+              });
+            }
+            return;
           }
           const session = yield* sessions.get(input.providerSessionId);
           if (Option.isNone(session)) {

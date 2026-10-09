@@ -43,6 +43,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as HookApprovalRegistry from "../hooks/HookApprovalRegistry.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
@@ -339,6 +340,7 @@ export const layerWithOptions = (
       const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
       const fileSystem = yield* FileSystem.FileSystem;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
+      const hookApprovals = yield* Effect.serviceOption(HookApprovalRegistry.HookApprovalRegistry);
       /**
        * Optional so the many focused tests that assemble this layer by hand do
        * not each need a settings stub; the production composition always
@@ -2083,8 +2085,29 @@ export const layerWithOptions = (
                 }
               });
               const sessionScope = yield* Scope.fork(sessionScopes);
+              const hookCredential = Option.isSome(hookApprovals)
+                ? yield* hookApprovals.value.issue({
+                    threadId: input.threadId,
+                    providerInstanceId: input.modelSelection.instanceId,
+                    runtimeSessionId: input.providerSessionId,
+                  })
+                : undefined;
+              if (hookCredential !== undefined && Option.isSome(hookApprovals)) {
+                yield* Scope.addFinalizer(
+                  sessionScope,
+                  hookApprovals.value.revokeProviderSession(hookCredential.providerSessionId),
+                );
+              }
               const runtime = yield* adapter
                 .openSession({
+                  ...(hookCredential === undefined
+                    ? {}
+                    : {
+                        hookApprovalEnvironment: {
+                          T3_HOOK_APPROVAL_URL: hookCredential.endpoint,
+                          T3_HOOK_APPROVAL_TOKEN: hookCredential.token,
+                        },
+                      }),
                   threadId: input.threadId,
                   providerSessionId: input.providerSessionId,
                   modelSelection: input.modelSelection,

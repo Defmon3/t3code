@@ -16,6 +16,46 @@ import type { ProviderAdapterV2RuntimeRequestResponseInput } from "./ProviderAda
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
+import * as HookApprovalRegistry from "../hooks/HookApprovalRegistry.ts";
+
+it.effect("routes mirrored hook responses through the hook registry", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread-hook-response");
+    const providerSessionId = ProviderSessionId.make("session-hook-response");
+    const requestId = RuntimeRequestId.make("custom-hook:hook-response");
+    const service = yield* RuntimeRequestService.RuntimeRequestServiceV2;
+    yield* service.respond({ threadId, providerSessionId, requestId, decision: "accept" });
+  }).pipe(
+    Effect.provide(
+      RuntimeRequestService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getRuntimeRequest: () =>
+                Effect.succeed(
+                  resolvedRuntimeRequest(
+                    RuntimeRequestId.make("custom-hook:hook-response"),
+                    ProviderSessionId.make("session-hook-response"),
+                  ),
+                ),
+            }),
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+              get: () => Effect.die("Hook responses must not reach native provider sessions."),
+            }),
+            Layer.mock(HookApprovalRegistry.HookApprovalRegistry)({
+              respond: (input) =>
+                Effect.sync(() => {
+                  assert.equal(input.requestId, "hook-response");
+                  assert.equal(input.decision, "allow");
+                  return true;
+                }),
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
 
 function projectionWithRuntimeRequest(
   runtimeRequest?: OrchestrationV2RuntimeRequest,

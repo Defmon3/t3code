@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId } from "./baseSchemas.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 
 import {
@@ -258,3 +257,27 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
     assert.strictEqual(broken._tag, "Failure");
   }),
 );
+
+describe("project quick slot payloads", () => {
+  it("preserves order and validates preset colors", () => {
+    const input = {
+      skillShortcuts: ["$review", "/deploy"],
+      skillShortcutColors: { "/deploy": "green" },
+    };
+    expect(decodeProjectUpdatePayload(input)).toEqual(input);
+    expect(decodeProjectUpdatePayload({ skillShortcuts: [], skillShortcutColors: {} })).toEqual({
+      skillShortcuts: [],
+      skillShortcutColors: {},
+    });
+    expect(decodeProjectUpdatePayload({ title: "Rename" })).not.toHaveProperty("skillShortcuts");
+  });
+
+  it.each([
+    { skillShortcuts: ["same", "same"] },
+    { skillShortcuts: [" "] },
+    { skillShortcuts: ["x".repeat(256)] },
+    { skillShortcutColors: { review: "unknown" } },
+  ])("rejects invalid quick slot data %j", (input) => {
+    expect(() => decodeProjectUpdatePayload(input)).toThrow();
+  });
+});

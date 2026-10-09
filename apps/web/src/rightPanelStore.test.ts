@@ -30,6 +30,30 @@ beforeEach(() => {
 });
 
 describe("rightPanelStore", () => {
+  it.each(["git-history", "processes"] as const)(
+    "opens, closes and restores %s without duplicate tabs",
+    (kind) => {
+      const store = useRightPanelStore.getState();
+      store.open(refA, kind);
+      store.open(refA, kind);
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+      ).toEqual([{ id: kind, kind }]);
+      store.closeSurface(refA, kind);
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+      ).toBe(false);
+      expect(useClosedViewStore.getState().entries[0]).toMatchObject({
+        kind: "panel-tab",
+        surface: { id: kind, kind },
+      });
+      store.open(refA, kind);
+      expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe(kind);
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refB).surfaces,
+      ).toEqual([]);
+    },
+  );
   it("records single and bulk tab closes, newest first", () => {
     const store = useRightPanelStore.getState();
     const pr = pullRequestSurface({
