@@ -8,7 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import type * as EventSink from "../orchestration-v2/EventSink.ts";
-import type * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import type * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import type { HookApprovalPending } from "./HookApprovalRegistry.ts";
 

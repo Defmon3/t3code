@@ -9,7 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { synchronizeHookApprovalPhase } from "./HookApprovalPhase.ts";
 import type { HookApprovalPending } from "./HookApprovalRegistry.ts";
 
