@@ -28,6 +28,7 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
   ProviderAdapterOpenSessionError,
   type ProviderAdapterV2Event,
@@ -289,6 +290,171 @@ function makeRestartAdapter(
       }),
   };
 }
+
+it.effect.each(["immediate", "queued"] as const)(
+  "resumes existing shared Codex chats in separate sessions when hook approvals require isolation (%s)",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const name = `shared-codex-hook-session-recovery-${mode}`;
+        const cwd = yield* checkpointWorkspace(name);
+        const state = yield* Ref.make<RestartAdapterState>({
+          activeTurn: null,
+          opened: [],
+          started: [],
+          closedSessionCount: 0,
+          failedReplacementOpen: true,
+        });
+        const isolated = yield* Ref.make(false);
+        const pooledAdapter = makeRestartAdapter(state, pooledCapabilities);
+        const isolatedAdapter = makeRestartAdapter(state, exclusiveCapabilities);
+        const adapter: ProviderAdapterV2Shape = {
+          ...pooledAdapter,
+          getCapabilities: () =>
+            Ref.get(isolated).pipe(
+              Effect.flatMap((enabled) =>
+                (enabled ? isolatedAdapter : pooledAdapter).getCapabilities(),
+              ),
+            ),
+          openSession: (input) =>
+            Ref.get(isolated).pipe(
+              Effect.flatMap((enabled) =>
+                (enabled ? isolatedAdapter : pooledAdapter).openSession(input),
+              ),
+            ),
+        };
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const threadIds = [ThreadId.make(`${name}:a`), ThreadId.make(`${name}:b`)];
+          const dispatch = (threadId: ThreadId, step: string) =>
+            Effect.gen(function* () {
+              const terminal = yield* orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.threadId === threadId &&
+                    event.type === "run.updated" &&
+                    (event.payload.status === "completed" || event.payload.status === "failed"),
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              if (mode === "queued" && step === "after-upgrade") {
+                yield* orchestrator.dispatch({
+                  type: "queue.resume",
+                  commandId: CommandId.make(`${threadId}:resume`),
+                  threadId,
+                });
+              } else {
+                yield* orchestrator.dispatch({
+                  type: "message.dispatch",
+                  createdBy: "user",
+                  creationSource: "web",
+                  commandId: CommandId.make(`${threadId}:${step}`),
+                  threadId,
+                  messageId: MessageId.make(`${threadId}:${step}`),
+                  text: step,
+                  attachments: [],
+                  modelSelection: seedSelection,
+                  dispatchMode: { type: "start_immediately" },
+                });
+              }
+              yield* worker.drain();
+              yield* Fiber.join(terminal);
+              yield* worker.drain();
+              const projection = yield* orchestrator.getThreadProjection(threadId);
+              assert.equal(projection.runs.at(-1)?.status, "completed");
+              return projection;
+            });
+          const before = [];
+          for (const threadId of threadIds) {
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`${threadId}:create`),
+              threadId,
+              projectId: ProjectId.make(`project:${name}`),
+              title: name,
+              modelSelection: seedSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+            });
+            before.push(yield* dispatch(threadId, "before-upgrade"));
+            if (mode === "queued") {
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                createdBy: "user",
+                creationSource: "web",
+                commandId: CommandId.make(`${threadId}:after-upgrade`),
+                threadId,
+                messageId: MessageId.make(`${threadId}:after-upgrade`),
+                text: "after-upgrade",
+                attachments: [],
+                modelSelection: seedSelection,
+                dispatchMode: { type: "defer_start" },
+              });
+              const queuedProjection = yield* orchestrator.getThreadProjection(threadId);
+              const queuedRun = queuedProjection.runs.at(-1);
+              assert.isDefined(queuedRun);
+              const occurredAt = yield* DateTime.now;
+              yield* eventSink.write({
+                events: [
+                  {
+                    id: EventId.make(`${threadId}:queue-held`),
+                    type: "run.updated",
+                    threadId,
+                    runId: queuedRun.id,
+                    providerInstanceId,
+                    occurredAt,
+                    payload: { ...queuedRun, status: "queued", queueHeld: true },
+                  },
+                ],
+              });
+            }
+          }
+          const sharedSessionId = before[0]?.providerThreads[0]?.providerSessionId;
+          assert.isDefined(sharedSessionId);
+          assert.equal(before[1]?.providerThreads[0]?.providerSessionId, sharedSessionId);
+          yield* sessions.shutdown;
+          yield* Ref.set(isolated, true);
+
+          const recovered = [];
+          for (const [index, threadId] of threadIds.entries()) {
+            const projection = yield* dispatch(threadId, "after-upgrade");
+            const providerThread = projection.providerThreads[0];
+            assert.notEqual(providerThread?.providerSessionId, sharedSessionId);
+            assert.deepEqual(
+              providerThread?.nativeThreadRef,
+              before[index]?.providerThreads[0]?.nativeThreadRef,
+            );
+            assert.equal(providerThread?.id, before[index]?.providerThreads[0]?.id);
+            assert.lengthOf(projection.messages, 2);
+            recovered.push(providerThread?.providerSessionId);
+            const continued = yield* dispatch(threadId, "continue-isolated-session");
+            assert.equal(
+              continued.providerThreads[0]?.providerSessionId,
+              providerThread?.providerSessionId,
+            );
+          }
+          assert.notEqual(recovered[0], recovered[1]);
+          assert.lengthOf((yield* Ref.get(state)).opened, 3);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              { name },
+              ProviderAdapterRegistry.layerSingle(adapter),
+            ),
+          ),
+        );
+      }),
+    ),
+);
 
 function makeCompletingHandoffAdapter(startCount: Ref.Ref<number>): ProviderAdapterV2Shape {
   return {

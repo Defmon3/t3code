@@ -860,20 +860,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly adapter: ProviderAdapterV2Shape;
     readonly providerInstanceId: ProviderInstanceId;
     readonly threadId: ThreadId;
+    readonly existingProviderSessionId?: ProviderSessionId | null | undefined;
   }) =>
     input.adapter.getCapabilities().pipe(
-      Effect.flatMap((capabilities) =>
-        capabilities.sessions.supportsMultipleProviderThreadsPerSession
-          ? Effect.succeed(
-              idAllocator.derive.providerSession({
-                providerInstanceId: input.providerInstanceId,
-              }),
-            )
+      Effect.flatMap((capabilities) => {
+        const sharedSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: input.providerInstanceId,
+        });
+        const supportsSharedSession =
+          capabilities.sessions.supportsMultipleProviderThreadsPerSession;
+        if (
+          input.existingProviderSessionId != null &&
+          (supportsSharedSession || input.existingProviderSessionId !== sharedSessionId)
+        ) {
+          return Effect.succeed(input.existingProviderSessionId);
+        }
+        return supportsSharedSession
+          ? Effect.succeed(sharedSessionId)
           : idAllocator.allocate.providerSession({
               providerInstanceId: input.providerInstanceId,
               threadId: input.threadId,
-            }),
-      ),
+            });
+      }),
     );
 
   const enforceCommandPolicy =
@@ -1569,29 +1577,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 }),
             ),
           ));
-      const providerSessionId =
-        (!canResumeAcrossInstances &&
-        queuedProviderThread.providerSessionId !== null &&
-        !switchPlan?.releaseProviderSessionIds.includes(queuedProviderThread.providerSessionId)
-          ? queuedProviderThread.providerSessionId
-          : null) ??
-        (yield* providerAdapters.get(queuedRun.providerInstanceId).pipe(
-          Effect.flatMap((adapter) =>
-            providerSessionIdFor({
-              adapter,
-              providerInstanceId: queuedRun.providerInstanceId,
-              threadId,
+      const providerSessionId = yield* providerAdapters.get(queuedRun.providerInstanceId).pipe(
+        Effect.flatMap((adapter) =>
+          providerSessionIdFor({
+            adapter,
+            providerInstanceId: queuedRun.providerInstanceId,
+            threadId,
+            existingProviderSessionId:
+              !canResumeAcrossInstances &&
+              queuedProviderThread.providerSessionId !== null &&
+              !switchPlan?.releaseProviderSessionIds.includes(
+                queuedProviderThread.providerSessionId,
+              )
+                ? queuedProviderThread.providerSessionId
+                : null,
+          }),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorDispatchError({
+              commandId,
+              commandType: "message.dispatch",
+              cause,
             }),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new OrchestratorDispatchError({
-                commandId,
-                commandType: "message.dispatch",
-                cause,
-              }),
-          ),
-        ));
+        ),
+      );
       const providerThread: OrchestrationV2ProviderThread = {
         ...deliveryProviderThread,
         providerSessionId,
@@ -4126,15 +4136,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           input.projection,
           input.modelSelection.instanceId,
         ).find((candidate) => candidate.id !== providerThread.id);
-        const targetProviderSessionId =
-          existingTargetProviderThread?.providerSessionId ??
-          (yield* mapDispatchError(input.command)(
-            providerSessionIdFor({
-              adapter: targetAdapter,
-              providerInstanceId: input.modelSelection.instanceId,
-              threadId: input.command.threadId,
-            }),
-          ));
+        const targetProviderSessionId = yield* mapDispatchError(input.command)(
+          providerSessionIdFor({
+            adapter: targetAdapter,
+            providerInstanceId: input.modelSelection.instanceId,
+            threadId: input.command.threadId,
+            existingProviderSessionId: existingTargetProviderThread?.providerSessionId,
+          }),
+        );
         const targetProviderThreadBase: OrchestrationV2ProviderThread =
           existingTargetProviderThread === undefined
             ? {
@@ -5209,15 +5218,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               }),
           ),
         );
-        const providerSessionId =
-          activeProviderThread?.providerSessionId ??
-          (yield* mapDispatchError(command)(
-            providerSessionIdFor({
-              adapter,
-              providerInstanceId: modelSelection.instanceId,
-              threadId: command.threadId,
-            }),
-          ));
+        const providerSessionId = yield* mapDispatchError(command)(
+          providerSessionIdFor({
+            adapter,
+            providerInstanceId: modelSelection.instanceId,
+            threadId: command.threadId,
+            existingProviderSessionId: activeProviderThread?.providerSessionId,
+          }),
+        );
         const providerThreadId =
           activeProviderThread?.id ??
           idAllocator.derive.providerThread({
@@ -5596,15 +5604,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         isProviderSwitch && !canResumeAcrossInstances
           ? rootProviderThreadsForProvider(projection, modelSelection.instanceId)[0]
           : activeProviderThread;
-      const providerSessionId =
-        (canResumeAcrossInstances ? undefined : targetProviderThread?.providerSessionId) ??
-        (yield* mapDispatchError(command)(
-          providerSessionIdFor({
-            adapter,
-            providerInstanceId: modelSelection.instanceId,
-            threadId: command.threadId,
-          }),
-        ));
+      const providerSessionId = yield* mapDispatchError(command)(
+        providerSessionIdFor({
+          adapter,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: command.threadId,
+          existingProviderSessionId: canResumeAcrossInstances
+            ? undefined
+            : targetProviderThread?.providerSessionId,
+        }),
+      );
       const existingProviderSession = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
@@ -10965,109 +10974,4 @@ export const layer: Layer.Layer<
   | ThreadForkServiceV2
 > = Layer.effect(OrchestratorV2, makeOrchestrator()).pipe(
   Layer.provide(ThreadCommandExecutor.layer),
-);
-
-const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
-  OrchestratorV2,
-  OrchestratorV2.of({
-    resumeQueuedRuns: Effect.fail(
-      new OrchestratorDispatchError({
-        commandId: CommandId.make("command:system:resume-queued-runs"),
-        commandType: "message.dispatch",
-        cause: "Orchestration V2 live runtime is not configured.",
-      }),
-    ),
-    recoverDelegatedTasks: Effect.void,
-    recoverDelegatedTask: () => Effect.void,
-    delegatedTaskResultPending: () => Effect.succeed(false),
-    dispatch: (command) =>
-      Effect.fail(
-        new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    searchThreadStream: (input) =>
-      Stream.fail(new OrchestratorProjectionError({ threadId: input.threadId })),
-    searchThread: (input) =>
-      Effect.fail(new OrchestratorProjectionError({ threadId: input.threadId })),
-    getThreadHistoryPage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getTimelinePage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getTurnItem: ({ threadId }) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getThreadProjection: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getCheckpointContext: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadSnapshot: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadSnapshotWindow: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getShellSnapshot: () =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: ThreadId.make("thread:shell"),
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    readShellSnapshot: () =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: ThreadId.make("thread:shell"),
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadShell: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadEventSequence: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    streamStoredEvents: Stream.fail(
-      new OrchestratorDomainEventStreamError({
-        cause: "Orchestration V2 live runtime is not configured.",
-      }),
-    ),
-    streamStoredEventsFrom: () =>
-      Stream.fail(
-        new OrchestratorDomainEventStreamError({
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    streamDomainEvents: Stream.fail(
-      new OrchestratorDomainEventStreamError({
-        cause: "Orchestration V2 live runtime is not configured.",
-      }),
-    ),
-  } satisfies OrchestratorV2Shape),
 );
