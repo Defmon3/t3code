@@ -787,6 +787,7 @@ describe("AcpAdapterV2", () => {
         endpoint: "http://127.0.0.1:43123/mcp",
         authorizationHeader: "Bearer instruction-transition-token",
         browserToolsAvailable: false,
+        capabilities: new Set(["issues"]),
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
@@ -860,6 +861,7 @@ describe("AcpAdapterV2", () => {
       assert.include(firstDefault.prompt, "T3 Code interaction mode: Default");
       assert.include(firstDefault.prompt, "T3 Code collaborative browser");
       assert.include(firstDefault.prompt, "T3 Code orchestration");
+      assert.include(firstDefault.prompt, "<issue_linking>");
       assert.notInclude(
         firstDefault.methods,
         "session/set_config_option",
@@ -874,6 +876,7 @@ describe("AcpAdapterV2", () => {
       const firstPlan = yield* runTurn(3, planPolicy, "Plan this change.");
       assert.include(firstPlan.prompt, "T3 Code interaction mode: Plan");
       assert.include(firstPlan.methods, "session/set_config_option");
+      assert.include(firstPlan.prompt, "<issue_linking>");
       assert.include(
         (yield* runTurn(4, planPolicy, "Continue planning.")).prompt,
         "Continue planning.",
@@ -885,6 +888,10 @@ describe("AcpAdapterV2", () => {
         "session/set_config_option",
         "Build should restore the native mode that T3 temporarily replaced for Plan",
       );
+      const mcpSession = McpProviderSession.readMcpProviderSession(threadId)!;
+      McpProviderSession.setMcpProviderSession({ ...mcpSession, capabilities: new Set() });
+      const withoutIssues = yield* runTurn(6, defaultPolicy, "Continue without issue tools.");
+      assert.notInclude(withoutIssues.prompt, "<issue_linking>");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -12022,8 +12029,8 @@ describe("AcpAdapterV2", () => {
       });
       assert.equal(taskkillCommands.length, 1);
       yield* Scope.close(runtimeScope, Exit.void);
-      assert.equal(taskkillCommands.length, 1);
-    }).pipe(Effect.provide(layerTest)),
+      assert.equal(taskkillCommands.length, 2);
+    }).pipe(Effect.provideService(HostProcessPlatform, "win32"), Effect.provide(layerTest)),
   );
 
   it("accepts only taskkill exit code zero as successful tree termination", () => {
@@ -12220,16 +12227,12 @@ describe("AcpAdapterV2", () => {
           makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
         )
         .pipe(Effect.forkScoped);
-      while ((yield* fileSystem.readFileString(commandPidPath)).trim().length === 0) {
-        yield* Effect.yieldNow;
-      }
-      const [commandRootPid, commandSleepPid] = (yield* fileSystem.readFileString(commandPidPath))
-        .trim()
-        .split(/\s+/)
-        .map(Number);
+      const publishedPids = yield* waitForPublishedProcessIds(fileSystem, commandPidPath, 2);
+      assert.isTrue(Option.isSome(publishedPids), "command fixture must publish its native PIDs");
+      const [commandRootPid, commandSleepPid] = Option.getOrThrow(publishedPids);
       assert.isTrue(
         Option.isSome(yield* waitForProcesses([commandRootPid!, commandSleepPid!])),
-        "declared failed-teardown Bash and sleep PIDs must both become live",
+        "declared failed-teardown command PIDs must both become live",
       );
       yield* pollProtocolMethods(protocolEvents);
 

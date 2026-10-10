@@ -3,6 +3,8 @@ import type {
   ChatAttachment,
   ModelSelection,
   TextGenerationError,
+  IssueReferenceStyle,
+  WorkItemMatchRelationship,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 
@@ -74,8 +76,36 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export interface WorkItemMatchGenerationInput {
+  cwd: string;
+  relationship: WorkItemMatchRelationship;
+  source: {
+    readonly kind: "issue" | "pull-request";
+    readonly provider: string;
+    readonly referenceStyle?: IssueReferenceStyle;
+    readonly repository: string;
+    readonly number: number;
+    readonly title: string;
+    readonly url: string;
+    readonly body: string;
+  };
+  candidates: ReadonlyArray<WorkItemMatchGenerationInput["source"]>;
+  modelSelection: ModelSelection;
+}
+
+export interface WorkItemMatchGenerationResult {
+  matches: ReadonlyArray<{
+    candidate: number;
+    confidence: "high" | "medium";
+    reason: string;
+  }>;
+}
+
 /** Commit, change request, branch, and title generation backed by one provider instance. */
 export interface ProviderTextGeneration {
+  readonly findWorkItemMatches: (
+    input: WorkItemMatchGenerationInput,
+  ) => Effect.Effect<WorkItemMatchGenerationResult, TextGenerationError>;
   /**
    * Generate a commit message from staged change context.
    */

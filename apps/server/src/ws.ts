@@ -100,6 +100,8 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
+  WsCoreRpcGroup,
+  WsIssueRpcGroup,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -225,6 +227,10 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as IssueService from "./issue/IssueService.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as WorkItemLinks from "./workItems/WorkItemLinks.ts";
+import * as WorkItemMatches from "./workItems/WorkItemMatches.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
@@ -546,6 +552,8 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
+const ServerWsIssueRpcGroup = WsIssueRpcGroup.middleware(RpcInstrumentation);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1186,6 +1194,40 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
+const layerIssueWsRpc = ServerWsIssueRpcGroup.toLayer(
+  Effect.gen(function* () {
+    const issues = yield* IssueService.IssueService;
+    const workItemLinks = yield* WorkItemLinks.WorkItemLinks;
+    const workItemMatches = yield* WorkItemMatches.WorkItemMatches;
+    return ServerWsIssueRpcGroup.of({
+      [WS_METHODS.issuesList]: (input) => issues.list(input),
+      [WS_METHODS.issuesDetail]: (input) => issues.detail(input),
+      [WS_METHODS.issuesActivity]: (input) => issues.activity(input),
+      [WS_METHODS.issuesCommentsPage]: (input) => issues.commentsPage(input),
+      [WS_METHODS.issuesRunAction]: (input) => issues.runAction(input),
+      [WS_METHODS.issuesComment]: (input) => issues.comment(input),
+      [WS_METHODS.issuesUpdateComment]: (input) => issues.updateComment(input),
+      [WS_METHODS.issuesSetReaction]: (input) => issues.setReaction(input),
+      [WS_METHODS.issuesCreate]: (input) => issues.create(input),
+      [WS_METHODS.issuesUpdate]: (input) => issues.update(input),
+      [WS_METHODS.issuesSetLabels]: (input) => issues.setLabels(input),
+      [WS_METHODS.issuesSetAssignees]: (input) => issues.setAssignees(input),
+      [WS_METHODS.issuesLabelCandidates]: (input) => issues.labelCandidates(input),
+      [WS_METHODS.issuesAssigneeCandidates]: (input) => issues.assigneeCandidates(input),
+      [WS_METHODS.issuesTemplates]: (input) => issues.templates(input),
+      [WS_METHODS.issuesInvalidate]: (input) => issues.invalidate(input),
+      [WS_METHODS.issueTrackersStatus]: (input) => issues.trackerStatus(input),
+      [WS_METHODS.issueTrackersConnect]: (input) => issues.trackerConnect(input),
+      [WS_METHODS.issueTrackersDisconnect]: (input) => issues.trackerDisconnect(input),
+      [WS_METHODS.issueTrackersBind]: (input) => issues.trackerBind(input),
+      [WS_METHODS.workItemsListLinks]: (input) => workItemLinks.list(input),
+      [WS_METHODS.workItemsLink]: (input) => workItemLinks.link(input),
+      [WS_METHODS.workItemsUnlink]: (input) => workItemLinks.unlink(input),
+      [WS_METHODS.workItemsFindMatches]: (input) => workItemMatches.find(input),
+    });
+  }),
+);
+
 const layerWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
@@ -1193,7 +1235,7 @@ const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  ServerWsCoreRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1819,7 +1861,7 @@ const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.hookApprovalsSubscribe]: () => hookApprovals.subscribe(),
         [WS_METHODS.hookApprovalsRespond]: (input) =>
           hookApprovals.respond(input).pipe(
@@ -3169,6 +3211,8 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const issues = yield* IssueService.IssueService;
+    const textGeneration = yield* TextGeneration.TextGeneration;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3224,10 +3268,13 @@ export const layer = Layer.unwrap(
               previewAutomationBroker,
               serverBrowser,
             ).pipe(
+              Layer.merge(layerIssueWsRpc),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.
               Layer.provide(DefectReporter.layer),
+              Layer.provide(WorkItemLinks.layer),
+              Layer.provide(WorkItemMatches.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
@@ -3235,6 +3282,8 @@ export const layer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
+              Layer.provide(Layer.succeed(TextGeneration.TextGeneration, textGeneration)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

@@ -3,7 +3,14 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
-import { WsRpcGroup, WsSubscribeServerConfigRpc } from "./rpc.ts";
+import {
+  RpcScopeAuthorization,
+  WS_METHODS,
+  WsCoreRpcGroup,
+  WsIssueRpcGroup,
+  WsRpcGroup,
+  WsSubscribeServerConfigRpc,
+} from "./rpc.ts";
 
 /**
  * The client always sends `environmentThemes`, including to servers built
@@ -32,6 +39,29 @@ describe("subscribeServerConfig payload compatibility", () => {
 });
 
 describe("WebSocket RPC contracts", () => {
+  it("keeps every method authorized when combining core and issue handlers", () => {
+    const coreMethods = [...WsCoreRpcGroup.requests.keys()];
+    const issueMethods = [...WsIssueRpcGroup.requests.keys()];
+    const methods = [...WsRpcGroup.requests.keys()];
+    const obsoleteProjectMethods: ReadonlySet<string> = new Set([
+      WS_METHODS.projectsAdd,
+      WS_METHODS.projectsList,
+      WS_METHODS.projectsRemove,
+    ]);
+    const expectedMethods = [
+      ...Object.values(WS_METHODS).filter((method) => !obsoleteProjectMethods.has(method)),
+      ...Object.values(ORCHESTRATION_V2_WS_METHODS),
+    ];
+
+    expect(new Set([...coreMethods, ...issueMethods]).size).toBe(
+      coreMethods.length + issueMethods.length,
+    );
+    expect(methods.toSorted()).toEqual(expectedMethods.toSorted());
+    expect(
+      [...WsRpcGroup.requests.values()].every((rpc) => rpc.middlewares.has(RpcScopeAuthorization)),
+    ).toBe(true);
+  });
+
   it("exposes only the V2 orchestration transport surface", () => {
     const methods = [...WsRpcGroup.requests.keys()];
 

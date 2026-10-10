@@ -1165,8 +1165,6 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* fileSystem.makeDirectory(cwd);
           yield* initRepoWithCommit(cwd);
           yield* git(cwd, ["remote", "add", "origin", "git@example.invalid:owner/repo.git"]);
-          // Stands in for ssh, which prints its refusal unprefixed and leaves
-          // git to add only a generic "could not read" line after it.
           const fakeSsh = pathService.join(parent, "fake-ssh");
           yield* writeTextFile(
             parent,
@@ -1180,7 +1178,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
               operation: "GitVcsDriver.test.sshRefusal",
               cwd,
               args: ["fetch", "origin"],
-              env: { LC_ALL: "C", GIT_SSH_COMMAND: fakeSsh },
+              env: { LC_ALL: "C", GIT_SSH_COMMAND: `"${fakeSsh.replaceAll("\\", "/")}"` },
             })
             .pipe(Effect.flip);
 
@@ -1212,7 +1210,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             operation: "GitVcsDriver.test.osPermission",
             cwd,
             args: ["fetch", "origin"],
-            env: { LC_ALL: "C", GIT_SSH_COMMAND: fakeSsh },
+            env: { LC_ALL: "C", GIT_SSH_COMMAND: `"${fakeSsh.replaceAll("\\", "/")}"` },
           })
           .pipe(Effect.flip);
 
@@ -1598,7 +1596,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const cwd = yield* makeTmpDir();
         yield* initRepoWithCommit(cwd);
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* writeTextFile(cwd, ":(exclude)after.ts", "literal pathspec contents\n");
+        const magicPath =
+          (yield* HostProcessPlatform) === "win32" ? "[after].ts" : ":(exclude)after.ts";
+        yield* writeTextFile(cwd, magicPath, "literal pathspec contents\n");
         yield* writeTextFile(cwd, "ordinary.ts", "ordinary contents\n");
         const indexBefore = yield* git(cwd, ["ls-files", "--stage"]);
 
@@ -1610,14 +1610,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const scoped = yield* driver.getReviewDiffPreview({
           cwd,
           file: {
-            path: ":(exclude)after.ts",
+            path: magicPath,
             previousPath: null,
             sourceKind: "working-tree",
           },
         });
         const scopedSource = scoped.sources.find((source) => source.kind === "working-tree")!;
         assert.deepStrictEqual(scopedSource.files, [
-          { path: ":(exclude)after.ts", previousPath: null, additions: 1, deletions: 0 },
+          { path: magicPath, previousPath: null, additions: 1, deletions: 0 },
         ]);
         assert.include(scopedSource.diff, "+literal pathspec contents");
         assert.notInclude(scopedSource.diff, "ordinary.ts");
@@ -4434,6 +4434,7 @@ it.effect("returns full commit details and root commit changed files", () =>
     const initialHash = details.commit?.parentHashes[0];
     assert.ok(initialHash);
     const initial = yield* driver.getCommitDetails({ cwd, hash: initialHash });
+    assert.equal(initial.commit?.hash, initialHash);
     const initialFiles = yield* driver.listCommitFiles({ cwd, hash: initialHash });
     assert.deepEqual(initialFiles.files, [{ status: "A", path: "README.md" }]);
   }).pipe(Effect.provide(layerTest)),
@@ -4707,6 +4708,36 @@ it.effect("keeps ref namespaces isolated and marks current and origin default re
       ["release/v1"],
     );
     assert.isTrue(tags.refs.every((ref) => ref.isTag && !ref.isRemote));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shares history ref identity across worktrees and isolates other repositories", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const linkedWorktree = yield* makeTmpDir("git-vcs-driver-linked-");
+    const otherRepository = yield* makeTmpDir();
+    const nonRepository = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    yield* initRepoWithCommit(otherRepository);
+    yield* git(cwd, ["worktree", "add", "-b", "feature/linked", linkedWorktree]);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+
+    const main = yield* driver.listHistoryRefs({ cwd, limit: 1 });
+    assert.ok(main.nextCursor);
+    const continuation = yield* driver.listHistoryRefs({ cwd, cursor: main.nextCursor });
+    const linked = yield* driver.listHistoryRefs({ cwd: linkedWorktree });
+    const other = yield* driver.listHistoryRefs({ cwd: otherRepository });
+    const outside = yield* driver.listHistoryRefs({ cwd: nonRepository });
+    const tags = yield* driver.listHistoryRefs({ cwd, namespace: "tag" });
+
+    assert.isString(main.repositoryKey);
+    assert.isNotEmpty(main.repositoryKey);
+    assert.equal(continuation.repositoryKey, main.repositoryKey);
+    assert.equal(linked.repositoryKey, main.repositoryKey);
+    assert.equal(tags.repositoryKey, main.repositoryKey);
+    assert.notEqual(other.repositoryKey, main.repositoryKey);
+    assert.equal(outside.repositoryKey, null);
+    assert.equal(outside.isRepo, false);
   }).pipe(Effect.provide(layerTest)),
 );
 

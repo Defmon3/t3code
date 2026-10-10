@@ -48,6 +48,9 @@ const MUSE_PROVIDER = ProviderDriverKind.make("muse");
 const INSTANCE_ID = ProviderInstanceId.make("muse_work");
 const THREAD_ID = ThreadId.make("thread-muse-test");
 const MODEL = "muse-spark-1.3-contributor";
+const decodeTextInput = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.String })),
+);
 const museSettings = Schema.decodeSync(MuseSettings)({ enabled: true });
 const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
   runtimeMode: "full-access",
@@ -349,37 +352,50 @@ const approval = (turnId: string) => ({
 });
 
 describe("MuseAdapterV2", () => {
-  it.effect("connects the thread's MCP credential on native start and resume", () =>
-    Effect.gen(function* () {
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID)),
-      );
-      McpProviderSession.setMcpProviderSession({
-        environmentId: EnvironmentId.make("test-environment"),
-        threadId: THREAD_ID,
-        providerSessionId: "test-session",
-        providerInstanceId: INSTANCE_ID,
-        endpoint: "http://127.0.0.1:43210/mcp",
-        authorizationHeader: "Bearer thread-scoped-test-token",
-        browserToolsAvailable: true,
-      });
-      for (const nativeId of [undefined, "saved-native-session"]) {
-        const fake = yield* makeFakeMuse();
-        fake.host.initializeResult.grantedCapabilities.push("sessionMcp");
-        yield* makeHarness(fake, INSTANCE_ID, nativeId);
-        const call = yield* fake.takeCall(nativeId ? "session/resume" : "session/start");
-        assert.deepStrictEqual(call.params.config, {
-          mcpServers: {
-            "t3-code": {
-              transport: "streamableHttp",
-              mode: "optional",
-              url: "http://127.0.0.1:43210/mcp",
-              headers: { Authorization: "Bearer thread-scoped-test-token" },
-            },
-          },
+  it.effect.each([true, false])(
+    "connects MCP and conditions issue instructions on capability: %s",
+    (issueToolsAvailable) =>
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID)),
+        );
+        McpProviderSession.setMcpProviderSession({
+          environmentId: EnvironmentId.make("test-environment"),
+          threadId: THREAD_ID,
+          providerSessionId: "test-session",
+          providerInstanceId: INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43210/mcp",
+          authorizationHeader: "Bearer thread-scoped-test-token",
+          browserToolsAvailable: true,
+          capabilities: new Set(issueToolsAvailable ? ["issues"] : []),
         });
-      }
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+        for (const nativeId of [undefined, "saved-native-session"]) {
+          const fake = yield* makeFakeMuse();
+          fake.host.initializeResult.grantedCapabilities.push("sessionMcp");
+          const harness = yield* makeHarness(fake, INSTANCE_ID, nativeId);
+          const call = yield* fake.takeCall(nativeId ? "session/resume" : "session/start");
+          assert.deepStrictEqual(call.params.config, {
+            mcpServers: {
+              "t3-code": {
+                transport: "streamableHttp",
+                mode: "optional",
+                url: "http://127.0.0.1:43210/mcp",
+                headers: { Authorization: "Bearer thread-scoped-test-token" },
+              },
+            },
+          });
+          yield* harness.runtime.startTurn(yield* turnInput(harness.providerThread));
+          const admitted = yield* fake.takeCall("turn/start");
+          const parts = yield* decodeTextInput(admitted.params.input);
+          assert.strictEqual(parts[0]?.text.includes("<issue_linking>"), issueToolsAvailable);
+          if (issueToolsAvailable) {
+            assert.include(
+              parts[0]!.text,
+              "attach that issue to the current thread before starting work",
+            );
+          }
+        }
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
   it.effect("rejects a host without session MCP support before opening a native session", () =>

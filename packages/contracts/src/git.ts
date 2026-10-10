@@ -595,6 +595,9 @@ export const VcsListHistoryRefsResult = Schema.Struct({
   refs: Schema.Array(VcsHistoryRef),
   currentRef: Schema.NullOr(VcsHistoryRef),
   isRepo: Schema.Boolean,
+  repositoryKey: Schema.NullOr(TrimmedNonEmptyStringSchema).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   hasPrimaryRemote: Schema.Boolean,
   nextCursor: Schema.NullOr(TrimmedNonEmptyStringSchema),
   isComplete: Schema.Boolean,

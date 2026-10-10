@@ -492,6 +492,7 @@ export function usePaginatedHistoryRefs(
       refs: [...refs.values()],
       currentRef: first.currentRef,
       isRepo: first.isRepo,
+      repositoryKey: first.repositoryKey,
       hasPrimaryRemote: first.hasPrimaryRemote,
       nextCursor: last.nextCursor,
       isComplete: last.isComplete,
@@ -567,4 +568,8 @@ export function usePaginatedHistoryRefs(
     retry,
     loadNext,
   };
+}
+
+export function isVcsSnapshotExpiredCause(cause: Cause.Cause<unknown>): boolean {
+  return Schema.is(VcsSnapshotExpiredError)(Cause.squash(cause));
 }

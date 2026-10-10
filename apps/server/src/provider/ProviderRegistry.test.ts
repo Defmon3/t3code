@@ -35,6 +35,7 @@ import * as PlatformError from "effect/PlatformError";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { deepMerge } from "@t3tools/shared/Struct";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
@@ -359,6 +360,7 @@ function makeMutableServerSettingsService(
           yield* PubSub.publish(changes, next);
           return next;
         }),
+      modifySettings: () => Effect.die("Unexpected settings modification"),
       updateProviderInstance: (mutation, patch = {}) =>
         Effect.gen(function* () {
           const current = yield* Ref.get(settingsRef);
@@ -3118,7 +3120,7 @@ it.layer(
 
   // ── checkClaudeProviderStatus tests ──────────────────────────
 
-  describe("checkClaudeProviderStatus", () => {
+  it.layer(Layer.succeed(HostProcessPlatform, "linux"))("checkClaudeProviderStatus", (it) => {
     it.effect("returns ready when claude is installed and authenticated", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus(

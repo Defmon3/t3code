@@ -193,6 +193,7 @@ function nonRepositoryListRefs(): VcsListRefsResult {
 /** @public Service construction is part of the canonical Effect module API. */
 function nonRepositoryListHistoryRefs(): VcsListHistoryRefsResult {
   return {
+    repositoryKey: null,
     refs: [],
     currentRef: null,
     isRepo: false,

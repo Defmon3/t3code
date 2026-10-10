@@ -16,6 +16,7 @@ const refState = vi.hoisted(() => ({
     readonly target: unknown;
     readonly options: { readonly namespace: string };
   }>,
+  storageKeys: [] as Array<string | null>,
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -27,6 +28,7 @@ vi.mock("react", async (importOriginal) => {
     useDeferredValue: <Value,>(value: Value) => value,
     useEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
+    useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
   };
 });
@@ -37,13 +39,18 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("../../hooks/useLocalStorage", () => ({
-  useLocalStorage: () => [
-    refState.favoriteBranches,
-    (next: ReadonlyArray<string> | ((current: ReadonlyArray<string>) => ReadonlyArray<string>)) => {
-      refState.favoriteBranches =
-        typeof next === "function" ? next(refState.favoriteBranches) : next;
-    },
-  ],
+  useLocalStorage: (key: string | null) => {
+    refState.storageKeys.push(key);
+    return [
+      refState.favoriteBranches,
+      (
+        next: ReadonlyArray<string> | ((current: ReadonlyArray<string>) => ReadonlyArray<string>),
+      ) => {
+        refState.favoriteBranches =
+          typeof next === "function" ? next(refState.favoriteBranches) : next;
+      },
+    ];
+  },
 }));
 
 vi.mock("../../state/queries", () => ({
@@ -58,7 +65,15 @@ vi.mock("../../state/queries", () => ({
           : refState.tags;
     return {
       data: refState.isResolved
-        ? { currentRef: null, nextCursor: null, isComplete: refState.isComplete }
+        ? {
+            refs,
+            currentRef: null,
+            nextCursor: null,
+            isComplete: refState.isComplete,
+            isRepo: true,
+            hasPrimaryRemote: true,
+            repositoryKey: "shared-repository",
+          }
         : undefined,
       refs,
       error: null,
@@ -132,6 +147,16 @@ describe("useGitHistoryRefs", () => {
     refState.tags = [];
     refState.isComplete = true;
     refState.requests = [];
+    refState.storageKeys = [];
+  });
+
+  it("shares favorites across worktrees of one repository and isolates environments", () => {
+    renderRefs(environmentId, "C:/workspace/main");
+    renderRefs(environmentId, "C:/workspace/worktree");
+    renderRefs(EnvironmentId.make("environment-remote"), "C:/workspace/main");
+
+    expect(refState.storageKeys[0]).toBe(refState.storageKeys[1]);
+    expect(refState.storageKeys[2]).not.toBe(refState.storageKeys[0]);
   });
 
   it("preserves ref trees and the 10k-row virtual-list model across unchanged rerenders", () => {

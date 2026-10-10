@@ -98,11 +98,12 @@ function dispatchLocalStorageChange(key: string) {
 }
 
 export function useLocalStorage<T, E>(
-  key: string,
+  key: string | null,
   initialValue: T,
   schema: Schema.Codec<T, E>,
 ): [T, (value: T | ((val: T) => T)) => void] {
   const getSnapshot = useCallback(() => {
+    if (key === null) return null;
     try {
       return read(key);
     } catch (error) {
@@ -113,6 +114,7 @@ export function useLocalStorage<T, E>(
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
+      if (key === null) return () => undefined;
       const handleStorageChange = (event: StorageEvent) => {
         if (event.key === key) {
           onStoreChange();
@@ -136,7 +138,7 @@ export function useLocalStorage<T, E>(
 
   const serializedValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const storedValue = useMemo(() => {
-    if (serializedValue === null) {
+    if (key === null || serializedValue === null) {
       return initialValue;
     }
     try {
@@ -149,6 +151,7 @@ export function useLocalStorage<T, E>(
 
   const setValue = useCallback(
     (value: T | ((val: T) => T)) => {
+      if (key === null) return;
       try {
         const currentValue = getLocalStorageItem(key, schema) ?? initialValue;
         let valueToStore: T;

@@ -17,14 +17,24 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
+import type * as HttpRouter from "effect/http/HttpRouter";
+import type * as SqlClient from "effect/sql/SqlClient";
+import { expectTypeOf } from "vite-plus/test";
 
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import {
   hasCompatibleOrchestrationProtocol,
+  layer,
   resolveAvailableEditorsForConfig,
   shouldUseBoundedThreadSnapshot,
   withLateEditorConfig,
 } from "./ws.ts";
+
+it("provides SQL to websocket work-item services before registering the route", () => {
+  expectTypeOf<
+    Extract<HttpRouter.Request.Only<"Requires", Layer.Services<typeof layer>>, SqlClient.SqlClient>
+  >().toEqualTypeOf<never>();
+});
 
 it("accepts only the current orchestration protocol before websocket RPC setup", () => {
   assert.isTrue(

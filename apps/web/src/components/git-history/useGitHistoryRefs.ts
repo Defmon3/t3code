@@ -1,22 +1,23 @@
 import type { EnvironmentId, VcsHistoryRef } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { buildGitRefTree, filterGitRefTree } from "../../lib/gitRefTree";
 import { useDebouncedValue, usePaginatedHistoryRefs } from "../../state/queries";
+import type { GitHistoryRevisionState } from "./GitHistoryPanelState";
 
 const EMPTY_FAVORITE_BRANCHES: ReadonlyArray<string> = [];
 const FavoriteBranchesSchema = Schema.Array(Schema.String);
 const REF_FILTER_DEBOUNCE_MS = 175;
 
-export interface GitHistoryRevision {
-  readonly label: string;
-  readonly revision: string;
-}
+export type GitHistoryRevision = GitHistoryRevisionState;
 
-export function gitHistoryFavoriteStorageKey(environmentId: EnvironmentId, cwd: string): string {
-  return `t3code:git-history-favorites:v1:${environmentId}:${cwd}`;
+export function gitHistoryFavoriteStorageKey(
+  environmentId: EnvironmentId,
+  repositoryKey: string,
+): string {
+  return `t3code:git-history-favorites:v1:${environmentId}:${repositoryKey}`;
 }
 
 export function toggleGitHistoryFavorite(
@@ -28,65 +29,78 @@ export function toggleGitHistoryFavorite(
     : [...favorites, branch];
 }
 
-export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, revision = 0) {
-  const scopeKey = JSON.stringify([environmentId, cwd]);
-  const [favoriteBranches, setFavoriteBranches] = useLocalStorage(
-    gitHistoryFavoriteStorageKey(environmentId, cwd),
-    EMPTY_FAVORITE_BRANCHES,
-    FavoriteBranchesSchema,
-  );
+export function useGitHistoryRefs(
+  environmentId: EnvironmentId,
+  cwd: string,
+  revision: number,
+  scopeKey = `${environmentId}:${cwd}`,
+  state?: {
+    readonly selectedRevision: GitHistoryRevision | null | undefined;
+    readonly onSelectedRevisionChange: (
+      selectedRevision: GitHistoryRevision | null | undefined,
+    ) => void;
+  },
+) {
   const [refFilter, setRefFilter] = useState("");
-  const [selectedRevisionState, setSelectedRevision] = useState<{
-    readonly scopeKey: string;
-    readonly value: GitHistoryRevision | null | undefined;
-  }>(() => ({ scopeKey, value: undefined }));
-  const scopedSelectedRevision =
-    selectedRevisionState.scopeKey === scopeKey ? selectedRevisionState.value : undefined;
+  const [selectedRevisionState, setSelectedRevision] = useState(() => ({
+    scopeKey,
+    selectedRevision: state?.selectedRevision,
+  }));
+  const selectedRevisionValue =
+    selectedRevisionState.scopeKey === scopeKey
+      ? selectedRevisionState.selectedRevision
+      : undefined;
+  if (selectedRevisionState.scopeKey !== scopeKey) {
+    setSelectedRevision({ scopeKey, selectedRevision: state?.selectedRevision });
+  }
   const [expandedRefKeys, setExpandedRefKeys] = useState<ReadonlySet<string>>(
     () => new Set(["section:local"]),
   );
-  const debouncedRefFilter = useDebouncedValue(refFilter.trim(), REF_FILTER_DEBOUNCE_MS);
-  const normalizedRefFilter = debouncedRefFilter.toLocaleLowerCase();
+  const deferredRefFilter = useDebouncedValue(refFilter.trim(), REF_FILTER_DEBOUNCE_MS);
+  const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
   const shouldLoadRemote =
-    debouncedRefFilter.length > 0 ||
+    deferredRefFilter.length > 0 ||
     expandedRefKeys.has("section:remote") ||
-    scopedSelectedRevision?.revision.startsWith("refs/remotes/") === true;
+    selectedRevisionValue?.revision.startsWith("refs/remotes/") === true;
   const shouldLoadTags =
-    debouncedRefFilter.length > 0 ||
+    deferredRefFilter.length > 0 ||
     expandedRefKeys.has("section:tags") ||
-    scopedSelectedRevision?.revision.startsWith("refs/tags/") === true;
+    selectedRevisionValue?.revision.startsWith("refs/tags/") === true;
   const refs = usePaginatedHistoryRefs(
-    { environmentId, cwd, query: debouncedRefFilter },
+    { environmentId, cwd, query: deferredRefFilter },
     { limit: 200, namespace: "local", revision },
   );
   const remote = usePaginatedHistoryRefs(
     shouldLoadRemote
-      ? { environmentId, cwd, query: debouncedRefFilter }
+      ? { environmentId, cwd, query: deferredRefFilter }
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "remote", revision },
   );
   const tags = usePaginatedHistoryRefs(
     shouldLoadTags
-      ? { environmentId, cwd, query: debouncedRefFilter }
+      ? { environmentId, cwd, query: deferredRefFilter }
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "tag", revision },
   );
-  const mergedRefs = useMemo(() => [...refs.refs, ...remote.refs], [refs.refs, remote.refs]);
+  const localRefs = refs.refs;
+  const remoteRefs = remote.refs;
   const tagRefs = tags.refs;
-  const { localRefs, remoteRefs } = useMemo(() => {
-    const local: VcsHistoryRef[] = [];
-    const remote: VcsHistoryRef[] = [];
-    for (const ref of mergedRefs) {
-      if (ref.isRemote) remote.push(ref);
-      else if (!ref.isTag) local.push(ref);
-    }
-    return { localRefs: local, remoteRefs: remote };
-  }, [mergedRefs]);
+  const repositoryKey = refs.data?.repositoryKey ?? null;
+  const favoriteStorageKey =
+    repositoryKey === null ? null : gitHistoryFavoriteStorageKey(environmentId, repositoryKey);
+  const [persistedFavoriteBranches, setFavoriteBranches] = useLocalStorage(
+    favoriteStorageKey,
+    EMPTY_FAVORITE_BRANCHES,
+    FavoriteBranchesSchema,
+  );
   const localRefTree = useMemo(
     () => filterGitRefTree(buildGitRefTree(localRefs), normalizedRefFilter),
     [localRefs, normalizedRefFilter],
   );
-  const favoriteBranchSet = useMemo(() => new Set(favoriteBranches), [favoriteBranches]);
+  const favoriteBranchSet = useMemo(
+    () => new Set(persistedFavoriteBranches),
+    [persistedFavoriteBranches],
+  );
   const favoriteRefs = useMemo(
     () =>
       localRefs.filter(
@@ -105,56 +119,66 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     () => filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter),
     [normalizedRefFilter, tagRefs],
   );
-  const currentRef = refs.data?.currentRef;
-  const defaultSelectedRevision = useMemo(
-    () =>
-      currentRef === undefined
-        ? undefined
-        : currentRef === null
-          ? null
-          : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` },
-    [currentRef],
-  );
+  const currentRefResult = refs.data?.currentRef;
+  const lastResolvedCurrentRef = useRef<{
+    scopeKey: string;
+    value: VcsHistoryRef | null | undefined;
+  }>({ scopeKey, value: undefined });
+  if (lastResolvedCurrentRef.current.scopeKey !== scopeKey)
+    lastResolvedCurrentRef.current = { scopeKey, value: undefined };
+  if (currentRefResult !== undefined) lastResolvedCurrentRef.current.value = currentRefResult;
+  const currentRef =
+    currentRefResult === undefined ? lastResolvedCurrentRef.current.value : currentRefResult;
+  const defaultSelectedRevision = useMemo(() => {
+    if (currentRef === undefined) return refs.error === null ? undefined : null;
+    if (currentRef === null) return null;
+    return { label: currentRef.name, revision: `refs/heads/${currentRef.name}` };
+  }, [currentRef, refs.error]);
   const selectedRefWasRemoved = useMemo(() => {
-    if (scopedSelectedRevision === undefined || scopedSelectedRevision === null) return false;
-    if (debouncedRefFilter.length > 0) return false;
-    const selectedRevision = scopedSelectedRevision.revision;
-    if (selectedRevision.startsWith("refs/heads/"))
+    if (selectedRevisionValue === undefined || selectedRevisionValue === null) return false;
+    if (deferredRefFilter.length > 0) return false;
+    const selectedRef = selectedRevisionValue.revision;
+    if (selectedRef.startsWith("refs/heads/")) {
       return (
         refs.data?.isComplete === true &&
         refs.data.nextCursor === null &&
-        !localRefs.some((ref) => selectedRevision === `refs/heads/${ref.name}`)
+        !localRefs.some((ref) => selectedRef === `refs/heads/${ref.name}`)
       );
-    if (selectedRevision.startsWith("refs/remotes/"))
+    }
+    if (selectedRef.startsWith("refs/remotes/")) {
       return (
         remote.data?.isComplete === true &&
         remote.data.nextCursor === null &&
-        !remoteRefs.some((ref) => selectedRevision === `refs/remotes/${ref.name}`)
+        !remoteRefs.some((ref) => selectedRef === `refs/remotes/${ref.name}`)
       );
-    if (selectedRevision.startsWith("refs/tags/"))
+    }
+    if (selectedRef.startsWith("refs/tags/")) {
       return (
         tags.data?.isComplete === true &&
         tags.data.nextCursor === null &&
-        !tagRefs.some((ref) => selectedRevision === `refs/tags/${ref.name}`)
+        !tagRefs.some((ref) => selectedRef === `refs/tags/${ref.name}`)
       );
+    }
     return false;
   }, [
-    debouncedRefFilter,
     localRefs,
+    deferredRefFilter,
     refs.data?.isComplete,
     refs.data?.nextCursor,
     remote.data?.isComplete,
     remote.data?.nextCursor,
     remoteRefs,
-    scopedSelectedRevision,
+    selectedRevisionValue,
     tagRefs,
     tags.data?.isComplete,
     tags.data?.nextCursor,
   ]);
   const selectedRevision =
-    scopedSelectedRevision === undefined || selectedRefWasRemoved
+    selectedRevisionValue === undefined || selectedRefWasRemoved
       ? defaultSelectedRevision
-      : scopedSelectedRevision;
+      : selectedRevisionValue;
+  const initialLocalRefError =
+    currentRef === undefined && selectedRevisionValue === undefined ? refs.error : null;
   const toggleRefKey = useCallback((key: string) => {
     setExpandedRefKeys((current) => {
       const next = new Set(current);
@@ -165,66 +189,62 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
   }, []);
   const selectRef = useCallback(
     (label: string, revision: string) => {
-      setSelectedRevision({ scopeKey, value: { label, revision } });
+      const next = { label, revision };
+      setSelectedRevision({ scopeKey, selectedRevision: next });
+      state?.onSelectedRevisionChange(next);
     },
-    [scopeKey],
+    [scopeKey, state],
   );
   const selectAllRefs = useCallback(() => {
-    setSelectedRevision({ scopeKey, value: null });
-  }, [scopeKey]);
+    setSelectedRevision({ scopeKey, selectedRevision: null });
+    state?.onSelectedRevisionChange(null);
+  }, [scopeKey, state]);
   const toggleFavorite = useCallback(
     (branch: string) => {
-      setFavoriteBranches((current) => toggleGitHistoryFavorite(current, branch));
+      const toggle = (current: ReadonlyArray<string>) => toggleGitHistoryFavorite(current, branch);
+      setFavoriteBranches(toggle);
     },
     [setFavoriteBranches],
   );
 
   useEffect(() => {
-    setSelectedRevision({ scopeKey, value: undefined });
-    setRefFilter("");
-    setExpandedRefKeys(new Set(["section:local"]));
-  }, [cwd, environmentId, scopeKey]);
+    if (!selectedRefWasRemoved) return;
+    setSelectedRevision({ scopeKey, selectedRevision: undefined });
+    state?.onSelectedRevisionChange(undefined);
+  }, [scopeKey, selectedRefWasRemoved, state]);
 
-  useEffect(() => {
-    if (selectedRefWasRemoved) setSelectedRevision({ scopeKey, value: undefined });
-  }, [scopeKey, selectedRefWasRemoved]);
+  const refNamespaces = [
+    { namespace: "local", query: refs, enabled: true },
+    { namespace: "remote", query: remote, enabled: shouldLoadRemote },
+    { namespace: "tag", query: tags, enabled: shouldLoadTags },
+  ] as const;
+  const enabledRefNamespaces = refNamespaces.filter(({ enabled }) => enabled);
 
   return {
     currentRef,
     expandedRefKeys,
     favoriteBranches: favoriteBranchSet,
     favoriteRefs,
-    hasMoreRefs:
-      (refs.canLoadNext && refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
-      (remote.canLoadNext &&
-        remote.data?.nextCursor !== null &&
-        remote.data?.nextCursor !== undefined) ||
-      (tags.canLoadNext && tags.data?.nextCursor !== null && tags.data?.nextCursor !== undefined),
-    isFetchingMoreRefs:
-      refs.isFetchingNextPage || remote.isFetchingNextPage || tags.isFetchingNextPage,
-    isRefSnapshotComplete:
-      refs.data?.isComplete !== false &&
-      remote.data?.isComplete !== false &&
-      tags.data?.isComplete !== false,
+    hasMoreRefs: enabledRefNamespaces.some(
+      ({ query }) => query.data?.nextCursor !== null && query.data?.nextCursor !== undefined,
+    ),
+    isFetchingMoreRefs: enabledRefNamespaces.some(({ query }) => query.isFetchingNextPage),
+    isRefSnapshotComplete: enabledRefNamespaces.every(
+      ({ query }) => query.data?.isComplete !== false,
+    ),
+    initialLocalRefError,
     localRefTree,
     localRefs,
     normalizedRefFilter,
-    onLoadMoreRefs: () => {
-      refs.loadNext();
-      remote.loadNext();
-      tags.loadNext();
-    },
+    onLoadMoreRefs: () => enabledRefNamespaces.forEach(({ query }) => query.loadNext()),
     refreshRefs: () => {
-      refs.refresh();
-      remote.refresh();
-      tags.refresh();
+      refNamespaces.forEach(({ query }) => query.refresh());
     },
-    onRetryRefs: () => {
-      if (refs.error) refs.retry();
-      if (remote.error) remote.retry();
-      if (tags.error) tags.retry();
-    },
-    refPaginationError: refs.error ?? remote.error ?? tags.error,
+    onRetryRefs: () =>
+      enabledRefNamespaces.forEach(({ query }) => {
+        if (query.error) query.retry();
+      }),
+    refPaginationError: enabledRefNamespaces.find(({ query }) => query.error)?.query.error ?? null,
     refFilter,
     remoteRefTree,
     remoteRefs,

@@ -19,6 +19,8 @@ export type {
   PrContentGenerationResult,
   ThreadTitleGenerationInput,
   ThreadTitleGenerationResult,
+  WorkItemMatchGenerationInput,
+  WorkItemMatchGenerationResult,
 } from "@t3tools/provider-core/server/textGeneration";
 
 /**
@@ -32,7 +34,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "findWorkItemMatches";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -84,6 +87,10 @@ export const make = Effect.gen(function* () {
             return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
           }),
         ),
+      ),
+    findWorkItemMatches: (input) =>
+      resolveInstance(registry, "findWorkItemMatches", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.findWorkItemMatches(input)),
       ),
   });
 });

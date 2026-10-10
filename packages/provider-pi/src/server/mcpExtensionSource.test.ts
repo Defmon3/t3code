@@ -71,6 +71,7 @@ type AgentStartHook = (
 async function loadMcpBridge(
   options: {
     readonly modern?: boolean;
+    readonly issueToolsAvailable?: boolean;
     readonly toolSearchAvailable?: boolean;
     readonly toolSearchDisabled?: boolean;
     readonly allowsTool?: (name: string) => boolean;
@@ -87,6 +88,7 @@ async function loadMcpBridge(
   }> = [];
   const servers: Array<{ readonly name: string; readonly config: Record<string, unknown> }> = [];
   const catalog = [
+    ...(options.issueToolsAvailable ? [{ name: "link_issue", description: "Link an issue." }] : []),
     { name: "orchestrator_capabilities", description: "Discover available providers and models." },
     { name: "delegate_task", description: "Delegate work to another agent." },
     { name: "task_status", description: "Check delegated work." },
@@ -164,6 +166,30 @@ async function loadMcpBridge(
     },
   };
 }
+
+describe("Pi issue instructions", () => {
+  it.each([true, false])(
+    "includes instructions when the live catalog provides link_issue: %s",
+    async (available) => {
+      const bridge = await loadMcpBridge({ issueToolsAvailable: available });
+      const prompt = await bridge.handlers.get("before_agent_start")!(
+        { systemPrompt: "Pi system prompt" },
+        { ui: { notify: () => undefined } },
+      );
+      assert.equal(prompt.systemPrompt.includes("<issue_linking>"), available);
+      if (available) {
+        assert.include(
+          bridge.tools.map((tool) => tool.name),
+          "mcp__t3-code__link_issue",
+        );
+        assert.include(
+          prompt.systemPrompt,
+          "call link_issue immediately after creating an issue for this thread",
+        );
+      }
+    },
+  );
+});
 
 describe("Pi MCP tool exposure", () => {
   it("keeps orchestration direct and optional bridge tools discoverable on modern Pi", async () => {

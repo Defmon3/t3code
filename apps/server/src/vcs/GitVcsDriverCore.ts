@@ -38,6 +38,7 @@ import {
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
@@ -3766,6 +3767,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         refs: [],
         currentRef: null,
         isRepo: false,
+        repositoryKey: null,
         hasPrimaryRemote: false,
         nextCursor: null,
         isComplete: true,
@@ -3896,6 +3898,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       refs,
       currentRef: snapshot.currentRef,
       isRepo: true,
+      repositoryKey: normalizeProjectPathForComparison(snapshot.gitCommonDir),
       hasPrimaryRemote: snapshot.hasPrimaryRemote,
       nextCursor: hasMore ? yield* newRefCursor(snapshotId, offset + refs.length) : null,
       isComplete: snapshot.isComplete,

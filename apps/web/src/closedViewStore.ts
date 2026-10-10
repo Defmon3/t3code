@@ -61,11 +61,21 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
   if (!surface || typeof surface.id !== "string") return false;
   switch (surface.kind) {
     case "diff":
-    case "git-history":
     case "processes":
     case "files":
-    case "pull-requests":
       return surface.id === surface.kind;
+    case "repository":
+      return (
+        surface.id === "repository" &&
+        ["history", "issues", "pull-requests"].includes(surface.view) &&
+        (surface.selectedIssue == null ||
+          (typeof surface.selectedIssue.projectId === "string" &&
+            typeof surface.selectedIssue.repository === "string" &&
+            Number.isSafeInteger(surface.selectedIssue.number) &&
+            surface.selectedIssue.number > 0 &&
+            (surface.selectedIssue.provider === undefined ||
+              typeof surface.selectedIssue.provider === "string")))
+      );
     case "preview":
       return surface.resourceId === null || typeof surface.resourceId === "string";
     case "file":
@@ -84,6 +94,15 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
             typeof surface.target.deviceId === "string" &&
             typeof surface.target.name === "string" &&
             (surface.target.platform === "ios" || surface.target.platform === "android")))
+      );
+    case "issue":
+      return (
+        typeof surface.projectId === "string" &&
+        typeof surface.repository === "string" &&
+        Number.isSafeInteger(surface.number) &&
+        surface.number > 0 &&
+        (surface.environmentId === undefined || typeof surface.environmentId === "string") &&
+        (surface.provider === undefined || typeof surface.provider === "string")
       );
     case "pull-request":
       return (

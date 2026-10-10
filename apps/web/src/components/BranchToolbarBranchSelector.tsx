@@ -746,7 +746,9 @@ export function BranchToolbarBranchSelector({
             number={prNumber}
             url={prUrl}
             status={displayedPrStatus}
-            onOpenList={() => useRightPanelStore.getState().open(threadRef, "pull-requests")}
+            onOpenList={() =>
+              useRightPanelStore.getState().openRepository(threadRef, "pull-requests")
+            }
             onOpenPullRequest={(event, targetUrl = prUrl) => {
               if (targetUrl) openPrLink(event, targetUrl);
             }}

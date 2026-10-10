@@ -82,14 +82,12 @@ async function renderPanel(overrides: Partial<ComponentProps<typeof RightPanelTa
         onAddDiff={noop}
         onAddFiles={addFiles}
         onAddPullRequest={noop}
-        onAddPullRequests={noop}
         onAddDevice={noop}
         browserAvailable={false}
         terminalAvailable={false}
         diffAvailable={false}
         filesAvailable
         pullRequestAvailable={false}
-        pullRequestsAvailable={false}
         deviceAvailable={false}
         {...overrides}
       >
@@ -120,9 +118,7 @@ describe("right panel new-tab shortcut", () => {
         platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true },
       );
       expect(event.defaultPrevented).toBe(true);
-      expect(document.querySelector('[role="menu"]')?.textContent).toContain(
-        "Linked pull requests",
-      );
+      expect(document.querySelector('[role="menu"]')?.textContent).toContain("Files");
       expect(document.activeElement?.closest('[role="menu"]')).not.toBeNull();
       expect(
         (
@@ -138,6 +134,15 @@ describe("right panel new-tab shortcut", () => {
       expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
     },
   );
+
+  it("opens Repository from the keyboard menu", async () => {
+    const addIssue = vi.fn();
+    await renderPanel({ repositoryAvailable: true, onAddRepository: addIssue });
+    await press("t", { metaKey: true });
+    await press("g");
+    expect(addIssue).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
+  });
 
   it("leaves the shortcut alone while the mounted panel is closed", async () => {
     await renderPanel({ open: false });

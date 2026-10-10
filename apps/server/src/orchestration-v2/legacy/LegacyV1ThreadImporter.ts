@@ -19,6 +19,7 @@ import {
   ThreadId,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
+  ThreadIssueLinks,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -57,6 +58,7 @@ interface LegacyThreadRow {
   readonly auto_settle_disabled_at: string | null;
   readonly pin_order_key: string | null;
   readonly pull_requests_json: string;
+  readonly issue_links_json: string;
   readonly linked_pull_request_json: string | null;
   readonly branch_pull_request_json: string | null;
   readonly active_order_key: string | null;
@@ -121,6 +123,7 @@ export class LegacyV1ThreadImporter extends Context.Service<
 
 const decodeModelSelection = Schema.decodeUnknownOption(ModelSelection);
 const decodeAttachments = Schema.decodeUnknownOption(Schema.Array(ChatAttachment));
+const decodeIssueLinks = Schema.decodeEffect(Schema.fromJsonString(ThreadIssueLinks));
 const decodePullRequests = Schema.decodeUnknownOption(Schema.Array(ThreadPullRequestLink));
 const decodeLinkedPullRequest = Schema.decodeUnknownOption(ThreadLinkedPullRequest);
 const decodeStoredThread = Schema.decodeUnknownOption(
@@ -186,7 +189,10 @@ function nullableDateTime(value: string | null): DateTime.Utc | null {
   return value === null ? null : dateTime(value);
 }
 
-function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
+function importedThread(
+  row: LegacyThreadRow,
+  issues: typeof ThreadIssueLinks.Type,
+): OrchestrationV2AppThread {
   const threadId = ThreadId.make(row.thread_id);
   const modelSelection = modelSelectionFor(row);
   const branch = row.branch?.trim() || null;
@@ -216,6 +222,7 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
     worktreePath,
     linkedPullRequest,
     pullRequests: importedPullRequests,
+    issues,
     branchPullRequest: branchPullRequestFor(row),
     activeOrderKey: row.active_order_key?.trim() || null,
     activeProviderThreadId: null,
@@ -464,6 +471,7 @@ const make = Effect.gen(function* () {
         thread.auto_settle_disabled_at,
         thread.pin_order_key,
         (SELECT json_group_array(json_object('host', pr.host, 'repository', pr.repository, 'number', pr.number, 'url', pr.url, 'source', pr.source, 'linkedAt', pr.linked_at, 'snapshot', json(pr.snapshot_json), 'stack', json(pr.stack_json))) FROM projection_thread_pull_requests pr WHERE pr.thread_id = thread.thread_id) AS pull_requests_json,
+        thread.issue_links_json,
         thread.linked_pull_request_json,
         thread.branch_pull_request_json,
         thread.active_order_key,
@@ -481,6 +489,7 @@ const make = Effect.gen(function* () {
          OR json_type(projection.payload_json, '$.unsettledAt') IS NULL
          OR json_type(projection.payload_json, '$.linkedPullRequest') IS NULL
          OR json_type(projection.payload_json, '$.pullRequests') IS NULL
+         OR json_type(projection.payload_json, '$.issues') IS NULL
          OR json_type(projection.payload_json, '$.branchPullRequest') IS NULL
          OR json_type(projection.payload_json, '$.activeOrderKey') IS NULL
       ORDER BY thread.created_at ASC, thread.thread_id ASC
@@ -490,7 +499,7 @@ const make = Effect.gen(function* () {
       const decoded = decodeStoredThread(row.payload_json);
       if (Option.isNone(decoded)) continue;
       const current = decoded.value;
-      const legacy = importedThread(row);
+      const legacy = importedThread(row, yield* decodeIssueLinks(row.issue_links_json));
       const legacyPullRequests = legacy.pullRequests ?? [];
       const repaired: OrchestrationV2AppThread = {
         ...current,
@@ -521,6 +530,7 @@ const make = Effect.gen(function* () {
                         : current.linkedPullRequest,
                   })
             : current.pullRequests,
+        issues: current.issues === undefined ? legacy.issues : current.issues,
         branchPullRequest:
           current.branchPullRequest === undefined
             ? legacy.branchPullRequest
@@ -568,6 +578,7 @@ const make = Effect.gen(function* () {
         thread.auto_settle_disabled_at,
         thread.pin_order_key,
         (SELECT json_group_array(json_object('host', pr.host, 'repository', pr.repository, 'number', pr.number, 'url', pr.url, 'source', pr.source, 'linkedAt', pr.linked_at, 'snapshot', json(pr.snapshot_json), 'stack', json(pr.stack_json))) FROM projection_thread_pull_requests pr WHERE pr.thread_id = thread.thread_id) AS pull_requests_json,
+        thread.issue_links_json,
         thread.linked_pull_request_json,
         thread.branch_pull_request_json,
         thread.active_order_key,
@@ -586,7 +597,7 @@ const make = Effect.gen(function* () {
     let importedThreadCount = repairedThreadCount;
     let importedMessageCount = 0;
     for (const row of rows) {
-      const thread = importedThread(row);
+      const thread = importedThread(row, yield* decodeIssueLinks(row.issue_links_json));
       const previews = yield* listShellMessages(thread.id);
       const events: Array<OrchestrationV2DomainEvent> = [
         {

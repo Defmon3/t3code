@@ -57,6 +57,11 @@ describe("CommitDiffView", () => {
     renderToStaticMarkup(
       <CommitDiffView
         hash="0123456789abcdef"
+        filesError={false}
+        filesHasMore={false}
+        filesLoading={false}
+        onLoadMoreFiles={vi.fn()}
+        onRetryFiles={vi.fn()}
         files={[
           { path: "first.ts", status: "M" },
           { path: "second.ts", status: "M" },

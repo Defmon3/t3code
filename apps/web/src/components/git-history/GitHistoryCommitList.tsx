@@ -1,3 +1,5 @@
+import { commitReferenceUrl } from "./commitReferenceUrl";
+import type { RepositoryIdentity } from "@t3tools/contracts";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { GitHistoryCommit } from "@t3tools/contracts";
@@ -141,19 +143,26 @@ export function firstParentHashes(
   return hashes;
 }
 
-function CommitSubject({ subject, issueUrlPrefix }: { subject: string; issueUrlPrefix?: string }) {
+function CommitSubject({
+  subject,
+  repositoryIdentity,
+}: {
+  subject: string;
+  repositoryIdentity?: RepositoryIdentity | null | undefined;
+}) {
   const parts = subject.split(/(#[0-9]+)/g);
   return parts.map((part, index) => {
     if (!/^#[0-9]+$/.test(part)) return part;
     const className = "font-semibold text-primary hover:text-primary hover:underline";
-    return issueUrlPrefix ? (
+    const url = commitReferenceUrl(repositoryIdentity, subject, Number(part.slice(1)));
+    return url ? (
       <Tooltip key={`${part}:${index}`}>
         <TooltipTrigger
           render={
             <a
               key={`${part}:${index}`}
               className={`${className} pointer-events-auto`}
-              href={`${issueUrlPrefix}${part.slice(1)}`}
+              href={url}
               target="_blank"
               rel="noreferrer"
             >
@@ -161,7 +170,7 @@ function CommitSubject({ subject, issueUrlPrefix }: { subject: string; issueUrlP
             </a>
           }
         />
-        <TooltipPopup>{`Open ${part} on GitHub`}</TooltipPopup>
+        <TooltipPopup>{`Open ${part} on repository host`}</TooltipPopup>
       </Tooltip>
     ) : (
       <span key={`${part}:${index}`} className={className}>
@@ -265,7 +274,7 @@ export function CommitRow(props: {
   laneCount: number;
   rowHeight?: number;
   refKinds: ReadonlyMap<string, CommitRefKind>;
-  issueUrlPrefix?: string;
+  repositoryIdentity?: RepositoryIdentity | null | undefined;
   timestampFormat: TimestampFormat;
   selected: boolean;
   onSelect: (hash: string) => void;
@@ -317,7 +326,9 @@ export function CommitRow(props: {
                     {commit.subject ? (
                       <CommitSubject
                         subject={commit.subject}
-                        {...(props.issueUrlPrefix ? { issueUrlPrefix: props.issueUrlPrefix } : {})}
+                        {...(props.repositoryIdentity
+                          ? { repositoryIdentity: props.repositoryIdentity }
+                          : {})}
                       />
                     ) : (
                       "(no subject)"

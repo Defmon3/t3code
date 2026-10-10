@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import {
   VcsGetCommitDetailsInput,
   VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
   VcsListRefsInput,
   VcsListRefsResult,
   VcsCreateWorktreeInput,
@@ -177,10 +178,52 @@ const decodeListRefsInput = Schema.decodeUnknownSync(VcsListRefsInput);
 const decodeListRefsResult = Schema.decodeUnknownSync(VcsListRefsResult);
 
 const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsInput);
+const decodeListHistoryRefsResult = Schema.decodeUnknownSync(VcsListHistoryRefsResult);
 
 const decodeCommitDetailsInput = Schema.decodeUnknownSync(VcsGetCommitDetailsInput);
 
 describe("VCS ref contracts", () => {
+  it.each(["/repo/.git", null])("preserves the repository identity %s", (repositoryKey) => {
+    const result = {
+      refs: [],
+      currentRef: null,
+      isRepo: repositoryKey !== null,
+      repositoryKey,
+      hasPrimaryRemote: false,
+      nextCursor: null,
+      isComplete: true,
+    };
+
+    expect(decodeListHistoryRefsResult(result)).toEqual(result);
+  });
+
+  it("decodes History responses from older servers without a repository identity", () => {
+    const result = {
+      refs: [],
+      currentRef: null,
+      isRepo: true,
+      hasPrimaryRemote: false,
+      nextCursor: null,
+      isComplete: true,
+    };
+
+    expect(decodeListHistoryRefsResult(result)).toEqual({ ...result, repositoryKey: null });
+  });
+
+  it.each(["", "   ", 42])("rejects invalid repository identity %s", (repositoryKey) => {
+    const result = {
+      refs: [],
+      currentRef: null,
+      isRepo: true,
+      repositoryKey,
+      hasPrimaryRemote: false,
+      nextCursor: null,
+      isComplete: true,
+    };
+
+    expect(() => decodeListHistoryRefsResult(result)).toThrow();
+  });
+
   it("preserves the numeric cursor and result shape of vcs.listRefs", () => {
     expect(decodeListRefsInput({ cwd: "/repo", cursor: 20, query: "release" })).toEqual({
       cwd: "/repo",

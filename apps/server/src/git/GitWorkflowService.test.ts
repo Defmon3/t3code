@@ -166,6 +166,23 @@ describe("GitWorkflowService", () => {
     ),
   );
 
+  it.effect("returns history refs without a repository identity outside a Git repository", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const refs = yield* workflow.listHistoryRefs({ cwd: "/not-a-repo" });
+
+      assert.deepStrictEqual(refs, {
+        repositoryKey: null,
+        refs: [],
+        currentRef: null,
+        isRepo: false,
+        hasPrimaryRemote: false,
+        nextCursor: null,
+        isComplete: true,
+      });
+    }).pipe(Effect.provide(layer({ detect: () => Effect.succeed(null) }))),
+  );
+
   it.effect("structures workflow detection failures without exposing upstream details", () => {
     const cause = new VcsRepositoryDetectionError({
       operation: "VcsDriverRegistry.detect",

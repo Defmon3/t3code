@@ -269,6 +269,7 @@ export function GitRefsPane(props: {
       ) : null}
       <div className="min-h-0 flex-1 px-2 py-1">
         <LegendList<RefPaneRow>
+          recycleItems
           data={rows}
           keyExtractor={(row) => row.key}
           getItemType={(row) => row.kind}

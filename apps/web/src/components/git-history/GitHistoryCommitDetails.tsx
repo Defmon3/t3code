@@ -44,6 +44,7 @@ function CommitFilesTree(props: {
   const { resolvedTheme } = useTheme();
   return (
     <LegendList<GitCommitChangedFile>
+      recycleItems
       data={props.files}
       keyExtractor={(file) => file.path}
       estimatedItemSize={24}

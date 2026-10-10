@@ -27,11 +27,42 @@ async function loadWithStorage(storage: Storage) {
 }
 
 afterEach(() => {
+  vi.doUnmock("react");
   vi.resetModules();
   vi.unstubAllGlobals();
 });
 
 describe("local storage errors", () => {
+  it("does not access or subscribe to storage without a resolved key", async () => {
+    const getItem = vi.fn();
+    const setItem = vi.fn();
+    const addEventListener = vi.fn();
+    vi.stubGlobal("window", {
+      localStorage: createStorage({ getItem, setItem }),
+      addEventListener,
+    });
+    vi.doMock("react", () => ({
+      useCallback: (callback: unknown) => callback,
+      useMemo: (factory: () => unknown) => factory(),
+      useSyncExternalStore: (
+        subscribe: (listener: () => void) => () => void,
+        snapshot: () => unknown,
+      ) => {
+        subscribe(() => undefined);
+        return snapshot();
+      },
+    }));
+    const { useLocalStorage } = await import("./useLocalStorage");
+
+    const [value, setValue] = useLocalStorage(null, "initial", Schema.String);
+    setValue("updated");
+
+    expect(value).toBe("initial");
+    expect(getItem).not.toHaveBeenCalled();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(addEventListener).not.toHaveBeenCalled();
+  });
+
   it("preserves read failure context", async () => {
     const cause = new Error("storage unavailable");
     const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(

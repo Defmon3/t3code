@@ -30,10 +30,28 @@ const snapshot: PreviewSessionSnapshot = {
 
 describe("closedViewStore", () => {
   it.each([
-    { id: "git-history", kind: "git-history" },
+    { id: "repository", kind: "repository", view: "history" },
+    {
+      id: "repository",
+      kind: "repository",
+      view: "issues",
+      selectedIssue: { projectId: "project", repository: "owner/repo", number: 42 },
+    },
+    {
+      id: "issue:owner/repo:42",
+      kind: "issue",
+      projectId: "project",
+      repository: "owner/repo",
+      number: 42,
+    },
     { id: "processes", kind: "processes" },
   ] as const)("preserves closed $kind tabs across rehydration", async (surface) => {
     useClosedViewStore.getState().remember({ kind: "panel-tab", threadRef: refA, surface });
+    const { storage, name } = useClosedViewStore.persist.getOptions();
+    await storage!.setItem(name!, {
+      state: { entries: useClosedViewStore.getState().entries },
+      version: 1,
+    });
     await useClosedViewStore.persist.rehydrate();
     expect(useClosedViewStore.getState().entries).toHaveLength(1);
     expect(useClosedViewStore.getState().entries[0]).toMatchObject({
@@ -68,6 +86,23 @@ describe("closedViewStore", () => {
     { id: "bad", kind: "panel-tab", threadRef: refA },
     { id: "bad", kind: "panel-tab", threadRef: {}, surface: { kind: "diff", id: "diff" } },
     { id: "bad", kind: "panel-tab", threadRef: refA, surface: {} },
+    {
+      id: "bad",
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: { id: "repository", kind: "repository", view: "unknown" },
+    },
+    {
+      id: "bad",
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: {
+        id: "repository",
+        kind: "repository",
+        view: "issues",
+        selectedIssue: { number: 42 },
+      },
+    },
     { id: "bad", kind: "panel-tab", threadRef: refA, surface: { kind: "file", id: "file:x" } },
     {
       id: "bad",
@@ -98,7 +133,7 @@ describe("closedViewStore", () => {
     const surfaces = [
       { kind: "diff", id: "diff" },
       { kind: "files", id: "files" },
-      { kind: "pull-requests", id: "pull-requests" },
+      { kind: "repository", id: "repository", view: "pull-requests" },
       { kind: "preview", id: "browser:new", resourceId: null },
       { kind: "preview", id: "browser:saved", resourceId: "saved" },
       { kind: "device", id: "device" },

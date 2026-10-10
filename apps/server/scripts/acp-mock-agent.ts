@@ -2,6 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -1350,31 +1351,62 @@ const program = Effect.gen(function* () {
       ) {
         const toolCallId = "tool-call-running-1";
         if (runningCommandPidPath !== undefined) {
-          const command = runningCommandIgnoresTerm
-            ? 'trap "" TERM; bash -c \'trap "" TERM; while :; do sleep 1; done\' & child=$!; printf "%s %s\n" "$$" "$child" > "$1"; wait "$child"'
-            : 'sleep 120 & child=$!; printf "%s %s\n" "$$" "$child" > "$1"; wait "$child"';
-          if (runningCommandSeparateSession) {
-            const launcher = [
-              'const { spawn } = require("node:child_process");',
-              "const child = spawn(process.argv[1], process.argv.slice(2), { stdio: 'ignore' });",
+          if ((yield* HostProcessPlatform) === "win32") {
+            const childSource = runningCommandIgnoresTerm
+              ? "setInterval(() => {}, 1000);"
+              : "setTimeout(() => {}, 120000);";
+            const parentSource = [
+              "const { spawn } = require('node:child_process');",
+              "const { writeFileSync } = require('node:fs');",
+              `const child = spawn(process.execPath, ['-e', ${encodeJson(childSource)}], { stdio: 'ignore', windowsHide: true });`,
+              "child.once('error', (error) => { throw error; });",
+              "child.once('spawn', () => {",
+              `const pids = ${runningCommandSeparateSession ? "[process.ppid, process.pid, child.pid]" : "[process.pid, child.pid]"};`,
+              "writeFileSync(process.argv[1], pids.join(' ') + '\\n');",
+              "});",
               "child.once('exit', (code, signal) => process.exitCode = code ?? (signal ? 1 : 0));",
             ].join(" ");
-            const detachedCommand = runningCommandIgnoresTerm
-              ? 'trap "" TERM; bash -c \'trap "" TERM; while :; do sleep 1; done\' & child=$!; printf "%s %s %s\n" "$PPID" "$$" "$child" > "$1"; wait "$child"'
-              : 'sleep 120 & child=$!; printf "%s %s %s\n" "$PPID" "$$" "$child" > "$1"; wait "$child"';
-            // Nested bash publishes "$PPID $$ $child" once it starts. Do not
-            // write the launcher PID alone here: that races with bash and can
-            // clobber the triple that interrupt tests wait for.
-            const detachedLauncher = NodeChildProcess.spawn(
+            const launcher = [
+              "const { spawn } = require('node:child_process');",
+              "const child = spawn(process.execPath, process.argv.slice(1), { stdio: 'ignore', windowsHide: true });",
+              "child.once('error', (error) => { throw error; });",
+              "child.once('exit', (code, signal) => process.exitCode = code ?? (signal ? 1 : 0));",
+            ].join(" ");
+            const command = NodeChildProcess.spawn(
               process.execPath,
-              ["-e", launcher, "bash", "-c", detachedCommand, "bash", runningCommandPidPath],
-              { detached: true, stdio: "ignore" },
+              runningCommandSeparateSession
+                ? ["-e", launcher, "--", "-e", parentSource, runningCommandPidPath]
+                : ["-e", parentSource, runningCommandPidPath],
+              { detached: runningCommandSeparateSession, stdio: "ignore", windowsHide: true },
             );
-            detachedLauncher.unref();
+            if (runningCommandSeparateSession) command.unref();
           } else {
-            NodeChildProcess.spawn("bash", ["-c", command, "bash", runningCommandPidPath], {
-              stdio: "ignore",
-            });
+            const command = runningCommandIgnoresTerm
+              ? 'trap "" TERM; bash -c \'trap "" TERM; while :; do sleep 1; done\' & child=$!; printf "%s %s\n" "$$" "$child" > "$1"; wait "$child"'
+              : 'sleep 120 & child=$!; printf "%s %s\n" "$$" "$child" > "$1"; wait "$child"';
+            if (runningCommandSeparateSession) {
+              const launcher = [
+                'const { spawn } = require("node:child_process");',
+                "const child = spawn(process.argv[1], process.argv.slice(2), { stdio: 'ignore' });",
+                "child.once('exit', (code, signal) => process.exitCode = code ?? (signal ? 1 : 0));",
+              ].join(" ");
+              const detachedCommand = runningCommandIgnoresTerm
+                ? 'trap "" TERM; bash -c \'trap "" TERM; while :; do sleep 1; done\' & child=$!; printf "%s %s %s\n" "$PPID" "$$" "$child" > "$1"; wait "$child"'
+                : 'sleep 120 & child=$!; printf "%s %s %s\n" "$PPID" "$$" "$child" > "$1"; wait "$child"';
+              // Nested bash publishes "$PPID $$ $child" once it starts. Do not
+              // write the launcher PID alone here: that races with bash and can
+              // clobber the triple that interrupt tests wait for.
+              const detachedLauncher = NodeChildProcess.spawn(
+                process.execPath,
+                ["-e", launcher, "bash", "-c", detachedCommand, "bash", runningCommandPidPath],
+                { detached: true, stdio: "ignore" },
+              );
+              detachedLauncher.unref();
+            } else {
+              NodeChildProcess.spawn("bash", ["-c", command, "bash", runningCommandPidPath], {
+                stdio: "ignore",
+              });
+            }
           }
         }
         yield* agent.client.sessionUpdate({

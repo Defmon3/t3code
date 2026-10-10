@@ -33,6 +33,7 @@ import {
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
+import * as NodeUtil from "node:util";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -128,7 +129,13 @@ const normalizeServerSettings = (
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
-    Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
+    Effect.map((next) => ({
+      ...next,
+      ...deriveLegacyProjectOverrides(next),
+      issueTracking: NodeUtil.isDeepStrictEqual(next.issueTracking, settings.issueTracking)
+        ? settings.issueTracking
+        : next.issueTracking,
+    })),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -269,6 +276,9 @@ export class ServerSettingsService extends Context.Service<
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly modifySettings: (
+      patch: (current: ServerSettings) => ServerSettingsPatch | undefined,
+    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
     /** Apply a patch and one provider-instance mutation against the same latest settings snapshot. */
     readonly updateProviderInstance: (
@@ -319,8 +329,13 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
     ): Effect.Effect<ServerSettings, ServerSettingsError> =>
       writeSemaphore.withPermits(1)(
         Ref.get(currentSettingsRef).pipe(
-          Effect.flatMap(update),
-          Effect.flatMap(normalizeServerSettings),
+          Effect.flatMap((current) =>
+            update(current).pipe(
+              Effect.flatMap((next) =>
+                next === current ? Effect.succeed(current) : normalizeServerSettings(next),
+              ),
+            ),
+          ),
           Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
           Effect.map(resolveTextGenerationProvider),
         ),
@@ -334,6 +349,13 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
         updateTestSettings((currentSettings) =>
           Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
         ),
+      modifySettings: (patchOf) =>
+        updateTestSettings((current) => {
+          const patch = patchOf(current);
+          return Effect.succeed(
+            patch === undefined ? current : applyServerSettingsPatch(current, patch),
+          );
+        }),
       updateProviderInstance: (mutation, patch = {}) =>
         updateTestSettings((currentSettings) =>
           Effect.gen(function* () {
@@ -677,18 +699,12 @@ const make = Effect.gen(function* () {
   const emitChange = (settings: ServerSettings) =>
     PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
 
-  const readConfigExists = fs.exists(settingsPath).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ServerSettingsError({
-          settingsPath,
-          operation: "check-exists",
-          cause,
-        }),
-    ),
-  );
-
   const readRawConfig = fs.readFileString(settingsPath).pipe(
+    Effect.map(Option.some),
+    Effect.catchIf(
+      (cause) => cause.reason._tag === "NotFound",
+      () => Effect.succeedNone,
+    ),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -776,10 +792,10 @@ const make = Effect.gen(function* () {
     // the fold below only writes when it started from the file's real contents.
     let settingsFileTrusted = true;
 
-    if (yield* readConfigExists) {
-      const raw = yield* readRawConfig;
-      const decoded = decodeServerSettingsJsonExit(raw);
-      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
+    const raw = yield* readRawConfig;
+    if (Option.isSome(raw)) {
+      const decoded = decodeServerSettingsJsonExit(raw.value);
+      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw.value);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;
       }
@@ -1254,6 +1270,11 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
         const updated = yield* update(current);
+        if (updated === current) {
+          return yield* materializeProviderEnvironmentSecrets(current).pipe(
+            Effect.map(resolveTextGenerationProvider),
+          );
+        }
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>
@@ -1293,8 +1314,28 @@ const make = Effect.gen(function* () {
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
+      const current = yield* getSettingsFromCache;
       yield* Cache.invalidate(settingsCache, cacheKey);
-      const settings = yield* getSettingsFromCache;
+      let settings = yield* getSettingsFromCache;
+      const currentLinear = current.issueTracking.connections.linear;
+      const reloadedLinear = settings.issueTracking.connections.linear;
+      if (
+        currentLinear !== undefined &&
+        reloadedLinear !== undefined &&
+        NodeUtil.isDeepStrictEqual(currentLinear.projectBindings, reloadedLinear.projectBindings)
+      ) {
+        settings = {
+          ...settings,
+          issueTracking: {
+            ...settings.issueTracking,
+            connections: {
+              ...settings.issueTracking.connections,
+              linear: { ...reloadedLinear, projectBindings: currentLinear.projectBindings },
+            },
+          },
+        };
+        yield* Cache.set(settingsCache, cacheKey, settings);
+      }
       yield* emitChange(settings);
     }),
   );
@@ -1408,6 +1449,13 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings((current) =>
         Effect.succeed(applyServerSettingsPatch(current, patch)),
       ),
+    modifySettings: (patchOf) =>
+      updateAndPersistSettings((current) => {
+        const patch = patchOf(current);
+        return Effect.succeed(
+          patch === undefined ? current : applyServerSettingsPatch(current, patch),
+        );
+      }),
     updateProviderInstance: (mutation, patch = {}) =>
       updateAndPersistSettings((current) =>
         Effect.gen(function* () {

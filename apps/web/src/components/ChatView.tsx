@@ -1,3 +1,4 @@
+import { createGitHistoryPanelStore } from "./git-history/GitHistoryPanelState";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -258,12 +259,14 @@ import {
 } from "../rightPanelLayout";
 import { PopoverCreateHandle } from "./ui/popover";
 import {
+  issueSurfaceId,
   pullRequestSurface,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadPanelOpen,
   selectThreadRightPanelState,
   type RightPanelSurface,
+  updateIssueTabStatus,
   useRightPanelStore,
 } from "../rightPanelStore";
 import {
@@ -287,16 +290,18 @@ import {
   selectThreadPreviewMiniPlayer,
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
+import { IssueDetailPanel } from "./issue/IssueDetailPanel";
+import { IssuesUnavailableState } from "./issue/IssuesUnavailableState";
 import {
   pullRequestPanelContext,
   threadPullRequestPanelTarget,
 } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
+import { DetailGhost } from "./sourceControl/ListGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs } from "./RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus } from "./RightPanelTabs";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
-import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
@@ -406,6 +411,13 @@ import {
   terminalContextReference,
 } from "../lib/composerContextRecords";
 import { type ReviewCommentContext } from "../reviewCommentContext";
+import {
+  findProjectForLink,
+  linkedPullRequestTarget,
+  openLinkInBrowser,
+  relatedIssueTarget,
+  repositoryForProjectLink,
+} from "../lib/openIssueLink";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
@@ -713,7 +725,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
-const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
+const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const ProcessPanelForEnvironment = lazy(() =>
   import("./ProcessPanelForEnvironment").then((module) => ({
     default: module.ProcessPanelForEnvironment,
@@ -2342,6 +2354,21 @@ export default function ChatView(props: ChatViewProps) {
   const activeRightPanelSurface = useRightPanelStore((state) =>
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
+  const [gitHistoryPanelStore] = useState(createGitHistoryPanelStore);
+  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
+  const activeIssueSurfaceId =
+    activeRightPanelSurface?.kind === "issue"
+      ? activeRightPanelSurface.id
+      : activeRightPanelSurface?.kind === "repository" && activeRightPanelSurface.selectedIssue
+        ? issueSurfaceId(activeRightPanelSurface.selectedIssue)
+        : undefined;
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      if (activeIssueSurfaceId === undefined) return;
+      setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
+    },
+    [activeIssueSurfaceId],
+  );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const previewSessionsReady = !activeEnvironmentServerBrowser || activePreviewState.listLoaded;
@@ -3044,6 +3071,7 @@ export default function ChatView(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const supportsIssues = serverConfig?.environment.capabilities.issues === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsQuestionAttachments =
@@ -5480,15 +5508,16 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
-  const addGitHistorySurface = useCallback(() => {
-    if (
-      !activeThreadRef ||
-      !isGitRepo ||
-      !hasGitHistoryCapability(serverConfig?.environment.capabilities)
-    )
-      return;
-    useRightPanelStore.getState().open(activeThreadRef, "git-history");
-  }, [activeThreadRef, isGitRepo, serverConfig]);
+  const addRepositorySurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    const view =
+      isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)
+        ? "history"
+        : supportsIssues && activeProject
+          ? "issues"
+          : "pull-requests";
+    useRightPanelStore.getState().openRepository(activeThreadRef, view);
+  }, [activeThreadRef, activeProject, isGitRepo, serverConfig, supportsIssues]);
   const addProcessesSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "processes");
@@ -5501,10 +5530,13 @@ export default function ChatView(props: ChatViewProps) {
   const visiblePullRequestCount = visiblePullRequests.length;
   const pullRequestsSurfaceAvailable =
     isServerThread && supportsThreadPullRequests && visiblePullRequestCount > 0;
+  const linkedItemsSurfaceAvailable =
+    pullRequestsSurfaceAvailable ||
+    (isServerThread && supportsIssues && (activeThreadShell?.issues?.length ?? 0) > 0);
   const addPullRequestsSurface = useCallback(() => {
-    if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
-    useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
-  }, [activeThreadRef, pullRequestsSurfaceAvailable]);
+    if (!activeThreadRef || !linkedItemsSurfaceAvailable) return;
+    useRightPanelStore.getState().openRepository(activeThreadRef, "pull-requests");
+  }, [activeThreadRef, linkedItemsSurfaceAvailable]);
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -5759,6 +5791,59 @@ export default function ChatView(props: ChatViewProps) {
       )
     : linkedThreadPullRequestKey;
   const activeRunningTurnId = activeRuntime?.activeRunId ?? null;
+  /**
+   * An issue or change request opened as its own tab in this thread's panel, referenced by the one
+   * already open beside it. Only this view knows which thread's panel that is, which is why the
+   * panel is told rather than asking.
+   *
+   * The project comes from the repository the link names, not from the thread: a link can cross
+   * repositories, and this thread's project need not own the one it points at. A repository no
+   * project here holds opens on its host instead — showing a different repository's item of the
+   * same number would be worse than not opening it at all.
+   */
+  const openLinkedItem = useCallback(
+    (
+      kind: "issue" | "pull-request",
+      link: { provider?: string; repository: string; number: number; url: string },
+    ) => {
+      const supported = kind === "issue" ? supportsIssues : supportsPullRequests;
+      const project =
+        activeThreadRef === null
+          ? undefined
+          : findProjectForLink(
+              allProjects.filter(
+                (candidate) => candidate.environmentId === activeThreadRef.environmentId,
+              ),
+              link,
+            );
+      if (!supported || !activeThreadRef || project === undefined) {
+        openLinkInBrowser(link.url);
+        return;
+      }
+      const panel = useRightPanelStore.getState();
+      if (kind === "issue") {
+        panel.openIssue(activeThreadRef, {
+          projectId: project.id,
+          ...(link.provider !== undefined ? { provider: link.provider } : {}),
+          repository: repositoryForProjectLink(project, link.repository),
+          number: link.number,
+        });
+      } else {
+        panel.openPullRequest(activeThreadRef, linkedPullRequestTarget(project, link));
+      }
+    },
+    [activeThreadRef, allProjects, supportsIssues, supportsPullRequests],
+  );
+  const openLinkedIssue = useCallback(
+    (link: { provider?: string; repository: string; number: number; url: string }) =>
+      openLinkedItem("issue", link),
+    [openLinkedItem],
+  );
+  const openLinkedPullRequest = useCallback(
+    (link: { repository: string; number: number; url: string }) =>
+      openLinkedItem("pull-request", link),
+    [openLinkedItem],
+  );
   const proactivePanelObservationRef = useRef<ReturnType<
     typeof observeProactivePanelUserChoice
   > | null>(null);
@@ -5825,7 +5910,7 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         panels.openProactive(
           activeThreadRef,
-          { id: "pull-requests", kind: "pull-requests" },
+          { id: "repository", kind: "repository", view: "pull-requests" },
           userActionRevision,
         );
       } else if (
@@ -7017,6 +7102,17 @@ export default function ChatView(props: ChatViewProps) {
           })
         : null,
     [activeThreadBranch, activeWorktreePath, envMode, gitStatusQuery.data?.refName, isServerThread],
+  );
+  // Which issue is not something the chooser can know, so it opens the browser and the reader
+  // picks inside it — in the same tab, rather than as one more of them.
+  const selectIssueInPanel = useCallback(
+    (
+      target: { projectId: string; provider?: string; repository: string; number: number } | null,
+    ) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().selectRepositoryIssue(activeThreadRef, target);
+    },
+    [activeThreadRef],
   );
   const publishComposerOverlayHeight = useCallback(
     (height: number) => {
@@ -11062,11 +11158,38 @@ export default function ChatView(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
-    ) : renderedRightPanelSurface?.kind === "git-history" && gitCwd ? (
+    ) : renderedRightPanelSurface?.kind === "repository" ? (
       <Suspense fallback={null}>
-        <GitHistoryPanel
+        <RepositoryPanel
+          threadRef={activeThreadRef}
+          view={renderedRightPanelSurface.view}
+          selectedIssue={renderedRightPanelSurface.selectedIssue ?? null}
+          gitHistoryPanelStore={gitHistoryPanelStore}
+          gitHistoryAvailable={
+            isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)
+          }
+          issuesAvailable={supportsIssues}
+          onViewChange={(view) =>
+            useRightPanelStore.getState().selectRepositoryView(activeThreadRef, view)
+          }
+          onSelectIssue={selectIssueInPanel}
+          onIssueStateChange={handleIssueTabStatusChange}
+          onOpenLinkedPullRequest={openLinkedPullRequest}
+          issueContext={
+            activeProject && activeProjectRef
+              ? {
+                  projectId: activeProject.id,
+                  handoffTarget: {
+                    kind: "existing-thread",
+                    projectRef: activeProjectRef,
+                    draftId: composerDraftTarget,
+                  },
+                }
+              : null
+          }
           environmentId={activeThreadRef.environmentId}
-          cwd={gitCwd}
+          cwd={isGitRepo ? gitCwd : null}
+          repositoryIdentity={activeProject?.repositoryIdentity}
           active={rightPanelOpen}
           onSolveGitSync={(prompt) => {
             const current =
@@ -11147,9 +11270,59 @@ export default function ChatView(props: ChatViewProps) {
             ? addPullRequestsSurface
             : undefined
         }
+        onOpenLinkedIssue={openLinkedIssue}
       />
-    ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
-      <ThreadPullRequestsPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "issue" && serverConfig === null ? (
+      <DetailGhost label="Loading issues" />
+    ) : renderedRightPanelSurface?.kind === "issue" && !supportsIssues ? (
+      <IssuesUnavailableState
+        title="Issues unavailable"
+        error="Update this environment's T3 Code server to browse issues."
+      />
+    ) : renderedRightPanelSurface?.kind === "issue" && activeProjectRef ? (
+      // Same as the pull request above: the surface tab's own X owns closing. What is different
+      // is where a hand-off lands — "Solve this issue", Ask, Explain and Add to composer write
+      // into the thread this panel is open beside, so reading an issue and acting on it stay one
+      // conversation instead of stranding the reader in a thread they did not ask for.
+      <IssueDetailPanel
+        key={renderedRightPanelSurface.id}
+        environmentId={activeThread.environmentId}
+        reference={{
+          projectId: renderedRightPanelSurface.projectId as ProjectId,
+          ...(renderedRightPanelSurface.provider === undefined
+            ? {}
+            : { provider: renderedRightPanelSurface.provider }),
+          repository: renderedRightPanelSurface.repository,
+          number: renderedRightPanelSurface.number,
+        }}
+        onOpenRelatedIssue={(relative) => {
+          const target = relatedIssueTarget(
+            allProjects.filter(
+              (candidate) => candidate.environmentId === activeThread.environmentId,
+            ),
+            renderedRightPanelSurface,
+            relative,
+          );
+          if (activeThreadRef === null || target === null) {
+            openLinkInBrowser(relative.url);
+            return;
+          }
+          useRightPanelStore.getState().openIssue(activeThreadRef, {
+            ...target,
+            ...(renderedRightPanelSurface.provider === undefined
+              ? {}
+              : { provider: renderedRightPanelSurface.provider }),
+          });
+        }}
+        chromeVariant="collapse"
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
+        onOpenLinkedPullRequest={openLinkedPullRequest}
+      />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -11730,6 +11903,9 @@ export default function ChatView(props: ChatViewProps) {
                               activeThreadId={activeThreadId}
                               activeThreadEnvironmentId={activeThread?.environmentId}
                               activeThread={activeThread}
+                              issueSearchProjectId={
+                                supportsIssues ? (activeProject?.id ?? null) : null
+                              }
                               activeThreadShell={activeThreadShell}
                               promptHistoryMessages={timelineMessages}
                               isServerThread={isServerThread}
@@ -12084,22 +12260,23 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
-          onAddGitHistory={addGitHistorySurface}
+          onAddRepository={addRepositorySurface}
           onAddProcesses={addProcessesSurface}
-          gitHistoryAvailable={
-            isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)
+          repositoryAvailable={
+            (isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)) ||
+            linkedItemsSurfaceAvailable ||
+            (supportsIssues && activeProject !== null)
           }
           processesAvailable={activeThreadRef !== null}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
-          onAddPullRequests={addPullRequestsSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
-          pullRequestsAvailable={pullRequestsSurfaceAvailable}
+          issueStatuses={issueTabStatuses}
           deviceAvailable={activeThreadRef !== null}
         >
           {rightPanelContent}
@@ -12148,22 +12325,23 @@ export default function ChatView(props: ChatViewProps) {
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
-            onAddGitHistory={addGitHistorySurface}
+            onAddRepository={addRepositorySurface}
             onAddProcesses={addProcessesSurface}
-            gitHistoryAvailable={
-              isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)
+            repositoryAvailable={
+              (isGitRepo && hasGitHistoryCapability(serverConfig?.environment.capabilities)) ||
+              linkedItemsSurfaceAvailable ||
+              (supportsIssues && activeProject !== null)
             }
             processesAvailable={activeThreadRef !== null}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
-            onAddPullRequests={addPullRequestsSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
-            pullRequestsAvailable={pullRequestsSurfaceAvailable}
+            issueStatuses={issueTabStatuses}
             deviceAvailable={activeThreadRef !== null}
           >
             {rightPanelContent}

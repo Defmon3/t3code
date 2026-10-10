@@ -79,7 +79,7 @@ export default defineConfig({
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt --no-error-on-unmatched-pattern",
+    "*": "node node_modules/vite-plus/bin/vp fmt --no-error-on-unmatched-pattern",
   },
   fmt: {
     ignorePatterns: [
