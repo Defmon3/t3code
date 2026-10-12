@@ -11,6 +11,7 @@ import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantPr
 import ProjectionThreadIssues from "./Migrations/062_ProjectionThreadIssues.ts";
 import WorkItemLinks from "./Migrations/063_WorkItemLinks.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
+import PullRequestReviewGuides from "./Migrations/064_PullRequestReviewGuides.ts";
 
 // The V2 schema is unchanged from the published September 15–16 previews.
 const seedPreview = Effect.gen(function* () {
@@ -30,6 +31,50 @@ const seedPreview = Effect.gen(function* () {
 });
 
 describe("V2 preview upgrade", () => {
+  it.effect("upgrades official nightly migration 61 without losing review guides", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 60 });
+      yield* PullRequestReviewGuides;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (61, 'PullRequestReviewGuides')`;
+      yield* sql`INSERT INTO pull_request_review_guides VALUES ('github.com', 'team/repo', 1, '{}')`;
+      const guides = yield* sql`SELECT * FROM pull_request_review_guides`;
+
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [61, "ProjectSkillShortcuts"],
+        [62, "ProjectionThreadIssues"],
+        [63, "WorkItemLinks"],
+        [64, "PullRequestReviewGuides"],
+      ]);
+      assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
+      const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+      assert.deepStrictEqual(
+        history.map((row) => [row.migration_id, row.name] as const),
+        migrationManifest,
+      );
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("rejects unknown later nightly migrations without changing history", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 60 });
+      yield* PullRequestReviewGuides;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (61, 'PullRequestReviewGuides'), (62, 'UnknownFork')`;
+      const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+
+      assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations())));
+      assert.deepStrictEqual(
+        yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
+        history,
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("upgrades a published preview without replaying V2 or losing import progress", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -46,6 +91,7 @@ describe("V2 preview upgrade", () => {
         [61, "ProjectSkillShortcuts"],
         [62, "ProjectionThreadIssues"],
         [63, "WorkItemLinks"],
+        [64, "PullRequestReviewGuides"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -132,6 +178,7 @@ describe("V2 preview upgrade", () => {
         [61, "ProjectSkillShortcuts"],
         [62, "ProjectionThreadIssues"],
         [63, "WorkItemLinks"],
+        [64, "PullRequestReviewGuides"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -197,7 +244,7 @@ describe("V2 preview upgrade", () => {
         );
         if (issueId === 62) {
           assert.deepStrictEqual(
-            yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
+            yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 63 ORDER BY migration_id`,
             issueHistory,
           );
         }

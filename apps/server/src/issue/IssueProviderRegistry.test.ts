@@ -1,7 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { issueSourceKey, type OrchestrationProjectShell, type ProjectId } from "@t3tools/contracts";
+import {
+  issueSourceKey,
+  type OrchestrationProjectShell,
+  type ProjectId,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { IssueAdapter } from "./IssueProvider.ts";
@@ -180,56 +185,70 @@ it.effect("derives a self-hosted hostname from a legacy remote identity", () =>
   }),
 );
 
-it.effect("refines one unknown remote before de-duplicating its worktrees", () =>
-  Effect.gen(function* () {
-    let refinementCalls = 0;
-    const selfHosted: OrchestrationProjectShell = {
-      ...PROJECT,
-      repositoryIdentity: {
-        canonicalKey: "code.example.test/group/project",
-        locator: {
-          source: "git-remote",
-          remoteName: "origin",
-          remoteUrl: "https://code.example.test/group/project.git",
+it.effect.each(["gitlab", "custom-host"] as const)(
+  "refines unknown remote %s before de-duplicating its worktrees",
+  (kind) =>
+    Effect.gen(function* () {
+      let refinementCalls = 0;
+      const selfHosted: OrchestrationProjectShell = {
+        ...PROJECT,
+        repositoryIdentity: {
+          canonicalKey: "code.example.test/group/project",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "https://code.example.test/group/project.git",
+          },
+          provider: "unknown",
+          displayName: "group/project",
+        } as unknown as OrchestrationProjectShell["repositoryIdentity"],
+      };
+      const sourceControl = SourceControlProviderRegistry.SourceControlProviderRegistry.of({
+        resolveLink: () => Effect.die("unused"),
+        get: () => Effect.die("unused"),
+        resolve: () => Effect.die("unused"),
+        discover: Effect.die("unused"),
+        resolveHandle: ({ context }) => {
+          refinementCalls += 1;
+          return Effect.succeed({
+            provider: undefined as never,
+            context: {
+              ...context!,
+              provider: { ...context!.provider, kind: SourceControlProviderKind.make(kind) },
+            },
+          });
         },
-        provider: "unknown",
-        displayName: "group/project",
-      } as unknown as OrchestrationProjectShell["repositoryIdentity"],
-    };
-    const sourceControl = SourceControlProviderRegistry.SourceControlProviderRegistry.of({
-      resolveLink: () => Effect.die("unused"),
-      get: () => Effect.die("unused"),
-      resolve: () => Effect.die("unused"),
-      discover: Effect.die("unused"),
-      resolveHandle: ({ context }) => {
-        refinementCalls += 1;
-        return Effect.succeed({
-          provider: undefined as never,
-          context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
-        });
-      },
-    });
-    const gitlab = { kind: "gitlab" } as unknown as IssueAdapter;
-    const registry = yield* fromProviders([gitlab]).pipe(
-      Effect.provideService(
-        SourceControlProviderRegistry.SourceControlProviderRegistry,
-        sourceControl,
-      ),
-    );
+      });
+      const gitlab = { kind: "gitlab" } as unknown as IssueAdapter;
+      const registry = yield* fromProviders([gitlab]).pipe(
+        Effect.provideService(
+          SourceControlProviderRegistry.SourceControlProviderRegistry,
+          sourceControl,
+        ),
+      );
 
-    const result = yield* registry.resolveProjects(
-      [selfHosted, { ...selfHosted, id: "p2" as ProjectId, workspaceRoot: "/worktree" }],
-      { host: "code.example.test" },
-    );
+      const result = yield* registry.resolveProjects(
+        [selfHosted, { ...selfHosted, id: "p2" as ProjectId, workspaceRoot: "/worktree" }],
+        { host: "code.example.test" },
+      );
 
-    assert.strictEqual(refinementCalls, 1);
-    assert.strictEqual(result.supported.length, 1);
-    assert.strictEqual(result.supported[0]?.adapter, gitlab);
-    assert.deepStrictEqual(
-      result.viewerRoots,
-      new Map([[issueSourceKey("gitlab", "code.example.test"), ["/work/web", "/worktree"]]]),
-    );
-  }),
+      assert.strictEqual(refinementCalls, 1);
+      if (kind === "custom-host") {
+        assert.deepStrictEqual(result.supported, []);
+        assert.deepStrictEqual(
+          [...result.unimplemented.values()],
+          [{ host: "code.example.test", kind: "custom-host", projectCount: 1 }],
+        );
+        assert.strictEqual(result.viewerRoots.size, 0);
+        return;
+      }
+      assert.strictEqual(result.supported.length, 1);
+      assert.strictEqual(result.supported[0]?.adapter, gitlab);
+      assert.deepStrictEqual(
+        result.viewerRoots,
+        new Map([[issueSourceKey("gitlab", "code.example.test"), ["/work/web", "/worktree"]]]),
+      );
+    }),
 );
 
 it.effect("routes account management by provider and rejects unsupported trackers", () =>

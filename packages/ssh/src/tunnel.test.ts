@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -16,6 +16,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as SshAuth from "./auth.ts";
+import { collectProcessOutput } from "./command.ts";
 import { SshCommandError } from "./errors.ts";
 import * as SshTunnel from "./tunnel.ts";
 
@@ -97,7 +98,45 @@ const NODE_SCRIPT = {
   nodeScriptPath: "/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs",
 } as const;
 
+const runTransportedScript = (command: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const platform = yield* HostProcess.Platform;
+    const shell = platform === "win32" ? `${process.env.ProgramFiles}/Git/bin/bash.exe` : "/bin/sh";
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const child = yield* spawner.spawn(ChildProcess.make(shell, ["-c", command.join(" ")]));
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [collectProcessOutput(child.stdout), collectProcessOutput(child.stderr), child.exitCode],
+      { concurrency: "unbounded" },
+    );
+    return { stdout, stderr, exitCode: Number(exitCode) };
+  });
+
 describe("ssh tunnel scripts", () => {
+  it.effect(
+    "executes a large quoted Unicode script and preserves its arguments without SSH stdin",
+    () =>
+      Effect.gen(function* () {
+        const script = `${": 'café 東京 shell payload'\n".repeat(2_000)}printf '%s\\n' "$1" "$2"\n`;
+        const args = ["a path with spaces and 'quotes'", "$(exit 99); café 東京"];
+        const command = SshTunnel.buildRemoteScriptCommand(script, args);
+        const result = yield* runTransportedScript(command);
+
+        assert.isAbove(Buffer.byteLength(script), 24_000);
+        assert.isBelow(command.join(" ").length, 16_000);
+        assert.equal(result.exitCode, 0, result.stderr);
+        assert.equal(result.stdout, `${args.join("\n")}\n`);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("preserves a transported script's failure exit code", () =>
+    Effect.gen(function* () {
+      const command = SshTunnel.buildRemoteScriptCommand("exit 17\n");
+      const result = yield* runTransportedScript(command);
+
+      assert.equal(result.exitCode, 17, result.stderr);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it("installs and runs the release archive without Node, npm, or npx", () => {
     const script = SshTunnel.buildRemoteT3RunnerScript(ARCHIVE);
 
@@ -232,6 +271,12 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "npx");
   });
 
+  it("embeds the runner in the launch script byte for byte", () => {
+    const runner = SshTunnel.buildRemoteT3RunnerScript(ARCHIVE);
+    assert.include(runner, 'printf \'%s\\n\' "$$" > "$T3_LOCK/pid.tmp"');
+    assert.include(SshTunnel.buildRemoteLaunchScript(ARCHIVE), runner);
+  });
+
   it("uses the remote t3 runner for launch and pairing scripts", () => {
     const stateKey = "711bc738002d72fd";
     const launch = SshTunnel.buildRemoteLaunchScript(ARCHIVE);
@@ -306,7 +351,7 @@ describe("ssh tunnel scripts", () => {
     );
   });
 
-  it.effect("accepts launch JSON after remote shell startup noise", () => {
+  it.effect("launches without streaming scripts through a forced PTY", () => {
     const target = {
       alias: "devbox",
       hostname: "devbox.example.com",
@@ -315,7 +360,21 @@ describe("ssh tunnel scripts", () => {
     } as const;
     const spawnedCommands: Array<ReadonlyArray<string>> = [];
     const spawner = ChildProcessSpawner.make((command) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        assert.isTrue(ChildProcess.isStandardCommand(command));
+        if (ChildProcess.isStandardCommand(command)) {
+          const stdin = command.options.stdin;
+          assert.isObject(stdin);
+          if (
+            stdin &&
+            typeof stdin === "object" &&
+            "stream" in stdin &&
+            Stream.isStream(stdin.stream)
+          ) {
+            const chunks = yield* Stream.runCollect(stdin.stream);
+            assert.equal(chunks.length, 0, "SSH stdin must not contain the launch script");
+          }
+        }
         spawnedCommands.push(commandArgs(command));
         return makeSuccessfulProcess('loaded nvm default\n{"remotePort":3774}\n');
       }),
@@ -326,7 +385,8 @@ describe("ssh tunnel scripts", () => {
     return Effect.gen(function* () {
       const result = yield* SshTunnel.launchOrReuseRemoteServer(target, undefined, ARCHIVE);
       assert.equal(result.remotePort, 3774);
-      assert.deepEqual(spawnedCommands[0]?.slice(-5, -1), ["sh", "-l", "-s", "--"]);
+      assert.isTrue(spawnedCommands[0]?.includes("-c"));
+      assert.isBelow(spawnedCommands.flat().join(" ").length, 16_000);
     }).pipe(Effect.provide(layerProcess));
   });
 
@@ -499,7 +559,7 @@ describe("ssh tunnel scripts", () => {
               tunnelKillCount += 1;
             });
           }
-          if (args.includes("sh") && args.includes("--")) {
+          if (args.includes("sh") && args.at(-2) === "--") {
             return makeSuccessfulProcess('{"remotePort":3773}\n');
           }
           if (args.includes("sh")) {
@@ -620,7 +680,7 @@ describe("ssh tunnel scripts", () => {
               }
               return tunnel;
             }
-            if (args.includes("--")) {
+            if (args.at(-2) === "--") {
               if (isTarget) {
                 launches += 1;
                 remoteRunning = true;
@@ -691,8 +751,8 @@ describe("ssh tunnel scripts", () => {
 // lock excludes concurrent installers. Run the real script against a tiny
 // fake archive served from a file:// mirror.
 describe("archive runner script", () => {
-  const hostPlatform = HostProcessPlatform.defaultValue();
-  const hostArch = HostProcessArchitecture.defaultValue();
+  const hostPlatform = HostProcess.Platform.defaultValue();
+  const hostArch = HostProcess.Architecture.defaultValue();
   const windowsHost = hostPlatform === "win32";
   const archiveVersion = "1.2.3-preview.20260911.4";
 

@@ -86,7 +86,7 @@ it.effect("rejects malformed hook approval payloads", () =>
   }),
 );
 
-it.effect("bridges a real hook request to the registry and back", () =>
+it.effect("remembers session approval for real unscoped custom hook requests", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const registry = yield* HookApprovalRegistryModule.__testing
@@ -120,11 +120,33 @@ it.effect("bridges a real hook request to the registry and back", () =>
         ),
       );
       const approval = requests[0]!;
-      yield* registry.respond({ requestId: approval.requestId, decision: "allow" });
+      expect(approval.scope).toBeUndefined();
+      yield* registry.respond({ requestId: approval.requestId, decision: "allow-session" });
       const completed = yield* Fiber.join(response);
 
       expect(completed.status).toBe(200);
-      expect(yield* completed.json).toEqual({ decision: "allow" });
+      expect(yield* completed.json).toEqual({ decision: "allow-session" });
+      const repeated = yield* client.post("/hook-approvals", {
+        headers: { authorization: `Bearer ${credential.token}` },
+        body: HttpBody.jsonUnsafe({
+          command: "git diff",
+          reason: "Inspect changes",
+          cwd: "C:/repo",
+        }),
+      });
+      expect(repeated.status).toBe(200);
+      expect(yield* repeated.json).toEqual({ decision: "allow" });
+      expect(Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead))).toEqual([]);
+      yield* registry.revokeProviderSession(credential.providerSessionId);
+      const revoked = yield* client.post("/hook-approvals", {
+        headers: { authorization: `Bearer ${credential.token}` },
+        body: HttpBody.jsonUnsafe({
+          command: "git diff",
+          reason: "Inspect changes",
+          cwd: "C:/repo",
+        }),
+      });
+      expect(revoked.status).toBe(401);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   ),
 );

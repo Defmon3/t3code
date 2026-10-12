@@ -83,8 +83,8 @@ const requestTimeout = Duration.seconds(300);
 const tokenFromBytes = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
 const bytesToHex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-const allowanceKey = (sessionId: string, scope: HookApprovalScope) =>
-  `${sessionId}\u0000${scope.key}`;
+const allowanceKey = (sessionId: string, scope: HookApprovalScope | undefined) =>
+  `${sessionId}\u0000${scope ? `scope:${scope.key}` : "unscoped"}`;
 const endpointHost = (hostname: string) => {
   const host =
     hostname === "0.0.0.0" || hostname === "::" || hostname === "[::]" ? "127.0.0.1" : hostname;
@@ -222,7 +222,6 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
           const credential = current.credentials.get(tokenHash);
           if (!credential) return [{ _tag: "denied" as const }, current] as const;
           if (
-            input.scope &&
             current.sessionAllowances.has(allowanceKey(credential.providerSessionId, input.scope))
           )
             return [{ _tag: "allowed" as const }, current] as const;
@@ -266,25 +265,29 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
       );
     }, Effect.uninterruptible),
     respond: Effect.fn("HookApprovalRegistry.respond")(function* ({ requestId, decision }) {
-      const pending = yield* SubscriptionRef.modify(state, (current) => {
+      const removed = yield* SubscriptionRef.modify(state, (current) => {
         const entry = current.pending.get(requestId);
-        if (!entry || (decision === "allow-session" && !entry.request.scope))
-          return [undefined, current] as const;
+        if (!entry) return [undefined, current] as const;
+        const key = allowanceKey(entry.providerSessionId, entry.request.scope);
         const nextPending = new Map(current.pending);
-        nextPending.delete(requestId);
+        const matching = Array.from(nextPending.entries()).flatMap(([id, pending]) =>
+          id === requestId ||
+          (decision === "allow-session" &&
+            allowanceKey(pending.providerSessionId, pending.request.scope) === key)
+            ? (nextPending.delete(id), [pending])
+            : [],
+        );
         const allowances =
           decision === "allow-session"
-            ? new Set(current.sessionAllowances).add(
-                allowanceKey(entry.providerSessionId, entry.request.scope!),
-              )
+            ? new Set(current.sessionAllowances).add(key)
             : current.sessionAllowances;
         return [
-          entry,
+          matching,
           { ...current, pending: nextPending, sessionAllowances: allowances },
         ] as const;
       });
-      if (!pending) return false;
-      yield* finish(pending, decision);
+      if (!removed) return false;
+      yield* Effect.forEach(removed, (pending) => finish(pending, decision), { discard: true });
       return true;
     }, Effect.uninterruptible),
     subscribe: () => SubscriptionRef.changes(state).pipe(Stream.map(snapshot)),

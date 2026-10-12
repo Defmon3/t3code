@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
 import {
-  changeRequestWebUrl,
   linkIssuePreviewMatchesReference,
   linkPullRequestPreviewTarget,
   linkReferenceKind,
@@ -9,6 +9,8 @@ import {
   resolveLinkPullRequestInput,
 } from "./LinkPullRequestDialog";
 
+const changeRequestWebUrl = (kind: string, host: string, repository: string, number: number) =>
+  sourceControlClients.get(kind).changeRequestUrl({ host, repository, number });
 const project = {
   host: "github.com",
   repository: "acme/web",

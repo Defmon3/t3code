@@ -18,6 +18,20 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 53
       `;
+      const nightlyReviewGuides = history.some(
+        (row) => row.migration_id === 61 && row.name === "PullRequestReviewGuides",
+      );
+      if (nightlyReviewGuides) {
+        if (history.some((row) => row.migration_id > 61)) {
+          return yield* new Migrator.MigrationError({
+            kind: "BadState",
+            message: "Cannot upgrade review guide migration with unexpected later migrations.",
+          });
+        }
+        yield* sql`DELETE FROM effect_sql_migrations
+          WHERE migration_id = 61 AND name = 'PullRequestReviewGuides'`;
+        return [];
+      }
       const rebasedIssuePreview = history.find(
         (row) =>
           (row.migration_id === 57 ||

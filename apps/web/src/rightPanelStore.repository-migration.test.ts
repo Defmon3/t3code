@@ -4,6 +4,46 @@ import { migratePersistedRightPanelState } from "./rightPanelStore";
 const validSelection = { projectId: "project-a", repository: "org/repo", number: 42 };
 
 describe("Repository selection migration", () => {
+  it("preserves maximization and terminal groups while migrating repository tabs", () => {
+    const state = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env:thread": {
+          isOpen: true,
+          maximized: true,
+          activeSurfaceId: "git-history",
+          surfaces: [
+            { id: "git-history", kind: "git-history" },
+            {
+              id: "terminal:one",
+              kind: "terminal",
+              resourceId: "one",
+              terminalIds: ["one", "two", "one"],
+              activeTerminalId: "two",
+              splitDirection: "horizontal",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(state.byThreadKey["env:thread"]).toEqual({
+      isOpen: true,
+      maximized: true,
+      activeSurfaceId: "repository",
+      surfaces: [
+        { id: "repository", kind: "repository", view: "history", selectedIssue: null },
+        {
+          id: "terminal:one",
+          kind: "terminal",
+          resourceId: "one",
+          terminalIds: ["one", "two"],
+          activeTerminalId: "two",
+          splitDirection: "horizontal",
+        },
+      ],
+    });
+  });
+
   it("preserves a valid repository selection when the legacy issue selection is malformed", () => {
     const state = migratePersistedRightPanelState({
       byThreadKey: {

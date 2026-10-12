@@ -23,6 +23,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as NodeZlib from "node:zlib";
 
 import * as SshAuth from "./auth.ts";
 import {
@@ -234,13 +235,31 @@ function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+export function buildRemoteScriptCommand(
+  script: string,
+  args: ReadonlyArray<string> = [],
+  login = false,
+): string[] {
+  const payload = NodeZlib.gzipSync(script).toString("base64");
+  // why: SSH recording wrappers can force a PTY that truncates streamed script input.
+  const command = [
+    "set -eu",
+    "T3_SCRIPT=$(mktemp)",
+    `trap 'rm -f "$T3_SCRIPT"' EXIT`,
+    `printf '%s' '${payload}' | base64 -d | gzip -dc > "$T3_SCRIPT"`,
+    `sh ${login ? "-l " : ""}"$T3_SCRIPT" "$@"`,
+  ].join("; ");
+  return ["sh", "-c", shellSingleQuote(command), "--", ...args.map(shellSingleQuote)];
+}
+
 function applyScriptPlaceholders(
   template: string,
   replacements: Readonly<Record<string, string>>,
 ): string {
   let result = template;
   for (const [token, value] of Object.entries(replacements)) {
-    result = result.replaceAll(`@@${token}@@`, value);
+    // A replacer function keeps `$$` and other `$` patterns in the value literal.
+    result = result.replaceAll(`@@${token}@@`, () => value);
   }
   return result;
 }
@@ -875,8 +894,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       stateKey,
     });
     const result = yield* runSshCommand(target, {
-      remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
-      stdin: buildRemoteLaunchScript(runner),
+      remoteCommandArgs: buildRemoteScriptCommand(
+        buildRemoteLaunchScript(runner),
+        [stateKey],
+        true,
+      ),
       timeoutMs: isNodeScriptRunner(runner)
         ? REMOTE_LAUNCH_TIMEOUT_MS
         : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
@@ -936,8 +958,7 @@ export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingT
     stateKey,
   });
   const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
-    stdin: buildRemotePairingScript(stateKey, runner),
+    remoteCommandArgs: buildRemoteScriptCommand(buildRemotePairingScript(stateKey, runner)),
     // Pairing may be the first command on a cold remote, so it can install
     // the archive on the way.
     ...(isNodeScriptRunner(runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
@@ -990,8 +1011,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
     stateKey,
   });
   yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
-    stdin: buildRemoteStopScript(stateKey),
+    remoteCommandArgs: buildRemoteScriptCommand(buildRemoteStopScript(stateKey)),
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -1011,8 +1031,9 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
-    stdin: buildRemoteLogTailScript(yield* remoteStateKey(target)),
+    remoteCommandArgs: buildRemoteScriptCommand(
+      buildRemoteLogTailScript(yield* remoteStateKey(target)),
+    ),
     timeoutMs: 10_000,
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),

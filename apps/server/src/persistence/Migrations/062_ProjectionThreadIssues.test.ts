@@ -20,6 +20,7 @@ it.effect("upgrades custom migration 61 without changing saved project shortcuts
     assert.deepEqual(yield* runMigrations(), [
       [62, "ProjectionThreadIssues"],
       [63, "WorkItemLinks"],
+      [64, "PullRequestReviewGuides"],
     ]);
 
     assert.deepEqual(yield* sql`SELECT * FROM projection_projects`, projects);
@@ -71,6 +72,7 @@ it.effect("upgrades the issue preview ledger without losing saved links", () =>
       { migration_id: 61, name: "ProjectSkillShortcuts" },
       { migration_id: 62, name: "ProjectionThreadIssues" },
       { migration_id: 63, name: "WorkItemLinks" },
+      { migration_id: 64, name: "PullRequestReviewGuides" },
     ]);
     const links = yield* sql<{
       readonly issue_title: string;

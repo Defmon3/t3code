@@ -36,9 +36,9 @@ export function hasHookApprovalsCapability(
 }
 
 const hookApprovalOptions = [
-  { decision: "decline", label: "Deny" },
-  { decision: "acceptForSession", label: "Allow for this session" },
-  { decision: "accept", label: "Allow" },
+  { decision: "decline", label: "Reject" },
+  { decision: "acceptForSession", label: "Approve for this session" },
+  { decision: "accept", label: "Approve once" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 export function scopeHookApprovalRequests(
@@ -105,12 +105,11 @@ export function createPendingHookApprovals(
           request.reason,
           `Command:\n${request.command}`,
           `Working directory:\n${request.cwd}`,
-          ...(request.scope ? [`Session scope:\n${request.scope.label}`] : []),
+          request.scope
+            ? `Session scope:\n${request.scope.label}`
+            : "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
         ].join("\n\n"),
-        options:
-          request.scope === undefined
-            ? hookApprovalOptions.filter((option) => option.decision !== "acceptForSession")
-            : hookApprovalOptions,
+        options: hookApprovalOptions,
       },
     };
   });

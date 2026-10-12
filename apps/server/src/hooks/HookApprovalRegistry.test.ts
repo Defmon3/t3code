@@ -57,7 +57,7 @@ it.effect("allows one request and consumes duplicate responses", () =>
   }),
 );
 
-it.effect("requires a scope for a session allowance and scopes the allowance", () =>
+it.effect("remembers unscoped custom hook approvals only for the authenticated session", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry();
     const issued = yield* registry.issue({
@@ -71,19 +71,165 @@ it.effect("requires a scope for a session allowance and scopes the allowance", (
     const unscoped = Option.getOrThrow(yield* Fiber.join(initialSnapshot))[0]!;
     expect(
       yield* registry.respond({ requestId: unscoped.requestId, decision: "allow-session" }),
-    ).toBe(false);
-    yield* registry.respond({ requestId: unscoped.requestId, decision: "deny" });
-    expect(yield* Fiber.join(first)).toBe("deny");
-    const scoped = { ...input, scope: { key: "repo:one", label: "repo one" } };
-    const scopedSnapshot = yield* Effect.forkScoped(
-      registry.subscribe().pipe(Stream.drop(1), Stream.runHead),
+    ).toBe(true);
+    expect(yield* Fiber.join(first)).toBe("allow-session");
+    expect(yield* registry.request(issued.token, { ...input, command: "git status" })).toBe(
+      "allow",
     );
-    const second = yield* Effect.forkScoped(registry.request(issued.token, scoped));
-    const request = Option.getOrThrow(yield* Fiber.join(scopedSnapshot))[0]!;
-    yield* registry.respond({ requestId: request.requestId, decision: "allow-session" });
-    expect(yield* Fiber.join(second)).toBe("allow-session");
-    expect(yield* registry.request(issued.token, scoped)).toBe("allow");
+    expect(yield* registry.request(issued.token, { ...input, command: "git diff" })).toBe("allow");
+
+    const other = yield* registry.issue({
+      threadId: ThreadId.make("thread-other"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const update = yield* Effect.forkScoped(
+      registry.subscribe().pipe(
+        Stream.filter((pending) => pending.length === 2),
+        Stream.runHead,
+      ),
+    );
+    const otherRequest = yield* Effect.forkScoped(registry.request(other.token, input));
+    const scopedRequest = yield* Effect.forkScoped(
+      registry.request(issued.token, {
+        ...input,
+        scope: { key: "unscoped", label: "Explicit unscoped key" },
+      }),
+    );
+    const pending = Option.getOrThrow(yield* Fiber.join(update));
+    expect(pending.map((request) => request.threadId).sort()).toEqual(["thread-3", "thread-other"]);
+    yield* registry.revokeAll;
+    expect(yield* Fiber.join(otherRequest)).toBe("deny");
+    expect(yield* Fiber.join(scopedRequest)).toBe("deny");
   }),
+);
+
+it.effect.each([undefined, { key: "repo:one", label: "repo one" }])(
+  "resolves matching pending approvals together for scope %j",
+  (scope) =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry();
+      const issued = yield* registry.issue({
+        threadId: ThreadId.make("thread-batch"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const other = yield* registry.issue({
+        threadId: ThreadId.make("thread-batch-other"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const matchingInput = { ...input, ...(scope ? { scope } : {}) };
+      const isolatedInput = {
+        ...input,
+        ...(scope ? {} : { scope: { key: "unscoped", label: "Explicit unscoped key" } }),
+      };
+      const update = yield* Effect.forkScoped(
+        registry.subscribe().pipe(
+          Stream.filter((pending) => pending.length === 4),
+          Stream.runHead,
+        ),
+      );
+      const first = yield* Effect.forkScoped(registry.request(issued.token, matchingInput));
+      const second = yield* Effect.forkScoped(
+        registry.request(issued.token, { ...matchingInput, command: "git diff" }),
+      );
+      const isolated = yield* Effect.forkScoped(registry.request(issued.token, isolatedInput));
+      const otherSession = yield* Effect.forkScoped(registry.request(other.token, matchingInput));
+      const pending = Option.getOrThrow(yield* Fiber.join(update));
+      const selected = pending.find(
+        (request) => request.threadId === "thread-batch" && request.scope?.key === scope?.key,
+      )!;
+
+      expect(
+        yield* registry.respond({ requestId: selected.requestId, decision: "allow-session" }),
+      ).toBe(true);
+      expect(yield* Fiber.join(first)).toBe("allow-session");
+      expect(yield* Fiber.join(second)).toBe("allow-session");
+      const remaining = Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead));
+      expect(remaining).toHaveLength(2);
+      expect(remaining.some((request) => request.threadId === "thread-batch-other")).toBe(true);
+      expect(
+        yield* registry.respond({ requestId: selected.requestId, decision: "allow-session" }),
+      ).toBe(false);
+      yield* registry.revokeAll;
+      expect(yield* Fiber.join(isolated)).toBe("deny");
+      expect(yield* Fiber.join(otherSession)).toBe("deny");
+    }),
+);
+
+it.effect.each(["allow", "deny"] as const)(
+  "%s resolves only one request and does not grant a session allowance",
+  (decision) =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry();
+      const issued = yield* registry.issue({
+        threadId: ThreadId.make("thread-once"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const update = yield* Effect.forkScoped(
+        registry.subscribe().pipe(
+          Stream.filter((pending) => pending.length === 2),
+          Stream.runHead,
+        ),
+      );
+      const first = yield* Effect.forkScoped(registry.request(issued.token, input));
+      const second = yield* Effect.forkScoped(
+        registry.request(issued.token, { ...input, command: "git diff" }),
+      );
+      const pending = Option.getOrThrow(yield* Fiber.join(update));
+      const selected = pending.find((request) => request.command === input.command)!;
+
+      yield* registry.respond({ requestId: selected.requestId, decision });
+      expect(yield* Fiber.join(first)).toBe(decision);
+      expect(Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead))).toHaveLength(1);
+      const nextUpdate = yield* Effect.forkScoped(
+        registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 2),
+          Stream.runHead,
+        ),
+      );
+      const next = yield* Effect.forkScoped(registry.request(issued.token, input));
+      expect(Option.getOrThrow(yield* Fiber.join(nextUpdate))).toHaveLength(2);
+      yield* registry.revokeAll;
+      expect(yield* Fiber.join(second)).toBe("deny");
+      expect(yield* Fiber.join(next)).toBe("deny");
+    }),
+);
+
+it.effect.each(["replacement", "thread", "session", "all"] as const)(
+  "clears an unscoped allowance on credential %s",
+  (lifecycle) =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry();
+      const threadId = ThreadId.make("thread-lifecycle");
+      const issueInput = { threadId, providerInstanceId: ProviderInstanceId.make("codex") };
+      const issued = yield* registry.issue(issueInput);
+      const update = yield* Effect.forkScoped(
+        registry.subscribe().pipe(
+          Stream.filter((pending) => pending.length === 1),
+          Stream.runHead,
+        ),
+      );
+      const first = yield* Effect.forkScoped(registry.request(issued.token, input));
+      const pending = Option.getOrThrow(yield* Fiber.join(update))[0]!;
+      yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" });
+      expect(yield* Fiber.join(first)).toBe("allow-session");
+      expect(yield* registry.request(issued.token, input)).toBe("allow");
+
+      if (lifecycle === "thread") yield* registry.revokeThread(threadId);
+      if (lifecycle === "session") yield* registry.revokeProviderSession(issued.providerSessionId);
+      if (lifecycle === "all") yield* registry.revokeAll;
+      const replacement = yield* registry.issue(issueInput);
+      expect(yield* registry.request(issued.token, input)).toBe("deny");
+      const nextUpdate = yield* Effect.forkScoped(
+        registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      );
+      const next = yield* Effect.forkScoped(registry.request(replacement.token, input));
+      expect(Option.getOrThrow(yield* Fiber.join(nextUpdate))).toHaveLength(1);
+      yield* registry.revokeAll;
+      expect(yield* Fiber.join(next)).toBe("deny");
+    }),
 );
 
 it.effect("replaces a thread credential atomically", () =>

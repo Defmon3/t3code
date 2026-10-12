@@ -6,6 +6,7 @@ import * as ProcessDiagnostics from "./ProcessDiagnostics.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 const TOPOLOGY_CACHE_TTL = Duration.seconds(30);
 const PROCESS_COLLECTION_CACHE_TTL = Duration.seconds(2);
@@ -68,6 +69,7 @@ export const makeRegisteredProjectProcessDiscovery = Effect.fn(
   const projects = yield* ProjectStore.ProjectStoreV2;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
   return yield* makeProcessDiscoveryCollector({
     loadTopology: () =>
@@ -89,9 +91,15 @@ export const makeRegisteredProjectProcessDiscovery = Effect.fn(
         const worktrees = yield* Effect.forEach(
           projectShells,
           (project) =>
-            git
-              .listWorktreePaths(project.workspaceRoot)
-              .pipe(Effect.map((paths) => paths.map((path) => ({ projectId: project.id, path })))),
+            Effect.gen(function* () {
+              const repository = yield* vcsRegistry.detect({
+                cwd: project.workspaceRoot,
+                requestedKind: "git",
+              });
+              if (repository === null) return [];
+              const paths = yield* git.listWorktreePaths(project.workspaceRoot);
+              return paths.map((path) => ({ projectId: project.id, path }));
+            }),
           { concurrency: 4 },
         );
         return { worktrees: worktrees.flat() };

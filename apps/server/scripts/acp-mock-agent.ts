@@ -2,7 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { Platform } from "@t3tools/shared/HostProcess";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -95,6 +95,7 @@ const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
+const failSetModeConfigOption = process.env.T3_ACP_FAIL_SET_MODE_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
@@ -776,7 +777,7 @@ const program = Effect.gen(function* () {
           process.exit(7);
         });
       }
-      if (failSetConfigOption) {
+      if (failSetConfigOption || (failSetModeConfigOption && request.configId === "mode")) {
         return yield* AcpError.AcpRequestError.invalidParams(
           "Mock invalid params for session/set_config_option",
           {
@@ -1351,7 +1352,7 @@ const program = Effect.gen(function* () {
       ) {
         const toolCallId = "tool-call-running-1";
         if (runningCommandPidPath !== undefined) {
-          if ((yield* HostProcessPlatform) === "win32") {
+          if ((yield* Platform) === "win32") {
             const childSource = runningCommandIgnoresTerm
               ? "setInterval(() => {}, 1000);"
               : "setTimeout(() => {}, 120000);";

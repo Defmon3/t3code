@@ -8,7 +8,7 @@ import {
   type HookApprovalRequest,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   createPendingHookApprovals,
@@ -129,25 +129,44 @@ describe("hook approvals", () => {
       detail:
         "reason hook-request\n\nCommand:\ncommand hook-request\n\nWorking directory:\nC:/workspace/hook-request\n\nSession scope:\nGit commits",
       options: [
-        { decision: "decline", label: "Deny" },
-        { decision: "acceptForSession", label: "Allow for this session" },
-        { decision: "accept", label: "Allow" },
+        { decision: "decline", label: "Reject" },
+        { decision: "acceptForSession", label: "Approve for this session" },
+        { decision: "accept", label: "Approve once" },
       ],
     });
     expect(second[0]!.approval.requestId).not.toBe(first[0]!.approval.requestId);
     expect(findPendingHookApproval(first, first[0]!.approval.requestId)?.request).toBe(hookRequest);
   });
 
-  it("omits session allowance without a scope and rejects unsupported decisions", () => {
+  it("offers session approval without a scope and explains its lifetime", () => {
     const [hookRequest] = scopeHookApprovalRequests(environmentA, [
       { ...request("without-scope", "2026-09-07T12:00:00.000Z"), scope: undefined },
     ]);
     const [pending] = createPendingHookApprovals([hookRequest!], []);
 
-    expect(pending!.approval.options?.map((option) => option.decision)).toEqual([
-      "decline",
-      "accept",
+    expect(pending!.approval.options).toEqual([
+      { decision: "decline", label: "Reject" },
+      { decision: "acceptForSession", label: "Approve for this session" },
+      { decision: "accept", label: "Approve once" },
     ]);
+    expect(pending!.approval.detail).toContain(
+      "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
+    );
+    const sessionOption = pending!.approval.options!.find(
+      (option) => option.decision === "acceptForSession",
+    )!;
+    expect(
+      hookApprovalResponseTarget(
+        pending!.request,
+        hookApprovalDecisionForProviderDecision(sessionOption.decision)!,
+      ),
+    ).toEqual({
+      environmentId: environmentA,
+      input: { requestId: "without-scope", decision: "allow-session" },
+    });
+  });
+
+  it("maps supported decisions and rejects unsupported decisions", () => {
     expect(hookApprovalDecisionForProviderDecision("accept")).toBe("allow");
     expect(hookApprovalDecisionForProviderDecision("acceptForSession")).toBe("allow-session");
     expect(hookApprovalDecisionForProviderDecision("decline")).toBe("deny");

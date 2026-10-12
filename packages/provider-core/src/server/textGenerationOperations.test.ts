@@ -4,7 +4,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 
 import type { WorkItemMatchGenerationInput } from "./textGeneration.ts";
-import { decodeJsonReply, fromRunner } from "./textGenerationOperations.ts";
+import { decodeJsonReply, fromRunner, withoutInvestigation } from "./textGenerationOperations.ts";
 
 const source = {
   kind: "issue" as const,
@@ -53,6 +53,37 @@ it.effect("rejects invalid match confidence at the provider response boundary", 
       _tag: "TextGenerationError",
       operation: "findWorkItemMatches",
       detail: "Fixture returned invalid structured output.",
+    });
+  }),
+);
+
+it.effect("keeps work item matching available when review investigations are unsupported", () =>
+  Effect.gen(function* () {
+    const service = fromRunner(
+      "Fixture",
+      withoutInvestigation("Fixture", (request) =>
+        decodeJsonReply(request, "Fixture", JSON.stringify({ matches: [] })),
+      ),
+    );
+
+    expect(yield* service.findWorkItemMatches(input)).toEqual({ matches: [] });
+    expect(
+      yield* service
+        .generateReviewGuide({
+          cwd: input.cwd,
+          number: source.number,
+          title: source.title,
+          description: source.body,
+          baseBranch: "main",
+          baseCommit: "base-revision",
+          settledReview: "",
+          modelSelection: input.modelSelection,
+        })
+        .pipe(Effect.flip),
+    ).toMatchObject({
+      _tag: "TextGenerationError",
+      operation: "generateReviewGuide",
+      detail: expect.stringContaining("cannot investigate a checkout read-only"),
     });
   }),
 );

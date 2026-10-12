@@ -13,13 +13,15 @@ import {
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
-import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
+import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
 import {
   decodeWorkItemJson,
   decodeWorkItemsJson,
   type AzureDevOpsWorkItem,
 } from "./azureDevOpsIssueJson.ts";
 import type { ProviderListCursor } from "./IssueProvider.ts";
+
+const isVcsProcessExitError = Schema.is(VcsProcessExitError);
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -376,10 +378,7 @@ const make = Effect.gen(function* () {
           // tags: they keep their own explanation, and no other state is written after them.
           Effect.catchTags({
             AzureDevOpsCommandFailedError: (error) => {
-              if (
-                !Schema.is(VcsProcessExitError)(error.cause) ||
-                error.cause.failureKind !== "state-rule"
-              ) {
+              if (!isVcsProcessExitError(error.cause) || error.cause.failureKind !== "state-rule") {
                 return Effect.fail(error);
               }
               const [next, ...following] = remaining;
