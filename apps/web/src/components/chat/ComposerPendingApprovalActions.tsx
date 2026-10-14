@@ -38,11 +38,13 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
   const primaryOptions = options.filter(
-    (option) => option.decision === "decline" || option.decision === "accept",
+    (option) =>
+      option.decision === "decline" ||
+      option.decision === "acceptForSession" ||
+      option.decision === "accept",
   );
-  const moreOptions = options.filter(
-    (option) => option.decision !== "decline" && option.decision !== "accept",
-  );
+  const moreOptions = options.filter((option) => !primaryOptions.includes(option));
+  const responseDisabled = disabled || isResponding || !canRespond;
 
   return (
     <>
@@ -50,18 +52,19 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         const button = (
           <Button
             key={option.decision}
-            size="xs"
+            size="sm-multiline"
+            className="max-w-full"
             variant={option.decision === "accept" ? "default" : "outline"}
-            disabled={disabled || isResponding || !canRespond}
+            disabled={responseDisabled}
             aria-description={option.warning}
             onClick={() => {
-              if (!disabled && !isResponding) {
+              if (!responseDisabled) {
                 void onRespondToApproval(requestId, option.decision);
               }
             }}
           >
             {option.warning ? <TriangleAlertIcon className="size-3 shrink-0" /> : null}
-            <span className="max-w-40 truncate">{option.label}</span>
+            <span className="min-w-0 max-w-40 wrap-anywhere">{option.label}</span>
           </Button>
         );
         return option.warning ? (
@@ -76,7 +79,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
       {moreOptions.length > 0 ? (
         <Menu>
           <MenuTrigger
-            disabled={disabled || isResponding}
+            disabled={responseDisabled}
             render={<Button size="icon-xs" variant="outline" aria-label="More approval options" />}
           >
             <EllipsisIcon />
@@ -86,11 +89,10 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
               const item = (
                 <MenuItem
                   key={option.decision}
-                  disabled={disabled || isResponding}
+                  disabled={responseDisabled}
                   aria-description={option.warning}
                   onClick={() => {
-                    if (!disabled && !isResponding)
-                      void onRespondToApproval(requestId, option.decision);
+                    if (!responseDisabled) void onRespondToApproval(requestId, option.decision);
                   }}
                   variant="ghost"
                   className="mb-1 last:mb-0"
