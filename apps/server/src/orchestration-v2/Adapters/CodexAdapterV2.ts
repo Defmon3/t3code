@@ -694,7 +694,7 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
       };
     case "full-access":
       return {
-        approvalPolicy: "never",
+        approvalPolicy: "on-request",
         approvalsReviewer: "user",
         sandboxPolicy: {
           type: "dangerFullAccess",

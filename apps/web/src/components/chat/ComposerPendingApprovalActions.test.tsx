@@ -22,7 +22,7 @@ const providerOptions = [
     warning: "This permission will persist after the session ends.",
   },
   { decision: "cancel", label: "Cancel request" },
-] satisfies ReadonlyArray<ProviderApprovalOption>;
+] as const satisfies ReadonlyArray<ProviderApprovalOption>;
 
 let root: Root;
 let container: HTMLDivElement;

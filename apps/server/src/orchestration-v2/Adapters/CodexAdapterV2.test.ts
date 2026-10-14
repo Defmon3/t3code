@@ -427,13 +427,13 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(auto.approvalPolicy, "on-request");
       assert.equal(auto.approvalsReviewer, "auto_review");
       assert.equal(auto.sandboxPolicy?.type, "workspaceWrite");
-      assert.equal(fullAccess.approvalPolicy, "never");
+      assert.equal(fullAccess.approvalPolicy, "on-request");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
     }),
   );
 
-  it.effect("preserves explicit Codex turn policy overrides", () =>
+  it.effect("preserves explicit never-ask and sandbox overrides in full access", () =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: "native-override",
@@ -442,7 +442,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           runtimeMode: "full-access",
           interactionMode: "default",
           cwd: null,
-          approvalPolicy: "on-request",
+          approvalPolicy: "never",
           sandboxPolicy: {
             type: "readOnly",
           },
@@ -453,7 +453,7 @@ describe("CodexAdapterV2 runtime policy", () => {
         },
       });
 
-      assert.equal(params.approvalPolicy, "on-request");
+      assert.equal(params.approvalPolicy, "never");
       assert.equal(params.sandboxPolicy?.type, "readOnly");
     }),
   );
@@ -1687,7 +1687,7 @@ function codexReplayPreamble(input: {
           input: [{ type: "text", text: input.sentPrompt ?? input.prompt }],
           cwd: "/workspace",
           model: "gpt-5.4",
-          approvalPolicy: "never",
+          approvalPolicy: "on-request",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
           summary: "detailed",
@@ -3203,7 +3203,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   input: [],
                   cwd: "/workspace",
                   model: "gpt-5.4",
-                  approvalPolicy: "never",
+                  approvalPolicy: "on-request",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
                   summary: "detailed",
