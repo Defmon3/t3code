@@ -23,6 +23,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
+import { projectMutationOperation } from "./ProjectMutation.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
@@ -113,7 +114,8 @@ it.layer(layerTest)("Project quick slots", (it) => {
       assert.deepEqual(created.skillShortcuts, []);
       const shortcuts = ["$review", "/deploy", "x".repeat(255)];
       const colors = { "/deploy": "green" } as const;
-      const updated = yield* service.update({
+      const updated = yield* projectMutationOperation(service, {
+        type: "project.update",
         commandId: CommandId.make("slots:update"),
         projectId,
         skillShortcuts: shortcuts,
@@ -121,7 +123,8 @@ it.layer(layerTest)("Project quick slots", (it) => {
       });
       assert.deepEqual(updated.skillShortcuts, shortcuts);
       assert.deepEqual(updated.skillShortcutColors, colors);
-      yield* service.update({
+      yield* projectMutationOperation(service, {
+        type: "project.update",
         commandId: CommandId.make("slots:rename"),
         projectId,
         title: "Renamed",
@@ -132,7 +135,8 @@ it.layer(layerTest)("Project quick slots", (it) => {
       const shell = Option.getOrThrow(yield* service.getShell(projectId));
       assert.deepEqual(shell.skillShortcuts, shortcuts);
       assert.deepEqual(shell.skillShortcutColors, colors);
-      const cleared = yield* service.update({
+      const cleared = yield* projectMutationOperation(service, {
+        type: "project.update",
         commandId: CommandId.make("slots:clear"),
         projectId,
         skillShortcuts: [],

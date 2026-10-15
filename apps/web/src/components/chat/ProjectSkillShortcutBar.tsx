@@ -152,7 +152,7 @@ function SortableShortcut(props: {
               aria-label={`${color} button color`}
               aria-pressed={props.color === color}
               className={cn(
-                "flex size-7 items-center justify-center rounded-full outline-none ring-offset-2 ring-offset-popover hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring",
+                "flex size-7 items-center justify-center rounded-full outline-none ring-offset-2 ring-offset-popover hover:scale-105 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                 props.color === color && "ring-2 ring-foreground/70",
               )}
               onClick={() => {
@@ -370,7 +370,7 @@ export function ProjectSkillShortcutBar(props: {
           value={value}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={onKeyDown}
-          onBlur={cancel}
+          onBlur={commit}
           aria-label="Quick slot text"
         />
       ) : (

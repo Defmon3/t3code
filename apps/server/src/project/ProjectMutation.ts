@@ -41,6 +41,12 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
           ? {}
           : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
         ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
+        ...(mutation.skillShortcuts === undefined
+          ? {}
+          : { skillShortcuts: mutation.skillShortcuts }),
+        ...(mutation.skillShortcutColors === undefined
+          ? {}
+          : { skillShortcutColors: mutation.skillShortcutColors }),
       });
 
     case "project.delete":

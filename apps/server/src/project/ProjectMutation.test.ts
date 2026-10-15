@@ -57,6 +57,21 @@ it.effect("preserves every project mutation field", () =>
       faviconPath: null,
       defaultThreadEnvMode: null,
       scripts: [],
+      skillShortcuts: ["$review", "/deploy"],
+      skillShortcutColors: { "/deploy": "green" },
+    });
+    yield* projectMutationOperation(projects, {
+      type: "project.update",
+      commandId: CommandId.make("command:clear"),
+      projectId,
+      skillShortcuts: [],
+      skillShortcutColors: {},
+    });
+    yield* projectMutationOperation(projects, {
+      type: "project.update",
+      commandId: CommandId.make("command:rename"),
+      projectId,
+      title: "Renamed",
     });
     yield* projectMutationOperation(projects, {
       type: "project.delete",
@@ -86,7 +101,16 @@ it.effect("preserves every project mutation field", () =>
         faviconPath: null,
         defaultThreadEnvMode: null,
         scripts: [],
+        skillShortcuts: ["$review", "/deploy"],
+        skillShortcutColors: { "/deploy": "green" },
       },
+      {
+        commandId: "command:clear",
+        projectId,
+        skillShortcuts: [],
+        skillShortcutColors: {},
+      },
+      { commandId: "command:rename", projectId, title: "Renamed" },
       { commandId: "command:delete", projectId, force: true },
     ]);
   }),
