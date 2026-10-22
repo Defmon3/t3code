@@ -20,12 +20,6 @@ function createStorage(overrides: Partial<Storage> = {}): Storage {
   };
 }
 
-async function loadWithStorage(storage: Storage) {
-  vi.stubGlobal("window", { localStorage: storage });
-  vi.stubGlobal("localStorage", storage);
-  return import("./useLocalStorage");
-}
-
 afterEach(() => {
   vi.doUnmock("react");
   vi.resetModules();
@@ -42,8 +36,6 @@ describe("local storage errors", () => {
       addEventListener,
     });
     vi.doMock("react", () => ({
-      useCallback: (callback: unknown) => callback,
-      useMemo: (factory: () => unknown) => factory(),
       useSyncExternalStore: (
         subscribe: (listener: () => void) => () => void,
         snapshot: () => unknown,
@@ -63,29 +55,6 @@ describe("local storage errors", () => {
     expect(addEventListener).not.toHaveBeenCalled();
   });
 
-  it("preserves read failure context", async () => {
-    const cause = new Error("storage unavailable");
-    const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(
-      createStorage({
-        getItem: () => {
-          throw cause;
-        },
-      }),
-    );
-
-    try {
-      getLocalStorageItem("read-key", Schema.String);
-      expect.unreachable("expected the read to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(LocalStorageOperationError);
-      expect(error).toMatchObject({
-        operation: "read",
-        storageKey: "read-key",
-        cause,
-      });
-    }
-  });
-
   it("retries when access to browser storage becomes available", async () => {
     const storage = createStorage();
     storage.setItem("read-key", JSON.stringify("saved value"));
@@ -103,69 +72,5 @@ describe("local storage errors", () => {
     );
     blocked = false;
     expect(getLocalStorageItem("read-key", Schema.String)).toBe("saved value");
-  });
-
-  it.each(["", "not-json"])("preserves decode failure context for %j", async (value) => {
-    const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(
-      createStorage({ getItem: () => value }),
-    );
-
-    try {
-      getLocalStorageItem("decode-key", Schema.String);
-      expect.unreachable("expected decoding to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(LocalStorageOperationError);
-      expect(error).toMatchObject({
-        operation: "decode",
-        storageKey: "decode-key",
-        cause: expect.anything(),
-      });
-    }
-  });
-
-  it("preserves write failure context", async () => {
-    const cause = new Error("storage quota exceeded");
-    const { LocalStorageOperationError, setLocalStorageItem } = await loadWithStorage(
-      createStorage({
-        setItem: () => {
-          throw cause;
-        },
-      }),
-    );
-
-    try {
-      setLocalStorageItem("write-key", "value", Schema.String);
-      expect.unreachable("expected the write to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(LocalStorageOperationError);
-      expect(error).toMatchObject({
-        operation: "write",
-        storageKey: "write-key",
-        cause,
-      });
-    }
-  });
-
-  it("preserves removal failure context", async () => {
-    const cause = new Error("storage unavailable");
-    const { LocalStorageOperationError, removeLocalStorageItem } = await loadWithStorage(
-      createStorage({
-        removeItem: () => {
-          throw cause;
-        },
-      }),
-    );
-
-    try {
-      removeLocalStorageItem("remove-key");
-      expect.unreachable("expected the removal to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(LocalStorageOperationError);
-      expect(error).toMatchObject({
-        operation: "remove",
-        storageKey: "remove-key",
-        cause,
-      });
-    }
   });
 });

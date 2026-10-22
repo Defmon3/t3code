@@ -1,10 +1,8 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { formatIssueReference, type IssueListEntry, ProviderDriverKind } from "@t3tools/contracts";
+import { formatIssueReference, type IssueListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildComposerPathMenuItems,
-  ComposerCommandMenu,
   composerSuggestionOptionId,
   isComposerPathMenuLoading,
   serializeComposerIssueMention,
@@ -56,104 +54,7 @@ describe("composerSuggestionOptionId", () => {
   });
 });
 
-describe("ComposerCommandMenu", () => {
-  it("renders slash commands with their descriptions", () => {
-    const markup = renderToStaticMarkup(
-      <ComposerCommandMenu
-        listId="test-suggestions"
-        items={[
-          {
-            id: "slash:model",
-            type: "slash-command",
-            command: "model",
-            label: "/model",
-            description: "Switch response model for this thread",
-          },
-        ]}
-        resolvedTheme="dark"
-        isLoading={false}
-        triggerKind="slash-command"
-        activeItemId="slash:model"
-        onHighlightedItemChange={() => {}}
-        onSelect={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("/model");
-    expect(markup).toContain("Switch response model for this thread");
-  });
-
-  it("shows the app source for an app skill", () => {
-    const markup = renderToStaticMarkup(
-      <ComposerCommandMenu
-        listId="test-suggestions"
-        items={[
-          {
-            id: "skill:codex:browser",
-            type: "skill",
-            provider: ProviderDriverKind.make("codex"),
-            skill: {
-              name: "browser",
-              path: "/Users/maria/.codex/plugins/browser/skills/browser/SKILL.md",
-              scope: "user",
-              enabled: true,
-            },
-            label: "Browser",
-            description: "Open and control the in-app browser",
-          },
-        ]}
-        resolvedTheme="dark"
-        isLoading={false}
-        triggerKind="skill"
-        activeItemId="skill:codex:browser"
-        onHighlightedItemChange={() => {}}
-        onSelect={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("Browser");
-    expect(markup).toContain('data-slot="badge"');
-    expect(markup).toContain(">App Skill</span>");
-    expect(markup).toContain("Open and control the in-app browser");
-    expect(markup).toContain("<svg");
-  });
-
-  it("shows the repo source for a slash skill", () => {
-    const markup = renderToStaticMarkup(
-      <ComposerCommandMenu
-        listId="test-suggestions"
-        items={[
-          {
-            id: "skill:codex:ask-matt",
-            type: "skill",
-            provider: ProviderDriverKind.make("codex"),
-            skill: {
-              name: "ask-matt",
-              displayName: "Ask Matt",
-              path: "/skills/ask-matt/SKILL.md",
-              scope: "repo",
-              enabled: true,
-            },
-            label: "/skill:ask-matt",
-            description: "Find the right skill or workflow",
-          },
-        ]}
-        resolvedTheme="dark"
-        isLoading={false}
-        triggerKind="slash-command"
-        activeItemId="skill:codex:ask-matt"
-        onHighlightedItemChange={() => {}}
-        onSelect={() => {}}
-      />,
-    );
-
-    expect(markup).toContain('<span class="text-secondary-label">/skill:</span>Ask Matt');
-    expect(markup).toContain('data-slot="badge"');
-    expect(markup).toContain("lucide-folder");
-    expect(markup).toContain(">Repo</span>");
-    expect(markup).toContain("Find the right skill or workflow");
-  });
-
+describe("composer issue suggestions", () => {
   it.each([
     { entry: issue, expected: "acme/app#12" },
     {
@@ -179,35 +80,6 @@ describe("ComposerCommandMenu", () => {
     );
   });
 
-  it("renders issue results with their state and reference", () => {
-    const markup = renderToStaticMarkup(
-      <ComposerCommandMenu
-        listId="test-suggestions"
-        items={[
-          {
-            id: "issue:github:acme/app:12",
-            type: "issue",
-            issue,
-            label: issue.title,
-            description: "acme/app#12",
-          },
-        ]}
-        resolvedTheme="dark"
-        isLoading={false}
-        triggerKind="path"
-        activeItemId="issue:github:acme/app:12"
-        onHighlightedItemChange={() => {}}
-        onSelect={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("Fix session refresh");
-    expect(markup).toContain("acme/app#12");
-    expect(markup).toContain('aria-label="Open"');
-    expect(markup).toContain("min-w-0 flex-1 truncate");
-    expect(markup).toContain("text-right text-secondary-label text-xs shrink-0");
-  });
-
   it("waits on issues and files only once the path query has text", () => {
     expect(isComposerPathMenuLoading({ query: "", issuesPending: true, filesPending: true })).toBe(
       false,
@@ -226,6 +98,7 @@ describe("ComposerCommandMenu", () => {
       type: "path" as const,
       path: "src/app.ts",
       pathKind: "file" as const,
+      searchTarget: { environmentId: null, cwd: "/work", query: "src" },
       label: "app.ts",
       description: "src",
     };

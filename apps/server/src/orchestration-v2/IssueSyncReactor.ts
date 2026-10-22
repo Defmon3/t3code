@@ -195,7 +195,7 @@ const make = Effect.gen(function* () {
         lastSyncedAt.set(key, now);
         for (const { thread, link } of entries) {
           if (link.title === detail.title && link.state === detail.state) continue;
-          const uuid = yield* crypto.randomUUIDv4;
+          const uuid = yield* crypto.randomUUIDv4();
           yield* engine
             .dispatch({
               type: "thread.issue-link.sync",

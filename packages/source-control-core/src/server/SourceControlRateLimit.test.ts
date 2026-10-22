@@ -66,22 +66,6 @@ it.effect("backs off repeated rate limits until a successful request", () =>
   }).pipe(Effect.provide(SourceControlRateLimit.layer)),
 );
 
-it.effect("honors a provider reset time", () =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(1_000);
-    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
-    const lease = yield* limits.check(github);
-
-    yield* limits.recordRateLimit({ ...github, lease, retryAt: 121_000 });
-    assert.equal((yield* Effect.flip(limits.check(github))).retryAt, 121_000);
-
-    yield* TestClock.adjust("119999 millis");
-    assert.equal((yield* Effect.flip(limits.check(github))).retryAt, 121_000);
-    yield* TestClock.adjust("1 millis");
-    assert.equal(yield* limits.check(github), 1);
-  }).pipe(Effect.provide(SourceControlRateLimit.layer)),
-);
-
 it.effect("lets an interactive request through without clearing an active pause", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(1_000);

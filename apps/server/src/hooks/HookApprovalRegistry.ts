@@ -163,7 +163,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
     }) {
       const token = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hash(token);
-      const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      const providerSessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       const removed = yield* SubscriptionRef.modify(state, (current) => {
         const sessions = new Set(
           Array.from(current.credentials.values())
@@ -213,7 +213,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
     request: Effect.fn("HookApprovalRegistry.request")(function* (token, input) {
       if (token.length === 0) return "deny";
       const tokenHash = yield* hash(token);
-      const requestId = HookApprovalRequestId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+      const requestId = HookApprovalRequestId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
       const completion = yield* Deferred.make<HookApprovalDecision>();
       const createdAt = yield* DateTime.now;
       const result: RequestState = yield* SubscriptionRef.modify(

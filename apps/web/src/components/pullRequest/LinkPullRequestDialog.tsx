@@ -1,20 +1,23 @@
 import {
   type EnvironmentId,
   normalizeWorkItemLinkKey,
-  pullRequestHostOf,
   type IssueRef,
   type ProjectId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
+  pullRequestLinkProject,
+  resolveLinkPullRequestInput,
+} from "@t3tools/client-runtime/pull-request-link-input";
+import {
   isAtomCommandInterrupted,
+  settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { findProjectForIssue, repositoryForProjectLink } from "~/lib/openIssueLink";
 import {
@@ -22,7 +25,6 @@ import {
   parseChangeRequestUrl,
   resolvePullRequestPreviewTarget,
 } from "~/lib/openPullRequestLink";
-import { parsePullRequestReference } from "~/pullRequestReference";
 import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -65,13 +67,11 @@ export function openLinkPullRequestDialog(threadRef: ScopedThreadRef): void {
 interface LinkPullRequestDialogProps {
   open: boolean;
   threadRef: ScopedThreadRef;
-  /** The thread's own project: bare numbers resolve against its repository. */
   projectId: string | null;
   issuesSupported: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-/** Mounted once per chat view; shows the dialog for whichever thread asked for it. */
 export function LinkPullRequestDialogHost() {
   const threadRef = useAtomValue(linkPullRequestDialogThreadAtom);
   const thread = useThreadShell(threadRef);
@@ -92,55 +92,6 @@ export function LinkPullRequestDialogHost() {
       }}
     />
   );
-}
-
-interface ResolvedLink {
-  readonly host: string;
-  readonly repository: string;
-  readonly number: number;
-  readonly url: string;
-}
-
-/**
- * Which pull request an input names, or why it cannot. A URL carries its own host and
- * repository; a bare `#123` can only mean the thread's own repository.
- */
-export function resolveLinkPullRequestInput(input: {
-  readonly reference: string;
-  readonly project: {
-    readonly host: string;
-    readonly repository: string;
-    readonly webUrl: (number: number) => string | null;
-  } | null;
-  readonly hasProject: (reference: ResolvedLink) => boolean;
-}): { link: ResolvedLink } | { error: string } | null {
-  const parsed =
-    parseChangeRequestUrl(input.reference.trim()) !== null
-      ? input.reference.trim()
-      : parsePullRequestReference(input.reference);
-  if (parsed === null) return null;
-  const url = parseChangeRequestUrl(parsed);
-  if (url !== null) {
-    if (!input.hasProject({ ...url, url: parsed })) {
-      return { error: `No project in this environment can read ${url.host}/${url.repository}.` };
-    }
-    return {
-      link: { host: url.host, repository: url.repository, number: url.number, url: parsed },
-    };
-  }
-  const number = Number(parsed);
-  if (!Number.isSafeInteger(number) || number < 1) return null;
-  if (input.project === null) {
-    return { error: "Paste a full URL to link a pull request from another repository." };
-  }
-  const webUrl = input.project.webUrl(number);
-  const webReference = webUrl === null ? null : parseChangeRequestUrl(webUrl);
-  if (webUrl === null || webReference === null) {
-    return { error: "Paste a full URL; this project's host has no known pull request URL." };
-  }
-  return {
-    link: { ...webReference, url: webUrl },
-  };
 }
 
 export function linkPullRequestPreviewTarget(input: {
@@ -313,34 +264,15 @@ function LinkPullRequestDialog({
   const [dirty, setDirty] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const projects = useProjects();
-  const environmentProjects = useMemo(
-    () => projects.filter((project) => project.environmentId === threadRef.environmentId),
-    [projects, threadRef.environmentId],
+  const environmentProjects = projects.filter(
+    (project) => project.environmentId === threadRef.environmentId,
   );
-  const ownProject = useMemo(() => {
-    const project = environmentProjects.find((candidate) => candidate.id === projectId);
-    const identity = project?.repositoryIdentity;
-    if (!project || !identity) return null;
-    const repository =
-      identity.displayName ??
-      (identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
-    if (repository === null) return null;
-    const definition = sourceControlClients.get(identity.provider ?? "unknown");
-    const host = pullRequestHostOf(identity, definition.kind);
-    return {
-      id: project.id,
-      host,
-      repository,
-      webUrl: (number: number) =>
-        definition.changeRequestUrl({
-          host,
-          repository,
-          number,
-          remoteUrl: identity.locator.remoteUrl,
-          webUrl: identity.webUrl,
-        }),
-    };
-  }, [environmentProjects, projectId]);
+  const ownEnvironmentProject = environmentProjects.find((project) => project.id === projectId);
+  const ownLinkProject = pullRequestLinkProject(ownEnvironmentProject?.repositoryIdentity);
+  const ownProject =
+    ownEnvironmentProject === undefined || ownLinkProject === null
+      ? null
+      : { ...ownLinkProject, id: ownEnvironmentProject.id };
   const linking = usePullRequestLinking(threadRef.environmentId);
   const thread = useThreadShell(threadRef);
   const configs = useServerConfigs();
@@ -357,52 +289,52 @@ function LinkPullRequestDialog({
       ? "issue"
       : linkReferenceKind(reference, chosenKind);
 
+  const [openSeen, setOpenSeen] = useState(open);
+  if (openSeen !== open) {
+    setOpenSeen(open);
+    if (open) {
+      setReference("");
+      setDirty(false);
+      setSubmitError(null);
+    }
+  }
   useEffect(() => {
     if (!open) return;
-    setReference("");
-    setDirty(false);
-    setSubmitError(null);
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
-  const resolvedPullRequest = useMemo(
-    () =>
-      kind === "pull-request"
-        ? resolveLinkPullRequestInput({
-            reference,
-            project: ownProject,
-            hasProject: (reference) => linking.canLink(reference.url),
-          })
-        : null,
-    [kind, linking, ownProject, reference],
-  );
-  const resolvedIssue = useMemo(
-    () =>
-      kind === "issue"
-        ? resolveLinkIssueInput({
-            reference,
-            project: ownProject,
-            findProject: (link) => {
-              const project = findProjectForIssue(environmentProjects, link);
-              return project === undefined
-                ? undefined
-                : {
-                    id: project.id,
-                    repository: repositoryForProjectLink(project, link.repository),
-                  };
-            },
-            linearProjectId: (team) =>
-              linearProjectForTeam({
-                team,
-                projects: environmentProjects,
-                currentProjectId: projectId,
-                bindings: linearBindings,
-              }),
-          })
-        : null,
-    [environmentProjects, kind, linearBindings, ownProject, projectId, reference],
-  );
+  const resolvedPullRequest =
+    kind === "pull-request"
+      ? resolveLinkPullRequestInput({
+          reference,
+          project: ownProject,
+          hasProject: (reference) => linking.canLink(reference.url),
+        })
+      : null;
+  const resolvedIssue =
+    kind === "issue"
+      ? resolveLinkIssueInput({
+          reference,
+          project: ownProject,
+          findProject: (link) => {
+            const project = findProjectForIssue(environmentProjects, link);
+            return project === undefined
+              ? undefined
+              : {
+                  id: project.id,
+                  repository: repositoryForProjectLink(project, link.repository),
+                };
+          },
+          linearProjectId: (team) =>
+            linearProjectForTeam({
+              team,
+              projects: environmentProjects,
+              currentProjectId: projectId,
+              bindings: linearBindings,
+            }),
+        })
+      : null;
   const resolved = kind === "issue" ? resolvedIssue : resolvedPullRequest;
 
   const pullRequestPreviewTarget =
@@ -472,55 +404,49 @@ function LinkPullRequestDialog({
       ? issuePreview.isSuccess && issue != null
       : pullRequestPreviewTarget === null || (pullRequestPreview.isSuccess && pullRequest != null));
 
-  const submit = useCallback(async () => {
+  const linkSelected = async () => {
+    if (issue != null) {
+      const result = await updateMetadata({
+        environmentId: threadRef.environmentId,
+        input: {
+          threadId: threadRef.threadId,
+          issueLink: {
+            projectId: issue.projectId,
+            provider: issue.provider,
+            repository: issue.repository,
+            number: issue.number,
+            url: issue.url,
+            title: issue.title,
+          },
+        },
+      });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) throw new Error("Link update interrupted.");
+        throw squashAtomCommandFailure(result);
+      }
+    } else if (resolvedPullRequest !== null && "link" in resolvedPullRequest) {
+      await linking.changeLink(threadRef, resolvedPullRequest.link.url, true);
+    }
+  };
+
+  const submit = async () => {
     setDirty(true);
     if (!canSubmit) return;
     setSubmitError(null);
     setPending(true);
-    try {
-      if (issue != null) {
-        const result = await updateMetadata({
-          environmentId: threadRef.environmentId,
-          input: {
-            threadId: threadRef.threadId,
-            issueLink: {
-              projectId: issue.projectId,
-              provider: issue.provider,
-              repository: issue.repository,
-              number: issue.number,
-              url: issue.url,
-              title: issue.title,
-            },
-          },
-        });
-        if (result._tag === "Failure") {
-          if (isAtomCommandInterrupted(result)) throw new Error("Link update interrupted.");
-          throw squashAtomCommandFailure(result);
-        }
-      } else if (resolvedPullRequest !== null && "link" in resolvedPullRequest) {
-        await linking.changeLink(threadRef, resolvedPullRequest.link.url, true);
-      }
-    } catch (error) {
+    const result = await settlePromise(linkSelected);
+    setPending(false);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
       setSubmitError(
         error instanceof Error
           ? error.message
           : `Could not link the ${kind === "issue" ? "issue" : "pull request"}.`,
       );
       return;
-    } finally {
-      setPending(false);
     }
     onOpenChange(false);
-  }, [
-    canSubmit,
-    issue,
-    kind,
-    linking,
-    onOpenChange,
-    resolvedPullRequest,
-    threadRef,
-    updateMetadata,
-  ]);
+  };
 
   const subject =
     issuesSupported && pullRequestsSupported

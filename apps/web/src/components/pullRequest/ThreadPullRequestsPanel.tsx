@@ -12,6 +12,8 @@ import {
   UNKNOWN_SOURCE_CONTROL_CLIENT,
 } from "@t3tools/client-runtime/source-control-clients";
 import {
+  type PullRequestListLine,
+  pullRequestListLines,
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
@@ -24,8 +26,13 @@ import {
   MoreHorizontalIcon,
   PlusIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { LegendList } from "@legendapp/list/react";
+import { memo, useState, type MouseEvent, type ReactNode } from "react";
 
+import {
+  COMPOSER_PULL_REQUEST_DRAG_TYPE,
+  encodePullRequestDragPayload,
+} from "~/components/chat/composerMentionDrag";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   findProjectForLink,
@@ -42,18 +49,18 @@ import { cn } from "~/lib/utils";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useShortcutModifierState } from "~/shortcutModifierState";
 import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
+import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
+import { RelativeTime } from "~/components/RelativeTime";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { MiddleTruncate } from "../ui/middle-truncate";
-import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 import { ThreadIssueTrees } from "../issue/ThreadIssueTrees";
-import { pullRequestListLines, type PullRequestListLine } from "./pullRequestListLines";
+import { resolveIssueState } from "../issue/issuePresentation";
 import {
   PULL_REQUEST_ROW_CLASS,
   PULL_REQUEST_ROW_NUMBER_CLASS,
@@ -68,9 +75,8 @@ import {
   pullRequestChecksStatePresentation,
 } from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
-import { resolveIssueState } from "../issue/issuePresentation";
 import { pullRequestQuickActions } from "./pullRequestList.logic";
-import { PullRequestSpeedActions } from "./PullRequestSpeedActions";
+import { PullRequestSpeedActions, PullRequestSpeedModeContext } from "./PullRequestSpeedActions";
 
 const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
   manual: "Linked by you",
@@ -103,13 +109,9 @@ function ChecksGlyph({
 function useRowMenu() {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
-  const anchor = useMemo(
-    () =>
-      position
-        ? { getBoundingClientRect: () => new DOMRect(position.x, position.y, 0, 0) }
-        : undefined,
-    [position],
-  );
+  const anchor = position
+    ? { getBoundingClientRect: () => new DOMRect(position.x, position.y, 0, 0) }
+    : undefined;
   return {
     open,
     position,
@@ -139,9 +141,6 @@ function RowMenu({
   hidden?: boolean;
 }) {
   return (
-    // Out of the row's flow, so no row reserves a column for a button only the hovered one
-    // shows. It sits over the right end of the second line on the row's own hover color,
-    // fading in from the left, so it covers the time and leaves the diff counts alone.
     <span
       className={cn(
         "absolute right-0 bottom-0.5 flex items-center rounded-r-md bg-background pr-1 pl-5",
@@ -273,7 +272,7 @@ function IssueTreeActions({
   );
 }
 
-function LinkRow({
+function LinkRowImpl({
   line,
   threadRef,
   projectId,
@@ -286,7 +285,6 @@ function LinkRow({
   projectId: ProjectId | null;
   speedMode: boolean;
   onUnlink: (link: ThreadPullRequestLink) => void;
-  /** Null when the environment cannot watch pull requests. */
   onSetWatching: ((link: ThreadPullRequestLink, watching: boolean) => void) | null;
 }) {
   const openPrLink = useOpenPrLink(threadRef);
@@ -295,7 +293,6 @@ function LinkRow({
   const snapshot = link.snapshot;
   const open = snapshot === null || snapshot.state === "open";
   const watching = link.watch !== undefined;
-  // A link carries no host summary, so the host's own definition says what it can do.
   const linkHostActions = (
     sourceControlClients.findByChangeRequestUrl(link.url) ?? UNKNOWN_SOURCE_CONTROL_CLIENT
   ).changeRequestActions;
@@ -312,16 +309,12 @@ function LinkRow({
           ...(link.stack === null ? {} : { stack: link.stack }),
         }
       : null;
-  // Speed mode swaps the menu for quick actions only where a row has some to offer.
   const hasQuickActions =
     actionEntry !== null && pullRequestQuickActions(actionEntry, linkHostActions).length > 0;
   return (
     <div
       className={cn(PULL_REQUEST_ROW_CLASS, "relative hover:bg-accent/60")}
       onContextMenu={menu.onContextMenu}
-      // Each layer steps in under the one it targets. The step is capped: beyond a few layers
-      // the indent only says "still in the stack", which the connector line already does, and
-      // a sixteen-layer stack would otherwise stair-step off the right edge.
       style={{ paddingLeft: `${0.5 + Math.min(depth, 3) * 1.25}rem` }}
     >
       {depth > 0 ? <span aria-hidden className="-ml-2 h-6 w-px shrink-0 bg-border/70" /> : null}
@@ -341,6 +334,25 @@ function LinkRow({
       <a
         href={link.url}
         onClick={(event) => openPrLink(event, link.url, threadRef)}
+        // The link's own URL still rides along for drops outside the app; the composer takes
+        // this payload instead and adds the pull request as a context chip.
+        onDragStart={
+          snapshot === null
+            ? undefined
+            : (event) =>
+                event.dataTransfer.setData(
+                  COMPOSER_PULL_REQUEST_DRAG_TYPE,
+                  encodePullRequestDragPayload({
+                    number: link.number,
+                    title: snapshot.title,
+                    url: link.url,
+                    headBranch: snapshot.headBranch,
+                    baseBranch: snapshot.baseBranch,
+                    state: snapshot.state,
+                    isDraft: snapshot.isDraft,
+                  }),
+                )
+        }
         className="flex min-w-0 flex-1"
       >
         <PullRequestRowLines
@@ -350,7 +362,7 @@ function LinkRow({
                 #{link.number}
               </TooltipTrigger>
               <TooltipPopup>
-                {SOURCE_LABELS[link.source]} · {formatRelativeTimeLabel(link.linkedAt)}
+                {SOURCE_LABELS[link.source]} · <RelativeTime timestamp={link.linkedAt} />
               </TooltipPopup>
             </Tooltip>
           }
@@ -376,15 +388,27 @@ function LinkRow({
               </>
             ) : null
           }
-          // Match the full PR list: diff counts up top, checks under the lifecycle glyph, the
-          // verdict by the author. Each is absent rather than neutral when the host said
-          // nothing, so a row without them reads as unknown, not as fine.
           status={
-            <PullRequestDiffStat
-              additions={snapshot?.additions ?? 0}
-              deletions={snapshot?.deletions ?? 0}
-              className="font-mono"
-            />
+            projectId === null ? (
+              <PullRequestDiffStat
+                additions={snapshot?.additions ?? 0}
+                deletions={snapshot?.deletions ?? 0}
+                className="font-mono"
+              />
+            ) : (
+              <PullRequestChangeBreakdownStat
+                environmentId={threadRef.environmentId}
+                reference={{
+                  projectId,
+                  host: link.host,
+                  repository: link.repository,
+                  number: link.number,
+                }}
+                additions={snapshot?.additions ?? 0}
+                deletions={snapshot?.deletions ?? 0}
+                className="font-mono"
+              />
+            )
           }
           meta={
             <>
@@ -414,8 +438,6 @@ function LinkRow({
               ) : null}
               {snapshot !== null ? (
                 <>
-                  {/* Cut in the middle: rows from one owner differ in the repository name at the
-                      end, which a tail cut would hide. */}
                   <Tooltip>
                     <TooltipTrigger render={<span className="flex min-w-0 max-w-32 font-mono" />}>
                       <MiddleTruncate value={link.repository} showTitle={false} />
@@ -435,11 +457,7 @@ function LinkRow({
         />
       </a>
       {actionEntry !== null ? (
-        <PullRequestSpeedActions
-          entry={actionEntry}
-          hostActions={linkHostActions}
-          visible={speedMode}
-        />
+        <PullRequestSpeedActions entry={actionEntry} hostActions={linkHostActions} />
       ) : null}
       <RowMenu
         label={`Actions for #${link.number}`}
@@ -469,6 +487,21 @@ function LinkRow({
   );
 }
 
+/** Memoized so a modifier key or a sync of one link re-renders only the rows that changed. */
+const LinkRow = memo(LinkRowImpl);
+
+function latestSyncedAt(links: ReadonlyArray<ThreadPullRequestLink>): string | null {
+  let latest: string | null = null;
+  for (const link of links) {
+    const at = link.snapshot?.syncedAt;
+    if (at !== undefined && (latest === null || at > latest)) latest = at;
+  }
+  return latest;
+}
+
+const lineKey = (line: PullRequestListLine) =>
+  `${line.link.host}/${line.link.repository}#${line.link.number}`;
+
 export function ThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
   const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
   if (capabilities?.threadPullRequests !== true && capabilities?.issues !== true) {
@@ -485,147 +518,115 @@ export function ThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
 function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
   const thread = useThreadShell(threadRef);
   const projects = useProjects();
-  const environmentProjects = useMemo(
-    () =>
-      projects
-        .filter((project) => project.environmentId === threadRef.environmentId)
-        .toSorted((left, right) =>
-          left.id === thread?.projectId ? -1 : right.id === thread?.projectId ? 1 : 0,
-        ),
-    [projects, threadRef.environmentId, thread?.projectId],
-  );
+  const environmentProjects = projects
+    .filter((project) => project.environmentId === threadRef.environmentId)
+    .toSorted((left, right) =>
+      left.id === thread?.projectId ? -1 : right.id === thread?.projectId ? 1 : 0,
+    );
+  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
+  const supportsPullRequests = capabilities?.threadPullRequests === true;
+  const supportsIssues = capabilities?.issues === true;
+  // LegendList re-renders its rows when `data` changes identity. `links` and values derived
+  // from it go through plain functions only here, before the next hook, so the compiler keeps
+  // `lines` in its own cache scope.
+  const links = supportsPullRequests ? visibleThreadPullRequests(thread?.pullRequests ?? []) : [];
+  const lines = pullRequestListLines(resolveThreadPullRequestChains(links));
+  const issues = thread?.issues ?? [];
+  const openCount =
+    links.filter((link) => link.snapshot === null || link.snapshot.state === "open").length +
+    issues.filter((issue) => issue.state !== "closed").length;
+  const lastSynced = latestSyncedAt(links);
+  const linkCount = links.length + issues.length;
   const modifiers = useShortcutModifierState(true);
   const speedMode =
     modifiers.shiftKey && !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey;
-  const openLinkDialog = useCallback(() => openLinkPullRequestDialog(threadRef), [threadRef]);
+  const openLinkDialog = () => openLinkPullRequestDialog(threadRef);
   const unlink = useAtomCommand(threadEnvironment.unlinkPullRequest, { reportFailure: true });
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: true });
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
-  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
   const supportsWatch = capabilities?.threadPullRequestWatch === true;
-  const supportsPullRequests = capabilities?.threadPullRequests === true;
-  const supportsIssues = capabilities?.issues === true;
-  const links = useMemo(
-    () => (supportsPullRequests ? visibleThreadPullRequests(thread?.pullRequests ?? []) : []),
-    [supportsPullRequests, thread],
-  );
-  const lines = useMemo(() => pullRequestListLines(resolveThreadPullRequestChains(links)), [links]);
-  const issues = useMemo(() => thread?.issues ?? [], [thread]);
-  // The project an issue is read through, by its saved project, its host URL, or — for a
-  // tracker with no repository of its own — the thread's project.
-  const issueProjectId = useCallback(
-    (issue: ThreadIssueLink): ProjectId | null => {
-      if (!supportsIssues) return null;
-      const environmentProjects = projects.filter(
-        (candidate) => candidate.environmentId === threadRef.environmentId,
-      );
-      const project =
-        issue.projectId !== undefined
-          ? environmentProjects.find((candidate) => candidate.id === issue.projectId)
-          : sourceControlClients.find(issue.provider) !== undefined
-            ? findProjectForLink(environmentProjects, issue)
-            : environmentProjects.find((candidate) => candidate.id === thread?.projectId);
-      return project?.id ?? null;
-    },
-    [projects, supportsIssues, thread?.projectId, threadRef.environmentId],
-  );
-  const openThreadIssue = useCallback(
-    (issue: ThreadIssueLink, relative: Pick<IssueRelative, "repository" | "number" | "url">) => {
-      const projectId = issueProjectId(issue);
-      const target =
-        projectId === null
-          ? null
-          : relatedIssueTarget(
-              environmentProjects,
-              { projectId, repository: issue.repository },
-              relative,
-            );
-      if (target === null) {
-        openLinkInBrowser(relative.url);
-        return;
-      }
-      useRightPanelStore.getState().openIssue(threadRef, { ...target, provider: issue.provider });
-    },
-    [environmentProjects, issueProjectId, threadRef],
-  );
-  const openTreePullRequest = useCallback(
-    (link: IssueLinkedPullRequest) => {
-      const project = findProjectForLink(
-        projects.filter((candidate) => candidate.environmentId === threadRef.environmentId),
-        link,
-      );
-      if (!supportsPullRequests || project === undefined) {
-        openLinkInBrowser(link.url);
-        return;
-      }
-      useRightPanelStore
-        .getState()
-        .openPullRequest(threadRef, linkedPullRequestTarget(project, link));
-    },
-    [projects, supportsPullRequests, threadRef],
-  );
-  const handleUnlink = useCallback(
-    (link: ThreadPullRequestLink) => {
-      void unlink({
-        environmentId: threadRef.environmentId,
-        input: {
-          threadId: threadRef.threadId,
-          host: link.host,
-          repository: link.repository,
-          number: link.number,
-        },
-      });
-    },
-    [threadRef, unlink],
-  );
-  const handleUnlinkIssue = useCallback(
-    (issue: ThreadIssueLink) => {
-      void updateMetadata({
-        environmentId: threadRef.environmentId,
-        input: {
-          threadId: threadRef.threadId,
-          issueUnlink: {
-            provider: issue.provider,
-            repository: issue.repository,
-            number: issue.number,
-            url: issue.url,
-          },
-        },
-      });
-    },
-    [threadRef, updateMetadata],
-  );
-  const handleSetWatching = useCallback(
-    (link: ThreadPullRequestLink, watching: boolean) => {
-      void watch({
-        environmentId: threadRef.environmentId,
-        input: {
-          threadId: threadRef.threadId,
-          host: link.host,
-          repository: link.repository,
-          number: link.number,
-          watching,
-        },
-      });
-    },
-    [threadRef, watch],
-  );
-  const openCount = useMemo(
-    () =>
-      links.filter((link) => link.snapshot === null || link.snapshot.state === "open").length +
-      issues.filter((issue) => issue.state !== "closed").length,
-    [issues, links],
-  );
-  const lastSynced = useMemo(() => {
-    let latest: string | null = null;
-    for (const link of links) {
-      const at = link.snapshot?.syncedAt;
-      if (at !== undefined && (latest === null || at > latest)) latest = at;
+  const issueProjectId = (issue: ThreadIssueLink): ProjectId | null => {
+    if (!supportsIssues) return null;
+    const project =
+      issue.projectId !== undefined
+        ? environmentProjects.find((candidate) => candidate.id === issue.projectId)
+        : sourceControlClients.find(issue.provider) !== undefined
+          ? findProjectForLink(environmentProjects, issue)
+          : environmentProjects.find((candidate) => candidate.id === thread?.projectId);
+    return project?.id ?? null;
+  };
+  const openThreadIssue = (
+    issue: ThreadIssueLink,
+    relative: Pick<IssueRelative, "repository" | "number" | "url">,
+  ) => {
+    const projectId = issueProjectId(issue);
+    const target =
+      projectId === null
+        ? null
+        : relatedIssueTarget(
+            environmentProjects,
+            { projectId, repository: issue.repository },
+            relative,
+          );
+    if (target === null) {
+      openLinkInBrowser(relative.url);
+      return;
     }
-    return latest;
-  }, [links]);
+    useRightPanelStore.getState().openIssue(threadRef, { ...target, provider: issue.provider });
+  };
+  const openTreePullRequest = (link: IssueLinkedPullRequest) => {
+    const project = findProjectForLink(environmentProjects, link);
+    if (!supportsPullRequests || project === undefined) {
+      openLinkInBrowser(link.url);
+      return;
+    }
+    useRightPanelStore
+      .getState()
+      .openPullRequest(threadRef, linkedPullRequestTarget(project, link));
+  };
+  const handleUnlinkIssue = (issue: ThreadIssueLink) => {
+    void updateMetadata({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        issueUnlink: {
+          provider: issue.provider,
+          repository: issue.repository,
+          number: issue.number,
+          url: issue.url,
+        },
+      },
+    });
+  };
+  const handleUnlink = (link: ThreadPullRequestLink) => {
+    void unlink({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        host: link.host,
+        repository: link.repository,
+        number: link.number,
+      },
+    });
+  };
+  const handleSetWatching = (link: ThreadPullRequestLink, watching: boolean) => {
+    void watch({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        host: link.host,
+        repository: link.repository,
+        number: link.number,
+        watching,
+      },
+    });
+  };
 
-  if (links.length === 0 && issues.length === 0) {
+  // Legend re-renders visible rows only when data or extraData changes, so everything the rows
+  // read from outside their line goes in here.
+  const rowInputs = { speedMode, environmentProjects, capabilities, supportsWatch, thread };
+
+  if (linkCount === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <PullRequestGlyph.link aria-hidden className="size-6 text-muted-foreground/60" />
@@ -643,12 +644,16 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col p-1.5">
-          {lines.map((line) => (
+    <PullRequestSpeedModeContext value={speedMode}>
+      <div className="flex h-full min-h-0 flex-col">
+        {/* Threads that run a stack or a sweep link hundreds of pull requests; only the rows in
+          view are mounted. */}
+        <LegendList<PullRequestListLine>
+          data={lines}
+          keyExtractor={lineKey}
+          extraData={rowInputs}
+          renderItem={({ item: line }) => (
             <LinkRow
-              key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
               line={line}
               threadRef={threadRef}
               projectId={
@@ -662,34 +667,44 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               onUnlink={handleUnlink}
               onSetWatching={supportsWatch ? handleSetWatching : null}
             />
-          ))}
-          {issues.length > 0 ? (
-            <ThreadIssueTrees
-              className={lines.length > 0 ? "mt-1.5" : undefined}
-              environmentId={threadRef.environmentId}
-              threadRef={threadRef}
-              linked={issues}
-              projectFor={issueProjectId}
-              onOpen={openThreadIssue}
-              onOpenPullRequest={openTreePullRequest}
-              renderFallback={(issue) => <IssueRow issue={issue} onUnlink={handleUnlinkIssue} />}
-              renderActions={(issue) => (
-                <IssueTreeActions issue={issue} onUnlink={handleUnlinkIssue} />
-              )}
-            />
-          ) : null}
-        </div>
-      </ScrollArea>
-      <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
-        <span>
-          {openCount} open · {links.length + issues.length} linked
-          {lastSynced ? ` · synced ${formatRelativeTimeLabel(lastSynced)}` : ""}
-        </span>
-        <Button size="xs" variant="ghost" onClick={openLinkDialog}>
-          <PlusIcon className="size-3.5" />
-          Link
-        </Button>
-      </footer>
-    </div>
+          )}
+          ListFooterComponent={
+            issues.length > 0 ? (
+              <ThreadIssueTrees
+                className={lines.length > 0 ? "mt-1.5" : undefined}
+                environmentId={threadRef.environmentId}
+                threadRef={threadRef}
+                linked={issues}
+                projectFor={issueProjectId}
+                onOpen={openThreadIssue}
+                onOpenPullRequest={openTreePullRequest}
+                renderFallback={(issue) => <IssueRow issue={issue} onUnlink={handleUnlinkIssue} />}
+                renderActions={(issue) => (
+                  <IssueTreeActions issue={issue} onUnlink={handleUnlinkIssue} />
+                )}
+              />
+            ) : null
+          }
+          estimatedItemSize={44}
+          drawDistance={440}
+          className="min-h-0 flex-1 overscroll-contain p-1.5"
+        />
+        <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
+          <span>
+            {openCount} open · {linkCount} linked
+            {lastSynced ? (
+              <>
+                {" · synced "}
+                <RelativeTime timestamp={lastSynced} />
+              </>
+            ) : null}
+          </span>
+          <Button size="xs" variant="ghost" onClick={openLinkDialog}>
+            <PlusIcon className="size-3.5" />
+            Link
+          </Button>
+        </footer>
+      </div>
+    </PullRequestSpeedModeContext>
   );
 }

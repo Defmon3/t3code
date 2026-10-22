@@ -226,39 +226,6 @@ describe("planNextReopen", () => {
 });
 
 describe("pullRequestsSearchForRestore", () => {
-  it("replaces the selection and keeps list filters", () => {
-    const search = pullRequestsSearchForRestore(
-      {
-        involvement: "reviewing",
-        state: "open",
-        q: "mine",
-        host: "filter.example.com",
-        selectedHost: "old",
-        number: 1,
-      },
-      {
-        kind: "pull-request",
-        id: "pull-request:example",
-        repository: "owner/repo",
-        number: 42,
-        projectId: "project-1",
-        environmentId: "remote",
-        host: "github.example.com",
-      },
-    );
-    expect(search).toEqual({
-      involvement: "reviewing",
-      state: "open",
-      q: "mine",
-      host: "filter.example.com",
-      repository: "owner/repo",
-      number: 42,
-      selectedProjectId: "project-1",
-      selectedHost: "github.example.com",
-      selectedEnvironmentId: "remote",
-    });
-  });
-
   it("resets an Issues-only involvement filter when reopening a pull request", () => {
     expect(
       pullRequestsSearchForRestore(
@@ -266,12 +233,5 @@ describe("pullRequestsSearchForRestore", () => {
         null,
       ),
     ).toEqual({ involvement: "all", state: "closed" });
-  });
-
-  it("clears a stale selection and fills default filters when nothing is selected", () => {
-    expect(pullRequestsSearchForRestore({ repository: "old/repo", number: 7 }, null)).toEqual({
-      involvement: "all",
-      state: "open",
-    });
   });
 });

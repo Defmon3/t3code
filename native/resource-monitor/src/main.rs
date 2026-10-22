@@ -28,6 +28,7 @@ const MAX_DISCOVERY_ROOTS: usize = 512;
 const MAX_DISCOVERY_ROOT_PATH_BYTES: usize = 16 * 1024;
 const MAX_DISCOVERY_PROCESSES: usize = 512;
 const MAX_DISCOVERY_TOTAL_PROCESSES: usize = 4_096;
+const TWO_STAGE_PROCESS_REFRESH: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -501,7 +502,7 @@ impl Collector {
         roots.insert(config.root_pid);
         let tracked = select_tracked_pids(&rows, &roots);
         let tracked_process_count = tracked.len();
-        let process_details = if cfg!(target_os = "linux") && !tracked.is_empty() {
+        let process_details = if TWO_STAGE_PROCESS_REFRESH && !tracked.is_empty() {
             let monitor_pid = Pid::from_u32(std::process::id());
             let mut detail_pids = tracked
                 .iter()
@@ -716,6 +717,15 @@ fn process_sample(pid: u32, process: &sysinfo::Process) -> ProcessSample {
     }
 }
 
+// Keep CPU baselines separate. Even a metadata refresh resets Linux process times.
+fn global_process_refresh_kind() -> ProcessRefreshKind {
+    if TWO_STAGE_PROCESS_REFRESH {
+        ProcessRefreshKind::nothing().with_cpu().without_tasks()
+    } else {
+        process_refresh_kind()
+    }
+}
+
 fn discovered_process_sample(pid: u32, process: &sysinfo::Process) -> DiscoveredProcessSample {
     DiscoveredProcessSample {
         process: process_sample(pid, process),
@@ -724,15 +734,6 @@ fn discovered_process_sample(pid: u32, process: &sysinfo::Process) -> Discovered
             .cwd()
             .map(|path| truncate_utf8(path.to_string_lossy().into_owned(), MAX_PROCESS_CWD_BYTES)),
     }
-}
-
-fn global_process_refresh_kind() -> ProcessRefreshKind {
-    ProcessRefreshKind::nothing()
-        .with_memory()
-        .with_cpu()
-        .with_disk_usage()
-        .with_cmd(UpdateKind::Always)
-        .without_tasks()
 }
 
 fn process_refresh_kind() -> ProcessRefreshKind {
@@ -1420,6 +1421,43 @@ mod tests {
         assert!(process.cpu_percent.is_finite());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn keeps_command_lines_and_memory_out_of_the_discovery_table() {
+        let mut collector = Collector::new();
+        let mut config = CollectorConfig {
+            root_pid: u32::MAX,
+            sample_interval: None,
+            external_processes: HashMap::new(),
+        };
+        assert!(collector.sample(&config, None).processes.is_empty());
+
+        let pid = Pid::from_u32(std::process::id());
+        let unselected = collector.system.process(pid).expect("discovered process");
+        assert!(unselected.cmd().is_empty());
+        assert_eq!(unselected.memory(), 0);
+        assert_eq!(unselected.virtual_memory(), 0);
+
+        config.external_processes.insert(pid.as_u32(), None);
+        let snapshot = collector.sample(&config, None);
+        let selected = snapshot
+            .processes
+            .iter()
+            .find(|process| process.pid == pid.as_u32())
+            .expect("external process details");
+        assert!(!selected.command.is_empty());
+        assert!(selected.resident_bytes > 0);
+        assert!(selected.start_time_ms > 0);
+
+        let retained = collector
+            .system
+            .process(pid)
+            .expect("retained CPU baseline");
+        assert!(retained.cmd().is_empty());
+        assert_eq!(retained.memory(), 0);
+        assert_eq!(retained.virtual_memory(), 0);
+    }
+
     #[test]
     fn accepts_clock_shifts_without_accepting_reused_process_starts() {
         assert!(matches_process_start_time(10_000, 13_600, 3_600));
@@ -1784,12 +1822,17 @@ mod tests {
         let discovery_refresh_kind = discovery_process_refresh_kind();
         let priming_refresh_kind = discovery_cpu_priming_refresh_kind();
 
-        assert_eq!(global_refresh_kind.cmd(), UpdateKind::Always);
+        let expected_global_cmd = if TWO_STAGE_PROCESS_REFRESH {
+            UpdateKind::Never
+        } else {
+            UpdateKind::Always
+        };
+        assert_eq!(global_refresh_kind.cmd(), expected_global_cmd);
         assert_eq!(global_refresh_kind.cwd(), UpdateKind::Never);
         assert!(!global_refresh_kind.tasks());
         assert!(global_refresh_kind.cpu());
-        assert!(global_refresh_kind.memory());
-        assert!(global_refresh_kind.disk_usage());
+        assert_eq!(global_refresh_kind.memory(), !TWO_STAGE_PROCESS_REFRESH);
+        assert_eq!(global_refresh_kind.disk_usage(), !TWO_STAGE_PROCESS_REFRESH);
         assert_eq!(discovery_refresh_kind.cmd(), UpdateKind::OnlyIfNotSet);
         assert_eq!(discovery_refresh_kind.cwd(), UpdateKind::OnlyIfNotSet);
         assert!(discovery_refresh_kind.cpu());

@@ -96,7 +96,7 @@ const make = Effect.gen(function* () {
   });
 
   const commandId = (threadId: string) =>
-    crypto.randomUUIDv4.pipe(
+    crypto.randomUUIDv4().pipe(
       Effect.orDie,
       Effect.map((uuid) => CommandId.make(`server:mcp-issue:${threadId}:${uuid}`)),
     );

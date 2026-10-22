@@ -11,7 +11,7 @@ import { ChevronDownIcon, MessageSquareIcon } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
+import { RelativeTime } from "~/components/RelativeTime";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { TimelineComment } from "./TimelineComment";
@@ -74,7 +74,7 @@ export function ConversationGroup<Entry extends ConversationEntry>({
               </span>
               <span className="block truncate text-3xs text-muted-foreground">
                 {actors.length.toLocaleString()} {actors.length === 1 ? "author" : "authors"} ·{" "}
-                {formatRelativeTimeLabel(first.at)}
+                <RelativeTime timestamp={first.at} />
               </span>
             </span>
             <ChevronDownIcon

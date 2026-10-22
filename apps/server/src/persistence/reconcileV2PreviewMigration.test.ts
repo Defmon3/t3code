@@ -13,7 +13,6 @@ import WorkItemLinks from "./Migrations/063_WorkItemLinks.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
 import PullRequestReviewGuides from "./Migrations/064_PullRequestReviewGuides.ts";
 
-// The V2 schema is unchanged from the published September 15–16 previews.
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* runMigrations({ toMigrationInclusive: 52 });
@@ -94,6 +93,11 @@ describe("V2 preview upgrade", () => {
         [63, "WorkItemLinks"],
         [64, "PullRequestReviewGuides"],
         [65, "ThreadFailureLookupIndex"],
+        [66, "DropUnusedV1Projections"],
+        [67, "CanonicalizeThreadPullRequestLinks"],
+        [68, "CodexUsageNativeTurnIndex"],
+        [69, "RepairClientSettlementTimestamps"],
+        [70, "WebhookDedupe"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -182,6 +186,11 @@ describe("V2 preview upgrade", () => {
         [63, "WorkItemLinks"],
         [64, "PullRequestReviewGuides"],
         [65, "ThreadFailureLookupIndex"],
+        [66, "DropUnusedV1Projections"],
+        [67, "CanonicalizeThreadPullRequestLinks"],
+        [68, "CodexUsageNativeTurnIndex"],
+        [69, "RepairClientSettlementTimestamps"],
+        [70, "WebhookDedupe"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
