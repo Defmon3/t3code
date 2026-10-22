@@ -153,9 +153,16 @@ export function useLocalStorage<T, E>(
     (value: T | ((val: T) => T)) => {
       if (key === null) return;
       try {
-        const currentValue = getLocalStorageItem(key, schema) ?? initialValue;
         let valueToStore: T;
         if (typeof value === "function") {
+          // Like the read path, treat an unreadable stored value as the initial
+          // value, so a corrupt blob cannot block every later write.
+          let currentValue = initialValue;
+          try {
+            currentValue = getLocalStorageItem(key, schema) ?? initialValue;
+          } catch (error) {
+            console.error("[LOCALSTORAGE] Could not read stored value.", error);
+          }
           try {
             valueToStore = (value as (val: T) => T)(currentValue);
           } catch (cause) {

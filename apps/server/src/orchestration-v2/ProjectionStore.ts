@@ -83,7 +83,7 @@ import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import {
   isThreadHistoryUserTurn,
   isConversationHistoryItem,
-  isThreadHistoryTurnStart,
+  threadHistoryTurnStarts,
   THREAD_HISTORY_MAX_RAW_TURNS,
   selectHistoryPageFromCursor,
   selectRecentTimelineWindow,
@@ -419,6 +419,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
+  readonly getThreadWorktreePaths: () => Effect.Effect<
+    ReadonlyArray<{ readonly threadId: ThreadId; readonly worktreePath: string }>,
+    ProjectionStoreV2Error
+  >;
   readonly getThreadsWithIssues: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadIssues>, ProjectionStoreV2Error>;
@@ -1055,7 +1059,7 @@ const encodeSubagentPayload = Schema.encodeEffect(
 const encodeProviderSessionPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJsonSchema),
 );
-const encodeProviderThreadPayload = Schema.encodeEffect(
+export const encodeProviderThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderThreadJsonSchema),
 );
 const encodeProviderTurnPayload = Schema.encodeEffect(
@@ -5643,6 +5647,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = () =>
+      sql<{ readonly thread_id: string; readonly worktree_path: string }>`
+        SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL
+          AND json_extract(payload_json, '$.archivedAt') IS NULL
+          AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
+      `.pipe(
+        Effect.map((rows) =>
+          rows.map((row) => ({
+            threadId: ThreadId.make(row.thread_id),
+            worktreePath: row.worktree_path,
+          })),
+        ),
+        Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+      );
+
     const shellThreadStateFromRow = (input: {
       readonly row: ShellThreadRow;
       readonly runOrdinalsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
@@ -5979,6 +6000,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread,
       getSettlementCandidates,
       getThreadsWithPullRequests,
+      getThreadWorktreePaths,
       getThreadsWithIssues,
       getThreadProjection,
       getTurnStartContext,
@@ -6147,6 +6169,18 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 settledAt: thread.settledAt,
                 issues: thread.issues ?? [],
               })),
+          ),
+        ),
+      getThreadWorktreePaths: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()].flatMap(({ thread }) =>
+              thread.deletedAt === null &&
+              thread.archivedAt === null &&
+              thread.worktreePath !== null
+                ? [{ threadId: thread.id, worktreePath: thread.worktreePath }]
+                : [],
+            ),
           ),
         ),
       getThreadsWithPullRequests: (threadId) =>
@@ -6677,12 +6711,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                     (row) => row.sourceItemId === options.anchorItemId,
                   ) + 1;
             const candidates = snapshot.projection.visibleTurnItems.slice(0, anchorIndex);
+            const turnStartFlags = threadHistoryTurnStarts(candidates.map((row) => row.item));
             const turnAnchors =
               options.userTurnLimit === undefined
                 ? []
-                : candidates.flatMap((row, index) =>
-                    isThreadHistoryTurnStart(row.item) ? [index] : [],
-                  );
+                : candidates.flatMap((_row, index) => (turnStartFlags[index] ? [index] : []));
             const rawStart = turnAnchors.at(-(THREAD_HISTORY_MAX_RAW_TURNS + 2)) ?? 0;
             const anchors = turnAnchors.filter(
               (index) => index >= rawStart && isThreadHistoryUserTurn(candidates[index]!.item),

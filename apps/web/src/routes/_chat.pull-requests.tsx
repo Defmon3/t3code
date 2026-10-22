@@ -10,6 +10,7 @@ import type { PullRequestSpeedActionResult } from "~/components/pullRequest/Pull
 import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
+import { sortProjectsByGroupOrder } from "@t3tools/client-runtime/state/project-grouping";
 import { pullRequestHostOf, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import type {
   EnvironmentId,
@@ -48,6 +49,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -93,6 +95,7 @@ import {
   reusePullRequestEntries,
   settlePullRequestOverrides,
   pullRequestHostActions,
+  largestPullRequestReadCount,
 } from "../components/pullRequest/pullRequestList.logic";
 import {
   pullRequestListPreferences,
@@ -167,6 +170,7 @@ import {
 } from "../lib/openIssueLink";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
+import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useEnvironments } from "../state/environments";
 import {
   pullRequestEnvironment,
@@ -345,7 +349,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     ...(typeof raw.selectedEnvironmentId === "string" && raw.selectedEnvironmentId
       ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
       : {}),
-    ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+    // Always an own key: the router lays this result over the parent route's unvalidated
+    // search, so leaving out a `q` the URL parser made a number would let the number through.
+    q: typeof raw.q === "string" && raw.q ? raw.q.slice(0, 200) : undefined,
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
     ...(raw.review === "approved" ||
     raw.review === "changes-requested" ||
@@ -422,9 +428,12 @@ function PullRequestsRouteView() {
   // the one wrong answer the empty state can give.
   const projectsKnown = useAllEnvironmentShellsBootstrapped();
   // Only the projects the page can actually read: one on an environment that cannot list pull
-  // requests could neither be listed nor acted on.
+  // requests could neither be listed nor acted on, and the Scratch folder is never a repository.
   const projects = useMemo(
-    () => allProjects.filter((project) => environmentIds.includes(project.environmentId)),
+    () =>
+      allProjects.filter(
+        (project) => !project.isScratch && environmentIds.includes(project.environmentId),
+      ),
     [allProjects, environmentIds],
   );
   const environmentLabels = useMemo(
@@ -1261,7 +1270,8 @@ function PullRequestsRouteView() {
       return;
     }
     if (related.length > 0) listQuery.refresh(related);
-    const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
+    const loadedCount =
+      ordered?.key === filterKey ? largestPullRequestReadCount(ordered.entries) : pageSize;
     setPage({
       key: filterKey,
       regrown: [],
@@ -2089,7 +2099,7 @@ function PullRequestsRouteView() {
     />
   );
   const filtersMenu = (
-    <PullRequestFiltersMenu
+    <PullRequestFiltersMenuInSidebarOrder
       onOpenChange={setFiltersOpen}
       state={search.state}
       stateOptions={STATE_TABS}
@@ -2487,6 +2497,23 @@ function PullRequestsRouteView() {
   );
 }
 
+/** Lists the projects in the sidebar's order; it re-renders with thread activity, so the page does not. */
+function PullRequestFiltersMenuInSidebarOrder(
+  props: ComponentProps<typeof PullRequestFiltersMenu>,
+) {
+  const sidebarProjectGroups = useSidebarProjectGroups();
+  const projects = useMemo(
+    () => sortProjectsByGroupOrder(props.projects, sidebarProjectGroups),
+    [props.projects, sidebarProjectGroups],
+  );
+  return <PullRequestFiltersMenu {...props} projects={projects} />;
+}
+
+/**
+ * The search, folded to an icon until asked for. Opening moves focus into the input — the
+ * whole point of pressing it is to type. It stays open while it holds a query, so an active
+ * search is never invisible; empty and blurred, it folds back.
+ */
 /**
  * The pull request list column. The full controls live at the top of the scroll flow; once
  * they scroll away, the title transforms into the scope itself — "Pull Requests / Open ▾

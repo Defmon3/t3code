@@ -46,6 +46,7 @@ describe("V2 preview upgrade", () => {
         [62, "ProjectionThreadIssues"],
         [63, "WorkItemLinks"],
         [64, "PullRequestReviewGuides"],
+        [65, "ThreadFailureLookupIndex"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -92,6 +93,7 @@ describe("V2 preview upgrade", () => {
         [62, "ProjectionThreadIssues"],
         [63, "WorkItemLinks"],
         [64, "PullRequestReviewGuides"],
+        [65, "ThreadFailureLookupIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -179,6 +181,7 @@ describe("V2 preview upgrade", () => {
         [62, "ProjectionThreadIssues"],
         [63, "WorkItemLinks"],
         [64, "PullRequestReviewGuides"],
+        [65, "ThreadFailureLookupIndex"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

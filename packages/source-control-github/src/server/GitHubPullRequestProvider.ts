@@ -34,6 +34,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase"],
+  deleteBranch: true,
   updateMethods: ["merge", "rebase"],
   search: true,
   reactions: true,
@@ -72,6 +73,7 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
   return {
     ...(access.canWrite ? { stackRebase: true } : {}),
     actions: [
+      ...(access.canDeleteBranch === true ? (["delete-branch"] as const) : []),
       // Arming a merge and taking the arming back are the merge, deferred: whoever may not
       // merge here may not leave an instruction to merge later either.
       ...(access.canWrite
@@ -456,11 +458,14 @@ export const make = Effect.gen(function* () {
             Effect.map((cited): ProviderChangeRequestDetail => ({
               ...pullRequest,
               author: withAvatar(pullRequest.author, new Map<string, string>(), input.host),
-              reviewers: pullRequest.reviewRequestLogins.map((login) => ({
-                login,
-                name: null,
-                avatarUrl: null,
-              })),
+              reviewers: [
+                ...pullRequest.reviewRequestLogins.map((login) => ({
+                  login,
+                  name: null,
+                  avatarUrl: null,
+                })),
+                ...pullRequest.reviewRequestTeams,
+              ],
               mergeCapabilities: pullRequest.viewerAccess.mergeCapabilities,
               viewerPermissions: gitHubViewerPermissions({
                 ...pullRequest.viewerAccess,

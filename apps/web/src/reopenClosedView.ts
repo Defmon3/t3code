@@ -89,18 +89,20 @@ type PullRequestsSearchLike = Omit<PullRequestListPreferencePatch, "involvement"
 export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
   previous: S,
   selected: RightPanelSurface | null,
-): S & PullRequestListPreferences {
+): Omit<S, "q"> & { readonly q?: string } & PullRequestListPreferences {
   const {
     repository: _repository,
     number: _number,
     selectedProjectId: _projectId,
     selectedHost: _host,
     selectedEnvironmentId: _environmentId,
+    q,
     sort,
     ...filters
   } = previous;
   return {
     ...filters,
+    ...(q === undefined ? {} : { q }),
     involvement:
       previous.involvement === "authored" || previous.involvement === "reviewing"
         ? previous.involvement
@@ -118,13 +120,14 @@ export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
             : { selectedEnvironmentId: selected.environmentId as EnvironmentId }),
         }
       : {}),
-  } as S & PullRequestListPreferences;
+  } as Omit<S, "q"> & { readonly q?: string } & PullRequestListPreferences;
 }
 
 type IssuesSearchLike = {
   involvement?: string | undefined;
   state?: string | undefined;
   sort?: string | undefined;
+  q?: string | undefined;
   repository?: string;
   number?: number;
   selectedProjectId?: ProjectId;
@@ -134,17 +137,24 @@ type IssuesSearchLike = {
 export function issuesSearchForRestore<S extends IssuesSearchLike>(
   previous: S,
   selected: RightPanelSurface | null,
-): S & { involvement: IssueInvolvement; state: IssueListState; sort?: IssueListSort } {
+): Omit<S, "q"> & {
+  readonly q?: string;
+  involvement: IssueInvolvement;
+  state: IssueListState;
+  sort?: IssueListSort;
+} {
   const {
     repository: _repository,
     number: _number,
     selectedProjectId: _projectId,
     selectedProvider: _provider,
+    q,
     sort,
     ...filters
   } = previous;
   return {
     ...filters,
+    ...(q === undefined ? {} : { q }),
     involvement: isIssueInvolvement(previous.involvement) ? previous.involvement : "all",
     state: isIssueListState(previous.state) ? previous.state : "open",
     ...(isIssueListSort(sort) ? { sort } : {}),
@@ -156,7 +166,12 @@ export function issuesSearchForRestore<S extends IssuesSearchLike>(
           ...(selected.provider === undefined ? {} : { selectedProvider: selected.provider }),
         }
       : {}),
-  } as S & { involvement: IssueInvolvement; state: IssueListState; sort?: IssueListSort };
+  } as Omit<S, "q"> & {
+    readonly q?: string;
+    involvement: IssueInvolvement;
+    state: IssueListState;
+    sort?: IssueListSort;
+  };
 }
 
 export async function reopenClosedView(
