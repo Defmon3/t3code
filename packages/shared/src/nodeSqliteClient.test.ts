@@ -8,6 +8,8 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
+import type * as Tracer from "effect/Tracer";
 import { vi } from "vite-plus/test";
 
 import * as SqliteClient from "./nodeSqliteClient.ts";
@@ -24,7 +26,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         ...((silentWorkers.on
           ? ["setInterval(() => {}, 1 << 30);", { eval: true }]
           : failingWorkers.message !== undefined
-            ? [`throw new Error(${JSON.stringify(failingWorkers.message)});`, { eval: true }]
+            ? [
+                `require("node:worker_threads").parentPort.postMessage({ type: "unavailable", message: ${JSON.stringify(failingWorkers.message)} });`,
+                { eval: true },
+              ]
             : args) as ConstructorParameters<typeof actual.Worker>),
       );
       startedWorkers.push(this);
@@ -64,6 +69,41 @@ const countEntries = (sql: SqlClient.SqlClient) =>
 const layer = it.layer(SqliteClient.layer({ filename: ":memory:" }));
 
 layer("NodeSqliteClient", (it) => {
+  it.effect("records the writer connection owner on a waiting query", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* sql
+        .withTransaction(
+          sql`SELECT 1`.pipe(
+            Effect.andThen(Deferred.succeed(held, undefined)),
+            Effect.andThen(Deferred.await(release)),
+          ),
+        )
+        .pipe(Effect.withSpan("test.writerHolder"), Effect.forkChild);
+      yield* Deferred.await(held);
+
+      const waitingSpan = yield* Deferred.make<Tracer.Span>();
+      const observeWaiter: Statement.Transformer = (statement, _sql, _fiber, span) =>
+        Deferred.succeed(waitingSpan, span).pipe(Effect.as(statement));
+      const waiter = yield* sql`SELECT 1`.pipe(
+        Effect.provideService(Statement.CurrentTransformer, observeWaiter),
+        Effect.provideService(Statement.SpanPropagationEnabled, true),
+        (effect) => Effect.forkChild(effect, { startImmediately: true }),
+      );
+      const span = yield* Deferred.await(waitingSpan);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(waiter);
+
+      assert.equal(span.attributes.get("db.lock_owner_at_start.name"), "test.writerHolder");
+      assert.typeOf(span.attributes.get("db.lock_owner_at_start.fiber_id"), "number");
+      assert.typeOf(span.attributes.get("db.lock_owner_at_start.trace_id"), "string");
+      assert.typeOf(span.attributes.get("db.lock_owner_at_start.span_id"), "string");
+    }),
+  );
+
   it.effect("retries preparing a query after the missing schema becomes available", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -287,17 +327,21 @@ const withFileClient = <A, E>(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 it.effect("uses the writer when the reader cannot open the database", () =>
-  withFileClient((sql, filename) =>
+  withFileClient((sql) =>
     Effect.gen(function* () {
       yield* sql`PRAGMA journal_mode = WAL`;
       yield* sql`CREATE TABLE entries(name TEXT NOT NULL)`;
       yield* sql`INSERT INTO entries VALUES ('kept')`;
-      yield* (yield* FileSystem.FileSystem).remove(filename);
       const startedBefore = startedWorkers.length;
-
-      assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);
-      assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);
-      assert.equal(startedWorkers.length, startedBefore + 1);
+      const previousFailure = failingWorkers.message;
+      failingWorkers.message = "reader cannot open database";
+      try {
+        assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);
+        assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);
+        assert.equal(startedWorkers.length, startedBefore + 1);
+      } finally {
+        failingWorkers.message = previousFailure;
+      }
     }),
   ),
 );

@@ -1,11 +1,16 @@
+import { RegistryContext } from "@effect/atom-react";
+import type { ScopedHookApprovalRequest } from "@t3tools/client-runtime/state/hook-approvals";
 import {
   EnvironmentId,
+  HookApprovalRequestId,
   NodeId,
+  ProviderSessionId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
+import { AtomRegistry } from "effect/reactivity";
 import { useLayoutEffect, useRef, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -16,6 +21,7 @@ vi.mock(import("../ChatMarkdown"), async (importOriginal) => ({
 
 import { act, fakeTimers, render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
+import { pendingHookApprovalRequestsAtom } from "../../state/hookApprovals";
 import { usePendingThreadRequests } from "./usePendingThreadRequests";
 
 const threadRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") };
@@ -102,6 +108,68 @@ function PendingRequestsProbe({
   });
   return null;
 }
+
+it("keeps custom hook choices alongside a provider approval with the same native request id", async () => {
+  const environmentId = EnvironmentId.make("approval-collision-environment");
+  const projection = questionProjection(threadRef.threadId, ["shared-request"]);
+  const providerRequest = projection.runtimeRequests[0]!;
+  const hookRequest = {
+    environmentId,
+    requestId: HookApprovalRequestId.make(providerRequest.id),
+    threadId: projection.thread.id,
+    command: "git status",
+    reason: "Review the candidate working tree.",
+    cwd: "/workspace",
+    createdAt: projection.updatedAt,
+  } satisfies ScopedHookApprovalRequest;
+  const registry = AtomRegistry.make({
+    initialValues: [[pendingHookApprovalRequestsAtom, [hookRequest]]],
+  });
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  await using _screen = await render(
+    <RegistryContext.Provider value={registry}>
+      <PendingRequestsProbe
+        environmentId={environmentId}
+        projection={{
+          ...projection,
+          turnItems: [],
+          runtimeRequests: [
+            {
+              ...providerRequest,
+              kind: "command",
+              responseCapability: {
+                type: "live",
+                providerSessionId: ProviderSessionId.make("approval-session"),
+                supportsFeedback: true,
+              },
+            },
+          ],
+        }}
+      />
+    </RegistryContext.Provider>,
+  );
+
+  expect(requests.pendingApprovals).toHaveLength(2);
+  const providerApproval = requests.pendingApprovals.find(
+    (approval) => approval.requestId === providerRequest.id,
+  );
+  const hookApproval = requests.pendingApprovals.find(
+    (approval) => approval.requestId !== providerRequest.id,
+  );
+  expect(providerApproval).toMatchObject({ responseCapability: "live", supportsFeedback: true });
+  expect(hookApproval).toMatchObject({
+    appName: "Custom hook",
+    responseCapability: "live",
+    options: [
+      { decision: "decline", label: "Reject" },
+      { decision: "acceptForSession", label: "Approve for this session" },
+      { decision: "accept", label: "Approve once" },
+    ],
+  });
+  expect(hookApproval?.detail).toContain(hookRequest.command);
+  expect(hookApproval?.detail).toContain(hookRequest.reason);
+  expect(hookApproval?.supportsFeedback).not.toBe(true);
+});
 
 it("retains answers, selections and question position after leaving chat, including while the projection reloads", async () => {
   using _timers = fakeTimers();

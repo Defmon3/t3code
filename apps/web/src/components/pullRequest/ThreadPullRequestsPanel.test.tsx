@@ -1,8 +1,30 @@
-import { act, cloneElement, type ReactElement, type ReactNode } from "react";
+import { cloneElement, Fragment, type ReactElement, type ReactNode } from "react";
+import { act } from "../../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { ThreadPullRequestsPanel } from "./ThreadPullRequestsPanel";
+
+vi.mock("@legendapp/list/react", () => ({
+  LegendList: <T,>({
+    data,
+    renderItem,
+    keyExtractor,
+    ListFooterComponent,
+  }: {
+    data: ReadonlyArray<T>;
+    renderItem: (info: { item: T; index: number }) => ReactNode;
+    keyExtractor: (item: T) => string;
+    ListFooterComponent?: ReactNode;
+  }) => (
+    <>
+      {data.map((item, index) => (
+        <Fragment key={keyExtractor(item)}>{renderItem({ item, index })}</Fragment>
+      ))}
+      {ListFooterComponent}
+    </>
+  ),
+}));
 
 const { shell, tracker, capabilities, update, openIssue, openInBrowser, modifiers, perform } =
   vi.hoisted(() => ({
@@ -131,6 +153,7 @@ async function click(url: string) {
 function answerWith(issues: ReadonlyArray<typeof issue>) {
   const answers = issues.map((saved) => ({ ...saved, title: saved.url, state: "open" }));
   tracker.mockImplementation((reference) => {
+    if (reference === null) return null;
     const { provider, repository, number } = reference as typeof issue;
     return answers.find(
       (answer) =>

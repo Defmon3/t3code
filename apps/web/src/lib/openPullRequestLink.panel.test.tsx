@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
-import { act } from "react";
+import { act } from "../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { PULL_REQUESTS_PANEL_REF } from "../rightPanelStore";
@@ -13,7 +13,7 @@ const { navigate, openPullRequest } = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigate }));
 vi.mock("../state/environments", () => ({ usePrimaryEnvironmentId: () => "local" }));
 vi.mock("../state/entities", () => ({
-  useProjects: () => [
+  readProjects: () => [
     {
       id: "project",
       environmentId: "local",
@@ -28,13 +28,21 @@ vi.mock("../state/entities", () => ({
       },
     },
   ],
-  useServerConfigs: () =>
-    new Map([
-      [
-        "local",
-        { environment: { capabilities: { pullRequests: true, threadPullRequests: true } } },
-      ],
-    ]),
+}));
+vi.mock("../rpc/atomRegistry", () => ({
+  appAtomRegistry: {
+    get: () =>
+      new Map([
+        [
+          "local",
+          { environment: { capabilities: { pullRequests: true, threadPullRequests: true } } },
+        ],
+      ]),
+  },
+}));
+vi.mock("../hooks/useSettings", () => ({
+  useClientSettings: (select: (settings: { pullRequestLinksOpenInApp: boolean }) => unknown) =>
+    select({ pullRequestLinksOpenInApp: true }),
 }));
 vi.mock("../rightPanelStore", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../rightPanelStore")>()),
@@ -67,7 +75,6 @@ function Link({ panelRef, threadRef }: { panelRef: ScopedThreadRef; threadRef?: 
 it.each(["issues", "pull-requests", "thread"])(
   "opens links in the owning %s panel",
   async (surface) => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const panelRef =
       surface === "pull-requests"
         ? PULL_REQUESTS_PANEL_REF

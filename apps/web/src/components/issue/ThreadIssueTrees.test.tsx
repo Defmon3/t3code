@@ -1,9 +1,12 @@
 import type { EnvironmentId, ThreadIssueLink } from "@t3tools/contracts";
-import { act, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { act } from "../../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { LIVE_REFRESH_IDLE_AFTER_MS, LIVE_REFRESH_INTERVAL_MS } from "~/hooks/useLiveRefresh";
 import { ThreadIssueTrees } from "./ThreadIssueTrees";
+
+const LIVE_REFRESH_INTERVAL_MS = 5 * 60_000;
+const LIVE_REFRESH_IDLE_AFTER_MS = 6 * 60_000;
 
 const runtime = vi.hoisted(() => ({ current: null as { status: string } | null }));
 const refreshes = vi.hoisted(() => new Map<string, number>());
@@ -26,8 +29,7 @@ vi.mock("../ui/tooltip", () => ({
   TooltipPopup: () => null,
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => invalidate }));
-vi.mock("~/state/query", async () => {
-  const { useCallback } = await import("react");
+vi.mock("~/state/query", () => {
   return {
     useEnvironmentQuery: ({ projectId }: { projectId: string }) => ({
       data: pending.has(projectId)
@@ -37,10 +39,7 @@ vi.mock("~/state/query", async () => {
           : issues.find((issue) => issue.projectId === projectId),
       error: failed.has(projectId) ? "The environment request failed." : null,
       isPending: pending.has(projectId),
-      refresh: useCallback(
-        () => refreshes.set(projectId, (refreshes.get(projectId) ?? 0) + 1),
-        [projectId],
-      ),
+      refresh: () => refreshes.set(projectId, (refreshes.get(projectId) ?? 0) + 1),
     }),
   };
 });
@@ -83,10 +82,9 @@ beforeEach(() => {
   document = Object.assign(new EventTarget(), { visibilityState: "visible" });
   vi.stubGlobal("document", document);
   vi.stubGlobal("window", new EventTarget());
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
-afterEach(() => {
-  act(() => renderer?.unmount());
+afterEach(async () => {
+  await act(() => renderer?.unmount());
   renderer = undefined;
   runtime.current = null;
   refreshes.clear();
@@ -100,8 +98,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(linked: ReadonlyArray<ThreadIssueLink> = issues) {
-  act(() => {
+async function mount(linked: ReadonlyArray<ThreadIssueLink> = issues) {
+  await act(() => {
     renderer = create(trees(linked));
   });
   refreshes.clear();
@@ -129,8 +127,8 @@ const counts = () =>
   Object.fromEntries(issues.map(({ projectId }) => [projectId, refreshes.get(projectId!) ?? 0]));
 const each = (count: number) => ({ public: count, enterprise: count, linear: count });
 
-it("keeps same-numbered issues on different hosts as separate trees with their own actions", () => {
-  mount(issues.slice(0, 2));
+it("keeps same-numbered issues on different hosts as separate trees with their own actions", async () => {
+  await mount(issues.slice(0, 2));
   expect(treeLabels()).toEqual(["Public", "Enterprise"]);
   expect(
     renderer!.root
@@ -139,42 +137,44 @@ it("keeps same-numbered issues on different hosts as separate trees with their o
   ).toEqual(issues.slice(0, 2).map((linked) => linked.url));
 });
 
-it("re-reads every tree on the live interval only while the window is showing and in use", () => {
-  mount();
+it("re-reads every tree on the live interval only while the window is showing and in use", async () => {
+  await mount();
   expect(counts()).toEqual(each(0));
 
-  act(() => vi.advanceTimersByTime(60_000));
+  await act(() => vi.advanceTimersByTime(60_000));
   expect(counts()).toEqual(each(0));
-  act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS - 60_000));
+  await act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS - 60_000));
   expect(counts()).toEqual(each(1));
 
   document.visibilityState = "hidden";
-  act(() => document.dispatchEvent(new Event("visibilitychange")));
-  act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS * 3));
+  await act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS * 3));
   expect(counts()).toEqual(each(1));
 
   document.visibilityState = "visible";
-  act(() => document.dispatchEvent(new Event("pointerdown")));
-  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await act(() => document.dispatchEvent(new Event("pointerdown")));
+  await act(() => document.dispatchEvent(new Event("visibilitychange")));
   expect(counts()).toEqual(each(2));
 
-  act(() => vi.advanceTimersByTime(LIVE_REFRESH_IDLE_AFTER_MS + LIVE_REFRESH_INTERVAL_MS * 3));
+  await act(() =>
+    vi.advanceTimersByTime(LIVE_REFRESH_IDLE_AFTER_MS + LIVE_REFRESH_INTERVAL_MS * 3),
+  );
   expect(counts()).toEqual(each(3));
 
-  act(() => document.dispatchEvent(new Event("pointerdown")));
+  await act(() => document.dispatchEvent(new Event("pointerdown")));
   expect(counts()).toEqual(each(4));
   expect(invalidate).not.toHaveBeenCalled();
 });
 
-it("leaves a tree alone while its first read is still pending", () => {
+it("leaves a tree alone while its first read is still pending", async () => {
   pending.add("enterprise");
-  mount();
-  act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS));
+  await mount();
+  await act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS));
   expect(counts()).toEqual({ public: 1, enterprise: 0, linear: 1 });
 });
 
-it("does not share a refresh schedule across environments", () => {
-  act(() => {
+it("does not share a refresh schedule across environments", async () => {
+  await act(() => {
     renderer = create(
       <>
         {trees(issues, "first")}
@@ -183,27 +183,27 @@ it("does not share a refresh schedule across environments", () => {
     );
   });
   refreshes.clear();
-  act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS));
+  await act(() => vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS));
   expect(counts()).toEqual(each(2));
 });
 
-it("re-reads each tree once per finished run through the server cache", () => {
+it("re-reads each tree once per finished run through the server cache", async () => {
   runtime.current = { status: "running" };
-  mount();
+  await mount();
   for (const status of ["idle", "running", "idle", "running", "idle"]) {
     runtime.current = { status };
-    act(() => renderer!.update(trees()));
+    await act(() => renderer!.update(trees()));
   }
   expect(counts()).toEqual(each(3));
   expect(invalidate).not.toHaveBeenCalled();
 });
 
-it("shows a tree only while the tracker answers with the saved issue", () => {
+it("shows a tree only while the tracker answers with the saved issue", async () => {
   const linear = issues[2]!;
   served.set("linear", { ...linear, title: "Renamed", url: `${linear.url}-renamed?x=1` });
-  mount([linear]);
+  await mount([linear]);
   expect(treeLabels()).toEqual(["Renamed"]);
-  act(() =>
+  await act(() =>
     renderer!.root
       .find((node) => node.type === "button" && node.props["aria-current"])
       .props.onClick(),
@@ -216,27 +216,27 @@ it("shows a tree only while the tracker answers with the saved issue", () => {
     null,
   ]) {
     served.set("linear", answer);
-    act(() => renderer!.update(trees([linear])));
+    await act(() => renderer!.update(trees([linear])));
     expect(treeLabels()).toEqual([]);
-    act(() => renderer!.root.findByType("button").props.onClick());
+    await act(() => renderer!.root.findByType("button").props.onClick());
   }
   expect(openInBrowser.mock.calls).toEqual([[linear.url], [linear.url], [linear.url]]);
   expect(open).toHaveBeenCalledOnce();
 
   pending.add("linear");
-  act(() => renderer!.update(trees([linear])));
+  await act(() => renderer!.update(trees([linear])));
   expect(treeLabels()).toEqual([]);
   expect(renderer!.root.findAllByType("button")).toEqual([]);
 });
 
-it("opens the saved URL instead of a tree kept from before a failed refresh", () => {
+it("opens the saved URL instead of a tree kept from before a failed refresh", async () => {
   const linear = issues[2]!;
-  mount([linear]);
+  await mount([linear]);
   expect(treeLabels()).toEqual(["Linear"]);
   failed.add("linear");
-  act(() => renderer!.update(trees([linear])));
+  await act(() => renderer!.update(trees([linear])));
   expect(treeLabels()).toEqual([]);
-  act(() => renderer!.root.findByType("button").props.onClick());
+  await act(() => renderer!.root.findByType("button").props.onClick());
   expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(linear.url);
   expect(open).not.toHaveBeenCalled();
 });

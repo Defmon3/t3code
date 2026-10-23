@@ -30,6 +30,30 @@ const seedPreview = Effect.gen(function* () {
 });
 
 describe("V2 preview upgrade", () => {
+  it.effect("appends the shell stop index without rewriting installed fork migrations", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 70 });
+      const installedHistory =
+        yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+      yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
+      const links = yield* sql`SELECT * FROM work_item_links`;
+
+      assert.deepStrictEqual(yield* runMigrations(), [[71, "ShellStopRequestIndex"]]);
+      assert.deepStrictEqual(
+        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 70 ORDER BY migration_id`,
+        installedHistory,
+      );
+      assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+      assert.deepStrictEqual(
+        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+          AND name = 'orchestration_v2_projection_turn_items_stop_request_idx'`,
+        [{ name: "orchestration_v2_projection_turn_items_stop_request_idx" }],
+      );
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("upgrades official nightly migration 61 without losing review guides", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -46,6 +70,12 @@ describe("V2 preview upgrade", () => {
         [63, "WorkItemLinks"],
         [64, "PullRequestReviewGuides"],
         [65, "ThreadFailureLookupIndex"],
+        [66, "DropUnusedV1Projections"],
+        [67, "CanonicalizeThreadPullRequestLinks"],
+        [68, "CodexUsageNativeTurnIndex"],
+        [69, "RepairClientSettlementTimestamps"],
+        [70, "WebhookDedupe"],
+        [71, "ShellStopRequestIndex"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -98,6 +128,7 @@ describe("V2 preview upgrade", () => {
         [68, "CodexUsageNativeTurnIndex"],
         [69, "RepairClientSettlementTimestamps"],
         [70, "WebhookDedupe"],
+        [71, "ShellStopRequestIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -191,6 +222,7 @@ describe("V2 preview upgrade", () => {
         [68, "CodexUsageNativeTurnIndex"],
         [69, "RepairClientSettlementTimestamps"],
         [70, "WebhookDedupe"],
+        [71, "ShellStopRequestIndex"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

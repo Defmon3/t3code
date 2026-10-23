@@ -378,7 +378,7 @@ function RightPanelEmptyState(props: {
     ...(props.onAddRepository
       ? [
           {
-            label: "Repository",
+            label: "Git History",
             icon: GitBranch,
             shortcut: "G",
             available: props.repositoryAvailable === true,
@@ -584,7 +584,7 @@ function surfaceTitle(
     case "diff":
       return "Diff";
     case "repository":
-      return "Repository";
+      return "Git History";
     case "processes":
       return "Processes";
     case "files":
@@ -1113,7 +1113,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     ...(props.onAddRepository
       ? [
           {
-            label: "Repository",
+            label: "Git History",
             icon: GitBranch,
             shortcut: "G",
             available: props.repositoryAvailable === true,
