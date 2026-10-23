@@ -135,7 +135,7 @@ describe("right panel new-tab shortcut", () => {
     },
   );
 
-  it("opens Repository from the keyboard menu", async () => {
+  it("opens Git History from the keyboard menu", async () => {
     const addIssue = vi.fn();
     await renderPanel({ repositoryAvailable: true, onAddRepository: addIssue });
     await press("t", { metaKey: true });

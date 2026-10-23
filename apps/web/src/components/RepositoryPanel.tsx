@@ -66,12 +66,12 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
   return (
     <section
       className="flex size-full min-h-0 min-w-0 flex-col bg-background"
-      aria-label="Repository"
+      aria-label="Git History"
     >
       <div
         className="flex shrink-0 gap-1 border-b border-border/70 px-3 py-1.5"
         role="tablist"
-        aria-label="Repository views"
+        aria-label="Git History views"
       >
         {views.map((view, index) => (
           <Button
