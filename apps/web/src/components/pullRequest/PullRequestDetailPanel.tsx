@@ -1,4 +1,3 @@
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { useAtomValue } from "@effect/atom-react";
 import { usePullRequestStack } from "~/state/usePullRequestStack";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -50,8 +49,8 @@ import { isCommandPaletteOpen } from "~/commandPaletteBus";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { usePullRequestDefaultMergeMethodResolver } from "./usePullRequestActions";
-import { OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST } from "./pullRequestCheckoutToast";
-import { changeRequestRepositoryUrl, gitHubPullRequestBrowserUrl } from "~/lib/openPullRequestLink";
+import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
+import { projectChangeRequestUrl } from "@t3tools/client-runtime/change-request-links";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -66,6 +65,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { PullRequestStackMenu } from "./PullRequestStackMenu";
 import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { changeRequestReferenceAutolinker } from "@t3tools/client-runtime/pull-request-markdown";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
 import { vcsEnvironment } from "~/state/vcs";
 import { RelativeTime } from "~/components/RelativeTime";
@@ -222,14 +222,12 @@ function resolvePullRequestReference(
 }
 
 function pullRequestMarkdownContext(
-  hostClient: ReturnType<typeof sourceControlClients.get>,
-  repositoryUrl: string | null,
+  detail: Pick<PullRequestDetail, "provider" | "url"> | null,
   threadRef: ScopedThreadRef | null,
   panelRef: ScopedThreadRef | null,
 ) {
   return {
-    repositoryUrl:
-      repositoryUrl === null ? null : hostClient.referenceAutolinkRepositoryUrl(repositoryUrl),
+    autolinks: changeRequestReferenceAutolinker(detail),
     threadRef,
     panelRef,
   };
@@ -240,9 +238,11 @@ function pullRequestStackReference(
   reference: PullRequestRef,
   supportsThreadPullRequests: boolean,
 ) {
-  return detail === null || detail.capabilities.stacks !== true || !supportsThreadPullRequests
-    ? null
-    : { ...reference, host: reference.host ?? parseChangeRequestUrl(detail.url)?.host };
+  if (detail === null || detail.capabilities.stacks !== true || !supportsThreadPullRequests) {
+    return null;
+  }
+  const link = sourceControlClients.parseChangeRequestUrl(detail.url)?.link;
+  return { ...reference, host: reference.host ?? link?.authority ?? link?.host };
 }
 
 export function PullRequestDetailPanel({
@@ -299,7 +299,7 @@ export function PullRequestDetailPanel({
     supportsThreadPullRequests,
   );
   const loadingCheckoutCommand = loadingPullRequestCheckoutCommand(reference, repositoryIdentity);
-  const unavailableGitHubUrl = gitHubPullRequestBrowserUrl(
+  const unavailableHostUrl = projectChangeRequestUrl(
     repositoryIdentity,
     reference.repository,
     reference.number,
@@ -463,15 +463,17 @@ export function PullRequestDetailPanel({
     setSeenAutoMergeKey(autoMergeKey);
     if (detail?.autoMergeMethod !== undefined) setMergeMethod(detail.autoMergeMethod);
   }
-  const repositoryUrl = detail === null ? null : changeRequestRepositoryUrl(detail.url);
+  const repositoryUrl =
+    detail === null
+      ? null
+      : (sourceControlClients.parseChangeRequestUrl(detail.url)?.link.repositoryUrl ?? null);
   const hostClient = sourceControlClients.get(detail?.provider);
+  const terminology = sourceControlClients.get(
+    handoffSummary?.provider ?? listEntry?.provider ?? repositoryIdentity?.provider,
+  ).changeRequest;
+  const checkoutToast = offHeadPullRequestCheckoutToast(hostClient.changeRequest);
   const openOnHostText = openOnHostLabel(hostClient);
-  const markdownContext = pullRequestMarkdownContext(
-    hostClient,
-    repositoryUrl,
-    threadRef,
-    panelRef,
-  );
+  const markdownContext = pullRequestMarkdownContext(detail, threadRef, panelRef);
   const authorProfileUrl =
     detail?.author && repositoryUrl !== null
       ? hostClient.authorProfileUrl(detail.author.login, repositoryUrl)
@@ -482,7 +484,7 @@ export function PullRequestDetailPanel({
         handoffSummary.number,
         handoffSummary.headBranch,
         detail?.headRepositoryNameWithOwner,
-        changeRequestRepositoryUrl(handoffSummary.url),
+        sourceControlClients.parseChangeRequestUrl(handoffSummary.url)?.link.repositoryUrl ?? null,
       )
     : loadingCheckoutCommand;
   const branchRefsQuery = useEnvironmentQuery(
@@ -888,7 +890,7 @@ export function PullRequestDetailPanel({
                   ? "This repository is on the pull request's branch, with a thread open on it."
                   : "The pull request is in its own worktree, with a thread open on it.",
             }
-          : OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST,
+          : checkoutToast,
       );
       return;
     }
@@ -901,7 +903,7 @@ export function PullRequestDetailPanel({
             title: "Checkout ready",
             description: "The task is in the composer. Read it over, then send.",
           }
-        : OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST,
+        : checkoutToast,
     );
   };
 
@@ -1188,6 +1190,7 @@ export function PullRequestDetailPanel({
   const checkoutControl =
     context === "page" ? (
       <PullRequestCheckoutMenu
+        term={terminology.singular}
         handoff={handoff}
         checkoutRoot={checkoutRoot}
         canPrepareWorktree={canPrepareWorktree}
@@ -1271,6 +1274,7 @@ export function PullRequestDetailPanel({
               ) : null}
               {nativeStack ? (
                 <PullRequestStackMenu
+                  terminology={terminology}
                   hostLabel={hostClient.label}
                   stack={nativeStack}
                   notice={nativeStackQuery.notice}
@@ -1320,6 +1324,7 @@ export function PullRequestDetailPanel({
               />
               {checkoutControl}
               <PullRequestActionsMenu
+                terminology={terminology}
                 environmentId={environmentId}
                 reference={reference}
                 pullRequestKey={pullRequestKey}
@@ -1688,7 +1693,16 @@ export function PullRequestDetailPanel({
               : { error: detailQuery.error })}
             refreshing={detailQuery.isPending}
             onRetry={refreshDetail}
-            {...(unavailableGitHubUrl ? { gitHubUrl: unavailableGitHubUrl } : {})}
+            {...(unavailableHostUrl
+              ? {
+                  host: {
+                    url: unavailableHostUrl,
+                    openLabel: openOnHostLabel(
+                      sourceControlClients.get(repositoryIdentity?.provider),
+                    ),
+                  },
+                }
+              : {})}
           />
         ) : detail ? (
           <PullRequestMarkdownContext value={markdownContext}>
@@ -1717,6 +1731,7 @@ export function PullRequestDetailPanel({
             {mountedTabs.has("guide") ? (
               <div className={cn("absolute inset-0", tab !== "guide" && "invisible")}>
                 <PullRequestGuideTab
+                  rangeComments={detail.capabilities.review.rangeComment === true}
                   environmentId={environmentId}
                   reference={reference}
                   active={tab === "guide"}

@@ -13,7 +13,7 @@ and modes you choose in a draft keep their permissions.
 | **Supervised**        | Requests approval for commands and file changes.                                      |
 | **Auto-accept edits** | Approves file edits automatically; other actions can still require approval.          |
 | **Auto**              | Uses the provider's automatic review to approve routine actions and ask about others. |
-| **Full access**       | Allows unrestricted access; provider safety checks can still request approval.        |
+| **Full access**       | Allows commands and edits without approval prompts.                                   |
 
 Approve or reject requests in the conversation to let the agent continue. Permission modes do
 not prevent the agent from asking questions about the task.
@@ -24,9 +24,6 @@ Providers enforce permissions differently. Some read-only actions can proceed in
 **Auto** uses automatic review on Codex, Claude, Cursor, and Grok; providers without an equivalent,
 including OpenCode and Antigravity, fall back to asking. On Grok, commands its review blocks come
 to you for approval.
-
-Codex **Full access** leaves filesystem and network access unrestricted. Its safety checks can
-still ask you to approve flagged commands, such as forced deletions.
 
 Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
 runs in **Supervised**.

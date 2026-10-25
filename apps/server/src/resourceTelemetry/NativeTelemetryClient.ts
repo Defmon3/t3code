@@ -486,7 +486,7 @@ export const clearProcessDiscoveryRequest = Effect.fn("clearProcessDiscoveryRequ
   });
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(function* () {
   const binary = yield* ResourceMonitorBinary.ResourceMonitorBinary;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1117,82 +1117,84 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     );
   });
 
-  const discoverProcesses: NativeTelemetryClient["Service"]["discoverProcesses"] = (roots) =>
-    Effect.gen(function* () {
-      const current = yield* Ref.get(state);
-      if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) {
-        return yield* new NativeTelemetryUnavailable({
-          reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
-        });
-      }
-      const normalizedRoots = normalizeProcessDiscoveryRoots(roots, platform);
-      const request = yield* shareProcessDiscoveryRequest({
-        mutex: discoveryMutex,
-        pending: pendingDiscoveries,
-        rootKey: normalizedRoots.join("\u0000"),
-        start: () =>
-          Effect.gen(function* () {
-            const requestId = yield* crypto.randomUUIDv4().pipe(
-              Effect.mapError(
-                (cause) =>
-                  new NativeTelemetryCommandFailed({
-                    operation: "createProcessDiscoveryRequestId",
-                    cause,
-                  }),
-              ),
-            );
-            const deferred = yield* Deferred.make<
-              ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
-              NativeTelemetryClientError
-            >();
-            const request: PendingDiscoveryRequest = {
-              rootKey: normalizedRoots.join("\u0000"),
-              deferred,
-              processes: [],
-              completed: Option.none(),
-            };
-            yield* Ref.update(pendingDiscoveries, (pending) => {
-              const next = new Map(pending);
-              next.set(requestId, request);
-              return next;
-            });
-            yield* writeCommand(Option.getOrThrow(current.handle), {
-              version: RESOURCE_MONITOR_PROTOCOL_VERSION,
-              type: "discoverProcesses",
-              requestId,
-              roots: [...normalizedRoots],
-            }).pipe(
-              Effect.tapError(() =>
-                Ref.update(pendingDiscoveries, (pending) => {
-                  const next = new Map(pending);
-                  next.delete(requestId);
-                  return next;
-                }),
-              ),
-            );
-            return request;
-          }),
+  const discoverProcesses: NativeTelemetryClient["Service"]["discoverProcesses"] = Effect.fn(
+    "resourceTelemetry.nativeTelemetryClient.discoverProcesses",
+  )(function* (roots) {
+    const current = yield* Ref.get(state);
+    if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) {
+      return yield* new NativeTelemetryUnavailable({
+        reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
       });
-      if (request.type === "completed") return request.processes;
-      return yield* Deferred.await(request.request.deferred).pipe(
-        Effect.timeoutOption(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
-        Effect.flatMap(
-          Option.match({
-            onNone: () =>
-              Effect.fail(
-                new NativeTelemetryRequestTimedOut({
-                  operation: "discoverProcesses",
-                  timeoutMs: Duration.toMillis(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+    }
+    const normalizedRoots = normalizeProcessDiscoveryRoots(roots, platform);
+    const request = yield* shareProcessDiscoveryRequest({
+      mutex: discoveryMutex,
+      pending: pendingDiscoveries,
+      rootKey: normalizedRoots.join("\u0000"),
+      start: Effect.fn("resourceTelemetry.nativeTelemetryClient.startProcessDiscovery")(
+        function* () {
+          const requestId = yield* crypto.randomUUIDv4().pipe(
+            Effect.mapError(
+              (cause) =>
+                new NativeTelemetryCommandFailed({
+                  operation: "createProcessDiscoveryRequestId",
+                  cause,
                 }),
-              ),
-            onSome: (processes) =>
-              clearProcessDiscoveryRequest(pendingDiscoveries, request.request.deferred).pipe(
-                Effect.as(processes),
-              ),
-          }),
-        ),
-      );
+            ),
+          );
+          const deferred = yield* Deferred.make<
+            ReadonlyArray<ResourceMonitorDiscoveredProcessSample>,
+            NativeTelemetryClientError
+          >();
+          const request: PendingDiscoveryRequest = {
+            rootKey: normalizedRoots.join("\u0000"),
+            deferred,
+            processes: [],
+            completed: Option.none(),
+          };
+          yield* Ref.update(pendingDiscoveries, (pending) => {
+            const next = new Map(pending);
+            next.set(requestId, request);
+            return next;
+          });
+          yield* writeCommand(Option.getOrThrow(current.handle), {
+            version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+            type: "discoverProcesses",
+            requestId,
+            roots: [...normalizedRoots],
+          }).pipe(
+            Effect.tapError(() =>
+              Ref.update(pendingDiscoveries, (pending) => {
+                const next = new Map(pending);
+                next.delete(requestId);
+                return next;
+              }),
+            ),
+          );
+          return request;
+        },
+      ),
     });
+    if (request.type === "completed") return request.processes;
+    return yield* Deferred.await(request.request.deferred).pipe(
+      Effect.timeoutOption(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new NativeTelemetryRequestTimedOut({
+                operation: "discoverProcesses",
+                timeoutMs: Duration.toMillis(PROCESS_DISCOVERY_REQUEST_TIMEOUT),
+              }),
+            ),
+          onSome: (processes) =>
+            clearProcessDiscoveryRequest(pendingDiscoveries, request.request.deferred).pipe(
+              Effect.as(processes),
+            ),
+        }),
+      ),
+    );
+  });
 
   const sampleNow: NativeTelemetryClient["Service"]["sampleNow"] = Effect.gen(function* () {
     const current = yield* Ref.get(state);

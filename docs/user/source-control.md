@@ -339,7 +339,8 @@ Use **Link issue or PR** in the command palette or the thread header's right-cli
 in the **Linked items** panel, or right-click an issue or pull request URL in the conversation.
 Use **Link to thread** to attach it, or **Unlink from thread** to remove its saved link.
 Creating a pull request from Git actions links it automatically.
-Agents can link their pull requests with the `link_pull_request` tool.
+Creating one with `gh pr create` or `glab mr create` links it automatically. Agents can link their
+pull requests with the `link_pull_request` tool.
 
 Use **Link this PR** in a branch-detected badge's tooltip to keep it with the thread. From a review
 on the Pull Requests page, **Link to thread** lets you search for an active thread. The review header

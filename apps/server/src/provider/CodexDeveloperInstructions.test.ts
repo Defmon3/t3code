@@ -30,7 +30,7 @@ describe("buildCodexAdditionalContext", () => {
   });
 });
 
-describe("buildCodexDeveloperInstructions", () => {
+describe("Codex runtime context", () => {
   it("flattens multiline metadata into single-line runtime info", () => {
     const instructions = runtimeInstructions({
       model: "gpt\n5.3\ncodex",
@@ -59,6 +59,27 @@ describe("T3 issue developer instructions", () => {
       buildCodexAdditionalContext(runtime, false).t3_code_runtime!.value,
       /<issue_linking>/,
     );
+  });
+});
+
+describe("Codex orchestration context", () => {
+  it("routes subagents native first, delegate_task for the rest", () => {
+    const orchestration = Object.entries(buildCodexAdditionalContext({ model: "gpt-6.1-sol" }))
+      .filter(([key]) => key.startsWith("t3_code_orchestration_"))
+      .map(([, entry]) => entry.value)
+      .join("\n");
+
+    NodeAssert.ok(orchestration.includes("use your native tool when the child uses your provider"));
+    NodeAssert.ok(orchestration.includes("`run_in_background:false`"));
+    NodeAssert.ok(orchestration.includes("A native type running another provider's model"));
+    NodeAssert.ok(
+      orchestration.includes("Every new delegate review or re-check is a new `delegate_task`"),
+    );
+    NodeAssert.ok(orchestration.includes("never a `t3_thread_send`"));
+    NodeAssert.ok(!orchestration.includes("inheritedOptions"));
+    NodeAssert.ok(!orchestration.includes("Prefer native"));
+    // The ACP terminal fallback is ACP-only; Codex agents never need it.
+    NodeAssert.ok(!orchestration.includes("acp-mcp-call"));
   });
 });
 

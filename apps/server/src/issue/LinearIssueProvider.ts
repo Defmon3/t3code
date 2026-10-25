@@ -9,7 +9,7 @@ import type {
   IssueState,
   IssueViewerPermissions,
 } from "@t3tools/contracts";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as LinearConnection from "./LinearConnection.ts";
@@ -108,8 +108,8 @@ export function linearLinkedPullRequests(
   return attachments.flatMap((attachment) => {
     const match = PULL_REQUEST_URL.exec(attachment.url);
     if (match === null) return [];
-    const reference = parseChangeRequestUrl(attachment.url);
-    if (reference === null) return [];
+    const reference = sourceControlDefinitions.parseChangeRequestUrl(attachment.url)?.link;
+    if (reference === undefined) return [];
     const key = `${reference.host}/${reference.repository}#${reference.number}`;
     if (seen.has(key)) return [];
     seen.add(key);

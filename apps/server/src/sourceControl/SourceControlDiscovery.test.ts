@@ -3,6 +3,11 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { providerAuth } from "@t3tools/source-control-core/server/discovery";
+import {
+  fakeDiscovery,
+  fakeSourceControlProvider,
+} from "@t3tools/source-control-testing/fakeSourceControlDriver";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -33,6 +38,7 @@ import * as ForgejoPullRequestProvider from "@t3tools/source-control-forgejo/ser
 import * as ForgejoSourceControlProvider from "@t3tools/source-control-forgejo/server/ForgejoSourceControlProvider";
 import * as SourceControlDiscovery from "./SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
+import * as SourceControlBuiltInDrivers from "./builtInDrivers.ts";
 import * as ServerSourceControlHost from "./ServerSourceControlHost.ts";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -118,6 +124,9 @@ it.effect("reads Forgejo details and keeps review summaries out of GETs", () => 
       if (request.url === "https://forgejo.test/api/v1/repos/maria/project") {
         return new Response(encodeJson({ full_name: "maria/project" }));
       }
+      if (request.url === "https://forgejo.test/api/v1/repos/maria/project/branches/main") {
+        return new Response(encodeJson({ enable_status_check: false }));
+      }
       if (request.url.startsWith("https://forgejo.test/api/v1/repos/maria/project/statuses/")) {
         return new Response("[]");
       }
@@ -175,7 +184,7 @@ it.effect("reads Forgejo details and keeps review summaries out of GETs", () => 
       body: "Review summary",
       comments: [],
     });
-    assert.deepStrictEqual(methods, ["GET", "GET", "GET", "GET", "GET", "POST"]);
+    assert.deepStrictEqual(methods, ["GET", "GET", "GET", "GET", "GET", "GET", "POST"]);
   }).pipe(
     Effect.provideService(
       FetchHttpClient.Fetch,
@@ -306,6 +315,12 @@ Logged in to gitlab.com as gitlab-user
         },
       }),
     ),
+    Layer.provide(SourceControlBuiltInDrivers.layer),
+    Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+    Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
+    Layer.provide(Layer.mock(VcsProcess.VcsProcess)(processMock)),
+    Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+    Layer.provide(FetchHttpClient.layer),
     Layer.provideMerge(NodeServices.layer),
   );
 
@@ -334,15 +349,9 @@ Logged in to gitlab.com as gitlab-user
           detail: Option.none(),
         },
         {
-          kind: SourceControlProviderKind.make("azure-devops"),
+          kind: SourceControlProviderKind.make("gitcafe"),
           auth: "authenticated",
-          account: Option.some("azure-user@example.com"),
-          detail: Option.none(),
-        },
-        {
-          kind: SourceControlProviderKind.make("bitbucket"),
-          auth: "authenticated",
-          account: Option.some("bitbucket-user"),
+          account: Option.some("cafe-user"),
           detail: Option.none(),
         },
         {
@@ -352,9 +361,17 @@ Logged in to gitlab.com as gitlab-user
           detail: Option.none(),
         },
         {
-          kind: SourceControlProviderKind.make("gitcafe"),
+          kind: SourceControlProviderKind.make("bitbucket"),
+          auth: "unauthenticated",
+          account: Option.none(),
+          detail: Option.some(
+            "Add a Bitbucket token in Settings → Source Control, or set the T3CODE_BITBUCKET_* environment variables on the server.",
+          ),
+        },
+        {
+          kind: SourceControlProviderKind.make("azure-devops"),
           auth: "authenticated",
-          account: Option.some("cafe-user"),
+          account: Option.some("azure-user@example.com"),
           detail: Option.none(),
         },
       ],
@@ -562,4 +579,115 @@ it.effect(
         ),
       ),
     ),
+);
+
+const kind = SourceControlProviderKind.make;
+
+// Serves both the host's runs and the server's own VCS probes, whose inputs share these fields.
+const run = (
+  input: Pick<
+    SourceControlHost.SourceControlProcessInput,
+    "operation" | "command" | "args" | "cwd"
+  >,
+): Effect.Effect<SourceControlHost.SourceControlProcessOutput, VcsProcessSpawnError> => {
+  if (input.args[0] === "--version") {
+    return input.command === "missing-cli"
+      ? Effect.fail(
+          new VcsProcessSpawnError({
+            operation: input.operation,
+            command: input.command,
+            cwd: input.cwd,
+            cause: new Error(`${input.command} not found`),
+          }),
+        )
+      : Effect.succeed(TestSourceControlHost.processOutput(`${input.command} version test\n`));
+  }
+  return Effect.succeed(
+    TestSourceControlHost.processOutput(`signed in as ${input.command}-user\n`),
+  );
+};
+
+const cliDiscovery = (name: string) => ({
+  type: "cli" as const,
+  kind: kind(name),
+  label: name,
+  installHint: `Install ${name}.`,
+  executable: name === "beta" ? "missing-cli" : `${name}-cli`,
+  versionArgs: ["--version"],
+  authArgs: ["auth", "status"],
+  parseAuth: ({ stdout }: { readonly stdout: string }) =>
+    providerAuth({ status: "authenticated", account: /as (\S+)/.exec(stdout)?.[1] }),
+});
+
+const layerDiscovery = Layer.effect(
+  SourceControlProviderRegistry.SourceControlProviderRegistry,
+  SourceControlProviderRegistry.makeWithProviders(
+    [
+      cliDiscovery("alpha"),
+      cliDiscovery("beta"),
+      fakeDiscovery("gamma", {
+        probeAuth: Effect.succeed(providerAuth({ status: "authenticated", account: "api-user" })),
+      }),
+    ].map((discovery) => ({
+      kind: discovery.kind,
+      provider: fakeSourceControlProvider(discovery.kind),
+      discovery,
+    })),
+  ),
+).pipe(
+  Layer.provideMerge(TestSourceControlHost.layer({ process: { run } })),
+  Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest()),
+  Layer.provideMerge(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
+  Layer.provideMerge(Layer.mock(VcsProcess.VcsProcess)({ run })),
+  Layer.provideMerge(
+    ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-control-discovery-" }),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.effect("reports every hosting integration in registry order with its sign-in", () =>
+  Effect.gen(function* () {
+    const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+    const result = yield* discovery.discover;
+
+    assert.deepStrictEqual(
+      result.sourceControlProviders.map((item) => ({
+        kind: item.kind,
+        status: item.status,
+        version: item.version,
+        auth: item.auth.status,
+        account: item.auth.account,
+      })),
+      [
+        {
+          kind: kind("alpha"),
+          status: "available",
+          version: Option.some("alpha-cli version test"),
+          auth: "authenticated",
+          account: Option.some("alpha-cli-user"),
+        },
+        {
+          kind: kind("beta"),
+          status: "missing",
+          version: Option.none(),
+          auth: "unknown",
+          account: Option.none(),
+        },
+        {
+          kind: kind("gamma"),
+          status: "available",
+          version: Option.none(),
+          auth: "authenticated",
+          account: Option.some("api-user"),
+        },
+      ],
+    );
+    assert.deepStrictEqual(
+      result.versionControlSystems.map((item) => [item.kind, item.status]),
+      [
+        ["git", "available"],
+        ["jj", "available"],
+      ],
+    );
+  }).pipe(Effect.provide(SourceControlDiscovery.layer.pipe(Layer.provide(layerDiscovery)))),
 );

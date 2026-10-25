@@ -217,17 +217,21 @@ describe("repositoryForProjectLink", () => {
 });
 
 describe("linkedPullRequestTarget", () => {
-  it("opens the same tab as the list row, with the host and the project's repository casing", () => {
+  it.each([
+    ["https://github.com/acme/web/pull/7", "github.com"],
+    ["https://github.example.com:8443/acme/web/pull/7", "github.example.com"],
+    ["https://forge.example.com:8443/acme/web/pulls/7", "forge.example.com:8443"],
+  ])("opens %s in the list row's tab with its host identity", (url, host) => {
     const project = { id: "p1", repositoryIdentity: { displayName: "Acme/Web" } } as never;
     const target = linkedPullRequestTarget(project, {
       repository: "acme/web",
       number: 7,
-      url: "https://github.com/acme/web/pull/7",
+      url,
     });
     expect(pullRequestSurfaceId(target)).toBe(
       pullRequestSurfaceId({
         projectId: "p1",
-        host: "github.com",
+        host,
         repository: "Acme/Web",
         number: 7,
       }),

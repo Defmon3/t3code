@@ -61,7 +61,7 @@ it.effect("keeps two adapters that share one host and repository", () =>
           remoteName: "origin",
           remoteUrl: "https://tracker.example.test/acme/web.git",
         },
-        provider: "github",
+        provider: SourceControlProviderKind.make("github"),
         displayName: "acme/web",
       },
     };
@@ -101,7 +101,7 @@ it.effect("keeps source-control and external issue sources for one project", () 
           remoteName: "origin",
           remoteUrl: "https://github.com/acme/web.git",
         },
-        provider: "github",
+        provider: SourceControlProviderKind.make("github"),
         displayName: "acme/web",
       },
     };
@@ -199,7 +199,7 @@ it.effect.each(["gitlab", "custom-host"] as const)(
             remoteName: "origin",
             remoteUrl: "https://code.example.test/group/project.git",
           },
-          provider: "unknown",
+          provider: SourceControlProviderKind.make("unknown"),
           displayName: "group/project",
         } as unknown as OrchestrationProjectShell["repositoryIdentity"],
       };

@@ -1,3 +1,4 @@
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   resolveComposerDraftKey,
   useComposerDraftStore,
@@ -22,16 +23,6 @@ const HANDOFF_COMMENT_ID_PATTERN = /^(?:pull-request|issue)-/u;
  */
 const lastHandoffPromptByDraft = new Map<string, string>();
 
-/**
- * The prompt the composer should hold once a hand-off lands there.
- *
- * A hand-off owns what an earlier hand-off wrote and nothing else: pressing Ask and then Explain
- * used to stack both in the composer, and the reader sent a question nobody wrote. What says an
- * earlier one wrote it is the text itself — the caller remembers what it last put in this draft,
- * and only that exact sentence is replaced. A reader who typed their own question, or edited the
- * one they were given, has written something no hand-off may take away: an empty ask leaves it
- * alone, and one carrying a prompt goes underneath it.
- */
 export function handoffPrompt(
   existing: {
     readonly prompt: string;
@@ -113,8 +104,12 @@ const OPERATION_PREFIX = /^(?:Pull request|Issue) operation \w+ failed:\s*/iu;
  * Sentences that report only that a tool exited: true, and no help at all. Anything else the
  * host says is worth more than what this page could invent, so only these are replaced.
  */
+const HOST_LABELS = sourceControlClients.definitions
+  .map((definition) => definition.label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+  .join("|");
+
 const TOOL_NOISE = [
-  /^(github|gitlab|bitbucket|azure devops)?\s*(cli|api)?\s*(command\s*)?failed\.?$/iu,
+  new RegExp(`^(${HOST_LABELS})?\\s*(cli|api)?\\s*(command\\s*)?failed\\.?$`, "iu"),
   /^exited? with (code|status) \d+\.?$/iu,
   /^unknown error\.?$/iu,
 ];

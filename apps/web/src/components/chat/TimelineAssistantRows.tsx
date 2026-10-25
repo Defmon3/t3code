@@ -53,21 +53,22 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             />
           </AssistantCitationSource>
         </div>
-        <AssistantChangedFilesSection
-          turnSummary={row.assistantTurnDiffSummary}
-          routeThreadKey={ctx.routeThreadKey}
-          resolvedTheme={ctx.resolvedTheme}
-          onOpenTurnDiff={ctx.onOpenTurnDiff}
-        />
-        {row.showAssistantMeta ? (
-          <AssistantMessageMeta
-            className="mt-1.5"
-            projectedItem={row.projectedItem}
-            message={row.message}
-            showCopyButton={row.showAssistantCopyButton}
-            copyStreaming={row.assistantCopyStreaming}
+        {ctx.onOpenTurnDiff ? (
+          <AssistantChangedFilesSection
+            turnSummary={row.assistantTurnDiffSummary}
+            routeThreadKey={ctx.routeThreadKey}
+            resolvedTheme={ctx.resolvedTheme}
+            onOpenTurnDiff={ctx.onOpenTurnDiff}
           />
         ) : null}
+        <AssistantMessageMeta
+          className="mt-1.5"
+          projectedItem={row.projectedItem}
+          message={row.message}
+          showCopyButton={row.showAssistantCopyButton}
+          copyStreaming={row.assistantCopyStreaming}
+          showTimestamp={row.showAssistantTimestamp !== false}
+        />
       </div>
     </>
   );
@@ -90,7 +91,8 @@ function AssistantForkButton({
     capabilities: support.providerSession?.capabilities,
   });
 
-  if (!canFork || projectedItem.item.runId === null) return null;
+  const onForkFromRun = ctx.onForkFromRun;
+  if (!canFork || onForkFromRun === undefined || projectedItem.item.runId === null) return null;
   const runId = projectedItem.item.runId;
 
   return (
@@ -104,9 +106,9 @@ function AssistantForkButton({
             disabled={busy}
             onClick={() => {
               setBusy(true);
-              void ctx
-                .onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId })
-                .finally(() => setBusy(false));
+              void onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId }).finally(
+                () => setBusy(false),
+              );
             }}
             aria-label="Fork from this response"
           />
@@ -144,6 +146,7 @@ function AssistantMessageMeta({
   message,
   showCopyButton,
   copyStreaming,
+  showTimestamp = true,
   alwaysVisible = false,
 }: {
   className?: string;
@@ -151,43 +154,53 @@ function AssistantMessageMeta({
   message: ChatMessage;
   showCopyButton: boolean;
   copyStreaming: boolean;
+  showTimestamp?: boolean;
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
-        className,
-      )}
-    >
-      {projectedItem && projectedItem.item.status !== "completed" ? (
-        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
-          {projectedItem.item.status}
-        </span>
-      ) : null}
-      <AssistantCopyButton
-        message={message}
-        showCopyButton={showCopyButton}
-        streaming={copyStreaming}
-      />
-      {projectedItem?.item.type === "assistant_message" ? (
-        <AssistantForkButton projectedItem={projectedItem} />
-      ) : null}
-      {!message.streaming && (
+    <div className={cn("flex items-center gap-2 text-xs tabular-nums", className)}>
+      <span
+        className={cn(
+          "transition-opacity duration-200",
+          alwaysVisible
+            ? "opacity-100"
+            : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        )}
+      >
+        {projectedItem && projectedItem.item.status !== "completed" ? (
+          <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+            {projectedItem.item.status}
+          </span>
+        ) : null}
+        <AssistantCopyButton
+          message={message}
+          showCopyButton={showCopyButton}
+          streaming={copyStreaming}
+        />
+        {projectedItem?.item.type === "assistant_message" ? (
+          <AssistantForkButton projectedItem={projectedItem} />
+        ) : null}
+      </span>
+      {showTimestamp ? (
         <Tooltip>
-          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
+          <TooltipTrigger
+            render={
+              <time
+                dateTime={message.updatedAt}
+                data-agent-output-timestamp
+                className="text-muted-foreground text-xs tabular-nums"
+              />
+            }
+          >
+            {`updated ${formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}`}
           </TooltipTrigger>
           <TooltipPopup>
             {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
           </TooltipPopup>
         </Tooltip>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -244,6 +257,9 @@ export function HtmlRenderTimelineRow({
   const { onAppFullscreenChange } = ctx;
   const onFullscreenChange = (fullscreen: boolean) => onAppFullscreenChange(row.id, fullscreen);
 
+  if (ctx.renderHtmlRender) {
+    return <div className="min-w-0 px-1">{ctx.renderHtmlRender(row)}</div>;
+  }
   return (
     <div className="min-w-0 px-1">
       <HtmlRenderFrame

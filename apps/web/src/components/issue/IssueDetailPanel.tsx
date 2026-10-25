@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -534,6 +535,7 @@ export function IssueDetailPanel({
       ? handoffTarget.draftId
       : null;
   const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
+  const markdownReferenceAutolinks = sourceControlClients.get(detail?.provider).referenceAutolinks;
   const openRelatedIssue = useCallback(
     (issue: {
       readonly repository?: string | undefined;
@@ -547,7 +549,10 @@ export function IssueDetailPanel({
   const issueRepository = detail?.repository ?? null;
   const markdownContext = useMemo(
     () => ({
-      repositoryUrl: markdownRepositoryUrl,
+      autolinks:
+        markdownRepositoryUrl === null || markdownReferenceAutolinks === undefined
+          ? null
+          : (text: string) => markdownReferenceAutolinks(text, markdownRepositoryUrl),
       threadRef: markdownThreadRef,
       panelRef,
       onOpenUrl: (url: string) => {
@@ -562,6 +567,7 @@ export function IssueDetailPanel({
     }),
     [
       markdownRepositoryUrl,
+      markdownReferenceAutolinks,
       markdownThreadRef,
       panelRef,
       onOpenRelatedIssue,

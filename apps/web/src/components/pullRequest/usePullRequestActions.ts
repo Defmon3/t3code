@@ -1,4 +1,5 @@
 import { useAtomCommand } from "~/state/use-atom-command";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -32,7 +33,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 
 import { writeHandoffToComposer } from "../sourceControl/handoff";
 import { toastManager } from "../ui/toast";
-import { OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST } from "./pullRequestCheckoutToast";
+import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import { checkoutFailureDescription, readableFailure } from "./pullRequestDetail.logic";
 import { pullRequestEntryKey, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 
@@ -238,6 +239,9 @@ export function usePullRequestHandoffs({
     environmentId,
     cwd: detail?.workspaceRoot ?? null,
   });
+  const terminology =
+    sourceControlClients.findByChangeRequestUrl(detail?.url ?? "")?.changeRequest ??
+    sourceControlClients.get(undefined).changeRequest;
   // One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
 
@@ -362,7 +366,7 @@ export function usePullRequestHandoffs({
                   ? "This repository is on the pull request's branch, with a thread open on it."
                   : "The pull request is in its own worktree, with a thread open on it.",
             }
-          : OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST,
+          : offHeadPullRequestCheckoutToast(terminology),
       );
       return;
     }
@@ -375,7 +379,7 @@ export function usePullRequestHandoffs({
             title: "Checkout ready",
             description: "The task is in the composer. Read it over, then send.",
           }
-        : OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST,
+        : offHeadPullRequestCheckoutToast(terminology),
     );
   };
 

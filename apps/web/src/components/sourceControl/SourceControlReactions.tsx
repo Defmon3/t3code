@@ -1,4 +1,12 @@
 import type { PullRequestReaction, PullRequestReactionContent } from "@t3tools/contracts";
+import {
+  applyPendingPullRequestReactions,
+  PULL_REQUEST_REACTION_ORDER,
+  pullRequestReactionEmoji,
+  pullRequestReactionName,
+  pullRequestReactionTooltip,
+  pullRequestReactionsSignature,
+} from "@t3tools/client-runtime/pull-request-reactions";
 import { SmilePlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -7,25 +15,11 @@ import { cn } from "~/lib/utils";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  applyPendingPullRequestReactions,
-  PULL_REQUEST_REACTION_ORDER,
-  pullRequestReactionEmoji,
-  pullRequestReactionName,
-  pullRequestReactionTooltip,
-} from "../pullRequest/pullRequestReactions.logic";
 
 const PILL_CLASS =
   "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 
 const EMPTY_PENDING: ReadonlyMap<PullRequestReactionContent, boolean> = new Map();
-
-/** What the host last said, so a press in flight is forgotten the moment the real counts land. */
-function reactionsSignature(reactions: ReadonlyArray<PullRequestReaction>): string {
-  return reactions
-    .map((reaction) => `${reaction.content}:${reaction.count}:${reaction.viewerHasReacted ? 1 : 0}`)
-    .join(" ");
-}
 
 export function SourceControlReactionBar({
   reactions,
@@ -44,7 +38,7 @@ export function SourceControlReactionBar({
     readonly values: ReadonlyMap<PullRequestReactionContent, boolean>;
   }>({ signature: "", values: EMPTY_PENDING });
 
-  const signature = reactionsSignature(reactions);
+  const signature = pullRequestReactionsSignature(reactions);
   const values = pending.signature === signature ? pending.values : EMPTY_PENDING;
   const shown = applyPendingPullRequestReactions(reactions, values);
 

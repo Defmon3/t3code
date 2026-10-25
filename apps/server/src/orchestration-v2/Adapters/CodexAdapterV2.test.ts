@@ -140,6 +140,40 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
+  it.effect.each([undefined, false, true])(
+    "selects native collaboration modes without prompt overrides with hasT3Mcp=%s",
+    (hasT3Mcp) =>
+      Effect.gen(function* () {
+        for (const interactionMode of ["plan", "default"] as const) {
+          for (const reasoningEffort of [undefined, "high"] as const) {
+            const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+              nativeThreadId: "native-mode-switch",
+              codexInput: [{ type: "text", text: "test" }],
+              runtimePolicy: { runtimeMode: "full-access", interactionMode, cwd: null },
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5.4",
+                ...(reasoningEffort === undefined
+                  ? {}
+                  : { options: [{ id: "reasoningEffort", value: reasoningEffort }] }),
+              },
+              ...(hasT3Mcp === undefined ? {} : { hasT3Mcp }),
+            });
+
+            assert.deepEqual(params.collaborationMode, {
+              mode: interactionMode,
+              settings: {
+                model: "gpt-5.4",
+                ...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
+              },
+            });
+            assert.equal(params.effort, reasoningEffort);
+            assert.equal(params.additionalContext !== undefined, hasT3Mcp === true);
+          }
+        }
+      }),
+  );
+
   it.effect("derives concrete Codex turn policies from every T3 runtime mode", () =>
     Effect.gen(function* () {
       const build = (
@@ -173,13 +207,13 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(auto.approvalPolicy, "on-request");
       assert.equal(auto.approvalsReviewer, "auto_review");
       assert.equal(auto.sandboxPolicy?.type, "workspaceWrite");
-      assert.equal(fullAccess.approvalPolicy, "on-request");
+      assert.equal(fullAccess.approvalPolicy, "never");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
     }),
   );
 
-  it.effect("preserves explicit never-ask and sandbox overrides in full access", () =>
+  it.effect("preserves explicit Codex turn policy overrides", () =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: "native-override",
@@ -649,7 +683,7 @@ function codexReplayPreamble(input: {
           serviceTier: null,
           cwd: "/workspace",
           instructionSources: [],
-          approvalPolicy: "on-request",
+          approvalPolicy: "never",
           approvalsReviewer: "user",
           sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
           reasoningEffort: "medium",
@@ -667,10 +701,11 @@ function codexReplayPreamble(input: {
           input: [{ type: "text", text: input.sentPrompt ?? input.prompt }],
           cwd: "/workspace",
           model: "gpt-5.4",
-          approvalPolicy: "on-request",
+          approvalPolicy: "never",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
           summary: "detailed",
+          collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
         },
       },
     },
@@ -852,8 +887,7 @@ describe("CodexAdapterV2 session initialize", () => {
     Effect.gen(function* () {
       const initializeAwaitingResponse = yield* Deferred.make<void>();
       const releaseInitialize = yield* Deferred.make<void>();
-      // The transcript allows exactly one handshake: a second `initialize`
-      // frame fails the replay, as Codex rejects it with "Already initialized".
+      // Codex rejects a second initialize; the replay permits one handshake.
       const session = yield* openReplaySession(
         makeCodexReplayTranscript({
           scenario: "concurrent-initialize",
@@ -1609,7 +1643,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             sandboxPolicy: { type: "readOnly" },
           },
           "full-access": {
-            approvalPolicy: "on-request",
+            approvalPolicy: "never",
             approvalsReviewer: "user",
             sandboxPolicy: { type: "dangerFullAccess" },
           },
@@ -1630,6 +1664,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 model: "gpt-5.4",
                 ...turnPolicies[turnModes[index]!],
                 summary: "detailed",
+                collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
               },
             },
           },
@@ -5690,7 +5725,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     serviceTier: null,
     cwd: "/workspace",
     instructionSources: [],
-    approvalPolicy: "on-request",
+    approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
     reasoningEffort: "medium",

@@ -39,7 +39,10 @@ describe("V2 preview upgrade", () => {
       yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
       const links = yield* sql`SELECT * FROM work_item_links`;
 
-      assert.deepStrictEqual(yield* runMigrations(), [[71, "ShellStopRequestIndex"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [71, "ShellStopRequestIndex"],
+        [72, "ThreadMessageSearch"],
+      ]);
       assert.deepStrictEqual(
         yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 70 ORDER BY migration_id`,
         installedHistory,
@@ -76,6 +79,7 @@ describe("V2 preview upgrade", () => {
         [69, "RepairClientSettlementTimestamps"],
         [70, "WebhookDedupe"],
         [71, "ShellStopRequestIndex"],
+        [72, "ThreadMessageSearch"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -129,6 +133,8 @@ describe("V2 preview upgrade", () => {
         [69, "RepairClientSettlementTimestamps"],
         [70, "WebhookDedupe"],
         [71, "ShellStopRequestIndex"],
+
+        [72, "ThreadMessageSearch"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -223,6 +229,8 @@ describe("V2 preview upgrade", () => {
         [69, "RepairClientSettlementTimestamps"],
         [70, "WebhookDedupe"],
         [71, "ShellStopRequestIndex"],
+
+        [72, "ThreadMessageSearch"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

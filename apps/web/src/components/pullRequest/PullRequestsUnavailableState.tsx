@@ -11,12 +11,14 @@ export function PullRequestsUnavailableState({
   onRetry,
   refreshing = false,
   gitHubUrl,
+  host,
 }: {
   title?: string;
   error: string;
   onRetry?: () => void;
   refreshing?: boolean;
   gitHubUrl?: string;
+  host?: { readonly url: string; readonly openLabel: string };
 }) {
   return (
     <UnavailableState
@@ -26,14 +28,14 @@ export function PullRequestsUnavailableState({
       onRetry={onRetry}
       refreshing={refreshing}
       action={
-        gitHubUrl ? (
+        gitHubUrl || host ? (
           <Button
             size="sm"
             variant="outline"
-            render={<a href={gitHubUrl} target="_blank" rel="noopener noreferrer" />}
+            render={<a href={host?.url ?? gitHubUrl} target="_blank" rel="noopener noreferrer" />}
           >
             <ExternalLinkIcon aria-hidden className="size-3.5" />
-            Open on GitHub
+            {host?.openLabel ?? "Open on GitHub"}
           </Button>
         ) : null
       }

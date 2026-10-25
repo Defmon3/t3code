@@ -6,7 +6,19 @@ import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import { primaryServerConfigAtom } from "../state/server";
 
 export type SidebarStageBackdropVariant = "nightly" | "dev";
-export type EnvironmentIdentificationPillLabel = "Dev" | "Nightly";
+export type EnvironmentIdentificationPillLabel = "Custom" | "Dev" | "Nightly";
+
+export function formatBuildIdentityLabel(input: {
+  readonly stageLabel: EnvironmentIdentificationPillLabel;
+  readonly commitHash: string | null;
+  readonly buildTime: string | null;
+}): string {
+  const commitLabel = input.commitHash?.slice(0, 8);
+  const builtAtLabel = input.buildTime
+    ? `${input.buildTime.slice(0, 10)} ${input.buildTime.slice(11, 16)}Z`
+    : null;
+  return [input.stageLabel, builtAtLabel, commitLabel].filter(Boolean).join(" · ");
+}
 
 const STAGE_BACKDROP_VIEW_BOX = "0 0 8192 96";
 
@@ -23,7 +35,9 @@ export function resolveSidebarStageBackdropVariant(
 
 export function resolveEnvironmentIdentificationPillLabel(
   stageLabel: string,
+  isCustomBuild = false,
 ): EnvironmentIdentificationPillLabel | null {
+  if (isCustomBuild) return "Custom";
   const normalized = stageLabel.trim().toLowerCase();
   if (normalized === "dev") return "Dev";
   if (normalized === "nightly") return "Nightly";

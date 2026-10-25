@@ -21,31 +21,34 @@ import {
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "@t3tools/source-control-core/server/PullRequestProvider";
-import { definition } from "../client/definition.ts";
+import { definition } from "../shared/definition.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase"],
-  // Rebase alone: GitLab moves a stale branch onto its target by replaying it, and has nothing
-  // that merges the target back in the way GitHub's update button can.
+  // GitLab has no merge-target-into-source operation.
   updateMethods: ["rebase"],
   search: true,
   reactions: true,
-  // GitLab keeps a reader's viewed files in one browser's local storage, where nothing outside
-  // that browser can read or write them.
+  // GitLab's viewed marks live in browser-local storage.
   viewedFiles: "environment",
   review: {
     inlineComment: true,
     reply: true,
     resolve: true,
-    // No "changes requested": GitLab has approval and unresolved discussions, and nothing that
-    // says a merge request has been reviewed and rejected.
+    // GitLab has no requested-changes verdict.
     verdicts: ["comment", "approve"],
   },
   reviewers: { request: true, listCandidates: true },
   edit: { changeRequest: true, comment: true },
+};
+
+const UNAVAILABLE_REQUIREMENT = {
+  missing:
+    "GitLab CLI (`glab`) is required to browse change requests on this host. Install it from https://gitlab.com/gitlab-org/cli and reload.",
+  unauthenticated: "GitLab CLI is not authenticated. Run `glab auth login` and retry.",
 };
 
 /**
@@ -60,11 +63,7 @@ const MERGE_ACTIONS: ReadonlySet<string> = new Set([
   "disable-auto-merge",
 ]);
 
-/**
- * GitLab's REST API reports the viewer's role on the project but never whether they opened this
- * merge request — and its author may close it, reopen it and move it in and out of draft
- * whatever their role, just as the author of a note may resolve the discussion it started.
- */
+/** Authors may close/reopen/change draft state regardless of role; REST omits authorship. */
 export function gitLabViewerPermissions(input: {
   readonly viewerCanMerge: boolean;
 }): PullRequestViewerPermissions {
@@ -119,15 +118,6 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  /**
-   * The issues the merge request's own words name, resolved before any of them is shown: a number
-   * in a description is not proof that an issue exists, and a dead row in this section is worse
-   * than an absent one.
-   *
-   * Weaker than what GitLab itself reported, so a lookup that fails leaves the section with the
-   * host's own links rather than taking the detail down with it. A reference into another project
-   * is left out because the issues endpoint is per project, and one read is the whole budget here.
-   */
   const citedIssues = (
     input: { readonly cwd: string; readonly repository: string; readonly host: string },
     mergeRequest: { readonly title: string; readonly body: string },
@@ -172,6 +162,7 @@ export const make = Effect.gen(function* () {
   const provider: PullRequestProviderApi = {
     kind: SourceControlProviderKind.make("gitlab"),
     capabilities: CAPABILITIES,
+    unavailableRequirement: UNAVAILABLE_REQUIREMENT,
 
     getViewer: (input) =>
       cli.getViewerUsername({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
@@ -187,6 +178,7 @@ export const make = Effect.gen(function* () {
           limit: input.limit,
           query: input.query,
           cursor: input.cursor,
+          filters: input.filters,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequests")),
@@ -283,16 +275,13 @@ export const make = Effect.gen(function* () {
     getDiffFileContents: (input) =>
       cli.getMergeRequestDiffFileContents(input).pipe(Effect.mapError(fail("getDiffFileContents"))),
 
-    // GitLab's own local-storage marks are keyed on the blob id too, so this stales at the same
-    // moment its web UI would.
     getFileRevisions: (input) =>
       cli.getFileRevisions(input).pipe(
         Effect.mapError(fail("getFileRevisions")),
         Effect.map((revisions) => ({ revisions })),
       ),
 
-    // Users only: GitLab requests a review of a person, and the groups that can stand in for one
-    // appear in approval rules rather than in a merge request's reviewers.
+    // MR reviewers are users; groups belong to approval rules.
     listReviewerCandidates: (input) =>
       cli
         .listReviewerCandidates({
@@ -301,6 +290,16 @@ export const make = Effect.gen(function* () {
           number: input.number,
         })
         .pipe(Effect.mapError(fail("listReviewerCandidates"))),
+
+    listRepositoryLabels: (input) =>
+      cli
+        .listProjectLabels({ cwd: input.cwd, repository: input.repository, search: input.query })
+        .pipe(Effect.mapError(fail("listRepositoryLabels"))),
+
+    searchRepositoryAuthors: (input) =>
+      cli
+        .listProjectUsers({ cwd: input.cwd, repository: input.repository, search: input.query })
+        .pipe(Effect.mapError(fail("searchRepositoryAuthors"))),
 
     setReviewerRequest: (input) =>
       cli

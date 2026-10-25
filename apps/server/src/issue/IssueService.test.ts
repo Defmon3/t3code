@@ -78,7 +78,7 @@ function project(input: {
               remoteName: "origin",
               remoteUrl: `https://${host}/${input.repository}.git`,
             },
-            provider: input.provider ?? "github",
+            provider: SourceControlProviderKind.make(input.provider ?? "github"),
             displayName: input.repository,
           },
         }

@@ -38,7 +38,7 @@ async function clickLink(init: MouseEventInit) {
   const onOpenUrl = vi.fn(() => true);
   await act(async () =>
     root.render(
-      <PullRequestMarkdownContext value={{ repositoryUrl: null, threadRef: null, onOpenUrl }}>
+      <PullRequestMarkdownContext value={{ autolinks: null, threadRef: null, onOpenUrl }}>
         <PullRequestMarkdown
           text="https://github.com/acme/app/issues/2"
           cwd="/tmp/project"

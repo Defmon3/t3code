@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { RepositoryIdentity } from "@t3tools/contracts";
+import { SourceControlProviderKind, type RepositoryIdentity } from "@t3tools/contracts";
 import { commitReferenceUrl } from "./commitReferenceUrl";
 
 const repository: RepositoryIdentity = {
@@ -9,7 +9,7 @@ const repository: RepositoryIdentity = {
     remoteName: "origin",
     remoteUrl: "https://git.example.test/group/repo.git",
   },
-  provider: "gitlab",
+  provider: SourceControlProviderKind.make("gitlab"),
   webUrl: "https://git.example.test/group/repo",
 };
 
@@ -25,9 +25,13 @@ describe("commit reference URLs", () => {
     );
   });
   it("uses GitHub issue resolution without guessing whether a bare number is a pull request", () => {
-    expect(commitReferenceUrl({ ...repository, provider: "github" }, "Fix (#42)", 42)).toBe(
-      "https://git.example.test/group/repo/issues/42",
-    );
+    expect(
+      commitReferenceUrl(
+        { ...repository, provider: SourceControlProviderKind.make("github") },
+        "Fix (#42)",
+        42,
+      ),
+    ).toBe("https://git.example.test/group/repo/issues/42");
   });
   it("does not invent a URL for absent hosting metadata", () => {
     const { webUrl: _webUrl, ...unhostedRepository } = repository;

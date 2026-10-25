@@ -338,7 +338,7 @@ function isVerificationCommandRunner(process: ResourceMonitorDiscoveredProcessSa
   return label !== undefined && /(?:^|[\\/])check-(?:all|fast|full|lane)\.py$/i.test(label);
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.fn("makeProcessDiagnostics")(function* (
   options: {
     readonly logicalCpuCount?: number;
@@ -406,94 +406,95 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* (
         error: Option.some({ message }),
       })),
     );
-  const readRegisteredProjectDiagnostics = (roots: ReadonlyArray<string>) =>
-    Effect.gen(function* () {
-      const discovered = yield* nativeTelemetry.discoverProcesses(roots);
-      const telemetrySnapshot = yield* telemetry.latest;
-      const readAt = yield* DateTime.now;
-      const processes = discoveredTestProcesses(discovered, roots).map((entry) => ({
-        ...toDiscoveredProcessDiagnosticsEntry(entry, logicalCpuCount),
-        signalable: telemetrySnapshot.processes.some(
-          (owned) =>
-            owned.identity.pid === entry.pid &&
-            owned.identity.startTimeMs === entry.startTimeMs &&
-            canSignalCategory(owned.category),
-        ),
-      }));
-      return {
-        serverPid: process.pid,
-        readAt,
-        processCount: processes.length,
-        totalRssBytes: processes.reduce((total, entry) => total + entry.rssBytes, 0),
-        totalCpuPercent: processes.reduce((total, entry) => total + entry.cpuPercent, 0),
-        ...hostMetrics.read("discovery"),
-        processes,
-        error: Option.none(),
-      };
-    });
-  const cachedRegisteredProjectDiagnostics = (roots: ReadonlyArray<string>) =>
-    Effect.gen(function* () {
-      const normalizedRoots = normalizeRegisteredRoots(roots);
-      const cacheKey = normalizedRoots.join("\u0000");
-      const selected = yield* processDiscoveryCacheMutex.withPermits(1)(
-        Effect.gen(function* () {
-          const nowMillis = yield* Clock.currentTimeMillis;
-          for (const [key, entry] of processDiscoveryCache) {
-            if (entry.expiresAtMillis !== undefined && entry.expiresAtMillis <= nowMillis) {
-              processDiscoveryCache.delete(key);
-            }
+  const readRegisteredProjectDiagnostics = Effect.fn(
+    "ProcessDiagnostics.readRegisteredProjectDiagnostics",
+  )(function* (roots: ReadonlyArray<string>) {
+    const discovered = yield* nativeTelemetry.discoverProcesses(roots);
+    const telemetrySnapshot = yield* telemetry.latest;
+    const readAt = yield* DateTime.now;
+    const processes = discoveredTestProcesses(discovered, roots).map((entry) => ({
+      ...toDiscoveredProcessDiagnosticsEntry(entry, logicalCpuCount),
+      signalable: telemetrySnapshot.processes.some(
+        (owned) =>
+          owned.identity.pid === entry.pid &&
+          owned.identity.startTimeMs === entry.startTimeMs &&
+          canSignalCategory(owned.category),
+      ),
+    }));
+    return {
+      serverPid: process.pid,
+      readAt,
+      processCount: processes.length,
+      totalRssBytes: processes.reduce((total, entry) => total + entry.rssBytes, 0),
+      totalCpuPercent: processes.reduce((total, entry) => total + entry.cpuPercent, 0),
+      ...hostMetrics.read("discovery"),
+      processes,
+      error: Option.none(),
+    };
+  });
+  const cachedRegisteredProjectDiagnostics = Effect.fn(
+    "ProcessDiagnostics.cachedRegisteredProjectDiagnostics",
+  )(function* (roots: ReadonlyArray<string>) {
+    const normalizedRoots = normalizeRegisteredRoots(roots);
+    const cacheKey = normalizedRoots.join("\u0000");
+    const selected = yield* processDiscoveryCacheMutex.withPermits(1)(
+      Effect.gen(function* () {
+        const nowMillis = yield* Clock.currentTimeMillis;
+        for (const [key, entry] of processDiscoveryCache) {
+          if (entry.expiresAtMillis !== undefined && entry.expiresAtMillis <= nowMillis) {
+            processDiscoveryCache.delete(key);
           }
-          const cached = processDiscoveryCache.get(cacheKey);
-          if (cached) return { read: cached.read };
+        }
+        const cached = processDiscoveryCache.get(cacheKey);
+        if (cached) return { read: cached.read };
 
-          let cacheEntry: ProcessDiscoveryCacheEntry | undefined;
-          const markCacheEntrySettled = Clock.currentTimeMillis.pipe(
-            Effect.tap((settledAtMillis) =>
+        let cacheEntry: ProcessDiscoveryCacheEntry | undefined;
+        const markCacheEntrySettled = Clock.currentTimeMillis.pipe(
+          Effect.tap((settledAtMillis) =>
+            Effect.sync(() => {
+              if (cacheEntry && processDiscoveryCache.get(cacheKey) === cacheEntry) {
+                processDiscoveryCache.set(cacheKey, {
+                  ...cacheEntry,
+                  expiresAtMillis: settledAtMillis + Duration.toMillis(PROCESS_DISCOVERY_CACHE_TTL),
+                });
+              }
+            }),
+          ),
+        );
+        const cachedRead = yield* Effect.cachedWithTTL(
+          readRegisteredProjectDiagnostics(normalizedRoots).pipe(
+            Effect.tap((diagnostics) =>
               Effect.sync(() => {
-                if (cacheEntry && processDiscoveryCache.get(cacheKey) === cacheEntry) {
-                  processDiscoveryCache.set(cacheKey, {
-                    ...cacheEntry,
-                    expiresAtMillis:
-                      settledAtMillis + Duration.toMillis(PROCESS_DISCOVERY_CACHE_TTL),
-                  });
-                }
+                lastSuccessfulProcessDiscoveries.set(cacheKey, diagnostics);
               }),
             ),
-          );
-          const cachedRead = yield* Effect.cachedWithTTL(
-            readRegisteredProjectDiagnostics(normalizedRoots).pipe(
-              Effect.tap((diagnostics) =>
-                Effect.sync(() => {
-                  lastSuccessfulProcessDiscoveries.set(cacheKey, diagnostics);
-                }),
-              ),
-              Effect.catch((error) => {
-                const previousDiagnostics = lastSuccessfulProcessDiscoveries.get(cacheKey);
-                if (previousDiagnostics) {
-                  return Effect.succeed({
-                    ...previousDiagnostics,
-                    ...hostMetrics.read("discovery"),
-                    stale: true,
-                    error: Option.some({ message: processDiscoveryErrorMessage(error) }),
-                  });
-                }
-                return unavailable(processDiscoveryErrorMessage(error));
-              }),
-              Effect.ensuring(markCacheEntrySettled),
-              Effect.uninterruptible,
-            ),
-            PROCESS_DISCOVERY_CACHE_TTL,
-          );
-          cacheEntry = {
-            expiresAtMillis: undefined,
-            read: cachedRead,
-          };
-          processDiscoveryCache.set(cacheKey, cacheEntry);
-          return { read: cachedRead };
-        }),
-      );
-      return yield* selected.read;
-    });
+            Effect.catch((error) => {
+              const previousDiagnostics = lastSuccessfulProcessDiscoveries.get(cacheKey);
+              if (previousDiagnostics) {
+                return Effect.succeed({
+                  ...previousDiagnostics,
+                  ...hostMetrics.read("discovery"),
+                  stale: true,
+                  error: Option.some({ message: processDiscoveryErrorMessage(error) }),
+                });
+              }
+              return unavailable(processDiscoveryErrorMessage(error));
+            }),
+            Effect.ensuring(markCacheEntrySettled),
+            Effect.uninterruptible,
+          ),
+          PROCESS_DISCOVERY_CACHE_TTL,
+        );
+        cacheEntry = {
+          expiresAtMillis: undefined,
+          read: cachedRead,
+        };
+        processDiscoveryCache.set(cacheKey, cacheEntry);
+        return { read: cachedRead };
+      }),
+    );
+    return yield* selected.read;
+  });
   const read: ProcessDiagnostics["Service"]["read"] = (input) => {
     const roots = input.roots;
     return roots === undefined ? readT3Diagnostics : cachedRegisteredProjectDiagnostics(roots);

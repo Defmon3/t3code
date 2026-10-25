@@ -9,7 +9,7 @@ import {
   type OrchestrationProjectShell,
   type SourceControlProviderInfo,
 } from "@t3tools/contracts";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
 import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
@@ -78,33 +78,31 @@ function issueHostOf(
   const canonicalHost = identity?.canonicalKey?.split("/")[0]?.trim();
   if (canonicalHost !== undefined && canonicalHost.length > 0) return canonicalHost.toLowerCase();
   const provider = identity
-    ? detectSourceControlProviderFromRemoteUrl(identity.locator.remoteUrl)
+    ? sourceControlDefinitions.recognizeRemote(identity.locator.remoteUrl)
     : null;
   return provider === null ? kind : new URL(provider.baseUrl).host.toLowerCase();
 }
 
-function adapterSourcesOf(
+const adapterSourcesOf = Effect.fn("IssueProviderRegistry.adapterSourcesOf")(function* (
   projects: ReadonlyArray<OrchestrationProjectShell>,
   filter: IssueProjectFilter,
   adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
-): Effect.Effect<ReadonlyMap<OrchestrationProjectShell["id"], ReadonlyArray<BoundIssueSource>>> {
-  return Effect.gen(function* () {
-    const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource[]>();
-    for (const project of projects) {
-      if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-      for (const adapter of adapters.values()) {
-        const source =
-          adapter.resolveSource === undefined ? null : yield* adapter.resolveSource(project);
-        if (source === undefined || source === null) continue;
-        const bound = { adapter, ...source };
-        const projectSources = sources.get(project.id);
-        if (projectSources === undefined) sources.set(project.id, [bound]);
-        else projectSources.push(bound);
-      }
+) {
+  const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource[]>();
+  for (const project of projects) {
+    if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+    for (const adapter of adapters.values()) {
+      const source =
+        adapter.resolveSource === undefined ? null : yield* adapter.resolveSource(project);
+      if (source === undefined || source === null) continue;
+      const bound = { adapter, ...source };
+      const projectSources = sources.get(project.id);
+      if (projectSources === undefined) sources.set(project.id, [bound]);
+      else projectSources.push(bound);
     }
-    return sources;
-  });
-}
+  }
+  return sources;
+});
 
 function resolveProjectSource(
   project: OrchestrationProjectShell,
@@ -112,13 +110,18 @@ function resolveProjectSource(
   adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
 ): ResolvedProjectSource | null {
   const identity = project.repositoryIdentity;
-  let kind = identity?.provider;
+  const initialKind = identity?.provider;
   const repository = repositoryIdentityOf(project);
-  if (!identity || kind === undefined || repository === null) return null;
-  if (kind === "unknown") {
-    const provider = detectSourceControlProviderFromRemoteUrl(identity.locator.remoteUrl);
-    kind = provider === null ? kind : (refinedKinds.get(provider.baseUrl) ?? kind);
-  }
+  if (!identity || initialKind === undefined || repository === null) return null;
+  const kind =
+    initialKind === "unknown"
+      ? (() => {
+          const provider = sourceControlDefinitions.recognizeRemote(identity.locator.remoteUrl);
+          return provider === null
+            ? initialKind
+            : (refinedKinds.get(provider.baseUrl) ?? initialKind);
+        })()
+      : initialKind;
   return {
     adapter: adapters.get(kind) ?? null,
     kind,
@@ -151,7 +154,7 @@ const projectResolver = Effect.fn("IssueProviderRegistry.projectResolver")(funct
         continue;
       }
       const { remoteName, remoteUrl } = identity.locator;
-      const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
+      const provider = sourceControlDefinitions.recognizeRemote(remoteUrl);
       if (provider === null) continue;
       const candidate = { project, provider, remoteName, remoteUrl };
       const candidates = refinements.get(provider.baseUrl);

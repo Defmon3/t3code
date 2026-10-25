@@ -4,6 +4,8 @@ export function PullRequestActivityUnavailableState(props: {
   error: string;
   onRetry: () => void;
   compact?: boolean;
+  term?: string;
 }) {
-  return <ActivityUnavailableState {...props} title="Could not load pull request activity" />;
+  const { term = "pull request", ...state } = props;
+  return <ActivityUnavailableState {...state} title={`Could not load ${term} activity`} />;
 }

@@ -16,7 +16,8 @@ import {
   pullRequestListLines,
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+} from "@t3tools/client-runtime/thread-pull-requests";
+import { findProjectForChangeRequest } from "@t3tools/client-runtime/change-request-links";
 import {
   ArrowUpRightIcon,
   CircleDotIcon,
@@ -40,11 +41,7 @@ import {
   openLinkInBrowser,
   relatedIssueTarget,
 } from "~/lib/openIssueLink";
-import {
-  findProjectForChangeRequest,
-  shouldOpenPullRequestExternally,
-  useOpenPrLink,
-} from "~/lib/openPullRequestLink";
+import { shouldOpenPullRequestExternally, useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn } from "~/lib/utils";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useShortcutModifierState } from "~/shortcutModifierState";
@@ -293,9 +290,9 @@ function LinkRowImpl({
   const snapshot = link.snapshot;
   const open = snapshot === null || snapshot.state === "open";
   const watching = link.watch !== undefined;
-  const linkHostActions = (
-    sourceControlClients.findByChangeRequestUrl(link.url) ?? UNKNOWN_SOURCE_CONTROL_CLIENT
-  ).changeRequestActions;
+  const linkHost =
+    sourceControlClients.findByChangeRequestUrl(link.url) ?? UNKNOWN_SOURCE_CONTROL_CLIENT;
+  const linkHostActions = linkHost.changeRequestActions;
   const actionEntry =
     projectId !== null && snapshot !== null && snapshot.state !== "merged"
       ? {
@@ -457,7 +454,11 @@ function LinkRowImpl({
         />
       </a>
       {actionEntry !== null ? (
-        <PullRequestSpeedActions entry={actionEntry} hostActions={linkHostActions} />
+        <PullRequestSpeedActions
+          entry={actionEntry}
+          hostActions={linkHostActions}
+          terminology={linkHost.changeRequest}
+        />
       ) : null}
       <RowMenu
         label={`Actions for #${link.number}`}

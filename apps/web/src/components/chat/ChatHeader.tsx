@@ -38,6 +38,7 @@ import { cn } from "~/lib/utils";
 import { ThreadIssueLinks } from "./ThreadIssueLinks";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { GuestShareIndicator } from "./GuestShareControls";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -407,6 +408,7 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
       {isServerThread && <ThreadIssueLinks threadRef={activeThreadRef} />}
     </div>
   );

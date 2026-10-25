@@ -22,9 +22,9 @@ import { useEffect, useRef, useState } from "react";
 import { findProjectForIssue, repositoryForProjectLink } from "~/lib/openIssueLink";
 import {
   findProjectOnChangeRequestHost,
-  parseChangeRequestUrl,
   resolvePullRequestPreviewTarget,
-} from "~/lib/openPullRequestLink";
+} from "@t3tools/client-runtime/change-request-links";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -50,11 +50,7 @@ import { Input } from "../ui/input";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { PULL_REQUEST_STATE_PRESENTATION } from "./pullRequestIcons";
 
-/**
- * Which thread has the link dialog open, set by whichever entry point asked (command palette,
- * pull-requests surface, detail panel) and rendered once by the chat view so the dialog outlives
- * a palette that closes the moment its command runs.
- */
+// Host in chat to survive command palette dismissal.
 const linkPullRequestDialogThreadAtom = Atom.make<ScopedThreadRef | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("pull-requests:link-dialog-thread"),
@@ -102,7 +98,7 @@ export function linkPullRequestPreviewTarget(input: {
   readonly url: string;
 }) {
   const exact = resolvePullRequestPreviewTarget(input);
-  const parsed = parseChangeRequestUrl(input.url);
+  const parsed = sourceControlClients.parseChangeRequestUrl(input.url)?.link;
   if (exact !== null || !input.pullRequestsEnabled || !input.anyRepositoryOnHost || !parsed) {
     return exact;
   }
@@ -167,7 +163,7 @@ export function linkIssuePreviewMatchesReference(
   reference: string,
   issue: { readonly provider: string; readonly url: string },
 ): boolean {
-  if (parseChangeRequestUrl(issue.url) !== null) return false;
+  if (sourceControlClients.parseChangeRequestUrl(issue.url) !== null) return false;
   if (issue.provider !== "linear" || !URL.canParse(reference)) return true;
   const requested = new URL(reference);
   const preview = new URL(issue.url);

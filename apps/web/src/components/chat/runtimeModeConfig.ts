@@ -22,7 +22,7 @@ export const runtimeModeConfig: Record<
   },
   "full-access": {
     label: "Full access",
-    description: "Unrestricted access; provider safety checks may ask for approval.",
+    description: "Allow commands and edits without prompts.",
     icon: LockOpenIcon,
   },
 };

@@ -4,11 +4,13 @@ import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { APP_BUILD_TIME, APP_COMMIT_HASH, APP_IS_CUSTOM_BUILD, APP_VERSION } from "../../branding";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
+  formatBuildIdentityLabel,
   resolveSidebarStageBackdropVariant,
   SidebarStageBackdrop,
   useEnvironmentStageLabel,
@@ -44,13 +46,20 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   );
   const pillLabel =
     environmentIdentificationMode === "pill"
-      ? resolveEnvironmentIdentificationPillLabel(stageLabel)
+      ? resolveEnvironmentIdentificationPillLabel(stageLabel, APP_IS_CUSTOM_BUILD)
       : null;
+  const customBuildLabel = APP_IS_CUSTOM_BUILD
+    ? formatBuildIdentityLabel({
+        stageLabel: "Custom",
+        commitHash: APP_COMMIT_HASH,
+        buildTime: APP_BUILD_TIME,
+      })
+    : null;
 
   return (
     <div
       className={cn(
-        "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
+        "relative flex min-h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
         isElectron && "drag-region",
       )}
     >
@@ -62,14 +71,32 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           aria-label="Toggle main sidebar"
         />
       </div>
-      <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col items-start justify-center gap-0.5 py-1">
         <SidebarBrand onBackdrop={backdropVariant !== null} />
-        {pillLabel ? (
-          <div className="ml-1 flex h-7 items-center">
-            <Badge data-environment-identification="pill" size="sm" variant="secondary">
-              {pillLabel}
-            </Badge>
-          </div>
+        {customBuildLabel || pillLabel ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div
+                  className="ml-3 flex min-w-0 flex-wrap items-center gap-1 rounded-sm outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  data-environment-identification="pill"
+                  tabIndex={0}
+                >
+                  {(customBuildLabel ?? pillLabel)?.split(" · ").map((label) => (
+                    <Badge key={label} size="sm" variant="secondary">
+                      {label}
+                    </Badge>
+                  ))}
+                </div>
+              }
+            />
+            <TooltipPopup variant="code" className="max-w-none whitespace-pre-line" side="bottom">
+              {customBuildLabel ?? pillLabel}
+              {APP_IS_CUSTOM_BUILD ? `\nVersion ${APP_VERSION}` : ""}
+              {APP_IS_CUSTOM_BUILD && APP_BUILD_TIME ? `\nBuilt ${APP_BUILD_TIME}` : ""}
+              {APP_IS_CUSTOM_BUILD && APP_COMMIT_HASH ? `\nCommit ${APP_COMMIT_HASH}` : ""}
+            </TooltipPopup>
+          </Tooltip>
         ) : null}
       </div>
     </div>
@@ -156,7 +183,7 @@ function SidebarUtilityItem({
   );
 }
 
-export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
