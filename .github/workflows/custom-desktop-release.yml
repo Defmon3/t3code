@@ -1,0 +1,178 @@
+name: Custom desktop release
+
+on:
+  push:
+    branches:
+      - "custom-build-release/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: custom-desktop-release
+  cancel-in-progress: false
+
+env:
+  T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }} x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win
+            target: nsis
+            runner: windows-latest
+          - platform: linux
+            target: AppImage
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Install Linux desktop libraries
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
+
+      - name: Setup Rust
+        if: matrix.platform == 'win'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Spectre-mitigated MSVC libraries
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/heads/custom-build-release/}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building $version"
+
+      - name: Ensure Electron runtime
+        shell: bash
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Build desktop artifact
+        shell: bash
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          vp run dist:desktop:artifact \
+            --platform "${{ matrix.platform }}" \
+            --target "${{ matrix.target }}" \
+            --arch x64 \
+            --build-version "$T3CODE_DESKTOP_VERSION" \
+            --verbose
+
+      - name: Verify platform assets
+        shell: bash
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            installers=(release/*.exe)
+            manifests=(release/latest*.yml release/nightly*.yml)
+          else
+            installers=(release/*.AppImage)
+            manifests=(release/latest*.yml release/nightly*.yml)
+          fi
+          if [[ ${#installers[@]} -ne 1 ]]; then
+            echo "Expected one ${{ matrix.platform }} installer, found ${#installers[@]}." >&2
+            exit 1
+          fi
+          if [[ ${#manifests[@]} -lt 1 ]]; then
+            echo "No updater manifest was emitted for ${{ matrix.platform }}." >&2
+            exit 1
+          fi
+          grep -q "version: $T3CODE_DESKTOP_VERSION" "${manifests[0]}"
+          test -f "${installers[0]}.blockmap"
+
+      - name: Upload platform assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-desktop-${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download platform assets
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/heads/custom-build-release/}"
+          tag="v$version"
+          shopt -s nullglob
+          assets=()
+          for file in release-assets/custom-desktop-*/*; do
+            [[ "$(basename "$file")" == "builder-debug.yml" ]] && continue
+            assets+=("$file")
+          done
+          windows=(release-assets/custom-desktop-win/*.exe)
+          linux=(release-assets/custom-desktop-linux/*.AppImage)
+          if [[ ${#windows[@]} -ne 1 || ${#linux[@]} -ne 1 ]]; then
+            echo "Both Windows and Linux installers are required before publishing." >&2
+            exit 1
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$tag" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "T3 Code $version" \
+            --notes "Custom Windows and Linux desktop build $version from $GITHUB_SHA."
