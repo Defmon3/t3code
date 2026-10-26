@@ -27,9 +27,10 @@ the local mock-update path; setting a generic HTTP URL requires a separate code 
 
 ## Build a custom release
 
-Use a version that is valid SemVer, increases beyond the previous custom release, and is not reused
-from upstream. Keep the version sequence in the custom repository. A normal SemVer version uses the
-stable feed; a version matching `X.Y.Z-nightly.YYYYMMDD.N` uses the nightly feed.
+The `$build-custom-desktop` skill derives a valid, increasing custom version from the latest
+`custom-main` package version. The manual commands below are a fallback and require setting
+`T3CODE_DESKTOP_VERSION` yourself. Stable versions use the stable feed; versions matching
+`X.Y.Z-nightly.YYYYMMDD.N` use the nightly feed.
 
 The project skill `$build-custom-desktop` reads the latest `custom-main` checkout, derives the next
 custom version from its package version, pushes the release-trigger branch, and publishes one
