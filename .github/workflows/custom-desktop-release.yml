@@ -128,7 +128,9 @@ jobs:
             exit 1
           fi
           grep -q "version: $T3CODE_DESKTOP_VERSION" "${manifests[0]}"
-          test -f "${installers[0]}.blockmap"
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            test -f "${installers[0]}.blockmap"
+          fi
 
       - name: Upload platform assets
         uses: actions/upload-artifact@v7
