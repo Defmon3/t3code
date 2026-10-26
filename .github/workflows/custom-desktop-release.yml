@@ -176,5 +176,6 @@ jobs:
           fi
           gh release create "$tag" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "T3 Code $version" \
             --notes "Custom Windows and Linux desktop build $version from $GITHUB_SHA."
