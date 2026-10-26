@@ -31,12 +31,12 @@ Use a version that is valid SemVer, increases beyond the previous custom release
 from upstream. Keep the version sequence in the custom repository. A normal SemVer version uses the
 stable feed; a version matching `X.Y.Z-nightly.YYYYMMDD.N` uses the nightly feed.
 
-The project skill `$build-custom-desktop` pushes a versioned release branch, which triggers the
-native Windows x64 and Linux x64 builds and publishes one GitHub Release. Invoke it with an
-explicit version, for example:
+The project skill `$build-custom-desktop` reads the latest `custom-main` checkout, derives the next
+custom version from its package version, pushes the release-trigger branch, and publishes one
+GitHub Release. Invoke it without a version:
 
 ```text
-$build-custom-desktop 0.1.4-custom.20261026.1
+$build-custom-desktop
 ```
 
 It embeds the custom updater repository and does not install the result on a host.

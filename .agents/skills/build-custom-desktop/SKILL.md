@@ -14,41 +14,40 @@ commands.
 Read the invocation arguments as:
 
 ```text
-<version> [repository]
+[repository]
 ```
 
-Require an explicit version. Do not invent a version or infer one from the current date. The
-optional repository defaults to `Defmon3/t3code` and must be an `owner/repository` slug when
-supplied. This release targets Windows x64 (`nsis`) and Linux x64 (`AppImage`).
-
-The version must be valid SemVer, must be higher than the previous custom release, and must not
-reuse a published upstream version. Versions matching `X.Y.Z-nightly.YYYYMMDD.N` select the
-nightly updater channel; other release versions select the stable channel.
+Do not ask for a version. Require the current checkout to be the `custom-main` branch and derive
+the release version from the latest `apps/server/package.json` on that branch. The workflow strips
+any upstream prerelease suffix, increments the patch component, and appends a UTC custom-build
+stamp. The optional repository defaults to `Defmon3/t3code` and must be an `owner/repository` slug
+when supplied. This release targets Windows x64 (`nsis`) and Linux x64 (`AppImage`).
 
 ## Trigger the release
 
 Run from the repository root in the current checkout:
 
-1. Confirm the requested version and repository. If an argument is missing or malformed, stop and
-   ask for the exact value.
+1. Confirm the current branch is `custom-main` and the optional repository is valid. Do not ask for
+   a version.
 2. Leave existing worktree changes intact. Do not reset, clean, stash, or switch branches.
 3. Confirm `.github/workflows/custom-desktop-release.yml` is present in the current commit.
-4. Confirm the release tag and branch do not already exist:
+4. Confirm the current package version is valid SemVer:
 
    ```powershell
-   gh release view "v<version>" --repo <repository>
-   git ls-remote --exit-code --heads origin "custom-build-release/<version>"
+   git branch --show-current
+   node -p "require('./apps/server/package.json').version"
    ```
 
-   Both commands must report that the target is absent. Never overwrite a published version.
+   The workflow derives a new version from this package version and refuses malformed values.
 
-5. Push the exact current commit to the versioned release branch. This push is the build trigger:
+5. Push the exact current commit to the fixed release-trigger branch. This push is the build trigger:
 
    ```powershell
-   git push origin HEAD:refs/heads/custom-build-release/<version>
+   git push origin HEAD:refs/heads/custom-build-release
    ```
 
-6. The workflow runs Windows x64 (`nsis`) and Linux x64 (`AppImage`) on native GitHub runners with
+6. The workflow derives a new custom version, then runs Windows x64 (`nsis`) and Linux x64
+   (`AppImage`) on native GitHub runners with
    `T3CODE_DESKTOP_UPDATE_REPOSITORY` set to the configured repository. It verifies the emitted
    manifests and publishes one GitHub Release only after both jobs pass.
 7. Wait for the workflow run to complete. If either build or manifest validation fails, stop and
@@ -58,7 +57,8 @@ Run from the repository root in the current checkout:
 
 After the workflow succeeds:
 
-- Verify the release with `gh release view v<version> --repo <repository>`.
+- Identify the newly published tag from the completed workflow and verify it with
+  `gh release view <new-tag> --repo <repository>`.
 - Confirm the assets include the Windows `.exe` and `.blockmap`, the Linux `.AppImage` and `.deb`,
   `latest.yml`, and `latest-linux.yml`.
 - Confirm both manifests contain the requested version and reference their matching installers.
