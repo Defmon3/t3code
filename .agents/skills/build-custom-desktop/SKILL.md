@@ -25,76 +25,44 @@ The version must be valid SemVer, must be higher than the previous custom releas
 reuse a published upstream version. Versions matching `X.Y.Z-nightly.YYYYMMDD.N` select the
 nightly updater channel; other release versions select the stable channel.
 
-## Build procedure
+## Trigger the release
 
 Run from the repository root in the current checkout:
 
-1. Confirm the requested version and repository. If an argument is
-   missing or malformed, stop and ask for the exact value.
+1. Confirm the requested version and repository. If an argument is missing or malformed, stop and
+   ask for the exact value.
 2. Leave existing worktree changes intact. Do not reset, clean, stash, or switch branches.
-3. Confirm the current commit is the same source for both platform builds.
-4. Set `T3CODE_DESKTOP_UPDATE_REPOSITORY` and `T3CODE_DESKTOP_VERSION` for each build process only.
-5. Write to `release/custom/<version>/<platform>-<arch>` so artifacts from another build are not
-   mistaken for this build.
-6. Build Windows x64 with the Windows host builder:
+3. Confirm `.github/workflows/custom-desktop-release.yml` is present in the current commit.
+4. Confirm the release tag and branch do not already exist:
 
    ```powershell
-   $env:T3CODE_DESKTOP_UPDATE_REPOSITORY = "<repository>"
-   $env:T3CODE_DESKTOP_VERSION = "<version>"
-
-   node scripts/build-desktop-artifact.ts `
-     --platform win `
-     --target nsis `
-     --arch x64 `
-     --build-version <version> `
-     --output-dir release/custom/<version>/win-x64 `
-     --verbose
+   gh release view "v<version>" --repo <repository>
+   git ls-remote --exit-code --heads origin "custom-build-release/<version>"
    ```
 
-7. Build Linux x64 on a Linux host from the same commit. The repository builder intentionally
-   rejects Linux packaging on Windows because the browser-secret helper links against Linux
-   `libsecret`. Use the configured Linux build host or a native Linux CI runner; do not substitute a
-   Windows cross-build.
+   Both commands must report that the target is absent. Never overwrite a published version.
 
-   ```bash
-   T3CODE_DESKTOP_UPDATE_REPOSITORY=<repository> \
-   T3CODE_DESKTOP_VERSION=<version> \
-   node scripts/build-desktop-artifact.ts \
-     --platform linux \
-     --target AppImage \
-     --arch x64 \
-     --build-version <version> \
-     --output-dir release/custom/<version>/linux-x64 \
-     --verbose
+5. Push the exact current commit to the versioned release branch. This push is the build trigger:
+
+   ```powershell
+   git push origin HEAD:refs/heads/custom-build-release/<version>
    ```
 
-The builder uses `--publish never`; it creates installers and updater metadata but does not upload
-anything itself. Do not publish until both platform builds finish from the same commit.
+6. The workflow runs Windows x64 (`nsis`) and Linux x64 (`AppImage`) on native GitHub runners with
+   `T3CODE_DESKTOP_UPDATE_REPOSITORY` set to the configured repository. It verifies the emitted
+   manifests and publishes one GitHub Release only after both jobs pass.
+7. Wait for the workflow run to complete. If either build or manifest validation fails, stop and
+   return the failed job; do not create a partial release manually.
 
 ## Verify the result
 
-After both builds succeed:
+After the workflow succeeds:
 
-- List both output directories and report every emitted installer, manifest, and blockmap.
-- Confirm the Windows output contains one `.exe`, its `.blockmap`, and the stable channel manifest.
-- Confirm the Linux output contains an `.AppImage` and its channel manifest when emitted.
-- Confirm every manifest names the requested version and its matching installer.
-- Exclude `builder-debug.yml` from release assets.
-- Publish one tag and release to the configured repository:
-
-  ```powershell
-  $repo = "<repository>"
-  $tag = "v<version>"
-  $assets = @(Get-ChildItem release/custom/<version> -File -Recurse |
-    Where-Object { $_.Name -ne 'builder-debug.yml' })
-  gh release create $tag --repo $repo --title "T3 Code <version>" `
-    --notes "Custom Windows and Linux desktop build <version>." @($assets.FullName)
-  ```
-
-- If that tag already exists, stop and inspect it before uploading; never overwrite a published
-  version with different bytes.
-- Verify the release with `gh release view <tag> --repo <repository>` and retain the previous
-  installer for rollback.
+- Verify the release with `gh release view v<version> --repo <repository>`.
+- Confirm the assets include the Windows `.exe` and `.blockmap`, the Linux `.AppImage` and `.deb`,
+  `latest.yml`, and `latest-linux.yml`.
+- Confirm both manifests contain the requested version and reference their matching installers.
+- Retain the previous installer and release for rollback.
 
 If the build fails, return the command, exit status, and final error output. Do not claim an
 installer or release was produced, and do not publish a partial release.
