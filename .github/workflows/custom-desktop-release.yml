@@ -3,7 +3,7 @@ name: Custom desktop release
 on:
   push:
     branches:
-      - custom-build-release
+      - custom-desktop-release
 
 permissions:
   contents: write

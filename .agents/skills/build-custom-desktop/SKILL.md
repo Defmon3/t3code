@@ -43,7 +43,7 @@ Run from the repository root in the current checkout:
 5. Push the exact current commit to the fixed release-trigger branch. This push is the build trigger:
 
    ```powershell
-   git push origin HEAD:refs/heads/custom-build-release
+   git push origin HEAD:refs/heads/custom-desktop-release
    ```
 
 6. The workflow derives a new custom version, then runs Windows x64 (`nsis`) and Linux x64
