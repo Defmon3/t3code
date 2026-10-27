@@ -429,14 +429,7 @@ function parseRepositorySelector(value: string): {
 /** What a repository selector may hold before it goes into a search as itself. */
 const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
-/**
- * The reader's own words as one literal phrase of a GitHub search query. Quoting is the whole
- * defence: outside quotes GitHub reads `is:closed` as a qualifier and `label:x` as another, so
- * text typed into a search box could widen the very listing it is meant to narrow — inside them it
- * is only text. The two characters that could end the phrase early are therefore escaped first,
- * which GitHub reads back as themselves; an unbalanced quote is dropped instead, which would let
- * everything after it out of the phrase.
- */
+// why: Quote and escape user text so GitHub cannot interpret it as search qualifiers.
 function searchPhrase(query: string): string {
   return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
@@ -501,19 +494,7 @@ function searchTerms(input: {
   ].join(" ");
 }
 
-/**
- * The same listing as one GitHub search across several repositories, which is the only way to read
- * a whole host in one request.
- *
- * Every narrowing `involvementArgs` hands to `gh issue list` as a flag is a qualifier here instead,
- * because a search has no flags to borrow. The two belong together; a tab added to one wants adding
- * to the other.
- *
- * Null where a repository is not `owner/name`. A name is written into the query as itself, and a
- * name holding a space could otherwise end the `repo:` qualifier and start a qualifier of its own —
- * so an unaddressable one refuses the whole read rather than being escaped into something GitHub
- * might still read.
- */
+// why: Mirror involvement flags as search qualifiers and reject repository names that could inject extra qualifiers.
 function searchQuery(input: {
   readonly repositories: ReadonlyArray<string>;
   readonly state: IssueListState;
@@ -538,18 +519,7 @@ function searchQuery(input: {
   ].join(" ");
 }
 
-/**
- * How many rows a slice may hand over: the page that was asked for, plus the rest of the instant it
- * would otherwise stop inside.
- *
- * A continuation is an instant asked for inclusively plus the rows already sent at it, so a slice
- * that ends halfway through one instant cannot be carried on from at all: the read after it asks
- * the same question, is handed the same rows, drops every one of them as already sent, and works
- * out the cursor it started with. One afternoon of triage touches more issues in a second than a
- * page holds, and the listing would stand on that second for good. Handing the instant over whole
- * is what makes that impossible — the read after it drops the whole group and carries on with rows
- * that are strictly older — and it is why a slice may run a little past the page it was asked for.
- */
+// why: Finish the boundary timestamp's whole group or inclusive continuation reads can repeat the same page forever.
 function wholeInstantRows(
   items: ReadonlyArray<{ readonly updatedAt: string }>,
   limit: number,
@@ -651,13 +621,7 @@ const make = Effect.gen(function* () {
     });
   };
 
-  /**
-   * Every write to an issue is the same REST call, so its body is the only thing that differs.
-   * The REST road rather than `gh issue edit`: a title and a body are the reader's own words, and
-   * `--title` would put them in argv, which is visible in process listings and echoed back inside
-   * process-runner failure messages. Labels and assignees are written the same way because this
-   * endpoint replaces both, which is the whole-set write the page asks for.
-   */
+  // why: REST bodies keep user text out of process arguments and replace label and assignee sets together.
   const writeIssue = (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -680,39 +644,40 @@ const make = Effect.gen(function* () {
       .pipe(Effect.asVoid);
   };
 
-  const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = (input) =>
-    Effect.gen(function* () {
-      const { owner, name } = parseRepositorySelector(input.repository);
-      const host = input.host.trim().toLowerCase();
-      const read = (query: string) =>
-        graphqlRead({
-          ...input,
-          operation: "getIssueDetail",
-          variables: { owner, name, number: input.number },
-          query,
-          minimumCost: query === ISSUE_SUPPLEMENT_GRAPHQL_QUERY ? 3 : 1,
-          decode: decodeIssueCoreJson,
-        });
-      if (yield* Cache.has(unsupportedHierarchy, host))
-        return yield* read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY);
-      return yield* read(ISSUE_SUPPLEMENT_GRAPHQL_QUERY).pipe(
-        Effect.catchTags({
-          GitHubApiResponseError: (error) =>
-            error.status === 200 &&
-            error.githubErrors !== undefined &&
-            error.githubErrors.length > 0 &&
-            error.githubErrors.every((message) =>
-              /^Field [\x27"](?:parent|subIssues)[\x27"] (?:doesn\x27t|does not) exist on type [\x27"]Issue[\x27"]$/.test(
-                message,
-              ),
-            )
-              ? Cache.set(unsupportedHierarchy, host, host).pipe(
-                  Effect.andThen(read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY)),
-                )
-              : Effect.fail(error),
-        }),
-      );
-    });
+  const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = Effect.fn(
+    "GitHubIssueCli.issueDetail",
+  )(function* (input) {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    const host = input.host.trim().toLowerCase();
+    const read = (query: string) =>
+      graphqlRead({
+        ...input,
+        operation: "getIssueDetail",
+        variables: { owner, name, number: input.number },
+        query,
+        minimumCost: query === ISSUE_SUPPLEMENT_GRAPHQL_QUERY ? 3 : 1,
+        decode: decodeIssueCoreJson,
+      });
+    if (yield* Cache.has(unsupportedHierarchy, host))
+      return yield* read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY);
+    return yield* read(ISSUE_SUPPLEMENT_GRAPHQL_QUERY).pipe(
+      Effect.catchTags({
+        GitHubApiResponseError: (error) =>
+          error.status === 200 &&
+          error.githubErrors !== undefined &&
+          error.githubErrors.length > 0 &&
+          error.githubErrors.every((message) =>
+            /^Field [\x27"](?:parent|subIssues)[\x27"] (?:doesn\x27t|does not) exist on type [\x27"]Issue[\x27"]$/.test(
+              message,
+            ),
+          )
+            ? Cache.set(unsupportedHierarchy, host, host).pipe(
+                Effect.andThen(read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY)),
+              )
+            : Effect.fail(error),
+      }),
+    );
+  });
 
   const summaryResolver = RequestResolver.makeGrouped<IssueSummaryRead, string>({
     key: ({ request, context }) =>
@@ -864,15 +829,16 @@ const make = Effect.gen(function* () {
   };
 
   return GitHubIssueCli.of({
-    getViewerLogin: (input) =>
+    getViewerLogin: Effect.fn("GitHubIssueCli.getViewerLogin")((input) =>
       graphqlRead({
         ...input,
         operation: "getViewerLogin",
         query: "query { viewer { login } }",
         decode: decodeViewerLogin,
       }),
+    ),
 
-    listIssues: (input) => {
+    listIssues: Effect.fn("GitHubIssueCli.listIssues")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       const query = searchQuery({ ...input, repositories: [input.repository] });
       if (query === null)
@@ -883,71 +849,66 @@ const make = Effect.gen(function* () {
             operation: "listIssues",
           }),
         );
-      const fallback = () =>
-        Effect.gen(function* () {
-          const items: GitHubIssue[] = [];
-          let cursor: string | null = null;
-          let rawCount = 0;
-          let hasNextPage = false;
-          do {
-            const batch: {
-              readonly items: ReadonlyArray<GitHubIssue>;
-              readonly rawCount: number;
-              readonly hasNextPage: boolean;
-              readonly nextCursor: string | null;
-              readonly enabled: boolean;
-            } = yield* graphqlRead({
-              ...input,
-              operation: "listIssues",
-              query: ISSUE_REPOSITORY_LIST_GRAPHQL_QUERY,
-              variables: {
-                owner,
-                name,
-                cursor,
-                first: Math.min(input.limit + 1 - rawCount, 100),
-                states: input.state === "all" ? ["OPEN", "CLOSED"] : [input.state.toUpperCase()],
-                assignee: input.involvement === "assigned" ? input.viewer : null,
-                createdBy: input.involvement === "authored" ? input.viewer : null,
-                mentioned: input.involvement === "mentioned" ? input.viewer : null,
-              },
-              decode: decodeIssueRepositoryListJson,
+      const fallback = Effect.fn("GitHubIssueCli.fallback")(function* () {
+        const items: GitHubIssue[] = [];
+        let cursor: string | null = null;
+        let rawCount = 0;
+        let hasNextPage = false;
+        do {
+          const batch: {
+            readonly items: ReadonlyArray<GitHubIssue>;
+            readonly rawCount: number;
+            readonly hasNextPage: boolean;
+            readonly nextCursor: string | null;
+            readonly enabled: boolean;
+          } = yield* graphqlRead({
+            ...input,
+            operation: "listIssues",
+            query: ISSUE_REPOSITORY_LIST_GRAPHQL_QUERY,
+            variables: {
+              owner,
+              name,
+              cursor,
+              first: Math.min(input.limit + 1 - rawCount, 100),
+              states: input.state === "all" ? ["OPEN", "CLOSED"] : [input.state.toUpperCase()],
+              assignee: input.involvement === "assigned" ? input.viewer : null,
+              createdBy: input.involvement === "authored" ? input.viewer : null,
+              mentioned: input.involvement === "mentioned" ? input.viewer : null,
+            },
+            decode: decodeIssueRepositoryListJson,
+          });
+          if (!batch.enabled)
+            return yield* new GitHubIssuesDisabledError({
+              command: "gh",
+              cwd: input.cwd,
+              repository: input.repository,
             });
-            if (!batch.enabled)
-              return yield* new GitHubIssuesDisabledError({
-                command: "gh",
-                cwd: input.cwd,
-                repository: input.repository,
-              });
-            items.push(...batch.items);
-            rawCount += batch.rawCount;
-            cursor = batch.nextCursor;
-            hasNextPage = batch.hasNextPage;
-          } while (
-            cursor !== null &&
-            rawCount <= input.limit &&
-            rawCount < ISSUE_SEARCH_MAX_RESULTS
-          );
-          return {
-            items: items.slice(0, input.limit),
-            truncated: hasNextPage || rawCount > input.limit,
-            continues: false,
-          };
-        });
+          items.push(...batch.items);
+          rawCount += batch.rawCount;
+          cursor = batch.nextCursor;
+          hasNextPage = batch.hasNextPage;
+        } while (cursor !== null && rawCount <= input.limit && rawCount < ISSUE_SEARCH_MAX_RESULTS);
+        return {
+          items: items.slice(0, input.limit),
+          truncated: hasNextPage || rawCount > input.limit,
+          continues: false,
+        };
+      });
       return searchIssues({ ...input, repositories: [input.repository] }, query).pipe(
         Effect.map((batch) => ({
           ...batch,
           truncated: batch.truncated || batch.ceilingReached,
           continues: supportsIssueCursor(input) && !batch.ceilingReached,
         })),
-        Effect.flatMap((batch) =>
-          batch.items.length === 0 && input.cursor === undefined && !input.query?.trim()
-            ? fallback()
-            : Effect.succeed(batch),
+        Effect.filterOrElse(
+          (batch) =>
+            !(batch.items.length === 0 && input.cursor === undefined && !input.query?.trim()),
+          fallback,
         ),
       );
-    },
+    }),
 
-    searchIssues: (input) => {
+    searchIssues: Effect.fn("GitHubIssueCli.searchIssues")((input) => {
       const query = searchQuery(input);
       return query === null
         ? Effect.fail(
@@ -958,11 +919,11 @@ const make = Effect.gen(function* () {
             }),
           )
         : searchIssues(input, query);
-    },
+    }),
 
     getIssueDetail: issueDetail,
 
-    getIssueSummary: (input) =>
+    getIssueSummary: Effect.fn("GitHubIssueCli.getIssueSummary")((input) =>
       SEARCH_REPOSITORY.test(input.repository) &&
       Number.isSafeInteger(input.number) &&
       input.number > 0
@@ -974,31 +935,31 @@ const make = Effect.gen(function* () {
               operation: "getIssueSummary",
             }),
           ),
+    ),
 
-    getIssueActivity: (input) =>
-      Effect.gen(function* () {
-        const { owner, name } = parseRepositorySelector(input.repository);
-        const identity = { owner, name, number: input.number };
-        const first = yield* graphqlRead({
-          cwd: input.cwd,
-          host: input.host,
-          operation: "getIssueActivity",
-          variables: { ...identity, cursor: null },
-          query: ISSUE_ACTIVITY_GRAPHQL_QUERY,
-          decode: decodeIssueActivityJson,
-        });
-        return {
-          author: first.author,
-          comments: first.comments,
-          commentCount: Math.max(first.commentCount, first.comments.length),
-          commentsTruncated: first.nextCursor !== null,
-          nextCommentsCursor: first.nextCursor,
-          events: first.events,
-          reactions: first.reactions,
-        };
-      }),
+    getIssueActivity: Effect.fn("GitHubIssueCli.getIssueActivity")(function* (input) {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const identity = { owner, name, number: input.number };
+      const first = yield* graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getIssueActivity",
+        variables: { ...identity, cursor: null },
+        query: ISSUE_ACTIVITY_GRAPHQL_QUERY,
+        decode: decodeIssueActivityJson,
+      });
+      return {
+        author: first.author,
+        comments: first.comments,
+        commentCount: Math.max(first.commentCount, first.comments.length),
+        commentsTruncated: first.nextCursor !== null,
+        nextCommentsCursor: first.nextCursor,
+        events: first.events,
+        reactions: first.reactions,
+      };
+    }),
 
-    getIssueComments: (input) => {
+    getIssueComments: Effect.fn("GitHubIssueCli.getIssueComments")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return graphqlRead({
         cwd: input.cwd,
@@ -1008,9 +969,9 @@ const make = Effect.gen(function* () {
         query: ISSUE_COMMENTS_GRAPHQL_QUERY,
         decode: decodeIssueCommentsJson,
       });
-    },
+    }),
 
-    getViewerAccess: (input) => {
+    getViewerAccess: Effect.fn("GitHubIssueCli.getViewerAccess")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return graphqlRead({
         cwd: input.cwd,
@@ -1020,9 +981,9 @@ const make = Effect.gen(function* () {
         query: ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
         decode: decodeIssueViewerPermissionsJson,
       });
-    },
+    }),
 
-    runIssueAction: (input) =>
+    runIssueAction: Effect.fn("GitHubIssueCli.runIssueAction")((input) =>
       writeIssue({
         ...input,
         body: {
@@ -1032,8 +993,9 @@ const make = Effect.gen(function* () {
             : {}),
         },
       }),
+    ),
 
-    commentOnIssue: (input) => {
+    commentOnIssue: Effect.fn("GitHubIssueCli.commentOnIssue")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return api
         .rest({
@@ -1044,9 +1006,9 @@ const make = Effect.gen(function* () {
           body: { body: input.body },
         })
         .pipe(Effect.asVoid);
-    },
+    }),
 
-    createIssue: (input) => {
+    createIssue: Effect.fn("GitHubIssueCli.createIssue")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return api
         .rest({
@@ -1069,9 +1031,9 @@ const make = Effect.gen(function* () {
               : Effect.fail(readError({ ...input, operation: "createIssue" })(decoded.failure));
           }),
         );
-    },
+    }),
 
-    updateIssue: (input) =>
+    updateIssue: Effect.fn("GitHubIssueCli.updateIssue")((input) =>
       writeIssue({
         ...input,
         body: {
@@ -1079,20 +1041,23 @@ const make = Effect.gen(function* () {
           ...(input.body === undefined ? {} : { body: input.body }),
         },
       }),
+    ),
 
-    updateComment: (input): Effect.Effect<void, GitHubIssueCliError> =>
-      Effect.gen(function* () {
-        const belongs = yield* commentBelongsToIssue(input);
-        if (!belongs) {
-          return yield* new GitHubIssueCommentScopeError({ command: "gh", cwd: input.cwd });
-        }
-        yield* graphql({
-          cwd: input.cwd,
-          host: input.host,
-          query: UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION,
-          variables: { commentId: input.commentId, body: input.body },
-        });
-      }),
+    updateComment: Effect.fn("GitHubIssueCli.updateComment")(function* (input): Effect.fn.Return<
+      void,
+      GitHubIssueCliError
+    > {
+      const belongs = yield* commentBelongsToIssue(input);
+      if (!belongs) {
+        return yield* new GitHubIssueCommentScopeError({ command: "gh", cwd: input.cwd });
+      }
+      yield* graphql({
+        cwd: input.cwd,
+        host: input.host,
+        query: UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION,
+        variables: { commentId: input.commentId, body: input.body },
+      });
+    }),
 
     setReaction: (input): Effect.Effect<void, GitHubIssueCliError> => {
       const subjectId =
@@ -1117,11 +1082,15 @@ const make = Effect.gen(function* () {
       );
     },
 
-    setLabels: (input) => writeIssue({ ...input, body: { labels: input.labels } }),
+    setLabels: Effect.fn("GitHubIssueCli.setLabels")((input) =>
+      writeIssue({ ...input, body: { labels: input.labels } }),
+    ),
 
-    setAssignees: (input) => writeIssue({ ...input, body: { assignees: input.assignees } }),
+    setAssignees: Effect.fn("GitHubIssueCli.setAssignees")((input) =>
+      writeIssue({ ...input, body: { assignees: input.assignees } }),
+    ),
 
-    listLabelCandidates: (input) => {
+    listLabelCandidates: Effect.fn("GitHubIssueCli.listLabelCandidates")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return Effect.gen(function* () {
         let cursor: string | null = null;
@@ -1146,9 +1115,9 @@ const make = Effect.gen(function* () {
         }
         return { candidates, truncated: true };
       });
-    },
+    }),
 
-    listAssigneeCandidates: (input) => {
+    listAssigneeCandidates: Effect.fn("GitHubIssueCli.listAssigneeCandidates")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return graphqlRead({
         cwd: input.cwd,
@@ -1169,9 +1138,9 @@ const make = Effect.gen(function* () {
               ),
         ),
       );
-    },
+    }),
 
-    listIssueTemplates: (input) => {
+    listIssueTemplates: Effect.fn("GitHubIssueCli.listIssueTemplates")((input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return Effect.all(
         [
@@ -1191,8 +1160,7 @@ const make = Effect.gen(function* () {
             query: ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY,
             decode: decodeIssueTemplateFormsJson,
           }).pipe(
-            // A repository whose tree this account may not walk still has templates worth showing,
-            // so the questions are lost rather than the chooser.
+            // @effect-diagnostics-next-line catchConditionalRefailToCatchIf:off -- catchIf infers an invalid Effect context here with tsc-rs.
             Effect.catch((error) =>
               error._tag === "GitHubApiRateLimitError" ||
               error._tag === "SourceControlRateLimitPausedError"
@@ -1212,6 +1180,7 @@ const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.map((response) => decodeIssueTemplateConfigYaml(response.body)),
+              // @effect-diagnostics-next-line catchConditionalRefailToCatchIf:off -- catchIf infers an invalid Effect context here with tsc-rs.
               Effect.catch((error) =>
                 error._tag === "GitHubApiRateLimitError" ||
                 error._tag === "SourceControlRateLimitPausedError"
@@ -1240,7 +1209,7 @@ const make = Effect.gen(function* () {
           };
         }),
       );
-    },
+    }),
   });
 });
 

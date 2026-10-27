@@ -158,15 +158,14 @@ export const make = Effect.gen(function* () {
       return Effect.all(
         [
           api.getIssue(target),
-          api
-            .getRepositoryPermission({ repository: input.repository })
-            .pipe(
-              Effect.catch((error) =>
-                bitbucketIssueErrorReason(error, "getRepositoryPermission") === "rate-limited"
-                  ? Effect.fail(error)
-                  : Effect.succeed(false),
-              ),
+          api.getRepositoryPermission({ repository: input.repository }).pipe(
+            // @effect-diagnostics-next-line catchConditionalRefailToCatchIf:off -- catchIf infers an invalid Effect context here with tsc-rs.
+            Effect.catch((error) =>
+              bitbucketIssueErrorReason(error, "getRepositoryPermission") === "rate-limited"
+                ? Effect.fail(error)
+                : Effect.succeed(false),
             ),
+          ),
         ],
         { concurrency: 2 },
       ).pipe(

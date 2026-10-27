@@ -286,14 +286,7 @@ function searchParams(search: string | undefined): ReadonlyArray<readonly [strin
   return trimmed.length === 0 ? [] : [["search", trimmed]];
 }
 
-/**
- * Where a continuation carries on from, as the instant the last slice ended on and everything
- * before it. Without it the next request would offset into the list as it stands now, and an issue
- * touched between the two reads shifts every row past the boundary — sending some of them twice and
- * hiding others for good. GitLab's filter is inclusive, like the one every other host here is given:
- * rows sharing the boundary instant are ordinary, and the service drops the ones it has already sent
- * rather than asking for strictly older and losing their neighbours.
- */
+// why: Inclusive timestamps and previously sent rows prevent duplicates and omissions when issues move between page reads.
 function cursorParams(
   cursor: ProviderListCursor | undefined,
 ): ReadonlyArray<readonly [string, string]> {
@@ -357,13 +350,7 @@ const make = Effect.gen(function* () {
         cause,
       });
 
-  /**
-   * `per_page` stops at 100, so a larger page is walked one request at a time. The walk is
-   * bounded twice over: it stops on a short page or once the extra row that reveals a next
-   * page has been read, and it never asks for more pages than the caller's page needs. The
-   * second bound is what makes it terminate when every row on a page fails to decode, which
-   * leaves nothing collected but does not mean GitLab has run out of rows.
-   */
+  // why: Bound the page walk by raw rows so it terminates even when every row fails to decode.
   const listPage = (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -800,11 +787,13 @@ const make = Effect.gen(function* () {
 
     // Every read starts at the first page: a continuation is the boundary instant, not an offset
     // into a list that moves under it.
-    listIssues: (input) => listPage({ ...input, page: 1, collected: [], cursorAdvance: 0 }),
+    listIssues: Effect.fn("GitLabIssueCli.listIssues")((input) =>
+      listPage({ ...input, page: 1, collected: [], cursorAdvance: 0 }),
+    ),
 
     getIssueDetail: issueDetail,
 
-    listLinkedMergeRequests: (input) =>
+    listLinkedMergeRequests: Effect.fn("GitLabIssueCli.listLinkedMergeRequests")((input) =>
       Effect.all(
         [
           linkedMergeRequests({ ...input, endpoint: "closed_by", page: 1, collected: [] }),
@@ -830,8 +819,9 @@ const make = Effect.gen(function* () {
           });
         }),
       ),
+    ),
 
-    listActivity: (input) =>
+    listActivity: Effect.fn("GitLabIssueCli.listActivity")((input) =>
       Effect.all(
         [
           notesPage({ ...input, page: 1, comments: [], events: [] }),
@@ -856,8 +846,9 @@ const make = Effect.gen(function* () {
           reactions: awards.reactions,
         })),
       ),
+    ),
 
-    createIssue: (input) =>
+    createIssue: Effect.fn("GitLabIssueCli.createIssue")((input) =>
       api({
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues`,
@@ -876,8 +867,9 @@ const make = Effect.gen(function* () {
             : Effect.fail(readError({ cwd: input.cwd, operation: "createIssue" })(decoded.failure));
         }),
       ),
+    ),
 
-    updateIssue: (input) =>
+    updateIssue: Effect.fn("GitLabIssueCli.updateIssue")((input) =>
       updateIssue({
         ...input,
         body: {
@@ -885,68 +877,73 @@ const make = Effect.gen(function* () {
           ...(input.body === undefined ? {} : { description: input.body }),
         },
       }),
+    ),
 
     // The same PUT the edit uses: `glab issue close` would do it too, but a state change is one
     // field of the issue, and one path through GitLab is one thing to get right.
-    runIssueAction: (input) =>
+    runIssueAction: Effect.fn("GitLabIssueCli.runIssueAction")((input) =>
       updateIssue({
         ...input,
         body: { state_event: input.action === "close" ? "close" : "reopen" },
       }),
+    ),
 
-    commentOnIssue: (input) =>
+    commentOnIssue: Effect.fn("GitLabIssueCli.commentOnIssue")((input) =>
       api({
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes`,
         method: "POST",
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
+    ),
 
-    updateComment: (input) =>
+    updateComment: Effect.fn("GitLabIssueCli.updateComment")((input) =>
       api({
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes/${encodeURIComponent(input.commentId)}`,
         method: "PUT",
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
+    ),
 
-    setReaction: (input) =>
-      Effect.gen(function* () {
-        const subject = awardSubjectPath(input);
-        if (input.reacted) {
-          yield* api({
-            cwd: input.cwd,
-            path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
-            method: "POST",
-          });
-          return;
-        }
-        const viewer = yield* viewerUsername({ cwd: input.cwd });
-        const own = yield* ownAwardId({
+    setReaction: Effect.fn("GitLabIssueCli.setReaction")(function* (input) {
+      const subject = awardSubjectPath(input);
+      if (input.reacted) {
+        yield* api({
           cwd: input.cwd,
-          subject,
-          content: input.content,
-          viewer,
-          page: 1,
+          path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
+          method: "POST",
         });
-        if (own === null) return;
-        yield* api({ cwd: input.cwd, path: subject + "/" + own, method: "DELETE" });
-      }),
+        return;
+      }
+      const viewer = yield* viewerUsername({ cwd: input.cwd });
+      const own = yield* ownAwardId({
+        cwd: input.cwd,
+        subject,
+        content: input.content,
+        viewer,
+        page: 1,
+      });
+      if (own === null) return;
+      yield* api({ cwd: input.cwd, path: subject + "/" + own, method: "DELETE" });
+    }),
 
-    setLabels: (input) =>
+    setLabels: Effect.fn("GitLabIssueCli.setLabels")((input) =>
       updateIssue({
         ...input,
         // An array, which no label name can break; GitLab documents the empty string, and only
         // the empty string, as the way to take every label off an issue.
         body: { labels: input.labels.length === 0 ? "" : [...input.labels] },
       }),
+    ),
 
-    setAssignees: (input) =>
+    setAssignees: Effect.fn("GitLabIssueCli.setAssignees")((input) =>
       // The whole set rather than a change to it, which is what GitLab writes here anyway: an
       // empty list unassigns everybody.
       updateIssue({ ...input, body: { assignee_ids: assigneeIds(input.assignees) } }),
+    ),
 
-    listLabelCandidates: (input) =>
+    listLabelCandidates: Effect.fn("GitLabIssueCli.listLabelCandidates")((input) =>
       Effect.all([issueDetail(input), projectLabels(input)], { concurrency: 2 }).pipe(
         Effect.map(([issue, labels]) => {
           const applied = new Set(issue.labels.map((label) => label.name));
@@ -959,8 +956,9 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
+    ),
 
-    listAssigneeCandidates: (input) =>
+    listAssigneeCandidates: Effect.fn("GitLabIssueCli.listAssigneeCandidates")((input) =>
       Effect.all([issueDetail(input), projectMembers(input)], { concurrency: 2 }).pipe(
         Effect.map(([issue, members]) => {
           // Whoever already has the issue leads the list, ahead of the member page and whatever
@@ -981,8 +979,9 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
+    ),
 
-    listIssueTemplates: (input) =>
+    listIssueTemplates: Effect.fn("GitLabIssueCli.listIssueTemplates")((input) =>
       api({
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/templates/issues`,
@@ -1005,6 +1004,7 @@ const make = Effect.gen(function* () {
         // GitLab keeps no contact links, and never asks that an issue be filed from a template.
         Effect.map((templates) => ({ templates, contactLinks: [], blankIssuesEnabled: true })),
       ),
+    ),
   });
 });
 

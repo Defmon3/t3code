@@ -18,6 +18,7 @@ export function useEscapeToGoBack(onEscape?: () => void) {
   const navigateBack = useNavigateBack();
   const handleEscape = onEscape ?? navigateBack;
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Subscribe to the window's keyboard events and release the listener on unmount.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing || event.key !== "Escape")

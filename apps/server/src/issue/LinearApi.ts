@@ -469,280 +469,264 @@ const make = Effect.gen(function* () {
           new LinearApiError({ operation, reason: "rate-limited", retryAt: cause.retryAt, cause }),
       ),
     );
-  const requestWithToken = <S extends Schema.Codec<unknown, unknown, never, never>>(
+  const requestWithToken = Effect.fn("LinearApi.requestWithToken")(function* <
+    S extends Schema.Codec<unknown, unknown, never, never>,
+  >(
     key: string,
     operation: string,
     document: string,
     variables: Record<string, unknown>,
     schema: S,
-  ): Effect.Effect<S["Type"], LinearApiError> =>
-    Effect.gen(function* () {
-      const tokenScope = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(key))
-        .pipe(Effect.map(Hex.encode), Effect.orDie);
-      let credentialScope = verifiedTokenScopes.get(tokenScope) ?? tokenScope;
-      const queryEndpoints = QUERY_ENDPOINTS.get(document)!;
-      if (credentialScope === tokenScope) {
-        const endpoints = tokenEndpoints.get(tokenScope) ?? new Set<string>();
-        for (const endpoint of queryEndpoints) endpoints.add(endpoint);
-        tokenEndpoints.set(tokenScope, endpoints);
-      }
-      let lease = yield* checkRateLimit(operation, credentialScope);
-      let endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
-        checkRateLimit(operation, `${credentialScope}\0${endpoint}`),
-      );
-      const now = yield* Clock.currentTimeMillis;
-      const costKey = [document, variables.first, variables.last].join("\0");
-      const cost =
-        document === ISSUE_QUERY
-          ? ISSUE_COMPLEXITY
-          : document === LIST_QUERY
-            ? Math.max(
-                Math.ceil(66 * Number(variables.first ?? variables.last) + 1.4),
-                documentCosts.get(costKey) ?? 0,
-              )
-            : (documentCosts.get(costKey) ?? 0);
-      const budget = complexityBudgets.get(credentialScope);
-      if (budget !== undefined && budget.reset <= now) complexityBudgets.delete(credentialScope);
-      if (budget !== undefined && budget.reset > now) {
-        if (budget.remaining < cost)
-          return yield* new LinearApiError({
-            operation,
-            reason: "rate-limited",
-            retryAt: budget.reset,
-          });
-        budget.remaining = Math.max(0, budget.remaining - cost);
-      }
-      return yield* http
-        .execute(
-          HttpClientRequest.post(config.baseUrl).pipe(
-            HttpClientRequest.setHeader("authorization", key),
-            HttpClientRequest.acceptJson,
-            HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
-          ),
-        )
-        .pipe(
-          Effect.mapError((cause) => new LinearApiError({ operation, reason: "failed", cause })),
-          Effect.flatMap((response) =>
-            Effect.gen(function* () {
-              const now = yield* Clock.currentTimeMillis;
-              const reportedCost = Number(response.headers["x-complexity"]);
-              if (Number.isFinite(reportedCost) && reportedCost >= 0) {
-                documentCosts.set(costKey, reportedCost);
-                if (budget !== undefined && budget.reset > now)
-                  budget.remaining = Math.max(
-                    0,
-                    budget.remaining - Math.max(0, reportedCost - cost),
-                  );
-              }
-              const remaining = Number(response.headers["x-ratelimit-complexity-remaining"]);
-              const reset = Number(
-                response.headers["x-ratelimit-complexity-reset"] ?? budget?.reset,
-              );
-              if (
-                Number.isFinite(remaining) &&
-                remaining >= 0 &&
+  ): Effect.fn.Return<S["Type"], LinearApiError> {
+    const tokenScope = yield* crypto
+      .digest("SHA-256", new TextEncoder().encode(key))
+      .pipe(Effect.map(Hex.encode), Effect.orDie);
+    let credentialScope = verifiedTokenScopes.get(tokenScope) ?? tokenScope;
+    const queryEndpoints = QUERY_ENDPOINTS.get(document)!;
+    if (credentialScope === tokenScope) {
+      const endpoints = tokenEndpoints.get(tokenScope) ?? new Set<string>();
+      for (const endpoint of queryEndpoints) endpoints.add(endpoint);
+      tokenEndpoints.set(tokenScope, endpoints);
+    }
+    let lease = yield* checkRateLimit(operation, credentialScope);
+    let endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
+      checkRateLimit(operation, `${credentialScope}\0${endpoint}`),
+    );
+    const now = yield* Clock.currentTimeMillis;
+    const costKey = [document, variables.first, variables.last].join("\0");
+    const cost =
+      document === ISSUE_QUERY
+        ? ISSUE_COMPLEXITY
+        : document === LIST_QUERY
+          ? Math.max(
+              Math.ceil(66 * Number(variables.first ?? variables.last) + 1.4),
+              documentCosts.get(costKey) ?? 0,
+            )
+          : (documentCosts.get(costKey) ?? 0);
+    const budget = complexityBudgets.get(credentialScope);
+    if (budget !== undefined && budget.reset <= now) complexityBudgets.delete(credentialScope);
+    if (budget !== undefined && budget.reset > now) {
+      if (budget.remaining < cost)
+        return yield* new LinearApiError({
+          operation,
+          reason: "rate-limited",
+          retryAt: budget.reset,
+        });
+      budget.remaining = Math.max(0, budget.remaining - cost);
+    }
+    return yield* http
+      .execute(
+        HttpClientRequest.post(config.baseUrl).pipe(
+          HttpClientRequest.setHeader("authorization", key),
+          HttpClientRequest.acceptJson,
+          HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
+        ),
+      )
+      .pipe(
+        Effect.mapError((cause) => new LinearApiError({ operation, reason: "failed", cause })),
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const reportedCost = Number(response.headers["x-complexity"]);
+            if (Number.isFinite(reportedCost) && reportedCost >= 0) {
+              documentCosts.set(costKey, reportedCost);
+              if (budget !== undefined && budget.reset > now)
+                budget.remaining = Math.max(0, budget.remaining - Math.max(0, reportedCost - cost));
+            }
+            const remaining = Number(response.headers["x-ratelimit-complexity-remaining"]);
+            const reset = Number(response.headers["x-ratelimit-complexity-reset"] ?? budget?.reset);
+            if (
+              Number.isFinite(remaining) &&
+              remaining >= 0 &&
+              Number.isFinite(reset) &&
+              reset > now
+            )
+              complexityBudgets.set(credentialScope, { remaining, reset });
+            const resets = ["requests", "complexity"].flatMap((kind) => {
+              const remaining = response.headers[`x-ratelimit-${kind}-remaining`];
+              const reset = Number(response.headers[`x-ratelimit-${kind}-reset`]);
+              return remaining !== undefined &&
+                Number(remaining) <= 0 &&
                 Number.isFinite(reset) &&
                 reset > now
-              )
-                complexityBudgets.set(credentialScope, { remaining, reset });
-              const resets = ["requests", "complexity"].flatMap((kind) => {
-                const remaining = response.headers[`x-ratelimit-${kind}-remaining`];
-                const reset = Number(response.headers[`x-ratelimit-${kind}-reset`]);
-                return remaining !== undefined &&
-                  Number(remaining) <= 0 &&
-                  Number.isFinite(reset) &&
-                  reset > now
-                  ? [reset]
-                  : [];
+                ? [reset]
+                : [];
+            });
+            const endpointRemaining = response.headers["x-ratelimit-endpoint-requests-remaining"];
+            const endpointReset = Number(response.headers["x-ratelimit-endpoint-requests-reset"]);
+            const reportedEndpoint = response.headers["x-ratelimit-endpoint-name"];
+            const limitedEndpoints =
+              reportedEndpoint !== undefined && queryEndpoints.includes(reportedEndpoint)
+                ? [reportedEndpoint]
+                : queryEndpoints;
+            const recordEndpoints = (retryAt?: number) =>
+              Effect.forEach(limitedEndpoints, (endpoint) => {
+                const input = {
+                  ...rateLimitKey,
+                  lease: endpointLeases[queryEndpoints.indexOf(endpoint)]!,
+                  retryAt,
+                };
+                return (
+                  retryAt === undefined
+                    ? rateLimits.recordSuccess(input)
+                    : rateLimits.recordRateLimit(input)
+                ).pipe(
+                  Effect.provideService(
+                    SourceControlRateLimit.CredentialScope,
+                    `${credentialScope}\0${endpoint}`,
+                  ),
+                );
               });
-              const endpointRemaining = response.headers["x-ratelimit-endpoint-requests-remaining"];
-              const endpointReset = Number(response.headers["x-ratelimit-endpoint-requests-reset"]);
-              const reportedEndpoint = response.headers["x-ratelimit-endpoint-name"];
-              const limitedEndpoints =
-                reportedEndpoint !== undefined && queryEndpoints.includes(reportedEndpoint)
-                  ? [reportedEndpoint]
-                  : queryEndpoints;
-              const recordEndpoints = (retryAt?: number) =>
-                Effect.forEach(limitedEndpoints, (endpoint) => {
-                  const input = {
+            const endpointRetryAt =
+              endpointRemaining !== undefined &&
+              Number(endpointRemaining) <= 0 &&
+              Number.isFinite(endpointReset) &&
+              endpointReset > now
+                ? endpointReset
+                : undefined;
+            const retryAfter = SourceControlRateLimit.retryAtFromHeader(
+              response.headers["retry-after"],
+              now,
+            );
+            const retryTimes = [
+              ...resets,
+              ...(endpointRetryAt === undefined ? [] : [endpointRetryAt]),
+              ...(retryAfter === undefined ? [] : [retryAfter]),
+            ];
+            const retryAt = retryTimes.length === 0 ? undefined : Math.max(...retryTimes);
+            const limited = Effect.fn("LinearApi.limited")(function* () {
+              if (resets.length > 0 || endpointRetryAt === undefined)
+                yield* rateLimits
+                  .recordRateLimit({
                     ...rateLimitKey,
-                    lease: endpointLeases[queryEndpoints.indexOf(endpoint)]!,
-                    retryAt,
-                  };
-                  return (
-                    retryAt === undefined
-                      ? rateLimits.recordSuccess(input)
-                      : rateLimits.recordRateLimit(input)
-                  ).pipe(
-                    Effect.provideService(
-                      SourceControlRateLimit.CredentialScope,
-                      `${credentialScope}\0${endpoint}`,
-                    ),
+                    lease,
+                    retryAt: endpointRetryAt === undefined ? retryAt : Math.max(...resets),
+                  })
+                  .pipe(
+                    Effect.provideService(SourceControlRateLimit.CredentialScope, credentialScope),
                   );
-                });
-              const endpointRetryAt =
-                endpointRemaining !== undefined &&
-                Number(endpointRemaining) <= 0 &&
-                Number.isFinite(endpointReset) &&
-                endpointReset > now
-                  ? endpointReset
-                  : undefined;
-              const retryAfter = SourceControlRateLimit.retryAtFromHeader(
-                response.headers["retry-after"],
-                now,
-              );
-              const retryTimes = [
-                ...resets,
-                ...(endpointRetryAt === undefined ? [] : [endpointRetryAt]),
-                ...(retryAfter === undefined ? [] : [retryAfter]),
-              ];
-              const retryAt = retryTimes.length === 0 ? undefined : Math.max(...retryTimes);
-              const limited = () =>
-                Effect.gen(function* () {
-                  if (resets.length > 0 || endpointRetryAt === undefined)
-                    yield* rateLimits
-                      .recordRateLimit({
-                        ...rateLimitKey,
-                        lease,
-                        retryAt: endpointRetryAt === undefined ? retryAt : Math.max(...resets),
-                      })
-                      .pipe(
-                        Effect.provideService(
-                          SourceControlRateLimit.CredentialScope,
-                          credentialScope,
-                        ),
-                      );
-                  if (endpointRetryAt !== undefined)
-                    yield* recordEndpoints(Math.max(endpointRetryAt, retryAfter ?? 0));
-                  return yield* new LinearApiError({
-                    operation,
-                    reason: "rate-limited",
-                    status: response.status,
-                    ...(retryAt === undefined ? {} : { retryAt }),
-                  });
-                }).pipe(Effect.uninterruptible);
-              if (response.status === 429) return yield* limited();
-              if (response.status === 401 || response.status === 403)
-                return yield* new LinearApiError({ operation, reason: "unauthenticated" });
-              if (response.status < 200 || response.status >= 300) {
-                if (response.status === 400) {
-                  const errors = yield* readGraphQlErrors(response).pipe(Effect.option);
-                  if (
-                    Option.isSome(errors) &&
-                    errors.value.errors.some((error) => error.extensions?.code === "RATELIMITED")
-                  )
-                    return yield* limited();
-                }
-                return yield* new LinearApiError({
-                  operation,
-                  reason: "failed",
-                  status: response.status,
-                });
+              if (endpointRetryAt !== undefined)
+                yield* recordEndpoints(Math.max(endpointRetryAt, retryAfter ?? 0));
+              return yield* new LinearApiError({
+                operation,
+                reason: "rate-limited",
+                status: response.status,
+                ...(retryAt === undefined ? {} : { retryAt }),
+              });
+            }, Effect.uninterruptible);
+            if (response.status === 429) return yield* limited();
+            if (response.status === 401 || response.status === 403)
+              return yield* new LinearApiError({ operation, reason: "unauthenticated" });
+            if (response.status < 200 || response.status >= 300) {
+              if (response.status === 400) {
+                const errors = yield* readGraphQlErrors(response).pipe(Effect.option);
+                if (
+                  Option.isSome(errors) &&
+                  errors.value.errors.some((error) => error.extensions?.code === "RATELIMITED")
+                )
+                  return yield* limited();
               }
-              const payload = yield* response.json.pipe(
-                Effect.mapError(
-                  (cause) => new LinearApiError({ operation, reason: "failed", cause }),
-                ),
-              );
-              const { errors } = yield* decodeGraphQlErrors(payload).pipe(
-                Effect.mapError(
-                  (cause) => new LinearApiError({ operation, reason: "failed", cause }),
-                ),
-              );
-              if (errors?.some((error) => error.extensions?.code === "RATELIMITED"))
-                return yield* limited();
-              if (errors !== undefined && errors.length > 0)
-                return yield* new LinearApiError({
-                  operation,
-                  reason: errors.some(isAuthError) ? "unauthenticated" : "failed",
-                  cause: errors,
-                });
-              const envelope = yield* Schema.decodeUnknownEffect(schema)(payload).pipe(
-                Effect.mapError(
-                  (cause) => new LinearApiError({ operation, reason: "failed", cause }),
-                ),
-              );
-              return yield* Effect.gen(function* () {
-                if (isViewerEnvelope(envelope)) {
-                  const userScope = `user:${envelope.data.viewer.id}`;
-                  verifiedTokenScopes.set(tokenScope, userScope);
-                  if (credentialScope !== userScope) {
-                    const tokenBudget = complexityBudgets.get(credentialScope);
-                    const sharedBudget = complexityBudgets.get(userScope);
-                    if (tokenBudget !== undefined && tokenBudget.reset > now) {
-                      complexityBudgets.set(
-                        userScope,
-                        sharedBudget === undefined || sharedBudget.reset <= now
-                          ? tokenBudget
-                          : {
-                              remaining: Math.min(sharedBudget.remaining, tokenBudget.remaining),
-                              reset: Math.max(sharedBudget.reset, tokenBudget.reset),
-                            },
-                      );
-                      complexityBudgets.delete(credentialScope);
-                    }
-                    credentialScope = userScope;
-                    for (const endpoint of tokenEndpoints.get(tokenScope) ?? []) {
-                      const retryAt = yield* rateLimits.check(rateLimitKey).pipe(
-                        Effect.provideService(
-                          SourceControlRateLimit.CredentialScope,
-                          `${tokenScope}\0${endpoint}`,
-                        ),
-                        Effect.match({
-                          onFailure: (error) => error.retryAt,
-                          onSuccess: () => undefined,
-                        }),
-                      );
-                      if (retryAt !== undefined) {
-                        const scope = `${userScope}\0${endpoint}`;
-                        yield* rateLimits
-                          .recordRateLimit({
-                            ...rateLimitKey,
-                            lease: yield* checkRateLimit(operation, scope, true),
-                            retryAt,
-                          })
-                          .pipe(
-                            Effect.provideService(SourceControlRateLimit.CredentialScope, scope),
-                          );
-                      }
-                    }
-                    tokenEndpoints.delete(tokenScope);
-                    lease = yield* checkRateLimit(operation, credentialScope, true);
-                    endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
-                      checkRateLimit(operation, `${credentialScope}\0${endpoint}`, true),
+              return yield* new LinearApiError({
+                operation,
+                reason: "failed",
+                status: response.status,
+              });
+            }
+            const payload = yield* response.json.pipe(
+              Effect.mapError(
+                (cause) => new LinearApiError({ operation, reason: "failed", cause }),
+              ),
+            );
+            const { errors } = yield* decodeGraphQlErrors(payload).pipe(
+              Effect.mapError(
+                (cause) => new LinearApiError({ operation, reason: "failed", cause }),
+              ),
+            );
+            if (errors?.some((error) => error.extensions?.code === "RATELIMITED"))
+              return yield* limited();
+            if (errors !== undefined && errors.length > 0)
+              return yield* new LinearApiError({
+                operation,
+                reason: errors.some(isAuthError) ? "unauthenticated" : "failed",
+                cause: errors,
+              });
+            const envelope = yield* Schema.decodeEffect(schema)(payload).pipe(
+              Effect.mapError(
+                (cause) => new LinearApiError({ operation, reason: "failed", cause }),
+              ),
+            );
+            return yield* Effect.gen(function* () {
+              if (isViewerEnvelope(envelope)) {
+                const userScope = `user:${envelope.data.viewer.id}`;
+                verifiedTokenScopes.set(tokenScope, userScope);
+                if (credentialScope !== userScope) {
+                  const tokenBudget = complexityBudgets.get(credentialScope);
+                  const sharedBudget = complexityBudgets.get(userScope);
+                  if (tokenBudget !== undefined && tokenBudget.reset > now) {
+                    complexityBudgets.set(
+                      userScope,
+                      sharedBudget === undefined || sharedBudget.reset <= now
+                        ? tokenBudget
+                        : {
+                            remaining: Math.min(sharedBudget.remaining, tokenBudget.remaining),
+                            reset: Math.max(sharedBudget.reset, tokenBudget.reset),
+                          },
                     );
+                    complexityBudgets.delete(credentialScope);
                   }
+                  credentialScope = userScope;
+                  for (const endpoint of tokenEndpoints.get(tokenScope) ?? []) {
+                    const retryAt = yield* rateLimits.check(rateLimitKey).pipe(
+                      Effect.provideService(
+                        SourceControlRateLimit.CredentialScope,
+                        `${tokenScope}\0${endpoint}`,
+                      ),
+                      Effect.match({
+                        onFailure: (error) => error.retryAt,
+                        onSuccess: () => undefined,
+                      }),
+                    );
+                    if (retryAt !== undefined) {
+                      const scope = `${userScope}\0${endpoint}`;
+                      yield* rateLimits
+                        .recordRateLimit({
+                          ...rateLimitKey,
+                          lease: yield* checkRateLimit(operation, scope, true),
+                          retryAt,
+                        })
+                        .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, scope));
+                    }
+                  }
+                  tokenEndpoints.delete(tokenScope);
+                  lease = yield* checkRateLimit(operation, credentialScope, true);
+                  endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
+                    checkRateLimit(operation, `${credentialScope}\0${endpoint}`, true),
+                  );
                 }
-                if (resets.length > 0)
-                  yield* rateLimits
-                    .recordRateLimit({
-                      ...rateLimitKey,
-                      lease,
-                      retryAt: Math.max(...resets),
-                    })
-                    .pipe(
-                      Effect.provideService(
-                        SourceControlRateLimit.CredentialScope,
-                        credentialScope,
-                      ),
-                    );
-                else
-                  yield* rateLimits
-                    .recordSuccess({ ...rateLimitKey, lease })
-                    .pipe(
-                      Effect.provideService(
-                        SourceControlRateLimit.CredentialScope,
-                        credentialScope,
-                      ),
-                    );
-                yield* recordEndpoints(endpointRetryAt);
-                return envelope;
-              }).pipe(Effect.uninterruptible);
-            }),
-          ),
-        );
-    }).pipe(requestGate.withPermits(1));
+              }
+              if (resets.length > 0)
+                yield* rateLimits
+                  .recordRateLimit({
+                    ...rateLimitKey,
+                    lease,
+                    retryAt: Math.max(...resets),
+                  })
+                  .pipe(
+                    Effect.provideService(SourceControlRateLimit.CredentialScope, credentialScope),
+                  );
+              else
+                yield* rateLimits
+                  .recordSuccess({ ...rateLimitKey, lease })
+                  .pipe(
+                    Effect.provideService(SourceControlRateLimit.CredentialScope, credentialScope),
+                  );
+              yield* recordEndpoints(endpointRetryAt);
+              return envelope;
+            }).pipe(Effect.uninterruptible);
+          }),
+        ),
+      );
+  }, requestGate.withPermits(1));
 
   const credentialToken = (credentialId?: string) =>
     storedCredentials.pipe(
@@ -842,6 +826,7 @@ const make = Effect.gen(function* () {
     };
   };
   const inspectEnvironmentAccount = Option.match(config.envToken, {
+    // @effect-diagnostics-next-line effectSucceedWithVoid:off -- The optional account requires undefined, not void.
     onNone: () => Effect.succeed<IssueTrackerConnection["environmentAccount"]>(undefined),
     onSome: (token) =>
       inspectToken(token).pipe(
@@ -906,7 +891,7 @@ const make = Effect.gen(function* () {
 
   return LinearApi.of({
     connection,
-    connect: (value) =>
+    connect: Effect.fn("LinearApi.connect")((value) =>
       credentialPoolMutex.withPermits(1)(
         Effect.gen(function* () {
           const credentials = [...(yield* storedCredentials)];
@@ -922,7 +907,8 @@ const make = Effect.gen(function* () {
           return yield* connectionUnlocked;
         }),
       ),
-    disconnect: (input) =>
+    ),
+    disconnect: Effect.fn("LinearApi.disconnect")((input) =>
       credentialPoolMutex.withPermits(1)(
         Effect.gen(function* () {
           const credentials = yield* storedCredentials;
@@ -936,8 +922,9 @@ const make = Effect.gen(function* () {
           return connectionOf(accounts, remaining.length > 0, environmentAccount);
         }),
       ),
+    ),
     getViewer,
-    listIssues: (input) => {
+    listIssues: Effect.fn("LinearApi.listIssues")((input) => {
       const filter: Record<string, unknown> = { team: { key: { eq: input.teamKey } } };
       if (input.state !== "all") {
         const closed = ["completed", "canceled", "duplicate"];
@@ -1004,8 +991,8 @@ const make = Effect.gen(function* () {
           truncated: issues.length > input.limit || truncated,
         };
       });
-    },
-    getIssueSummary: ({ identifier, credentialId }) =>
+    }),
+    getIssueSummary: Effect.fn("LinearApi.getIssueSummary")(({ identifier, credentialId }) =>
       request(
         credentialId,
         "issue summary",
@@ -1021,11 +1008,13 @@ const make = Effect.gen(function* () {
             : Effect.succeed(data.issue),
         ),
       ),
-    getIssue: ({ identifier, credentialId }) =>
+    ),
+    getIssue: Effect.fn("LinearApi.getIssue")(({ identifier, credentialId }) =>
       request(credentialId, "issue", ISSUE_QUERY, { id: identifier }, IssueEnvelope).pipe(
         Effect.flatMap(({ data }) => issueOrFail(identifier, data.issue)),
       ),
-    getActivity: ({ identifier, credentialId }) =>
+    ),
+    getActivity: Effect.fn("LinearApi.getActivity")(({ identifier, credentialId }) =>
       request(
         credentialId,
         "issue activity",
@@ -1047,9 +1036,11 @@ const make = Effect.gen(function* () {
           }),
         ),
       ),
-    comment: ({ issueId, body, credentialId }) =>
+    ),
+    comment: Effect.fn("LinearApi.comment")(({ issueId, body, credentialId }) =>
       mutation(credentialId, "comment", COMMENT_MUTATION, { input: { issueId, body } }),
-    setReaction: (input) => {
+    ),
+    setReaction: Effect.fn("LinearApi.setReaction")((input) => {
       if (input.reacted) {
         return mutation(input.credentialId, "reaction", REACTION_CREATE_MUTATION, {
           input:
@@ -1080,7 +1071,7 @@ const make = Effect.gen(function* () {
               });
         }),
       );
-    },
+    }),
   });
 });
 

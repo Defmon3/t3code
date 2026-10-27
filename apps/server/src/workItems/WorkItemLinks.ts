@@ -99,7 +99,7 @@ const make = Effect.gen(function* () {
   });
 
   return WorkItemLinks.of({
-    list: (input) =>
+    list: Effect.fn("WorkItemLinks.list")((input) =>
       listRows(input).pipe(
         Effect.map((rows) => ({
           links: rows.slice(0, MAX_LINKS).map(fromRow),
@@ -107,32 +107,32 @@ const make = Effect.gen(function* () {
         })),
         Effect.mapError(failure("list", "Could not read saved links.")),
       ),
-    link: (input) =>
-      Effect.gen(function* () {
-        const issues = yield* IssueService.IssueService;
-        const pullRequests = yield* PullRequestService.PullRequestService;
-        const [issue, pullRequest] = yield* Effect.all([
-          issues.detail(input.issue),
-          pullRequests.withRoutingCredential(
-            input.pullRequest,
-            pullRequests.detail(input.pullRequest),
-          ),
-        ]).pipe(Effect.mapError(failure("link", "Could not read both work items.")));
-        const link: WorkItemLink = {
-          issue: {
-            ...normalizeWorkItemLinkKey({ provider: issue.provider, url: issue.url }),
-            repository: issue.repository,
-            number: issue.number,
-            title: issue.title,
-          },
-          pullRequest: {
-            ...normalizeWorkItemLinkKey({ provider: pullRequest.provider, url: pullRequest.url }),
-            repository: pullRequest.repository,
-            number: pullRequest.number,
-            title: pullRequest.title,
-          },
-        };
-        yield* sql`
+    ),
+    link: Effect.fn("WorkItemLinks.link")(function* (input) {
+      const issues = yield* IssueService.IssueService;
+      const pullRequests = yield* PullRequestService.PullRequestService;
+      const [issue, pullRequest] = yield* Effect.all([
+        issues.detail(input.issue),
+        pullRequests.withRoutingCredential(
+          input.pullRequest,
+          pullRequests.detail(input.pullRequest),
+        ),
+      ]).pipe(Effect.mapError(failure("link", "Could not read both work items.")));
+      const link: WorkItemLink = {
+        issue: {
+          ...normalizeWorkItemLinkKey({ provider: issue.provider, url: issue.url }),
+          repository: issue.repository,
+          number: issue.number,
+          title: issue.title,
+        },
+        pullRequest: {
+          ...normalizeWorkItemLinkKey({ provider: pullRequest.provider, url: pullRequest.url }),
+          repository: pullRequest.repository,
+          number: pullRequest.number,
+          title: pullRequest.title,
+        },
+      };
+      yield* sql`
           INSERT INTO work_item_links (
             issue_provider, issue_url, issue_repository, issue_number, issue_title,
             pull_request_provider, pull_request_url, pull_request_repository,
@@ -152,9 +152,9 @@ const make = Effect.gen(function* () {
             pull_request_number = excluded.pull_request_number,
             pull_request_title = excluded.pull_request_title
         `.pipe(Effect.mapError(failure("link", "Could not save the link.")));
-        return link;
-      }),
-    unlink: (input) => {
+      return link;
+    }),
+    unlink: Effect.fn("WorkItemLinks.unlink")((input) => {
       const issue = normalizeWorkItemLinkKey(input.issue);
       const pullRequest = normalizeWorkItemLinkKey(input.pullRequest);
       return sql`
@@ -164,7 +164,7 @@ const make = Effect.gen(function* () {
           AND pull_request_provider = ${pullRequest.provider}
           AND pull_request_url = ${pullRequest.url}
       `.pipe(Effect.asVoid, Effect.mapError(failure("unlink", "Could not remove the link.")));
-    },
+    }),
   });
 });
 

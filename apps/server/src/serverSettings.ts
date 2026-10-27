@@ -591,7 +591,7 @@ const make = Effect.gen(function* () {
     PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
 
   const readRawConfig = fs.readFileString(settingsPath).pipe(
-    Effect.map(Option.some),
+    Effect.asSome,
     Effect.catchIf(
       (cause) => cause.reason._tag === "NotFound",
       () => Effect.succeedNone,
@@ -808,9 +808,20 @@ const make = Effect.gen(function* () {
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey).pipe(
     Effect.map((loaded) => loaded.settings),
   );
-  const reloadSettings = Cache.invalidate(settingsCache, cacheKey).pipe(
-    Effect.andThen(Cache.get(settingsCache, cacheKey)),
-  );
+  const reloadSettings = Effect.gen(function* () {
+    const current = yield* getSettingsFromCache;
+    yield* Cache.invalidate(settingsCache, cacheKey);
+    const loaded = yield* Cache.get(settingsCache, cacheKey);
+    if (!NodeUtil.isDeepStrictEqual(current.issueTracking, loaded.settings.issueTracking)) {
+      return loaded;
+    }
+    const retained = {
+      ...loaded,
+      settings: { ...loaded.settings, issueTracking: current.issueTracking },
+    };
+    yield* Cache.set(settingsCache, cacheKey, retained);
+    return retained;
+  });
 
   const materializeSettingsSecrets = Effect.fn("serverSettings.materializeSettingsSecrets")(
     function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {

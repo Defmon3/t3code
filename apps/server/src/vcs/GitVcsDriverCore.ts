@@ -1121,14 +1121,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (value.snapshotId === snapshotId) commitFilesCursors.delete(cursor);
     }
   };
-  const newCommitFilesCursor = (snapshotId: string, offset: number) =>
-    Effect.gen(function* () {
-      const cursor = yield* createSnapshotId;
-      commitFilesCursors.set(cursor, { snapshotId, offset });
-      return cursor;
-    });
-  const storeCommitFilesSnapshot = (snapshot: GitCommitFilesSnapshot) =>
-    Effect.gen(function* () {
+  const newCommitFilesCursor = Effect.fn("GitVcsDriverCore.newCommitFilesCursor")(function* (
+    snapshotId: string,
+    offset: number,
+  ) {
+    const cursor = yield* createSnapshotId;
+    commitFilesCursors.set(cursor, { snapshotId, offset });
+    return cursor;
+  });
+  const storeCommitFilesSnapshot = Effect.fn("GitVcsDriverCore.storeCommitFilesSnapshot")(
+    function* (snapshot: GitCommitFilesSnapshot) {
       const snapshotId = yield* createSnapshotId;
       commitFilesSnapshots.set(snapshotId, snapshot);
       while (commitFilesSnapshots.size > GIT_COMMIT_FILES_SNAPSHOT_MAX_SESSIONS) {
@@ -1137,52 +1139,59 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         deleteCommitFilesSnapshot(oldest);
       }
       return snapshotId;
-    });
+    },
+  );
   const deleteHistorySnapshot = (snapshotId: string): void => {
     historySnapshots.delete(snapshotId);
     for (const [cursor, value] of historyCursors) {
       if (value.snapshotId === snapshotId) historyCursors.delete(cursor);
     }
   };
-  const newHistoryCursor = (snapshotId: string, offset: number) =>
-    Effect.gen(function* () {
-      const cursor = yield* createSnapshotId;
-      historyCursors.set(cursor, { snapshotId, offset });
-      return cursor;
-    });
-  const storeHistorySnapshot = (snapshot: GitHistorySnapshot) =>
-    Effect.gen(function* () {
-      const snapshotId = yield* createSnapshotId;
-      historySnapshots.set(snapshotId, snapshot);
-      while (historySnapshots.size > GIT_HISTORY_SNAPSHOT_MAX_SESSIONS) {
-        const oldest = historySnapshots.keys().next().value;
-        if (oldest === undefined) break;
-        deleteHistorySnapshot(oldest);
-      }
-      return snapshotId;
-    });
+  const newHistoryCursor = Effect.fn("GitVcsDriverCore.newHistoryCursor")(function* (
+    snapshotId: string,
+    offset: number,
+  ) {
+    const cursor = yield* createSnapshotId;
+    historyCursors.set(cursor, { snapshotId, offset });
+    return cursor;
+  });
+  const storeHistorySnapshot = Effect.fn("GitVcsDriverCore.storeHistorySnapshot")(function* (
+    snapshot: GitHistorySnapshot,
+  ) {
+    const snapshotId = yield* createSnapshotId;
+    historySnapshots.set(snapshotId, snapshot);
+    while (historySnapshots.size > GIT_HISTORY_SNAPSHOT_MAX_SESSIONS) {
+      const oldest = historySnapshots.keys().next().value;
+      if (oldest === undefined) break;
+      deleteHistorySnapshot(oldest);
+    }
+    return snapshotId;
+  });
   const refSnapshots = new Map<string, GitRefSnapshot>();
   const refCursors = new Map<string, { readonly snapshotId: string; readonly offset: number }>();
-  const newRefCursor = (snapshotId: string, offset: number) =>
-    Effect.gen(function* () {
-      const cursor = yield* createSnapshotId;
-      refCursors.set(cursor, { snapshotId, offset });
-      return cursor;
-    });
-  const storeRefSnapshot = (snapshot: GitRefSnapshot) =>
-    Effect.gen(function* () {
-      const snapshotId = yield* createSnapshotId;
-      refSnapshots.set(snapshotId, snapshot);
-      while (refSnapshots.size > GIT_REF_SNAPSHOT_MAX_SESSIONS) {
-        const oldest = refSnapshots.keys().next().value;
-        if (oldest === undefined) break;
-        refSnapshots.delete(oldest);
-        for (const [cursor, value] of refCursors) {
-          if (value.snapshotId === oldest) refCursors.delete(cursor);
-        }
+  const newRefCursor = Effect.fn("GitVcsDriverCore.newRefCursor")(function* (
+    snapshotId: string,
+    offset: number,
+  ) {
+    const cursor = yield* createSnapshotId;
+    refCursors.set(cursor, { snapshotId, offset });
+    return cursor;
+  });
+  const storeRefSnapshot = Effect.fn("GitVcsDriverCore.storeRefSnapshot")(function* (
+    snapshot: GitRefSnapshot,
+  ) {
+    const snapshotId = yield* createSnapshotId;
+    refSnapshots.set(snapshotId, snapshot);
+    while (refSnapshots.size > GIT_REF_SNAPSHOT_MAX_SESSIONS) {
+      const oldest = refSnapshots.keys().next().value;
+      if (oldest === undefined) break;
+      refSnapshots.delete(oldest);
+      for (const [cursor, value] of refCursors) {
+        if (value.snapshotId === oldest) refCursors.delete(cursor);
       }
-      return snapshotId;
-    });
+    }
+    return snapshotId;
+  });
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -4553,7 +4562,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           operation: "GitVcsDriver.createWorktree",
           command: "git worktree add",
           cwd: input.cwd,
-          detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Storage.`,
+          detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
         });
       }
       worktreePath = path.join(parentDir, repoName, sanitizedBranch);
@@ -4819,8 +4828,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         },
       );
       return run.pipe(
-        Effect.flatMap((result) =>
-          result.exitCode !== 0 && isRefLockFailure(result.stderr) ? run : Effect.succeed(result),
+        Effect.filterOrElse(
+          (result) => !(result.exitCode !== 0 && isRefLockFailure(result.stderr)),
+          (_result) => run,
         ),
       );
     };
@@ -5242,7 +5252,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       "branch",
       "--list",
       "--no-column",
-      "--format=%(refname:short)",
+      "--format=%(refname:lstrip=2)",
     ]).pipe(
       Effect.map((stdout) => {
         const branchNames: Array<string> = [];
@@ -5315,6 +5325,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ),
     );
 
+  // Forwarders retain the underlying Git operation spans.
   return GitVcsDriver.GitVcsDriver.of({
     execute,
     status,
@@ -5322,11 +5333,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     statusDetailsLocal,
     statusDetailsRemote,
     prepareCommitContext,
-    commit: (cwd, subject, body, options) =>
-      withListRefsInvalidation(cwd, commit(cwd, subject, body, options)),
-    pushCurrentBranch: (cwd, fallbackBranch, options) =>
-      withListRefsInvalidation(cwd, pushCurrentBranch(cwd, fallbackBranch, options)),
-    pullCurrentBranch: (cwd) => withListRefsInvalidation(cwd, pullCurrentBranch(cwd)),
+    commit: Effect.fnUntraced(function* (cwd, subject, body, options) {
+      return yield* withListRefsInvalidation(cwd, commit(cwd, subject, body, options));
+    }),
+    pushCurrentBranch: Effect.fnUntraced(function* (cwd, fallbackBranch, options) {
+      return yield* withListRefsInvalidation(cwd, pushCurrentBranch(cwd, fallbackBranch, options));
+    }),
+    pullCurrentBranch: Effect.fnUntraced(function* (cwd) {
+      return yield* withListRefsInvalidation(cwd, pullCurrentBranch(cwd));
+    }),
     readRangeContext,
     getReviewDiffPreview,
     getReviewDiffFileContents,
@@ -5339,19 +5354,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getCommitDetails,
     listCommitFiles,
     getCommitDiff,
-    syncHistoryRef: (input) => withListRefsInvalidation(input.cwd, syncHistoryRef(input)),
-    createWorktree: (input, options) =>
-      withListRefsInvalidation(input.cwd, createWorktree(input, options)),
-    fetchRefIntoBranch: (input) => withListRefsInvalidation(input.cwd, fetchRefIntoBranch(input)),
+    syncHistoryRef: Effect.fn("GitVcsDriver.GitVcsDriver.syncHistoryRef")((input) =>
+      withListRefsInvalidation(input.cwd, syncHistoryRef(input)),
+    ),
+    createWorktree: Effect.fnUntraced(function* (input, options) {
+      return yield* withListRefsInvalidation(input.cwd, createWorktree(input, options));
+    }),
+    fetchRefIntoBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchRefIntoBranch(input));
+    }),
     fetchRefCommit,
     resolveCommit,
-    refreshCheckedOutBranch: (input) =>
-      withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input)),
-    ensureRemote: (input) => withListRefsInvalidation(input.cwd, ensureRemote(input)),
+    refreshCheckedOutBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input));
+    }),
+    ensureRemote: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, ensureRemote(input));
+    }),
     resolvePrimaryRemoteName,
     resolveDefaultBranchName,
-    fetchRemote: (input) =>
-      withListRefsInvalidation(
+    fetchRemote: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(
         input.cwd,
         fetchRemote(input).pipe(
           Effect.flatMap((fetched) =>
@@ -5360,23 +5383,42 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               : fetchRemote({ cwd: input.cwd, remoteName: input.remoteName }).pipe(Effect.asVoid),
           ),
         ),
-      ),
+      );
+    }),
     remoteExists,
     remoteBranchExists,
     resolveRemoteTrackingCommit,
     resolveWorktreeBaseRemote,
-    fetchWorktreeBaseCommit: (input) =>
-      withListRefsInvalidation(input.cwd, fetchWorktreeBaseCommit(input)),
-    fetchRemoteBranch: (input) => withListRefsInvalidation(input.cwd, fetchRemoteBranch(input)),
-    fetchRemoteTrackingBranch: (input) =>
-      withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input)),
-    setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
-    removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
-    pruneWorktrees: (input) => withListRefsInvalidation(input.cwd, pruneWorktrees(input)),
-    deleteLocalBranch: (input) => withListRefsInvalidation(input.cwd, deleteLocalBranch(input)),
-    renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
-    createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
-    switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),
+    fetchWorktreeBaseCommit: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchWorktreeBaseCommit(input));
+    }),
+    fetchRemoteBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchRemoteBranch(input));
+    }),
+    fetchRemoteTrackingBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input));
+    }),
+    setBranchUpstream: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, setBranchUpstream(input));
+    }),
+    removeWorktree: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, removeWorktree(input));
+    }),
+    pruneWorktrees: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, pruneWorktrees(input));
+    }),
+    deleteLocalBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, deleteLocalBranch(input));
+    }),
+    renameBranch: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, renameBranch(input));
+    }),
+    createRef: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, createRef(input));
+    }),
+    switchRef: Effect.fnUntraced(function* (input) {
+      return yield* withListRefsInvalidation(input.cwd, switchRef(input));
+    }),
     initRepo: initRepoWithListRefsInvalidation,
     listLocalBranchNames,
     listWorktreePaths,

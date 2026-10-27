@@ -25,6 +25,7 @@ import {
   type IssueRef,
   IssueTrackingError,
   SourceControlProviderKind,
+  SourceControlProviderError,
 } from "@t3tools/contracts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -415,6 +416,15 @@ it.effect("shares cooldowns in both directions with the pull request service", (
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
             resolveLink: unused,
+            get: (provider) =>
+              Effect.fail(
+                new SourceControlProviderError({
+                  provider,
+                  operation: "get",
+                  cwd: "/a",
+                  detail: "Remote web host resolution is not configured in this fixture.",
+                }),
+              ),
           }),
           Layer.mock(ServerSettings.ServerSettingsService)({}),
           Layer.mock(PullRequestFilesViewed.PullRequestFilesViewedRepository)({}),
@@ -1010,21 +1020,21 @@ it.effect.each([
     const outputCodec = Schema.toCodecJson(IssueListResult);
     const result = yield* service.list({ state: "open", limit: 99 });
     assert.isAbove(result.nextCursors[cursorKey("acme/web")]!.length, 4096);
-    const first = yield* Schema.decodeUnknownEffect(outputCodec)(
+    const first = yield* Schema.decodeEffect(outputCodec)(
       yield* Schema.encodeUnknownEffect(outputCodec)(result),
     );
     assert.deepStrictEqual(first, result);
     assert.isUndefined(first.cursorLimitReached);
     assert.deepStrictEqual(first.entries.map((entry) => entry.number).toSorted(), numbers);
     const inputCodec = Schema.toCodecJson(IssueListInput);
-    const input = yield* Schema.decodeUnknownEffect(inputCodec)(
+    const input = yield* Schema.decodeEffect(inputCodec)(
       yield* Schema.encodeUnknownEffect(inputCodec)({
         state: "open",
         limit: 99,
         cursors: first.nextCursors,
       }),
     );
-    const second = yield* Schema.decodeUnknownEffect(outputCodec)(
+    const second = yield* Schema.decodeEffect(outputCodec)(
       yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(input)),
     );
     assert.deepStrictEqual(
@@ -1034,14 +1044,14 @@ it.effect.each([
     assert.deepStrictEqual(second.nextCursors, {
       [cursorKey("acme/web")]: `${boundary}|0|${[...numbers, start + count].join(",")}`,
     });
-    const continuation = yield* Schema.decodeUnknownEffect(inputCodec)(
+    const continuation = yield* Schema.decodeEffect(inputCodec)(
       yield* Schema.encodeUnknownEffect(inputCodec)({
         state: "open",
         limit: 99,
         cursors: second.nextCursors,
       }),
     );
-    const third = yield* Schema.decodeUnknownEffect(outputCodec)(
+    const third = yield* Schema.decodeEffect(outputCodec)(
       yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(continuation)),
     );
     assert.deepStrictEqual(
@@ -1085,14 +1095,14 @@ it.effect.each(["repository", "grouped"] as const)(
         ],
       });
       const inputCodec = Schema.toCodecJson(IssueListInput);
-      const input = yield* Schema.decodeUnknownEffect(inputCodec)(
+      const input = yield* Schema.decodeEffect(inputCodec)(
         yield* Schema.encodeUnknownEffect(inputCodec)({
           state: "open",
           cursors: { [cursorKey("acme/web")]: `${boundary}|0|${numbers.join(",")}` },
         }),
       );
       const outputCodec = Schema.toCodecJson(IssueListResult);
-      const result = yield* Schema.decodeUnknownEffect(outputCodec)(
+      const result = yield* Schema.decodeEffect(outputCodec)(
         yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(input)),
       );
       assert.deepStrictEqual(

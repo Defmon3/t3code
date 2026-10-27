@@ -72,38 +72,36 @@ export const makeRegisteredProjectProcessDiscovery = Effect.fn(
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
   return yield* makeProcessDiscoveryCollector({
-    loadTopology: () =>
-      Effect.gen(function* () {
-        const projectShells = yield* projects.listShells();
-        const snapshot = yield* orchestrator.getShellSnapshot();
-        return {
-          knownRoots: [
-            ...projectShells.map((project) => project.workspaceRoot),
-            ...snapshot.threads.flatMap((thread) =>
-              thread.worktreePath === null ? [] : [thread.worktreePath],
-            ),
-          ],
-        };
-      }),
-    loadWorktrees: () =>
-      Effect.gen(function* () {
-        const projectShells = yield* projects.listShells();
-        const worktrees = yield* Effect.forEach(
-          projectShells,
-          (project) =>
-            Effect.gen(function* () {
-              const repository = yield* vcsRegistry.detect({
-                cwd: project.workspaceRoot,
-                requestedKind: "git",
-              });
-              if (repository === null) return [];
-              const paths = yield* git.listWorktreePaths(project.workspaceRoot);
-              return paths.map((path) => ({ projectId: project.id, path }));
-            }),
-          { concurrency: 4 },
-        );
-        return { worktrees: worktrees.flat() };
-      }),
+    loadTopology: Effect.fn("ProcessDiscoveryCollector.loadTopology")(function* () {
+      const projectShells = yield* projects.listShells();
+      const snapshot = yield* orchestrator.getShellSnapshot();
+      return {
+        knownRoots: [
+          ...projectShells.map((project) => project.workspaceRoot),
+          ...snapshot.threads.flatMap((thread) =>
+            thread.worktreePath === null ? [] : [thread.worktreePath],
+          ),
+        ],
+      };
+    }),
+    loadWorktrees: Effect.fn("ProcessDiscoveryCollector.loadWorktrees")(function* () {
+      const projectShells = yield* projects.listShells();
+      const worktrees = yield* Effect.forEach(
+        projectShells,
+        (project) =>
+          Effect.gen(function* () {
+            const repository = yield* vcsRegistry.detect({
+              cwd: project.workspaceRoot,
+              requestedKind: "git",
+            });
+            if (repository === null) return [];
+            const paths = yield* git.listWorktreePaths(project.workspaceRoot);
+            return paths.map((path) => ({ projectId: project.id, path }));
+          }),
+        { concurrency: 4 },
+      );
+      return { worktrees: worktrees.flat() };
+    }),
     maxRoots: RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
     processDiagnostics,
   });

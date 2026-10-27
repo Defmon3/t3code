@@ -391,3 +391,4 @@ export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
 export { vcsHistoryRevisionAtom } from "./vcsRefInvalidation.ts";
+export * from "./vcsStatusRevalidation.ts";

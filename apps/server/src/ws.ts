@@ -80,6 +80,7 @@ import {
   type ServerConfig as ClientServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
+  type ServerProvider,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -119,6 +120,7 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import * as DocumentText from "./provider/DocumentText.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
@@ -369,6 +371,10 @@ export const withLateEditorConfig = <E, R>(
     ),
   );
 };
+
+function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
+  return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
+}
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -1287,6 +1293,7 @@ export const layerWsRpc = (
         | FileSystem.FileSystem
         | ServerConfig.ServerConfig
         | ServerSettings.ServerSettingsService
+        | DocumentText.DocumentText
       >();
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -1300,18 +1307,21 @@ export const layerWsRpc = (
       const analytics = yield* AnalyticsService.AnalyticsService;
       const originProps = clientAnalyticsProps;
       const recordClientCommandAnalytics = (command: OrchestrationV2Command) => {
-        if (command.type === "message.dispatch") {
-          return analytics.record("client.turn.requested", originProps).pipe(Effect.ignore);
-        }
         const usage = commandFeatureUsage(command);
-        return usage === undefined
-          ? Effect.void
-          : analytics
-              .record("feature.used", {
-                ...usage,
-                ...(originProps.surface === undefined ? {} : { surface: originProps.surface }),
-              })
-              .pipe(Effect.ignore);
+        return Effect.all(
+          [
+            command.type === "message.dispatch"
+              ? analytics.record("client.turn.requested", originProps)
+              : Effect.void,
+            usage === undefined
+              ? Effect.void
+              : analytics.record("feature.used", {
+                  ...usage,
+                  ...(originProps.surface === undefined ? {} : { surface: originProps.surface }),
+                }),
+          ],
+          { discard: true },
+        ).pipe(Effect.ignore);
       };
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
@@ -1443,16 +1453,14 @@ export const layerWsRpc = (
               }),
           ),
         );
-        return yield* Option.match(project, {
-          onNone: () =>
-            Effect.fail(
-              new AcpRegistryOperationError({
-                reason: "project_not_found",
-                message: `Project ${projectId} was not found.`,
-              }),
-            ),
-          onSome: Effect.succeed,
-        });
+        return yield* Effect.fromOption(
+          project,
+          () =>
+            new AcpRegistryOperationError({
+              reason: "project_not_found",
+              message: `Project ${projectId} was not found.`,
+            }),
+        );
       });
 
       const acpSessionManager = Effect.fn("ws.acpRegistry.sessionManager")(function* (
@@ -1766,12 +1774,16 @@ export const layerWsRpc = (
 
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
         readonly usageLimitsCommand: boolean;
+        readonly workspaceSnapshotsOnDemand: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const currentProviders = yield* providerRegistry.getProviders;
-        const providers = options.usageLimitsCommand
+        const commandProviders = options.usageLimitsCommand
           ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
           : currentProviders;
+        const providers = options.workspaceSnapshotsOnDemand
+          ? withoutWorkspaceSnapshots(commandProviders)
+          : commandProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
           yield* serverSettings.getSettings,
         );
@@ -2266,7 +2278,8 @@ export const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
-        [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
+        [WS_METHODS.serverGetConfig]: (_input) =>
+          loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
             .search(input)
@@ -2435,7 +2448,29 @@ export const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            return { providers };
+            if (input.workspaceSnapshotsOnDemand !== true) return { providers };
+            const commandProviders =
+              input.usageLimitsCommand === true
+                ? withUsageLimitsCommands(providers, yield* usageLimitSources.current)
+                : providers;
+            const { instanceId, cwd } = input;
+            if (instanceId === undefined || cwd === undefined) {
+              return { providers: withoutWorkspaceSnapshots(commandProviders) };
+            }
+            return {
+              providers: commandProviders
+                .filter((provider) => provider.instanceId === instanceId)
+                .map((provider) => ({
+                  ...provider,
+                  // Callers read only the cwd snapshot; the config stream carries the rest.
+                  models: [],
+                  slashCommands: [],
+                  skills: [],
+                  workspaceSnapshots: (provider.workspaceSnapshots ?? []).filter(
+                    (snapshot) => snapshot.cwd === cwd,
+                  ),
+                })),
+            };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
@@ -2454,29 +2489,23 @@ export const layerWsRpc = (
                 ) ?? projection.providerThreads.at(-1);
               const providerSessionId = providerThread?.providerSessionId ?? null;
               if (providerThread === undefined || providerSessionId === null) {
-                return yield* Effect.fail(
-                  new ProviderUploadFeedbackError({
-                    threadId: input.threadId,
-                    cause: "No provider session has run in this thread yet.",
-                  }),
-                );
+                return yield* new ProviderUploadFeedbackError({
+                  threadId: input.threadId,
+                  cause: "No provider session has run in this thread yet.",
+                });
               }
               const runtime = Option.getOrNull(yield* providerSessionsV2.get(providerSessionId));
               if (runtime === null) {
-                return yield* Effect.fail(
-                  new ProviderUploadFeedbackError({
-                    threadId: input.threadId,
-                    cause: "The provider session is no longer running. Send a message first.",
-                  }),
-                );
+                return yield* new ProviderUploadFeedbackError({
+                  threadId: input.threadId,
+                  cause: "The provider session is no longer running. Send a message first.",
+                });
               }
               if (runtime.uploadFeedback === undefined) {
-                return yield* Effect.fail(
-                  new ProviderUploadFeedbackError({
-                    threadId: input.threadId,
-                    cause: `Provider '${runtime.driver}' does not support feedback uploads.`,
-                  }),
-                );
+                return yield* new ProviderUploadFeedbackError({
+                  threadId: input.threadId,
+                  cause: `Provider '${runtime.driver}' does not support feedback uploads.`,
+                });
               }
               return yield* runtime.uploadFeedback({
                 providerThread,
@@ -3002,7 +3031,8 @@ export const layerWsRpc = (
           worktreeSetupTracker
             .cancel(input.threadId)
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
-        [WS_METHODS.vcsRefreshStatus]: (input) => vcsStatusBroadcaster.refreshStatus(input.cwd),
+        [WS_METHODS.vcsRefreshStatus]: (input) =>
+          vcsStatusBroadcaster.refreshStatus(input.cwd, { localOnly: input.localOnly ?? false }),
         [WS_METHODS.vcsPull]: (input) =>
           gitWorkflow.pullCurrentBranch(input.cwd).pipe(
             Effect.matchCauseEffect({
@@ -3169,10 +3199,14 @@ export const layerWsRpc = (
           Stream.unwrap(
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
+              const workspaceSnapshotsOnDemand = input.workspaceSnapshotsOnDemand === true;
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
-              const config = yield* loadServerConfig({ usageLimitsCommand });
+              const config = yield* loadServerConfig({
+                usageLimitsCommand,
+                workspaceSnapshotsOnDemand,
+              });
               const keybindingsUpdates = keybindingsChanges.pipe(
                 Stream.map((event) => ({
                   version: 1 as const,
@@ -3194,8 +3228,15 @@ export const layerWsRpc = (
                     usageLimitsCommand ? sameUsageLimitCommandCoverage : () => true,
                   ),
                 ),
-                (providers, sources) =>
-                  usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
+                (providers, sources) => {
+                  const commandProviders = usageLimitsCommand
+                    ? withUsageLimitsCommands(providers, sources)
+                    : providers;
+                  // Stripped before the de-dupe below, so snapshot-only changes send nothing.
+                  return workspaceSnapshotsOnDemand
+                    ? withoutWorkspaceSnapshots(commandProviders)
+                    : commandProviders;
+                },
               ).pipe(
                 // Compare initial paired values with the snapshot; blindly dropping them loses changes between snapshot and subscription.
                 (updates) => Stream.concat(rpcInitialItems([config.providers]), updates),
@@ -3408,7 +3449,6 @@ export const layer = Layer.unwrap(
             ),
             Effect.forkScoped,
           );
-          // @effect-diagnostics-next-line returnEffectInGen:off
           return httpEffect;
         }).pipe(
           Effect.provide(

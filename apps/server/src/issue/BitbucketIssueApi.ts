@@ -350,7 +350,7 @@ const make = Effect.gen(function* () {
     );
 
   return BitbucketIssueApi.of({
-    getViewer: () =>
+    getViewer: Effect.fn("BitbucketIssueApi.getViewer")(() =>
       bitbucket.request({ method: "GET", url: "/user" }).pipe(
         Effect.flatMap((response): Effect.Effect<string, BitbucketIssueApiError> => {
           const decoded = decodeViewerJson(response.body);
@@ -364,8 +364,9 @@ const make = Effect.gen(function* () {
             : Effect.succeed(decoded.success);
         }),
       ),
+    ),
 
-    listIssues: (input) =>
+    listIssues: Effect.fn("BitbucketIssueApi.listIssues")((input) =>
       withRepository(input.repository, (path) => {
         const search = input.query?.trim() ?? "";
         const predicates = [
@@ -397,8 +398,9 @@ const make = Effect.gen(function* () {
           collected: [],
         });
       }),
+    ),
 
-    getIssue: (input) =>
+    getIssue: Effect.fn("BitbucketIssueApi.getIssue")((input) =>
       withRepository(input.repository, (path) =>
         readPage({
           operation: "getIssue",
@@ -406,10 +408,11 @@ const make = Effect.gen(function* () {
           decode: decodeIssueJson,
         }),
       ),
+    ),
 
     // Nothing on the repository or the issue states what the credentials may do, so this is the
     // one request Bitbucket makes unavoidable — the same read the pull request provider makes.
-    getRepositoryPermission: (input) =>
+    getRepositoryPermission: Effect.fn("BitbucketIssueApi.getRepositoryPermission")((input) =>
       withRepository(input.repository, (_path, segments) =>
         readPage({
           operation: "getRepositoryPermission",
@@ -424,8 +427,9 @@ const make = Effect.gen(function* () {
           }),
         ),
       ),
+    ),
 
-    listComments: (input) =>
+    listComments: Effect.fn("BitbucketIssueApi.listComments")((input) =>
       withRepository(input.repository, (path) =>
         commentsPage({
           url: `${path}/issues/${input.number}/comments?pagelen=${MAX_PAGE_SIZE}`,
@@ -434,8 +438,9 @@ const make = Effect.gen(function* () {
           commentCount: 0,
         }),
       ),
+    ),
 
-    createIssue: (input) =>
+    createIssue: Effect.fn("BitbucketIssueApi.createIssue")((input) =>
       withRepository(input.repository, (path) =>
         bitbucket
           .request({
@@ -461,8 +466,9 @@ const make = Effect.gen(function* () {
             }),
           ),
       ),
+    ),
 
-    updateIssue: (input) =>
+    updateIssue: Effect.fn("BitbucketIssueApi.updateIssue")((input) =>
       updateIssue({
         repository: input.repository,
         number: input.number,
@@ -471,17 +477,19 @@ const make = Effect.gen(function* () {
           ...(input.body === undefined ? {} : { content: { raw: input.body } }),
         },
       }),
+    ),
 
     // Bitbucket has no dedicated close/reopen endpoint for an issue: the state is one field of
     // it, and this is the same PUT the edit uses.
-    runAction: (input) =>
+    runAction: Effect.fn("BitbucketIssueApi.runAction")((input) =>
       updateIssue({
         repository: input.repository,
         number: input.number,
         body: { state: input.action === "close" ? "closed" : "open" },
       }),
+    ),
 
-    comment: (input) =>
+    comment: Effect.fn("BitbucketIssueApi.comment")((input) =>
       withRepository(input.repository, (path) =>
         bitbucket
           .request({
@@ -491,8 +499,9 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.asVoid),
       ),
+    ),
 
-    updateComment: (input) =>
+    updateComment: Effect.fn("BitbucketIssueApi.updateComment")((input) =>
       withRepository(input.repository, (path) =>
         bitbucket
           .request({
@@ -502,13 +511,15 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.asVoid),
       ),
+    ),
 
-    setAssignee: (input) =>
+    setAssignee: Effect.fn("BitbucketIssueApi.setAssignee")((input) =>
       updateIssue({
         repository: input.repository,
         number: input.number,
         body: { assignee: input.assignee === null ? null : { nickname: input.assignee } },
       }),
+    ),
   });
 });
 

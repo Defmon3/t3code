@@ -151,18 +151,7 @@ export class AzureDevOpsIssueCli extends Context.Service<
   }
 >()("t3/issue/AzureDevOpsIssueCli") {}
 
-/**
- * The states a work item is moved into, written in order until Azure accepts one. Azure has no
- * close or reopen verb — a state is written like any other field — and `az boards` has no command
- * that reads a project's workflow. This is not discovery, then: it is a walk through the names
- * Microsoft documents for the four out-of-the-box process templates, Agile and CMMI first so those
- * projects still cost exactly one write.
- *
- * Closing: `Closed` on Agile and CMMI, `Done` on Scrum and Basic. Reopening: `Active` on Agile and
- * CMMI, `Committed` for Scrum's backlog items and `To Do` for its tasks, `Doing` on Basic — with
- * `New` and `Proposed` behind them for a workflow that allows no transition straight back into
- * work. A custom template can refuse all of them, and the refusal then names every one tried.
- */
+// why: Azure exposes state writes but no workflow lookup; try documented built-in states and report every rejection.
 const ACTION_STATES: Record<IssueAction, readonly [string, ...ReadonlyArray<string>]> = {
   close: ["Closed", "Done"],
   reopen: ["Active", "Committed", "Doing", "To Do", "New", "Proposed"],
@@ -233,13 +222,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  /**
-   * The project the checkout belongs to, named rather than left to WIQL's `@project` macro:
-   * `az boards query` runs at the organization, and never forwards a project to the query it
-   * sends — so `@project` resolves to nothing and the answer spans every project in the
-   * organization. Read from the repository the checkout points at, which is where `az` already
-   * looks for everything else.
-   */
+  // why: WIQL's @project is unset in az boards query; resolve the checkout's project explicitly to avoid reading the whole organization.
   const projectName = (cwd: string) =>
     azure
       .execute({
@@ -264,7 +247,7 @@ const make = Effect.gen(function* () {
       );
 
   return AzureDevOpsIssueCli.of({
-    getViewer: (input) =>
+    getViewer: Effect.fn("AzureDevOpsIssueCli.getViewer")((input) =>
       read({
         cwd: input.cwd,
         operation: "getViewer",
@@ -285,8 +268,9 @@ const make = Effect.gen(function* () {
         ],
         decode: decodeJsonResult(Schema.NonEmptyString),
       }),
+    ),
 
-    listWorkItems: (input) => {
+    listWorkItems: Effect.fn("AzureDevOpsIssueCli.listWorkItems")((input) => {
       const cursorClause =
         input.cursor === undefined
           ? ""
@@ -332,29 +316,28 @@ const make = Effect.gen(function* () {
           truncated: page.items.length > input.limit,
         })),
       );
-    },
+    }),
 
-    getWorkItem: (input) =>
+    getWorkItem: Effect.fn("AzureDevOpsIssueCli.getWorkItem")((input) =>
       read({
         cwd: input.cwd,
         operation: "getWorkItem",
         args: ["boards", "work-item", "show", ...detectArgs, "--id", String(input.number)],
         decode: decodeWorkItemJson,
       }).pipe(
-        Effect.flatMap((item) =>
-          item === null
-            ? Effect.fail(
-                new AzureDevOpsWorkItemIncompleteError({
-                  command: "az",
-                  cwd: input.cwd,
-                  number: input.number,
-                }),
-              )
-            : Effect.succeed(item),
+        Effect.filterOrFail(
+          (item): item is NonNullable<typeof item> => item !== null,
+          () =>
+            new AzureDevOpsWorkItemIncompleteError({
+              command: "az",
+              cwd: input.cwd,
+              number: input.number,
+            }),
         ),
       ),
+    ),
 
-    runWorkItemAction: (input) => {
+    runWorkItemAction: Effect.fn("AzureDevOpsIssueCli.runWorkItemAction")((input) => {
       const write = (
         state: string,
         remaining: ReadonlyArray<string>,
@@ -400,7 +383,7 @@ const make = Effect.gen(function* () {
 
       const [first, ...rest] = ACTION_STATES[input.action];
       return write(first, rest);
-    },
+    }),
   });
 });
 

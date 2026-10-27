@@ -17,7 +17,7 @@ import {
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { findProjectForIssue, repositoryForProjectLink } from "~/lib/openIssueLink";
 import {
@@ -294,11 +294,6 @@ function LinkPullRequestDialog({
       setSubmitError(null);
     }
   }
-  useEffect(() => {
-    if (!open) return;
-    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [open]);
 
   const resolvedPullRequest =
     kind === "pull-request"
@@ -465,7 +460,7 @@ function LinkPullRequestDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
-      <DialogPopup className="max-w-xl">
+      <DialogPopup className="max-w-xl" initialFocus={inputRef}>
         <DialogHeader>
           <DialogTitle>Link {subject}</DialogTitle>
           <DialogDescription>

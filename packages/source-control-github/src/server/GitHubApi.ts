@@ -153,11 +153,12 @@ const make = Effect.gen(function* () {
   const policy = yield* GitHubRequestPolicy.GitHubRequestPolicy;
   const rest = yield* GitHubRest.GitHubRest;
   return GitHubApi.of({
-    graphql: (input) =>
+    graphql: Effect.fn("GitHubApi.graphql")((input) =>
       sendGraphQlDocument(input).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(GitHubRequestPolicy.GitHubRequestPolicy, policy),
       ),
+    ),
     rest: rest.rest,
     credential: rest.credential,
   });
