@@ -7,6 +7,7 @@ import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
 import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
+  buildApprovalExplanationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
@@ -180,6 +181,20 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
   });
 
   return {
+    generateApprovalExplanation: Effect.fn(`${name}.generateApprovalExplanation`)(
+      function* (input) {
+        return yield* run({
+          operation: "generateApprovalExplanation",
+          cwd: input.cwd,
+          modelSelection: input.modelSelection,
+          ...buildApprovalExplanationPrompt({
+            command: input.command,
+            reason: input.reason,
+            workingDirectory: input.workingDirectory,
+          }),
+        });
+      },
+    ),
     findWorkItemMatches,
     generateCommitMessage,
     generatePrContent,

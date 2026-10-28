@@ -73,10 +73,12 @@ const makeUnsupportedTextGeneration = (): ProviderTextGeneration => {
       new TextGenerationError({
         operation,
         detail: "ACP Registry instances do not provide application text generation.",
+        reason: "provider_unsupported",
       }),
     );
   return {
     generateCommitMessage: () => unsupported("generateCommitMessage"),
+    generateApprovalExplanation: () => unsupported("generateApprovalExplanation"),
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),
     generateThreadTitle: () => unsupported("generateThreadTitle"),

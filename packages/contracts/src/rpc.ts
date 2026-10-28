@@ -24,6 +24,7 @@ import {
   ChatGptHandoffState,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import { ApprovalExplanationInput, ApprovalExplanationResult } from "./approvalExplanation.ts";
 import {
   HookApprovalRequest,
   HookApprovalRespondError,
@@ -592,6 +593,7 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   hookApprovalsSubscribe: "hookApprovals.subscribe",
   hookApprovalsRespond: "hookApprovals.respond",
+  approvalsExplain: "approvals.explain",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2168,6 +2170,11 @@ const WsHookApprovalsSubscribeRpc = Rpc.make(WS_METHODS.hookApprovalsSubscribe, 
   stream: true,
   error: EnvironmentAuthorizationError,
 });
+const WsApprovalsExplainRpc = Rpc.make(WS_METHODS.approvalsExplain, {
+  payload: ApprovalExplanationInput,
+  success: ApprovalExplanationResult,
+  error: EnvironmentAuthorizationError,
+});
 const WsHookApprovalsRespondRpc = Rpc.make(WS_METHODS.hookApprovalsRespond, {
   payload: HookApprovalRespondInput,
   success: Schema.Void,
@@ -2307,6 +2314,7 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   WsHookApprovalsSubscribeRpc,
+  WsApprovalsExplainRpc,
   WsHookApprovalsRespondRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,

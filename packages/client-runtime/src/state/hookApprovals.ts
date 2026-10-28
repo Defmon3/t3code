@@ -100,6 +100,13 @@ export function createPendingHookApprovals(
         requestKind: "command",
         createdAt: DateTime.formatIso(request.createdAt),
         appName: "Custom hook",
+        command: request.command,
+        cwd: request.cwd,
+        hookRequestId: request.requestId,
+        reason: request.reason,
+        sessionApprovalScope: request.scope
+          ? `Session scope: ${request.scope.label}`
+          : "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
         responseCapability: "live",
         detail: [
           request.reason,

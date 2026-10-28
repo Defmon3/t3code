@@ -1510,6 +1510,11 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                     >
                       {props.activePendingApproval ? (
                         <PendingApprovalCard
+                          key={props.activePendingApproval.requestId}
+                          threadRef={{
+                            environmentId: props.environmentId,
+                            threadId: props.selectedThread.id,
+                          }}
                           canOperateThread={props.canOperateThread}
                           approval={props.activePendingApproval}
                           respondingApprovalId={props.respondingApprovalId}

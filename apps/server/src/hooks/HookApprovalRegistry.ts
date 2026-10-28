@@ -65,6 +65,7 @@ export interface HookApprovalRegistryShape {
   ) => Effect.Effect<HookApprovalDecision>;
   readonly respond: (input: HookApprovalRespondInput) => Effect.Effect<boolean>;
   readonly subscribe: () => Stream.Stream<ReadonlyArray<HookApprovalRequest>>;
+  readonly getPending: (requestId: string) => Effect.Effect<HookApprovalRequest | undefined>;
   readonly subscribePending: () => Stream.Stream<ReadonlyArray<HookApprovalPending>>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
@@ -291,6 +292,11 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
       return true;
     }, Effect.uninterruptible),
     subscribe: () => SubscriptionRef.changes(state).pipe(Stream.map(snapshot)),
+    getPending: Effect.fn("HookApprovalRegistry.getPending")((requestId) =>
+      SubscriptionRef.get(state).pipe(
+        Effect.map((current) => current.pending.get(requestId)?.request),
+      ),
+    ),
     subscribePending: () =>
       SubscriptionRef.changes(state).pipe(
         Stream.map((current) =>

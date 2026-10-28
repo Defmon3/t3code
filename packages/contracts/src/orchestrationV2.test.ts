@@ -21,6 +21,9 @@ const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const encodeOrchestrationV2TurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
+const encodeOrchestrationV2TurnItemWire = Schema.encodeSync(
+  Schema.toCodecJson(OrchestrationV2TurnItem),
+);
 const decodeOrchestrationV2Subagent = Schema.decodeUnknownSync(OrchestrationV2Subagent);
 const encodeOrchestrationV2SubagentJson = Schema.encodeSync(OrchestrationV2SubagentJson);
 const decodeOrchestrationV2ProviderThreadJson = Schema.decodeUnknownSync(
@@ -35,6 +38,39 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it.each([{ command: "git status", cwd: "/workspace" }, {}])(
+    "preserves structured approval data through storage and wire codecs: %j",
+    (fields) => {
+      const stored = {
+        id: "approval-item",
+        threadId: "approval-thread",
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status: "waiting",
+        title: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: DateTime.formatIso(now),
+        type: "approval_request",
+        requestId: "approval-request",
+        requestKind: "command",
+        prompt: "Inspect the repository",
+        reason: "Needs approval",
+        ...fields,
+      };
+      const item = decodeOrchestrationV2TurnItemJson(stored);
+      expect(encodeOrchestrationV2TurnItemJson(item)).toEqual(stored);
+      const wire = encodeOrchestrationV2TurnItemWire(item);
+      expect(wire).toEqual(stored);
+      expect(decodeOrchestrationV2TurnItemJson(wire)).toEqual(item);
+    },
+  );
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),

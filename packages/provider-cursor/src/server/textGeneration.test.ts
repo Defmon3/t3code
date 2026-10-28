@@ -76,6 +76,26 @@ beforeEach(() => {
 });
 
 describe("CursorTextGeneration", () => {
+  it.effect("explains an approval with no tools offered to the model", () =>
+    Effect.gen(function* () {
+      cursorSdkMock.prompt.mockResolvedValueOnce({
+        id: "approval-explanation",
+        status: "finished",
+        result: JSON.stringify({ explanation: "Reads Git status.", risk: null }),
+      });
+      const generation = yield* makeCursorTextGeneration(cursorSettings, {
+        CURSOR_API_KEY: "test-key",
+      });
+      expect(
+        yield* generation.generateApprovalExplanation({
+          cwd: "/project",
+          command: "git status",
+          modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+        }),
+      ).toEqual({ explanation: "Reads Git status.", risk: null });
+      expect(cursorSdkMock.create).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }));
+    }).pipe(Effect.provide(layerTest)),
+  );
   it.effect("resolves the browser credential for every request after an account change", () =>
     Effect.gen(function* () {
       let apiKey = "first-browser-key";

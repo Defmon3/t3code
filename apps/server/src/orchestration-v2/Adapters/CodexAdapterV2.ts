@@ -3998,6 +3998,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly nativeRequestId: string;
           readonly requestKind: ProviderRequestKind;
           readonly prompt?: string | null;
+          readonly command?: string | null | undefined;
+          readonly cwd?: string | null | undefined;
+          readonly reason?: string | null | undefined;
           readonly appName?: string;
           readonly options?: ReadonlyArray<ProviderApprovalOption>;
         }) {
@@ -4082,6 +4085,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ? {}
               : { prompt: input.prompt }),
             ...(input.appName === undefined ? {} : { appName: input.appName }),
+            ...(input.command == null ? {} : { command: input.command }),
+            ...(input.cwd == null ? {} : { cwd: input.cwd }),
+            ...(input.reason == null ? {} : { reason: input.reason }),
             ...(input.options === undefined ? {} : { options: input.options }),
           };
           return { node, request, turnItem };
@@ -5078,6 +5084,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeItemId: payload.itemId,
               nativeRequestId,
               requestKind: "command",
+              command: payload.command,
+              cwd: payload.cwd,
+              reason: payload.reason,
               ...((payload.reason ?? payload.command) === undefined
                 ? {}
                 : { prompt: payload.reason ?? payload.command }),
@@ -5366,6 +5375,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeRequestId,
               requestKind: "command",
               prompt: payload.reason ?? payload.command.join(" "),
+              command: payload.command.join(" "),
+              cwd: payload.cwd,
+              reason: payload.reason,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {

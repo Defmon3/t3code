@@ -194,6 +194,7 @@ import {
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
+import { ComposerCommandApproval } from "./ComposerCommandApproval";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
@@ -3429,7 +3430,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 variant={activePendingApproval ? "warning" : "info"}
                 density={activePendingApproval ? "spacious" : "default"}
               >
-                {activePendingApproval ? (
+                {activePendingApproval?.requestKind === "command" ? (
+                  <ComposerCommandApproval
+                    key={activePendingApproval.requestId}
+                    approval={activePendingApproval}
+                    pendingCount={pendingApprovals.length}
+                    threadRef={routeThreadRef}
+                    disabled={!canOperateThread}
+                    isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
+                    onRespondToApproval={onRespondToApproval}
+                  />
+                ) : activePendingApproval ? (
                   <ComposerBanner.Row
                     layout="approval"
                     data-chat-composer-collapsed-controls="true"

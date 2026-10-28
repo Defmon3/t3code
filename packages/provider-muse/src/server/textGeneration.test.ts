@@ -25,6 +25,25 @@ const titleInput = {
   message: "Fix the login form",
   modelSelection,
 };
+
+it.effect("reports approval explanations unsupported instead of allowing tools", () =>
+  Effect.gen(function* () {
+    const generation = yield* makeMuseTextGeneration(settings);
+    expect(
+      yield* generation
+        .generateApprovalExplanation({
+          cwd: titleInput.cwd,
+          command: "git status",
+          modelSelection,
+        })
+        .pipe(Effect.flip),
+    ).toMatchObject({
+      _tag: "TextGenerationError",
+      operation: "generateApprovalExplanation",
+      reason: "provider_unsupported",
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 const matchSource = {
   kind: "issue" as const,
   provider: "github",

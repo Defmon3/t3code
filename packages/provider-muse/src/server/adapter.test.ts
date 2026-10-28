@@ -1019,6 +1019,13 @@ describe("MuseAdapterV2", () => {
         "runtime_request.updated",
         (event) => event.runtimeRequest.status === "pending",
       );
+      const approvalItem = harness.allEvents.findLast(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+      );
+      assert.exists(approvalItem);
+      assert.deepInclude(approvalItem?.type === "turn_item.updated" ? approvalItem.turnItem : {}, {
+        command: "touch result.txt",
+      });
       assert.strictEqual(refreshed.runtimeRequest.id, first.runtimeRequest.id);
       yield* harness.runtime.respondToRuntimeRequest({
         requestId: first.runtimeRequest.id,

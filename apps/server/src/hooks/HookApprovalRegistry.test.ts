@@ -49,7 +49,9 @@ it.effect("allows one request and consumes duplicate responses", () =>
     const requestFiber = yield* Effect.forkScoped(registry.request(issued.token, input));
     const pending = yield* Fiber.join(snapshotFiber);
     const request = Option.getOrThrow(pending)[0]!;
+    expect(yield* registry.getPending(request.requestId)).toEqual(request);
     expect(yield* registry.respond({ requestId: request.requestId, decision: "allow" })).toBe(true);
+    expect(yield* registry.getPending(request.requestId)).toBeUndefined();
     expect(yield* registry.respond({ requestId: request.requestId, decision: "allow" })).toBe(
       false,
     );

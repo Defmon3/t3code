@@ -186,6 +186,51 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect("explains commands with shell execution and web access disabled", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          explanation: "Restores the committed file.",
+          risk: "Discards staged and unstaged edits.",
+        }),
+        requireArg:
+          'features.shell_tool=false --config features.unified_exec=false --config features.multi_agent=false --config web_search="disabled"',
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          expect(
+            yield* generation.generateApprovalExplanation({
+              cwd: process.cwd(),
+              command: "git restore --staged --worktree -- src/app.ts",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            }),
+          ).toEqual({
+            explanation: "Restores the committed file.",
+            risk: "Discards staged and unstaged edits.",
+          });
+        }),
+    ),
+  );
+
+  it.effect("fails explanation when MCP tools cannot be reliably disabled", () =>
+    withFakeCodexEnv({ output: "", mcpServers: 2 }, (generation) =>
+      Effect.gen(function* () {
+        expect(
+          yield* generation
+            .generateApprovalExplanation({
+              cwd: process.cwd(),
+              command: "git status",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "TextGenerationError",
+          operation: "generateApprovalExplanation",
+          detail: "Cannot guarantee that Codex MCP tools are disabled.",
+        });
+      }),
+    ),
+  );
   it.effect.each(["exec", "mcp list"] as const)(
     "kills a stalled %s CLI when its request is interrupted",
     (command) =>

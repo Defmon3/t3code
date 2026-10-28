@@ -430,7 +430,32 @@ describe("AcpRuntimeModel", () => {
         command: "cat package.json",
       },
     });
+    expect(request.command).toBeUndefined();
+    expect(request.cwd).toBeUndefined();
   });
+
+  it.each([
+    [
+      { command: "cat package.json", cwd: "/workspace" },
+      "execute",
+      "cat package.json",
+      "/workspace",
+    ],
+    [{ executable: "cat", args: ["package.json"] }, "execute", "cat package.json", undefined],
+    [{ command: "cat package.json", cwd: "/workspace" }, "read", undefined, undefined],
+    [{ command: 42, cwd: "/workspace" }, "execute", undefined, undefined],
+  ] as const)(
+    "preserves only structured execute approval commands: %j",
+    (rawInput, kind, command, cwd) => {
+      const request = parsePermissionRequest({
+        sessionId: "session-1",
+        options: [],
+        toolCall: { toolCallId: "tool-1", kind, rawInput, title: "Inspect the file" },
+      });
+      expect(request.command).toBe(command);
+      expect(request.cwd).toBe(cwd);
+    },
+  );
 
   it("bounds an oversized cumulative tool_call_update content buffer to a tail window", () => {
     const hugeText = Array.from({ length: 2_000 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join(

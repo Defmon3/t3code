@@ -30,6 +30,7 @@ export class TextGeneration extends Context.Service<TextGeneration, ProviderText
 ) {}
 
 type TextGenerationOp =
+  | "generateApprovalExplanation"
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
@@ -60,6 +61,13 @@ export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   return TextGeneration.of({
+    generateApprovalExplanation: Effect.fn("TextGeneration.generateApprovalExplanation")((input) =>
+      resolveInstance(
+        registry,
+        "generateApprovalExplanation",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateApprovalExplanation(input))),
+    ),
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
       return resolveInstance(
         registry,

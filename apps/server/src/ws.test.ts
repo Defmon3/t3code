@@ -51,6 +51,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
+import * as ApprovalExplanationService from "./approvals/ApprovalExplanationService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -454,6 +455,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ReviewService.ReviewService)({}),
   Layer.mock(ScheduledTasks.ScheduledTaskService)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
+  Layer.mock(ApprovalExplanationService.ApprovalExplanationService)({}),
   Layer.mock(GuestShareService.GuestShareService)({}),
   Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({}),
   Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({}),

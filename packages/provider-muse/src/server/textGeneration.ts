@@ -352,7 +352,17 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
   });
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
+  const generateApprovalExplanation: ProviderTextGeneration["generateApprovalExplanation"] = () =>
+    Effect.fail(
+      new TextGenerationError({
+        operation: "generateApprovalExplanation",
+        reason: "provider_unsupported",
+        detail:
+          "Muse Code cannot disable tools for approval explanations. Choose another text-generation provider.",
+      }),
+    );
   return {
+    generateApprovalExplanation,
     findWorkItemMatches,
     generateCommitMessage,
     generatePrContent,

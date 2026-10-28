@@ -11,6 +11,11 @@ export const makeProcessProbe = Effect.gen(function* () {
   const server = NodeNet.createServer((socket) => {
     sockets.add(socket);
     let output = "";
+    socket.on("error", (error) => {
+      if ("code" in error && error.code === "ECONNRESET") return;
+      Deferred.doneUnsafe(started, Effect.die(error));
+      Deferred.doneUnsafe(exited, Effect.die(error));
+    });
     socket.on("data", (chunk) => {
       output += chunk.toString();
       if (output.includes("\n")) {

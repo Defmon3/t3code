@@ -99,6 +99,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         (store) => Effect.tryPromise(() => store.dispose()).pipe(Effect.ignore({ log: true })),
       );
       const agentOptions = {
+        ...(operation === "generateApprovalExplanation" ? { tools: [] } : {}),
         apiKey,
         mode: "plan",
         model: cursorSdkModelSelection(modelSelection),

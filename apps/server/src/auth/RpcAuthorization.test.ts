@@ -30,6 +30,11 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("requires operation permission to spend provider resources explaining approvals", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.approvalsExplain)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

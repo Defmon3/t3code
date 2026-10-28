@@ -262,6 +262,7 @@ function createTextGeneration(
   overrides: Partial<FakeGitTextGeneration> = {},
 ): TextGeneration.TextGeneration["Service"] {
   const implementation: FakeGitTextGeneration = {
+    generateApprovalExplanation: () => Effect.succeed({ explanation: "Reads status.", risk: null }),
     generateCommitMessage: (input) =>
       Effect.succeed({
         subject: "Implement stacked git actions",
@@ -343,6 +344,7 @@ function createTextGeneration(
         ),
       ),
     generateReviewGuide: (input) => implementation.generateReviewGuide(input),
+    generateApprovalExplanation: (input) => implementation.generateApprovalExplanation(input),
   };
 }
 

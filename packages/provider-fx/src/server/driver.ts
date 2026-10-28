@@ -47,6 +47,7 @@ const unsupportedTextGeneration: ProviderTextGeneration = (() => {
   const unsupported = (operation: string) =>
     Effect.fail(
       new TextGenerationError({
+        reason: "provider_unsupported",
         operation,
         detail: "fx does not provide application text generation.",
       }),
@@ -56,6 +57,7 @@ const unsupportedTextGeneration: ProviderTextGeneration = (() => {
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),
     generateThreadTitle: () => unsupported("generateThreadTitle"),
+    generateApprovalExplanation: () => unsupported("generateApprovalExplanation"),
     generateReviewGuide: () => unsupported("generateReviewGuide"),
     findWorkItemMatches: () => unsupported("findWorkItemMatches"),
   };

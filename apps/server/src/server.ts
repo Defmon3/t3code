@@ -4,6 +4,7 @@ import * as Random from "effect/Random";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
+import * as ApprovalExplanationService from "./approvals/ApprovalExplanationService.ts";
 import * as HookApprovalHttp from "./hooks/HookApprovalHttp.ts";
 import { synchronizeHookApprovalPhase } from "./hooks/HookApprovalPhase.ts";
 import * as EventSink from "./orchestration-v2/EventSink.ts";
@@ -740,7 +741,9 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   ),
 );
 
-const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
+const layerRuntimeDependencies = ApprovalExplanationService.layer.pipe(
+  Layer.provide(ProjectionStoreV2.layer),
+  Layer.provideMerge(layerRuntimeCoreDependencies),
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),

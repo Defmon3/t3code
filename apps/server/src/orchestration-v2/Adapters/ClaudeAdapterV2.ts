@@ -6827,6 +6827,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly nativeRequestId: string;
           readonly requestKind: OrchestrationV2RuntimeRequest["kind"];
           readonly prompt?: string;
+          readonly command?: string;
           readonly presentation?: ReturnType<typeof claudeApprovalPresentation>;
           readonly questions?: ReadonlyArray<OrchestrationV2UserInputQuestion>;
         }) {
@@ -6913,6 +6914,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   requestId,
                   requestKind: input.requestKind as ProviderRequestKind,
                   ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+                  ...(input.command === undefined ? {} : { command: input.command }),
                   ...input.presentation,
                 }
               : {
@@ -9428,6 +9430,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const requestKind = providerRequestKindFromClaudeTool(toolName);
+          const command =
+            classifyClaudeNativeTool(toolName).itemType === "command_execution"
+              ? inputRecordValue(nativeToolInput, "command")
+              : undefined;
           const prompt =
             callbackOptions.title ??
             callbackOptions.description ??
@@ -9439,6 +9445,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             nativeRequestId,
             requestKind,
             prompt,
+            ...(typeof command === "string" ? { command } : {}),
             presentation: claudeApprovalPresentation({
               permissionMode: context.queryPolicy.permissionMode,
               prompt,

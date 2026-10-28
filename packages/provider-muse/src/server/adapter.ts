@@ -1192,6 +1192,9 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 type: "approval_request",
                 requestId,
                 requestKind: kind === "user_input" ? "command" : kind,
+                ...(native.value.subject.command === undefined
+                  ? {}
+                  : { command: native.value.subject.command }),
                 prompt:
                   native.value.subject.command ??
                   native.value.subject.path ??

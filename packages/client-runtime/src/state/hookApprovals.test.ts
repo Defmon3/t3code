@@ -125,6 +125,11 @@ describe("hook approvals", () => {
     expect(first[0]!.approval).toMatchObject({
       requestKind: "command",
       appName: "Custom hook",
+      command: "command hook-request",
+      cwd: "C:/workspace/hook-request",
+      hookRequestId: "hook-request",
+      reason: "reason hook-request",
+      sessionApprovalScope: "Session scope: Git commits",
       responseCapability: "live",
       detail:
         "reason hook-request\n\nCommand:\ncommand hook-request\n\nWorking directory:\nC:/workspace/hook-request\n\nSession scope:\nGit commits",
@@ -150,6 +155,9 @@ describe("hook approvals", () => {
       { decision: "accept", label: "Approve once" },
     ]);
     expect(pending!.approval.detail).toContain(
+      "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
+    );
+    expect(pending!.approval.sessionApprovalScope).toBe(
       "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
     );
     const sessionOption = pending!.approval.options!.find(

@@ -235,6 +235,8 @@ export type AcpPlanUpdate =
 export interface AcpPermissionRequest {
   readonly kind: string | "unknown";
   readonly detail?: string;
+  readonly command?: string;
+  readonly cwd?: string;
   readonly toolCall?: AcpToolCallState;
 }
 
@@ -1196,6 +1198,8 @@ export function parsePermissionRequest(
     { fallbackStatus: "pending" },
   );
   const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
+  const command = extractToolCallCommand(params.toolCall.rawInput, undefined, undefined);
+  const cwd = isRecord(params.toolCall.rawInput) ? params.toolCall.rawInput.cwd : undefined;
   const detail =
     toolCall?.command ??
     toolCall?.title ??
@@ -1204,6 +1208,8 @@ export function parsePermissionRequest(
   return {
     kind,
     ...(detail ? { detail } : {}),
+    ...(kind === "execute" && command !== undefined ? { command } : {}),
+    ...(kind === "execute" && command !== undefined && typeof cwd === "string" ? { cwd } : {}),
     ...(toolCall ? { toolCall } : {}),
   };
 }

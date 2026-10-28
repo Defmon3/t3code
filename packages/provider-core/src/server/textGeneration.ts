@@ -6,6 +6,7 @@ import type {
   TextGenerationError,
   IssueReferenceStyle,
   WorkItemMatchRelationship,
+  ApprovalExplanationContent,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 
@@ -125,6 +126,14 @@ export type ReviewGuideGenerationResult = Omit<
 >;
 
 export interface ProviderTextGeneration {
+  readonly generateApprovalExplanation: (input: {
+    readonly cwd: string;
+    readonly command: string;
+    readonly workingDirectory?: string | undefined;
+    readonly reason?: string | undefined;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<ApprovalExplanationContent, TextGenerationError>;
+
   readonly findWorkItemMatches: (
     input: WorkItemMatchGenerationInput,
   ) => Effect.Effect<WorkItemMatchGenerationResult, TextGenerationError>;

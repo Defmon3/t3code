@@ -11,6 +11,7 @@ export interface ButtonProps {
   readonly onPress: () => void;
   readonly disabled?: boolean;
   readonly accessibilityHint?: string;
+  readonly expanded?: boolean;
   readonly loading?: boolean;
   readonly tone?: "primary" | "secondary" | "danger" | "text" | "contrast";
   readonly fullWidth?: boolean;
@@ -32,7 +33,11 @@ export function Button(props: ButtonProps) {
       accessibilityRole="button"
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityHint={props.accessibilityHint}
-      accessibilityState={{ disabled, busy: Boolean(props.loading) }}
+      accessibilityState={{
+        disabled,
+        busy: Boolean(props.loading),
+        ...(props.expanded === undefined ? {} : { expanded: props.expanded }),
+      }}
       disabled={disabled}
       onPress={props.onPress}
       className={cn(

@@ -1627,211 +1627,262 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("stops asking for commands the user allowed for the session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const nativeThreadId = "session-approval-thread";
-        const turnIds = [
-          "session-approval-turn-1",
-          "session-approval-turn-2",
-          "session-approval-turn-3",
-        ];
-        const turnPolicies = {
-          "approval-required": {
-            approvalPolicy: "untrusted",
-            approvalsReviewer: "user",
-            sandboxPolicy: { type: "readOnly" },
-          },
-          "full-access": {
-            approvalPolicy: "never",
-            approvalsReviewer: "user",
-            sandboxPolicy: { type: "dangerFullAccess" },
-          },
-        } as const;
-        const turnModes = ["approval-required", "full-access", "approval-required"] as const;
-        const turnText = (index: number) => `Review round ${index + 1}.`;
-        const startTurn = (index: number): ReadonlyArray<CodexReplay.CodexAppServerReplayEntry> => [
-          {
-            type: "expect_outbound",
-            label: `turn ${index + 1} turn/start`,
-            frame: {
-              id: 3 + index,
-              method: "turn/start",
-              params: {
-                threadId: nativeThreadId,
-                input: [{ type: "text", text: turnText(index) }],
-                cwd: "/workspace",
-                model: "gpt-5.4",
-                ...turnPolicies[turnModes[index]!],
-                summary: "detailed",
-                collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
+  it.effect.each(["current", "legacy"] as const)(
+    "stops asking for commands the user allowed for the session (%s)",
+    (protocol) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "session-approval-thread";
+          const turnIds = [
+            "session-approval-turn-1",
+            "session-approval-turn-2",
+            "session-approval-turn-3",
+          ];
+          const turnPolicies = {
+            "approval-required": {
+              approvalPolicy: "untrusted",
+              approvalsReviewer: "user",
+              sandboxPolicy: { type: "readOnly" },
+            },
+            "full-access": {
+              approvalPolicy: "never",
+              approvalsReviewer: "user",
+              sandboxPolicy: { type: "dangerFullAccess" },
+            },
+          } as const;
+          const turnModes = ["approval-required", "full-access", "approval-required"] as const;
+          const turnText = (index: number) => `Review round ${index + 1}.`;
+          const startTurn = (
+            index: number,
+          ): ReadonlyArray<CodexReplay.CodexAppServerReplayEntry> => [
+            {
+              type: "expect_outbound",
+              label: `turn ${index + 1} turn/start`,
+              frame: {
+                id: 3 + index,
+                method: "turn/start",
+                params: {
+                  threadId: nativeThreadId,
+                  input: [{ type: "text", text: turnText(index) }],
+                  cwd: "/workspace",
+                  model: "gpt-5.4",
+                  ...turnPolicies[turnModes[index]!],
+                  summary: "detailed",
+                  collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
+                },
               },
             },
-          },
-          {
-            type: "emit_inbound",
-            label: `turn ${index + 1} turn/start`,
-            frame: {
-              id: 3 + index,
-              result: { turn: makeCodexReplayTurn({ id: turnIds[index]!, status: "inProgress" }) },
-            },
-          },
-          turnEvent("turn/started", turnIds[index]!),
-        ];
-        const approval = (input: {
-          readonly id: number;
-          readonly turnId: string;
-          readonly kind: "commandExecution" | "fileChange";
-          readonly itemId: string;
-          readonly decision: string;
-        }): ReadonlyArray<CodexReplay.CodexAppServerReplayEntry> => [
-          {
-            type: "emit_inbound",
-            label: `${input.itemId} approval`,
-            frame: {
-              id: input.id,
-              method: `item/${input.kind}/requestApproval`,
-              params: {
-                threadId: nativeThreadId,
-                turnId: input.turnId,
-                itemId: input.itemId,
-                startedAtMs: 1782622441000,
-                ...(input.kind === "commandExecution" ? { command: `cat ${input.itemId}` } : {}),
+            {
+              type: "emit_inbound",
+              label: `turn ${index + 1} turn/start`,
+              frame: {
+                id: 3 + index,
+                result: {
+                  turn: makeCodexReplayTurn({ id: turnIds[index]!, status: "inProgress" }),
+                },
               },
             },
-          },
-          {
-            type: "expect_outbound",
-            label: `${input.itemId} decision`,
-            frame: { id: input.id, result: { decision: input.decision } },
-          },
-        ];
-        const turnEvent = (
-          method: "turn/started" | "turn/completed",
-          turnId: string,
-        ): CodexReplay.CodexAppServerReplayEntry => ({
-          type: "emit_inbound",
-          label: `${turnId} ${method}`,
-          frame: {
-            method,
-            params: {
-              threadId: nativeThreadId,
-              turn: makeCodexReplayTurn({
-                id: turnId,
-                status: method === "turn/started" ? "inProgress" : "completed",
-              }),
+            turnEvent("turn/started", turnIds[index]!),
+          ];
+          const approval = (input: {
+            readonly id: number;
+            readonly turnId: string;
+            readonly kind: "commandExecution" | "fileChange";
+            readonly itemId: string;
+            readonly decision: string;
+          }): ReadonlyArray<CodexReplay.CodexAppServerReplayEntry> => [
+            {
+              type: "emit_inbound",
+              label: `${input.itemId} approval`,
+              frame: {
+                id: input.id,
+                method:
+                  input.kind === "commandExecution" && protocol === "legacy"
+                    ? "execCommandApproval"
+                    : `item/${input.kind}/requestApproval`,
+                params:
+                  input.kind === "commandExecution" && protocol === "legacy"
+                    ? {
+                        conversationId: nativeThreadId,
+                        callId: input.itemId,
+                        command: ["cat", input.itemId],
+                        cwd: "/workspace",
+                        reason: "Inspect the file",
+                        parsedCmd: [],
+                      }
+                    : {
+                        threadId: nativeThreadId,
+                        turnId: input.turnId,
+                        itemId: input.itemId,
+                        startedAtMs: 1782622441000,
+                        ...(input.kind === "commandExecution"
+                          ? {
+                              command: `cat ${input.itemId}`,
+                              cwd: "/workspace",
+                              reason: "Inspect the file",
+                            }
+                          : {}),
+                      },
+              },
             },
-          },
-        });
-        const [patchRequest, patchDecision] = approval({
-          id: 102,
-          turnId: turnIds[0]!,
-          kind: "fileChange",
-          itemId: "first-patch",
-          decision: "acceptForSession",
-        });
-        const transcript = makeCodexReplayTranscript({
-          scenario: "codex-session-approvals",
-          entries: [
-            ...codexReplayPreamble({
-              nativeThreadId,
-              nativeTurnId: turnIds[0]!,
-              prompt: turnText(0),
-            }).slice(0, -3),
-            ...startTurn(0),
-            ...approval({
-              id: 100,
-              turnId: turnIds[0]!,
-              kind: "commandExecution",
-              itemId: "first-command",
-              decision: "acceptForSession",
-            }),
-            patchRequest!,
-            ...approval({
-              id: 101,
-              turnId: turnIds[0]!,
-              kind: "commandExecution",
-              itemId: "second-command",
-              decision: "acceptForSession",
-            }),
-            turnEvent("turn/completed", turnIds[0]!),
-            ...startTurn(1),
-            patchDecision!,
-            turnEvent("turn/completed", turnIds[1]!),
-            ...startTurn(2),
-            ...approval({
-              id: 103,
-              turnId: turnIds[2]!,
-              kind: "commandExecution",
-              itemId: "third-command",
-              decision: "accept",
-            }),
-            ...approval({
-              id: 104,
-              turnId: turnIds[2]!,
-              kind: "fileChange",
-              itemId: "second-patch",
-              decision: "accept",
-            }),
-            turnEvent("turn/completed", turnIds[2]!),
-          ],
-        });
-        const harness = yield* makeCodexReplayHarness(transcript);
-        const requests = () => [
-          ...new Map(
-            harness.events.flatMap((event) =>
-              event.type === "runtime_request.updated"
-                ? [[event.runtimeRequest.id, event.runtimeRequest] as const]
-                : [],
-            ),
-          ).values(),
-        ];
-        const answer = (
-          count: number,
-          kind: "command" | "file-change",
-          decision: ProviderApprovalDecision,
-        ) =>
-          Effect.gen(function* () {
-            yield* harness.until(() => requests().length === count);
-            const request = requests()[count - 1]!;
-            assert.equal(request.kind, kind);
-            yield* harness.runtime.respondToRuntimeRequest({ requestId: request.id, decision });
+            {
+              type: "expect_outbound",
+              label: `${input.itemId} decision`,
+              frame: {
+                id: input.id,
+                result: {
+                  decision:
+                    input.kind === "commandExecution" && protocol === "legacy"
+                      ? input.decision === "acceptForSession"
+                        ? "approved_for_session"
+                        : "approved"
+                      : input.decision,
+                },
+              },
+            },
+          ];
+          const turnEvent = (
+            method: "turn/started" | "turn/completed",
+            turnId: string,
+          ): CodexReplay.CodexAppServerReplayEntry => ({
+            type: "emit_inbound",
+            label: `${turnId} ${method}`,
+            frame: {
+              method,
+              params: {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({
+                  id: turnId,
+                  status: method === "turn/started" ? "inProgress" : "completed",
+                }),
+              },
+            },
           });
-
-        const runTurn = (index: number) =>
-          Effect.gen(function* () {
-            yield* harness.runtime.startTurn({
-              ...makeCodexTestTurnInput({
-                threadId: harness.threadId,
-                providerThread: harness.providerThread,
-                now: yield* DateTime.now,
-                attemptId: RunAttemptId.make(`session-approvals-${index + 1}`),
-                text: turnText(index),
+          const [patchRequest, patchDecision] = approval({
+            id: 102,
+            turnId: turnIds[0]!,
+            kind: "fileChange",
+            itemId: "first-patch",
+            decision: "acceptForSession",
+          });
+          const transcript = makeCodexReplayTranscript({
+            scenario: "codex-session-approvals",
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId: turnIds[0]!,
+                prompt: turnText(0),
+              }).slice(0, -3),
+              ...startTurn(0),
+              ...approval({
+                id: 100,
+                turnId: turnIds[0]!,
+                kind: "commandExecution",
+                itemId: "first-command",
+                decision: "acceptForSession",
               }),
-              runOrdinal: index + 1,
-              providerTurnOrdinal: index + 1,
-              runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode: turnModes[index]! },
+              patchRequest!,
+              ...approval({
+                id: 101,
+                turnId: turnIds[0]!,
+                kind: "commandExecution",
+                itemId: "second-command",
+                decision: "acceptForSession",
+              }),
+              turnEvent("turn/completed", turnIds[0]!),
+              ...startTurn(1),
+              patchDecision!,
+              turnEvent("turn/completed", turnIds[1]!),
+              ...startTurn(2),
+              ...approval({
+                id: 103,
+                turnId: turnIds[2]!,
+                kind: "commandExecution",
+                itemId: "third-command",
+                decision: "accept",
+              }),
+              ...approval({
+                id: 104,
+                turnId: turnIds[2]!,
+                kind: "fileChange",
+                itemId: "second-patch",
+                decision: "accept",
+              }),
+              turnEvent("turn/completed", turnIds[2]!),
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          const requests = () => [
+            ...new Map(
+              harness.events.flatMap((event) =>
+                event.type === "runtime_request.updated"
+                  ? [[event.runtimeRequest.id, event.runtimeRequest] as const]
+                  : [],
+              ),
+            ).values(),
+          ];
+          const answer = (
+            count: number,
+            kind: "command" | "file-change",
+            decision: ProviderApprovalDecision,
+          ) =>
+            Effect.gen(function* () {
+              yield* harness.until(() => requests().length === count);
+              const request = requests()[count - 1]!;
+              assert.equal(request.kind, kind);
+              yield* harness.runtime.respondToRuntimeRequest({ requestId: request.id, decision });
             });
-          });
 
-        yield* runTurn(0);
-        yield* answer(1, "command", "acceptForSession");
-        yield* harness.until(() => requests().length === 2);
-        yield* harness.awaitTerminal(1);
-        yield* runTurn(1);
-        yield* answer(2, "file-change", "acceptForSession");
-        yield* harness.awaitTerminal(2);
-        yield* runTurn(2);
-        yield* answer(3, "command", "accept");
-        yield* answer(4, "file-change", "accept");
-        yield* harness.awaitTerminal(3);
-        assert.lengthOf(requests(), 4);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          const runTurn = (index: number) =>
+            Effect.gen(function* () {
+              yield* harness.runtime.startTurn({
+                ...makeCodexTestTurnInput({
+                  threadId: harness.threadId,
+                  providerThread: harness.providerThread,
+                  now: yield* DateTime.now,
+                  attemptId: RunAttemptId.make(`session-approvals-${index + 1}`),
+                  text: turnText(index),
+                }),
+                runOrdinal: index + 1,
+                providerTurnOrdinal: index + 1,
+                runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode: turnModes[index]! },
+              });
+            });
+
+          yield* runTurn(0);
+          yield* answer(1, "command", "acceptForSession");
+          yield* harness.until(() => requests().length === 2);
+          yield* harness.awaitTerminal(1);
+          yield* runTurn(1);
+          yield* answer(2, "file-change", "acceptForSession");
+          yield* harness.awaitTerminal(2);
+          yield* runTurn(2);
+          yield* answer(3, "command", "accept");
+          yield* answer(4, "file-change", "accept");
+          yield* harness.awaitTerminal(3);
+          assert.lengthOf(requests(), 4);
+          const commandApproval = harness.events.find(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "approval_request" &&
+              event.turnItem.command === "cat first-command",
+          );
+          assert.exists(commandApproval);
+          assert.deepInclude(
+            commandApproval?.type === "turn_item.updated" ? commandApproval.turnItem : {},
+            {
+              prompt: "Inspect the file",
+              reason: "Inspect the file",
+              command: "cat first-command",
+              cwd: "/workspace",
+            },
+          );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
         ),
       ),
-    ),
   );
 
   it.effect("preserves T3 context on the wire and restores it after compaction", () =>

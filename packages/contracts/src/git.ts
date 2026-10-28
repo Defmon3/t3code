@@ -393,6 +393,7 @@ export class TextGenerationError extends Schema.TaggedError<TextGenerationError>
   {
     operation: Schema.String,
     detail: Schema.String,
+    reason: Schema.optional(Schema.Literal("provider_unsupported")),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {

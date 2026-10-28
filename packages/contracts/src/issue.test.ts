@@ -111,7 +111,7 @@ describe("IssueListResult", () => {
   it("round-trips through the JSON codec the RPC serializes with", () => {
     const codec = Schema.toCodecJson(IssueListResult);
 
-    const decoded = Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(LIST_RESULT));
+    const decoded = Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(LIST_RESULT));
 
     expect(decoded).toStrictEqual(LIST_RESULT);
   });
@@ -119,9 +119,7 @@ describe("IssueListResult", () => {
   it("round-trips a stopped continuation through the JSON codec", () => {
     const codec = Schema.toCodecJson(IssueListResult);
     const result = { ...LIST_RESULT, truncated: true, cursorLimitReached: true, nextCursors: {} };
-    expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(result))).toStrictEqual(
-      result,
-    );
+    expect(Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(result))).toStrictEqual(result);
   });
 
   it("keys a viewer by adapter and host, so accounts never cross", () => {
@@ -444,7 +442,7 @@ describe("IssueTemplateList", () => {
   it("round-trips through the JSON codec the RPC serializes with", () => {
     const codec = Schema.toCodecJson(IssueTemplateList);
 
-    const decoded = Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(TEMPLATES));
+    const decoded = Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(TEMPLATES));
 
     expect(decoded).toStrictEqual(TEMPLATES);
   });

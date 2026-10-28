@@ -131,6 +131,10 @@
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
     },
+    "./state/approval-explanations": {
+      "types": "./src/state/approvalExplanations.ts",
+      "default": "./src/state/approvalExplanations.ts"
+    },
     "./state/hook-approvals": {
       "types": "./src/state/hookApprovals.ts",
       "default": "./src/state/hookApprovals.ts"

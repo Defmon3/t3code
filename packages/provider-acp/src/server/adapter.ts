@@ -5180,6 +5180,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             requestId,
             requestKind,
             ...(parsed.detail === undefined ? {} : { prompt: parsed.detail }),
+            ...(parsed.command === undefined ? {} : { command: parsed.command }),
+            ...(parsed.cwd === undefined ? {} : { cwd: parsed.cwd }),
             ...(approvalOptions === undefined ? {} : { options: approvalOptions }),
           };
           yield* Ref.update(pendingRuntimeRequests, (current) => {

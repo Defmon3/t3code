@@ -8709,15 +8709,35 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               signal: new AbortController().signal,
               toolUseID: bashToolUseId,
               requestId: "request-wake-bash",
+              title: "Inspect the repository",
             },
           ),
         ).pipe(Effect.forkScoped);
 
         yield* harness.until(() =>
-          harness.events.some((event) => event.type === "runtime_request.updated"),
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+          ),
         );
         const request = harness.events.findLast(
           (event) => event.type === "runtime_request.updated",
+        );
+        const approvalItem = harness.events.findLast(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        );
+        assert.exists(approvalItem);
+        assert.deepInclude(
+          approvalItem?.type === "turn_item.updated" ? approvalItem.turnItem : {},
+          {
+            command: "git status",
+            prompt: "Inspect the repository",
+          },
+        );
+        assert.notProperty(
+          approvalItem?.type === "turn_item.updated" ? approvalItem.turnItem : {},
+          "cwd",
         );
         const bashItems = harness.events.flatMap((event) =>
           event.type === "turn_item.updated" &&

@@ -55,6 +55,7 @@ const hookApprovals = (
   request: () => Effect.succeed("deny"),
   respond: () => Effect.succeed(false),
   subscribe: () => Stream.empty,
+  getPending: () => Effect.die("unused"),
   revokeThread: () => Effect.void,
   revokeProviderSession: () => Effect.void,
   subscribePending: () => Stream.empty,

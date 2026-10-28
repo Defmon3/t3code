@@ -41,6 +41,36 @@ describe("declining approvals before sending", () => {
     requestId: RuntimeRequestId.make("second-approval"),
   };
 
+  it.each([
+    [{ command: "git status", cwd: "/workspace" }, "git status", "/workspace"],
+    [{}, undefined, undefined],
+  ] as const)(
+    "keeps authoritative command data separate from the display prompt: %j",
+    (fields, command, cwd) => {
+      const item = projection.turnItems[0]!;
+      if (item.type !== "user_input_request") {
+        throw new Error("Expected a user input request fixture.");
+      }
+      const pending = derivePendingThreadRequests({
+        runtimeRequests: [{ ...projection.runtimeRequests[0]!, kind: "command" }],
+        turnItems: [
+          {
+            ...item,
+            type: "approval_request",
+            requestId,
+            requestKind: "command",
+            prompt: "Inspect the repository",
+            ...fields,
+          },
+        ],
+      });
+      expect(pending.approvals).toHaveLength(1);
+      expect(pending.approvals[0]).toMatchObject({ detail: "Inspect the repository" });
+      expect(pending.approvals[0]?.command).toBe(command);
+      expect(pending.approvals[0]?.cwd).toBe(cwd);
+    },
+  );
+
   it("declines every pending approval before the send continues", async () => {
     let resolve!: (value: Awaited<ReturnType<ApprovalResponder>>) => void;
     const firstResponse = new Promise<Awaited<ReturnType<ApprovalResponder>>>((done) => {

@@ -245,6 +245,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeAuthAccess]: "auth",
   [WS_METHODS.subscribeBackgroundPolicy]: "server",
   [WS_METHODS.hookApprovalsSubscribe]: "server",
+  [WS_METHODS.approvalsExplain]: "server",
   [WS_METHODS.hookApprovalsRespond]: "server",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 

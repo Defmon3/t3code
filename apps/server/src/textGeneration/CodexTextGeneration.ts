@@ -158,6 +158,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       readonly cwd: string;
       readonly env: NodeJS.ProcessEnv;
       readonly launchArgs: ReadonlyArray<string>;
+      readonly requireDisabledTools: boolean;
     }) {
       const spawnCommand = yield* resolveSpawnCommand(
         input.binary,
@@ -181,6 +182,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         { concurrency: "unbounded" },
       );
       if (exitCode !== 0) {
+        if (input.requireDisabledTools) {
+          return yield* new TextGenerationError({
+            operation: "generateApprovalExplanation",
+            detail: "Cannot disable Codex MCP tools because their configuration could not be read.",
+          });
+        }
         yield* Effect.logWarning("codex mcp list failed; text generation keeps its MCP servers", {
           reason: "exit",
           exitCode,
@@ -189,25 +196,51 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       }
       const servers = yield* decodeCodexMcpServers(stdout).pipe(
         Effect.tapError(() =>
-          Effect.logWarning("codex mcp list failed; text generation keeps its MCP servers", {
-            reason: "decode",
-          }),
+          input.requireDisabledTools
+            ? Effect.void
+            : Effect.logWarning("codex mcp list failed; text generation keeps its MCP servers", {
+                reason: "decode",
+              }),
         ),
       );
       return servers.filter((server) => server.enabled).map((server) => server.name);
     },
     Effect.scoped,
-    Effect.timeoutOption(CODEX_MCP_LIST_TIMEOUT_MS),
-    Effect.flatMap(
-      Option.match({
-        onNone: () =>
-          Effect.logWarning("codex mcp list failed; text generation keeps its MCP servers", {
-            reason: "timeout",
-          }).pipe(Effect.as<ReadonlyArray<string>>([])),
-        onSome: (names) => Effect.succeed(names),
-      }),
-    ),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    (effect, input) =>
+      effect.pipe(
+        Effect.timeoutOption(CODEX_MCP_LIST_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              input.requireDisabledTools
+                ? Effect.fail(
+                    new TextGenerationError({
+                      operation: "generateApprovalExplanation",
+                      detail:
+                        "Cannot disable Codex MCP tools because reading their configuration timed out.",
+                    }),
+                  )
+                : Effect.logWarning(
+                    "codex mcp list failed; text generation keeps its MCP servers",
+                    {
+                      reason: "timeout",
+                    },
+                  ).pipe(Effect.as<ReadonlyArray<string>>([])),
+            onSome: (names) => Effect.succeed(names),
+          }),
+        ),
+        Effect.catch((cause) =>
+          input.requireDisabledTools
+            ? Effect.fail(
+                new TextGenerationError({
+                  operation: "generateApprovalExplanation",
+                  detail: "Cannot guarantee that Codex MCP tools are disabled.",
+                  cause,
+                }),
+              )
+            : Effect.succeed<ReadonlyArray<string>>([]),
+        ),
+      ),
   );
 
   const runCodexJson = Effect.fn("runCodexJson")(function* <S extends Schema.Top>({
@@ -270,6 +303,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       };
       const execLaunchArgs = codexExecLaunchArgs(launchArgs);
       const mcpServersOff = yield* listEnabledMcpServers({
+        requireDisabledTools: operation === "generateApprovalExplanation",
         binary,
         cwd,
         env,
@@ -283,6 +317,18 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           ...execLaunchArgs,
           // A user's MCP server could act on the text-generation prompt.
           ...CODEX_NO_PLUGIN_ARGS,
+          ...(operation === "generateApprovalExplanation"
+            ? [
+                "--config",
+                "features.shell_tool=false",
+                "--config",
+                "features.unified_exec=false",
+                "--config",
+                "features.multi_agent=false",
+                "--config",
+                'web_search="disabled"',
+              ]
+            : []),
           ...(mcpServersOff ? ["--config", mcpServersOff] : []),
           "--ephemeral",
           "--skip-git-repo-check",

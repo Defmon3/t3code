@@ -20,6 +20,11 @@ interface ComposerPendingApprovalActionsProps {
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<unknown>;
+  commandExpansion?: {
+    readonly expanded: boolean;
+    readonly detailId: string;
+    readonly onToggle: () => void;
+  };
 }
 
 const DEFAULT_APPROVAL_OPTIONS = [
@@ -36,6 +41,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   disabled = false,
   options = DEFAULT_APPROVAL_OPTIONS,
   onRespondToApproval,
+  commandExpansion,
 }: ComposerPendingApprovalActionsProps) {
   const primaryOptions = options.filter(
     (option) =>
@@ -48,6 +54,17 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
 
   return (
     <>
+      {commandExpansion ? (
+        <Button
+          size="sm-multiline"
+          variant="outline"
+          aria-expanded={commandExpansion.expanded}
+          aria-controls={commandExpansion.detailId}
+          onClick={commandExpansion.onToggle}
+        >
+          {commandExpansion.expanded ? "Collapse" : "Expand"}
+        </Button>
+      ) : null}
       {primaryOptions.map((option) => {
         const button = (
           <Button
