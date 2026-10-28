@@ -464,7 +464,9 @@ export const make = Effect.gen(function* () {
       ),
       Effect.flatMap((shells) =>
         Effect.forEach(
-          shells,
+          shells.filter(
+            (project) => filter.projectId === undefined || project.id === filter.projectId,
+          ),
           (project) =>
             project.repositoryIdentity != null
               ? Effect.succeed(project)

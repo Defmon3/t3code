@@ -1,8 +1,14 @@
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
   EventId,
+  MessageId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   SourceControlProviderKind,
+  RunId,
   ThreadId,
   type OrchestrationProjectShell,
   type OrchestrationV2DomainEvent,
@@ -83,6 +89,180 @@ describe("ThreadPullRequestServiceV2 reads", () => {
       deletedAt: null,
     };
   };
+
+  it.effect.each(["duplicate", "promotion", "in-flight"] as const)(
+    "coalesces %s thread refreshes without losing newer state",
+    (scenario) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let thread = { ...threadShell("refresh-thread"), branch: "feature/refresh" };
+          const project: OrchestrationProjectShell = {
+            id: thread.projectId,
+            title: "Project",
+            workspaceRoot: "/workspace/project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          };
+          const activation = yield* Deferred.make<void>();
+          const releaseStartup = yield* Deferred.make<void>();
+          const releaseRefresh = yield* Deferred.make<void>();
+          const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+          const eventsConsumed = yield* Queue.unbounded<void>();
+          const lookupStarted = yield* Queue.unbounded<boolean>();
+          const lookups: boolean[] = [];
+          const branches: string[] = [];
+          const identityRefreshes: boolean[] = [];
+          const base = {
+            id: EventId.make("event:refresh"),
+            threadId: thread.id,
+            occurredAt: NOW,
+          };
+          const completed: OrchestrationV2DomainEvent = {
+            ...base,
+            type: "run.updated",
+            payload: {
+              id: RunId.make("run:refresh"),
+              threadId: thread.id,
+              ordinal: 1,
+              providerInstanceId: thread.providerInstanceId,
+              modelSelection: thread.modelSelection,
+              providerThreadId: null,
+              userMessageId: MessageId.make("message:refresh"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "completed",
+              requestedAt: NOW,
+              startedAt: NOW,
+              completedAt: NOW,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          };
+          const checkpoint: OrchestrationV2DomainEvent = {
+            ...base,
+            type: "checkpoint.captured",
+            payload: {
+              id: CheckpointId.make("checkpoint:refresh"),
+              threadId: thread.id,
+              scopeId: CheckpointScopeId.make("scope:refresh"),
+              runId: null,
+              nodeId: NodeId.make("node:refresh"),
+              parentCheckpointId: null,
+              ordinalWithinScope: 0,
+              appRunOrdinal: null,
+              ref: CheckpointRef.make("refs/t3/checkpoints/refresh"),
+              status: "ready",
+              files: [],
+              capturedAt: NOW,
+            },
+          };
+          const marker: OrchestrationV2DomainEvent = {
+            ...completed,
+            payload: { ...completed.payload, status: "running" },
+          };
+          const dependencies = Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.fromQueue(domainEvents).pipe(
+                Stream.tap((event) =>
+                  event === marker ? Queue.offer(eventsConsumed, undefined) : Effect.void,
+                ),
+              ),
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  schemaVersion: 2,
+                  snapshotSequence: 1,
+                  threads: [thread],
+                  archivedThreads: [],
+                }),
+              getThreadEventSequence: () => Effect.succeed(1),
+              getThreadShell: () => Effect.succeed(thread),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([project]),
+            }),
+            Layer.mock(GitManager.GitManager)({
+              branchPullRequest: (input, options) =>
+                Effect.gen(function* () {
+                  const refresh = options?.refresh ?? false;
+                  lookups.push(refresh);
+                  branches.push(input.branch);
+                  yield* Queue.offer(lookupStarted, refresh);
+                  if (lookups.length === 1) yield* Deferred.await(releaseStartup);
+                  if (scenario === "in-flight" && lookups.length === 2) {
+                    yield* Deferred.await(releaseRefresh);
+                  }
+                  return null;
+                }),
+            }),
+            Layer.mock(PullRequestService.PullRequestService)({}),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: (_cwd, options) => {
+                identityRefreshes.push(options?.refresh ?? false);
+                return Effect.succeed({
+                  canonicalKey: "github.com/acme/project",
+                  locator: {
+                    source: "git-remote" as const,
+                    remoteName: "origin",
+                    remoteUrl: "git@github.com:acme/project.git",
+                  },
+                  provider: SourceControlProviderKind.make("github"),
+                  owner: "acme",
+                  name: "project",
+                });
+              },
+            }),
+            Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+              shouldRunOpportunisticWork: Effect.succeed(false),
+            }),
+            Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+            Layer.succeed(
+              Crypto.Crypto,
+              Crypto.make({
+                randomBytes: (size) => new Uint8Array(size).fill(1),
+                digest: (_algorithm, data) => Effect.succeed(data),
+              }),
+            ),
+            FileSystem.layerNoop({}),
+          );
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadPullRequestService.make;
+            yield* service.start();
+            yield* Deferred.succeed(activation, undefined);
+            expect(yield* Queue.take(lookupStarted)).toBe(false);
+            if (scenario === "promotion") {
+              yield* Queue.offer(domainEvents, {
+                ...base,
+                type: "thread.metadata-updated",
+                payload: { ...thread, branch: "feature/newer", lastVisitedAt: null },
+              });
+            }
+            yield* Queue.offer(domainEvents, completed);
+            if (scenario !== "in-flight") yield* Queue.offer(domainEvents, checkpoint);
+            yield* Queue.offer(domainEvents, marker);
+            yield* Queue.take(eventsConsumed);
+            yield* Deferred.succeed(releaseStartup, undefined);
+            if (scenario === "in-flight") {
+              expect(yield* Queue.take(lookupStarted)).toBe(true);
+              thread = { ...thread, branch: "feature/newest" };
+              yield* Queue.offerAll(domainEvents, [completed, checkpoint, marker]);
+              yield* Queue.take(eventsConsumed);
+              yield* Deferred.succeed(releaseRefresh, undefined);
+            }
+            yield* service.drain;
+            const expected = scenario === "in-flight" ? [false, true, true] : [false, true];
+            expect(lookups).toEqual(expected);
+            expect(identityRefreshes).toEqual(expected);
+            expect(branches).toEqual(
+              scenario === "in-flight"
+                ? ["feature/refresh", "feature/refresh", "feature/newest"]
+                : ["feature/refresh", "feature/refresh"],
+            );
+          }).pipe(Effect.provide(dependencies));
+        }),
+      ),
+  );
 
   it.effect("an event for one thread reads that thread's shell, not every thread's", () =>
     Effect.scoped(

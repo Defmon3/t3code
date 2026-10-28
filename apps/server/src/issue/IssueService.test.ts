@@ -780,7 +780,10 @@ it.effect("resolves a cold project shell before its first issue detail", () =>
     const resolved: string[] = [];
     let detailCalls = 0;
     const service = yield* makeService({
-      projects: [{ ...hydrated, repositoryIdentity: null }],
+      projects: [
+        { ...hydrated, repositoryIdentity: null },
+        project({ id: "p2", title: "unrelated", workspaceRoot: "/b" }),
+      ],
       resolveRepositoryIdentity: (cwd) => {
         resolved.push(cwd);
         return Effect.succeed(hydrated.repositoryIdentity ?? null);

@@ -359,8 +359,14 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const worker = yield* makeDrainableWorker((request: RefreshRequest) =>
-    synchronize(request).pipe(
+  const pendingRefreshes = new Map<ThreadId | null, RefreshRequest>();
+  const worker = yield* makeDrainableWorker((threadId: ThreadId | null) =>
+    Effect.suspend(() => {
+      const request = pendingRefreshes.get(threadId);
+      if (request === undefined) return Effect.die("Missing pending pull request refresh");
+      pendingRefreshes.delete(threadId);
+      return synchronize(request);
+    }).pipe(
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
@@ -370,6 +376,17 @@ export const make = Effect.gen(function* () {
       ),
     ),
   );
+
+  const enqueue = (request: RefreshRequest) =>
+    Effect.suspend(() => {
+      const pending = pendingRefreshes.get(request.threadId);
+      pendingRefreshes.set(request.threadId, {
+        threadId: request.threadId,
+        refresh: request.refresh || (pending?.refresh ?? false),
+        backfill: request.backfill || (pending?.backfill ?? false),
+      });
+      return pending === undefined ? worker.enqueue(request.threadId) : Effect.void;
+    }).pipe(Effect.uninterruptible);
 
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
@@ -389,14 +406,14 @@ export const make = Effect.gen(function* () {
             break;
           discoveryInputs.set(event.threadId, inputs);
         }
-        return worker.enqueue({ threadId: event.threadId, refresh: false });
+        return enqueue({ threadId: event.threadId, refresh: false });
       case "thread.deleted":
       case "thread.archived":
         discoveryInputs.delete(event.threadId);
         break;
       case "thread.unsettled":
       case "checkpoint.captured":
-        return worker.enqueue({ threadId: event.threadId, refresh: true });
+        return enqueue({ threadId: event.threadId, refresh: true });
       case "run.updated":
         if (
           event.payload.status === "completed" ||
@@ -404,7 +421,7 @@ export const make = Effect.gen(function* () {
           event.payload.status === "cancelled" ||
           event.payload.status === "interrupted"
         ) {
-          return worker.enqueue({ threadId: event.threadId, refresh: true });
+          return enqueue({ threadId: event.threadId, refresh: true });
         }
         break;
     }
@@ -417,13 +434,13 @@ export const make = Effect.gen(function* () {
     yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, processEvent));
     yield* forkParked(
       Effect.gen(function* () {
-        yield* worker.enqueue({ threadId: null, refresh: false, backfill: true });
+        yield* enqueue({ threadId: null, refresh: false, backfill: true });
         yield* worker.drain;
         yield* Effect.gen(function* () {
           // The sweep only catches pull requests opened outside a turn, which
           // nobody sees without a client. Thread events still refresh headless work.
           if (!(yield* backgroundPolicy.shouldRunOpportunisticWork)) return;
-          yield* worker.enqueue({ threadId: null, refresh: false });
+          yield* enqueue({ threadId: null, refresh: false });
           yield* worker.drain;
         }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.delay("1 minute"));
       }).pipe(Effect.asVoid),
