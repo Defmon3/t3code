@@ -1006,7 +1006,16 @@ export const layerWithOptions = (
                     reason: input.reason,
                   });
                   const records = {
-                    entry,
+                    entry:
+                      input.detachedThreadId === undefined
+                        ? entry
+                        : {
+                            ...entry,
+                            attachedThreadIds: new Set([
+                              ...entry.attachedThreadIds,
+                              input.detachedThreadId,
+                            ]),
+                          },
                     reason: input.reason,
                     ...(input.detail === undefined ? {} : { detail: input.detail }),
                     releasedBackgroundTasks,

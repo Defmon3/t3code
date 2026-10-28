@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import * as Deferred from "effect/Deferred";
@@ -100,6 +101,108 @@ const runTransportedScript = (command: ReadonlyArray<string>) =>
   });
 
 describe("ssh tunnel scripts", () => {
+  it.effect.each([true, false])(
+    "checks external server protocol before reuse (compatible: %s)",
+    (compatible) => {
+      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+      let launches = 0;
+      let stops = 0;
+      const spawner = ChildProcessSpawner.make((command) => {
+        const args = commandArgs(command);
+        if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
+        if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
+        if (args.some((arg) => arg.includes("server-runtime.json"))) {
+          return Effect.succeed(
+            makeSuccessfulProcess(
+              `${compatible ? "loaded profile\n" : ""}{"pid":123,"port":3773,"origin":"http://127.0.0.1:3773"}`,
+            ),
+          );
+        }
+        if (args.some((arg) => arg.includes("kill -0 123")))
+          return Effect.succeed(makeSuccessfulProcess("alive"));
+        if (args.at(-2) === "--") launches += 1;
+        else stops += 1;
+        return Effect.succeed(makeSuccessfulProcess(""));
+      });
+      const http = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              request.url.endsWith("/.well-known/t3/environment")
+                ? JSON.stringify({
+                    environmentId: "test",
+                    label: "test",
+                    platform: { os: "linux", arch: "x64" },
+                    serverVersion: "1.0.0",
+                    orchestrationProtocolVersion:
+                      ORCHESTRATION_PROTOCOL_VERSION + (compatible ? 0 : 1),
+                    capabilities: {},
+                  })
+                : "",
+              { status: 200 },
+            ),
+          ),
+        ),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, http),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+      );
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const result = yield* Effect.result(manager.ensureEnvironment(target));
+        if (Result.isSuccess(result)) {
+          assert.isTrue(compatible);
+          assert.equal(result.success.remotePort, 3773);
+          assert.equal(result.success.remoteServerKind, "external");
+          yield* manager.disconnectEnvironment(target);
+        } else {
+          assert.isFalse(compatible);
+          assert.equal(result.failure._tag, "SshLaunchError");
+        }
+        assert.equal(launches, 0);
+        assert.equal(stops, 0);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    },
+  );
+  it.effect.each(["", "managed"])("uses the launcher when the recorded process is %s", (status) => {
+    const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+    let launches = 0;
+    const spawner = ChildProcessSpawner.make((command) => {
+      const args = commandArgs(command);
+      if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
+      if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
+      if (args.some((arg) => arg.includes("server-runtime.json"))) {
+        return Effect.succeed(
+          makeSuccessfulProcess('{"pid":123,"port":3773,"origin":"http://127.0.0.1:3773"}'),
+        );
+      }
+      if (args.some((arg) => arg.includes("kill -0 123")))
+        return Effect.succeed(makeSuccessfulProcess(status));
+      launches += 1;
+      return Effect.succeed(makeSuccessfulProcess('{"remotePort":3774,"serverKind":"managed"}'));
+    });
+    const layer = Layer.mergeAll(
+      NodeServices.layer,
+      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Layer.succeed(HttpClient.HttpClient, testHttpClient),
+      Layer.succeed(NetService.NetService, testNetService),
+      SshAuth.SshPasswordPrompt.disabledLayer,
+      SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const result = yield* manager.ensureEnvironment(target);
+      assert.equal(result.remotePort, 3774);
+      assert.equal(result.remoteServerKind, "managed");
+      assert.equal(launches, 1);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
   it.effect(
     "executes a large quoted Unicode script and preserves its arguments without SSH stdin",
     () =>
@@ -222,13 +325,15 @@ describe("ssh tunnel scripts", () => {
       );
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.succeed(
-          commandArgs(command).includes("-N")
-            ? {
-                ...makeSuccessfulProcess(""),
-                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
-                stderr: Stream.make(output.subarray(0, output.length - 1), output.subarray(-1)),
-              }
-            : makeSuccessfulProcess('{"remotePort":3773}\n'),
+          commandArgs(command).some((arg) => arg.includes("server-runtime.json"))
+            ? makeSuccessfulProcess("")
+            : commandArgs(command).includes("-N")
+              ? {
+                  ...makeSuccessfulProcess(""),
+                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+                  stderr: Stream.make(output.subarray(0, output.length - 1), output.subarray(-1)),
+                }
+              : makeSuccessfulProcess('{"remotePort":3773}\n'),
         ),
       );
       const layer = Layer.mergeAll(
@@ -268,24 +373,26 @@ describe("ssh tunnel scripts", () => {
       const diagnostic = "Permission denied (publickey)";
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.succeed(
-          commandArgs(command).includes("-N")
-            ? {
-                ...makeSuccessfulProcess(""),
-                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
-                stderr: Stream.make(new TextEncoder().encode(diagnostic)).pipe(
-                  Stream.concat(
-                    Stream.fail(
-                      PlatformError.systemError({
-                        _tag: "Unknown",
-                        module: "Stream",
-                        method: "read",
-                        description: "stderr read failed",
-                      }),
+          commandArgs(command).some((arg) => arg.includes("server-runtime.json"))
+            ? makeSuccessfulProcess("")
+            : commandArgs(command).includes("-N")
+              ? {
+                  ...makeSuccessfulProcess(""),
+                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+                  stderr: Stream.make(new TextEncoder().encode(diagnostic)).pipe(
+                    Stream.concat(
+                      Stream.fail(
+                        PlatformError.systemError({
+                          _tag: "Unknown",
+                          module: "Stream",
+                          method: "read",
+                          description: "stderr read failed",
+                        }),
+                      ),
                     ),
                   ),
-                ),
-              }
-            : makeSuccessfulProcess('{"remotePort":3773}\n'),
+                }
+              : makeSuccessfulProcess('{"remotePort":3773}\n'),
         ),
       );
       const layer = Layer.mergeAll(
@@ -338,6 +445,8 @@ describe("ssh tunnel scripts", () => {
           Effect.gen(function* () {
             const args = commandArgs(command);
             const isTarget = args.includes(target.alias);
+            if (args.some((arg) => arg.includes("server-runtime.json")))
+              return makeSuccessfulProcess("");
             if (args.includes("-G")) {
               if (isTarget && ++resolutions === 4) {
                 yield* Deferred.succeed(reconnectsStarted, undefined);

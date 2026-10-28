@@ -2297,6 +2297,7 @@ it.effect(
       const state = yield* Ref.make(emptyState);
       const effect = Effect.gen(function* () {
         const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
         const { threadId, providerSessionId, rosters } = yield* openSessionWithBackgroundCommand(
           "provider-session-manager-detach-roster",
         );
@@ -2306,6 +2307,10 @@ it.effect(
 
         assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
         assert.deepStrictEqual(yield* rosters, [[], ["dev-server"]]);
+        assert.equal(
+          (yield* projections.getThreadProjection(threadId)).providerSessions.at(-1)?.status,
+          "stopped",
+        );
       });
 
       yield* effect.pipe(

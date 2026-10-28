@@ -3866,6 +3866,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : (providerSwitchPlan?.releaseProviderSessionIds ?? []),
     );
     if (detachSessionIds.size > 0) {
+      if (
+        command.type === "thread.metadata.update" &&
+        command.worktreePath !== undefined &&
+        command.worktreePath !== thread.worktreePath
+      ) {
+        const projection = yield* projectionStore
+          .getThreadRecords(command.threadId, ["providerThreads", "providerTurns"])
+          .pipe(mapDispatchError(command));
+        for (const turn of projection.providerTurns) {
+          const providerThread = projection.providerThreads.find(
+            (candidate) => candidate.id === turn.providerThreadId,
+          );
+          if (
+            turn.status !== "running" ||
+            providerThread?.providerSessionId == null ||
+            !detachSessionIds.has(providerThread.providerSessionId)
+          )
+            continue;
+          const providerSessionId = providerThread.providerSessionId;
+          yield* Ref.update(effects, (existing) => [
+            ...existing,
+            {
+              id: `effect:${command.commandId}:provider-turn.interrupt:${turn.id}`,
+              commandId: command.commandId,
+              threadId: command.threadId,
+              request: {
+                type: "provider-turn.interrupt",
+                providerSessionId,
+                providerThreadId: providerThread.id,
+                providerTurnId: turn.id,
+              },
+            } satisfies PendingOrchestrationEffectV2,
+          ]);
+        }
+      }
       const liveSessions = (providerContext?.providerSessions ?? []).filter(
         (session) =>
           detachSessionIds.has(session.id) &&

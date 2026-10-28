@@ -63,6 +63,114 @@ interface ActiveTurn {
   readonly providerTurnId: ProviderTurnId;
 }
 
+it.live.each(["exclusive", "shared"] as const)(
+  "interrupts a running %s session and starts its queued continuation in the new workspace",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace(`workspace-change-before-${mode}`);
+        const nextCwd = yield* checkpointWorkspace(`workspace-change-after-${mode}`);
+        const threadId = ThreadId.make(`thread:workspace-change-running-${mode}`);
+        const state = yield* Ref.make<RestartAdapterState>({
+          activeTurn: null,
+          opened: [],
+          started: [],
+          closedSessionCount: 0,
+          failedReplacementOpen: true,
+        });
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("workspace-change:create"),
+            threadId,
+            projectId: ProjectId.make("project:workspace-change"),
+            title: "Workspace change",
+            modelSelection: initialSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: cwd,
+          });
+          const running = yield* eventSink.stream({ threadId }).pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "provider-turn.updated" &&
+                stored.event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          const send = (id: string, dispatchMode: "start_immediately" | "queue_after_active") =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`workspace-change:${id}`),
+              threadId,
+              messageId: MessageId.make(`workspace-change:${id}`),
+              text: id,
+              attachments: [],
+              modelSelection: initialSelection,
+              dispatchMode: { type: dispatchMode },
+            });
+          yield* send("first", "start_immediately");
+          yield* Fiber.join(running);
+          yield* worker.drain();
+          yield* send("continuation", "queue_after_active");
+          const queuedRun = (yield* orchestrator.getThreadProjection(threadId)).runs[1];
+          if (queuedRun === undefined) return yield* Effect.die("queued continuation is missing");
+          const resumed = yield* eventSink.stream({ threadId }).pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "provider-turn.updated" &&
+                stored.event.runId === queuedRun.id &&
+                stored.event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          yield* orchestrator.dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("workspace-change:bind"),
+            threadId,
+            worktreePath: nextCwd,
+          });
+          yield* worker.drain();
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(projection.runs[0]?.status, "interrupted");
+          yield* Fiber.join(resumed);
+          yield* worker.drain();
+          assert.deepEqual(
+            (yield* Ref.get(state)).started.map((turn) => turn.cwd),
+            [cwd, nextCwd],
+          );
+          assert.equal((yield* Ref.get(state)).closedSessionCount, mode === "exclusive" ? 1 : 0);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              { name: "workspace-change-running" },
+              ProviderAdapterRegistry.layerSingle(
+                makeRestartAdapter(
+                  state,
+                  mode === "exclusive" ? exclusiveCapabilities : pooledCapabilities,
+                  initialSelection.instanceId,
+                  false,
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    ),
+);
+
 interface RestartAdapterState {
   readonly activeTurn: ActiveTurn | null;
   readonly opened: ReadonlyArray<{
@@ -82,6 +190,7 @@ function makeRestartAdapter(
   state: Ref.Ref<RestartAdapterState>,
   sessionCapabilities: OrchestrationV2ProviderCapabilities = pooledCapabilities,
   providerInstanceId = initialSelection.instanceId,
+  publishInterrupt = true,
 ): ProviderAdapter.ProviderAdapterV2["Service"] {
   return {
     instanceId: providerInstanceId,
@@ -257,6 +366,10 @@ function makeRestartAdapter(
             Effect.gen(function* () {
               const active = (yield* Ref.get(state)).activeTurn;
               if (active !== null) {
+                if (!publishInterrupt) {
+                  yield* Ref.update(state, (current) => ({ ...current, activeTurn: null }));
+                  return;
+                }
                 const updatedAt = yield* DateTime.now;
                 yield* Queue.offer(events, {
                   type: "provider_thread.updated",

@@ -1,6 +1,9 @@
-import type {
-  DesktopSshEnvironmentBootstrap,
-  DesktopSshEnvironmentTarget,
+import {
+  ExecutionEnvironmentDescriptor,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  PortSchema,
+  type DesktopSshEnvironmentBootstrap,
+  type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
 import { waitForHttpReady as waitForHttpReadyShared } from "@t3tools/shared/httpReadiness";
 import { cliReleaseDownloadBaseUrl } from "@t3tools/shared/cliRelease";
@@ -19,7 +22,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeZlib from "node:zlib";
 
@@ -163,6 +166,15 @@ const RemotePairingResult = Schema.Struct({
 
 const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
 const decodeRemotePairingResult = Schema.decodeEffect(fromLenientJson(RemotePairingResult));
+const decodeRemoteRuntime = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      pid: Schema.Int.check(Schema.isGreaterThan(0)),
+      port: PortSchema,
+      origin: Schema.String,
+    }),
+  ),
+);
 
 const decodeRemoteJsonOutput = <A, E>(
   stdout: string,
@@ -1134,6 +1146,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   readonly authOptions: SshAuth.SshAuthOptions;
   readonly remoteServerKind: "external" | "managed" | null;
   readonly scope: Scope.Closeable;
+  readonly readinessTimeoutMs?: number;
 }): Effect.fn.Return<
   SshTunnelEntry,
   SshCommandError | SshInvalidTargetError | SshReadinessError,
@@ -1301,7 +1314,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   yield* Effect.raceFirst(
     waitForHttpReady({
       baseUrl: input.httpBaseUrl,
-      timeoutMs: SSH_READY_TIMEOUT_MS,
+      timeoutMs: input.readinessTimeoutMs ?? SSH_READY_TIMEOUT_MS,
     }),
     exitFailure,
   ).pipe(
@@ -1528,6 +1541,117 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     });
   });
 
+  const discoverExternalServer = Effect.fn("ssh/tunnel.discoverExternalServer")(function* (input: {
+    readonly key: string;
+    readonly resolvedTarget: DesktopSshEnvironmentTarget;
+  }): Effect.fn.Return<
+    SshTunnelEntry | null,
+    SshEnvironmentEffectError,
+    SshEnvironmentEffectContext
+  > {
+    const stateKey = yield* remoteStateKey(input.resolvedTarget);
+    const runtimeOutput = yield* runWithSshAuth({
+      key: input.key,
+      target: input.resolvedTarget,
+      operation: (authOptions) =>
+        runSshCommand(input.resolvedTarget, {
+          ...authOptions,
+          remoteCommandArgs: [
+            "sh",
+            "-c",
+            shellSingleQuote(
+              'if [ -f "$HOME/.t3/userdata/server-runtime.json" ]; then cat "$HOME/.t3/userdata/server-runtime.json"; fi',
+            ),
+          ],
+        }),
+    });
+    if (runtimeOutput.stdout.trim() === "") return null;
+    const runtime = yield* decodeRemoteJsonOutput(runtimeOutput.stdout, decodeRemoteRuntime).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SshLaunchError({
+            message: "The remote server runtime descriptor is invalid.",
+            stdout: "",
+            cause,
+          }),
+      ),
+    );
+    const processProbe = yield* runWithSshAuth({
+      key: input.key,
+      target: input.resolvedTarget,
+      operation: (authOptions) =>
+        runSshCommand(input.resolvedTarget, {
+          ...authOptions,
+          remoteCommandArgs: [
+            "sh",
+            "-c",
+            shellSingleQuote(
+              `if [ "$(cat "$HOME/.t3/ssh-launch/${stateKey}/managed" 2>/dev/null)" = managed ] && [ "$(cat "$HOME/.t3/ssh-launch/${stateKey}/pid" 2>/dev/null)" = ${runtime.pid} ]; then printf managed; elif kill -0 ${runtime.pid} 2>/dev/null; then printf alive; fi`,
+            ),
+          ],
+        }),
+    });
+    if (processProbe.stdout.trim() === "managed") return null;
+    if (processProbe.stdout.trim() !== "alive") return null;
+    const origin = URL.parse(runtime.origin);
+    if (
+      origin?.protocol !== "http:" ||
+      !isLoopbackHostname(origin.hostname) ||
+      Number(origin.port) !== runtime.port
+    ) {
+      return yield* new SshLaunchError({
+        message: "The remote server runtime origin is invalid.",
+        stdout: "",
+      });
+    }
+    const localPort = yield* reserveLocalTunnelPort();
+    const scope = yield* Scope.make("sequential");
+    return yield* Effect.gen(function* () {
+      const attempt = yield* runWithSshAuth({
+        key: input.key,
+        target: input.resolvedTarget,
+        operation: (authOptions) =>
+          startSshTunnel({
+            key: input.key,
+            resolvedTarget: input.resolvedTarget,
+            remotePort: runtime.port,
+            localPort,
+            httpBaseUrl: `http://127.0.0.1:${localPort}/`,
+            wsBaseUrl: `ws://127.0.0.1:${localPort}/`,
+            authOptions,
+            remoteServerKind: "external",
+            readinessTimeoutMs: REMOTE_REUSE_READY_TIMEOUT_MS,
+            scope,
+          }),
+      });
+      const client = yield* HttpClient.HttpClient;
+      const descriptor = yield* client
+        .execute(HttpClientRequest.get(`${attempt.httpBaseUrl}.well-known/t3/environment`))
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(ExecutionEnvironmentDescriptor)),
+          Effect.timeout(REMOTE_REUSE_READY_TIMEOUT_MS),
+          Effect.mapError(
+            (cause) =>
+              new SshLaunchError({
+                message: "The remote server descriptor could not be verified.",
+                stdout: "",
+                cause,
+              }),
+          ),
+        );
+      if ((descriptor.orchestrationProtocolVersion ?? 1) !== ORCHESTRATION_PROTOCOL_VERSION) {
+        return yield* new SshLaunchError({
+          message: "The remote server uses an incompatible orchestration protocol.",
+          stdout: "",
+        });
+      }
+      return attempt;
+    }).pipe(
+      Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Scope.close(scope, Exit.void))),
+    );
+  });
+
   const createTunnelEntry = Effect.fn("ssh/tunnel.ensureTunnelEntry.create")(function* (input: {
     readonly key: string;
     readonly resolvedTarget: DesktopSshEnvironmentTarget;
@@ -1538,12 +1662,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...sshRunnerLogFields(input.runner),
       key: input.key,
     });
-    const remoteLaunch = yield* runWithSshAuth({
-      key: input.key,
-      target: input.resolvedTarget,
-      operation: (authOptions) =>
-        launchOrReuseRemoteServer(input.resolvedTarget, authOptions, input.runner),
-    });
+    const discovered = yield* discoverExternalServer(input);
+    const remoteLaunch =
+      discovered === null
+        ? yield* runWithSshAuth({
+            key: input.key,
+            target: input.resolvedTarget,
+            operation: (authOptions) =>
+              launchOrReuseRemoteServer(input.resolvedTarget, authOptions, input.runner),
+          })
+        : { remotePort: discovered.remotePort, remoteServerKind: "external" as const };
     const remotePort = remoteLaunch.remotePort;
     yield* Effect.logDebug("ssh.environment.remotePort.ready", {
       ...sshTargetLogFields(input.resolvedTarget),
@@ -1551,7 +1679,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       remotePort,
       remoteServerKind: remoteLaunch.remoteServerKind,
     });
-    const localPort = yield* reserveLocalTunnelPort();
+    const localPort = discovered?.localPort ?? (yield* reserveLocalTunnelPort());
     const httpBaseUrl = `http://127.0.0.1:${localPort}/`;
     const wsBaseUrl = `ws://127.0.0.1:${localPort}/`;
     yield* Effect.logDebug("ssh.environment.localPort.reserved", {
@@ -1560,27 +1688,31 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       localPort,
       remotePort,
     });
-    const entryScope = yield* Scope.make("sequential");
-    const tunnelEntry = yield* runWithSshAuth({
-      key: input.key,
-      target: input.resolvedTarget,
-      operation: (authOptions) =>
-        startSshTunnel({
-          key: input.key,
-          resolvedTarget: input.resolvedTarget,
-          remotePort,
-          localPort,
-          httpBaseUrl,
-          wsBaseUrl,
-          authOptions,
-          remoteServerKind: remoteLaunch.remoteServerKind,
-          scope: entryScope,
-        }),
-    }).pipe(
-      Effect.onExit((exit) =>
-        Exit.isSuccess(exit) ? Effect.void : Scope.close(entryScope, Exit.void).pipe(Effect.ignore),
-      ),
-    );
+    const entryScope = discovered?.scope ?? (yield* Scope.make("sequential"));
+    const tunnelEntry =
+      discovered ??
+      (yield* runWithSshAuth({
+        key: input.key,
+        target: input.resolvedTarget,
+        operation: (authOptions) =>
+          startSshTunnel({
+            key: input.key,
+            resolvedTarget: input.resolvedTarget,
+            remotePort,
+            localPort,
+            httpBaseUrl,
+            wsBaseUrl,
+            authOptions,
+            remoteServerKind: remoteLaunch.remoteServerKind,
+            scope: entryScope,
+          }),
+      }).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Scope.close(entryScope, Exit.void).pipe(Effect.ignore),
+        ),
+      ));
     tunnels.set(input.key, tunnelEntry);
     const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
     const cryptoService = yield* Crypto.Crypto;
@@ -1599,7 +1731,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             forceKillAfter: TUNNEL_SHUTDOWN_TIMEOUT_MS,
           })
           .pipe(Effect.ignore);
-        if (!stopRemote) {
+        if (!stopRemote || tunnelEntry.remoteServerKind === "external") {
           return;
         }
         yield* Effect.logDebug("ssh.environment.tunnel.finalizer.start", {
@@ -1789,11 +1921,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             yield* closeTunnelEntry(entry);
           }).pipe(Effect.uninterruptible);
         }
-        yield* runWithSshAuth({
-          key,
-          target: resolvedTarget,
-          operation: (authOptions) => stopRemoteServer(resolvedTarget, authOptions),
-        });
+        if (entry?.remoteServerKind !== "external")
+          yield* runWithSshAuth({
+            key,
+            target: resolvedTarget,
+            operation: (authOptions) => stopRemoteServer(resolvedTarget, authOptions),
+          });
         yield* Effect.logInfo("ssh.environment.disconnect.succeeded", {
           ...sshTargetLogFields(resolvedTarget),
           key,
