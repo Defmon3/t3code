@@ -52,8 +52,8 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeOS from "node:os";
+import * as NodeNet from "node:net";
 
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import packageJson from "../../../package.json" with { type: "json" };
 import * as ServerConfig from "../../config.ts";
 import * as HookApprovalRegistry from "../../hooks/HookApprovalRegistry.ts";
@@ -73,6 +73,15 @@ const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerRep
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
 const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJson);
 const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
+const decodeBrowserPermission = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      result: Schema.Struct({
+        payload: Schema.fromJsonString(Schema.Struct({ allowed: Schema.Boolean })),
+      }),
+    }),
+  ),
+);
 
 describe("CodexAdapterV2 context usage", () => {
   it("uses the current context rather than cumulative processed tokens", () => {
@@ -808,11 +817,13 @@ describe("CodexAdapterV2 process spawning", () => {
 
       assert.deepEqual(spawnedCommands, [path.join(NodeOS.homedir(), "bin", "codex")]);
       assert.equal(spawnedEnvironments[0]?.T3_HOOK_APPROVAL_TOKEN, "codex-hook-token");
+      assert.isString(spawnedEnvironments[0]?.BROWSER_USE_ACCESS_EXECUTOR_ID);
+      assert.isString(spawnedEnvironments[0]?.BROWSER_USE_ACCESS_PIPE_PATH);
+      assert.isString(spawnedEnvironments[0]?.BROWSER_USE_ACCESS_VERIFYING_IDENTITY);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
       ),
-      Effect.provideService(HostProcess.Platform, "linux"),
     ),
   );
 });
@@ -1038,9 +1049,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const changes = yield* makeChangeSignal;
       const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
         [];
+      let browserEnvironment: NodeJS.ProcessEnv = {};
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
-          Layer.build(CodexReplay.layerReplay(transcript)).pipe(
+          Effect.sync(() => {
+            browserEnvironment = openInput.environment;
+          }).pipe(
+            Effect.andThen(Layer.build(CodexReplay.layerReplay(transcript))),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -1145,11 +1160,125 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         terminalEvents,
         subagentUpdates,
         hasPendingBackgroundWork,
+        browserEnvironment: () => browserEnvironment,
         firstTerminal: Deferred.await(firstTerminal),
         until: changes.until,
         awaitTerminal: (count: number) => changes.until(() => terminalEvents().length >= count),
       };
     });
+
+  it.live.each([false, true])(
+    "authorizes browser access only for a permitted active native turn (completed=%s)",
+    (completed) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "browser-session";
+        const nativeTurnId = "browser-turn";
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: "browser-permission",
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" }),
+              ...(completed
+                ? [
+                    {
+                      type: "emit_inbound" as const,
+                      frame: {
+                        method: "turn/completed",
+                        params: {
+                          threadId: nativeThreadId,
+                          turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                        },
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          }),
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("browser-attempt"),
+            text: "work",
+          }),
+        );
+        if (completed) yield* harness.firstTerminal;
+        const environment = harness.browserEnvironment();
+        const requestPermission = (sessionId: string, turnId: string) =>
+          Effect.tryPromise(
+            () =>
+              new Promise<boolean>((resolve, reject) => {
+                const endpoint = environment.BROWSER_USE_ACCESS_PIPE_PATH;
+                if (endpoint === undefined) {
+                  reject(new Error("Missing browser authorization endpoint."));
+                  return;
+                }
+                const socket = NodeNet.createConnection(endpoint);
+                let response = Buffer.alloc(0);
+                socket.once("error", reject);
+                socket.once("connect", () => {
+                  const body = Buffer.from(
+                    JSON.stringify({
+                      jsonrpc: "2.0",
+                      id: 1,
+                      method: "browser/access",
+                      params: {
+                        executorId: environment.BROWSER_USE_ACCESS_EXECUTOR_ID,
+                        sessionId,
+                        turnId,
+                        nonce: "browser-nonce",
+                      },
+                    }),
+                  );
+                  const header = Buffer.alloc(4);
+                  if (NodeOS.endianness() === "LE") header.writeUInt32LE(body.length);
+                  else header.writeUInt32BE(body.length);
+                  socket.write(Buffer.concat([header, body]));
+                });
+                socket.on("data", (chunk) => {
+                  response = Buffer.concat([response, chunk]);
+                  if (response.length < 4) return;
+                  const length =
+                    NodeOS.endianness() === "LE"
+                      ? response.readUInt32LE(0)
+                      : response.readUInt32BE(0);
+                  if (response.length < length + 4) return;
+                  const decoded = decodeBrowserPermission(
+                    response.subarray(4, length + 4).toString("utf8"),
+                  );
+                  socket.destroy();
+                  resolve(decoded.result.payload.allowed);
+                });
+              }),
+          );
+        assert.isFalse(yield* requestPermission(nativeThreadId, nativeTurnId));
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        for (const enabled of [true, false]) {
+          yield* sessions.set({
+            environmentId: EnvironmentId.make("browser-environment"),
+            threadId: harness.threadId,
+            providerSessionId: "browser-provider-session",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer test",
+            browserToolsAvailable: enabled,
+          });
+          assert.equal(
+            yield* requestPermission(nativeThreadId, nativeTurnId),
+            enabled && !completed,
+          );
+          assert.isFalse(yield* requestPermission("unknown-session", nativeTurnId));
+          assert.isFalse(yield* requestPermission(nativeThreadId, "unknown-turn"));
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
 
   it.effect.each(["supported", "unsupported", "invalid"] as const)(
     "delivers native history with %s app-server protocol",

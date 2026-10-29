@@ -1,4 +1,5 @@
 import * as DocumentText from "../../provider/DocumentText.ts";
+import * as CodexBrowserAccess from "../../provider/CodexBrowserAccess.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -1648,6 +1649,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
+        const browserAccess = yield* CodexBrowserAccess.make({
+          authorize: Effect.fn("CodexAdapterV2.authorizeBrowserAccess")(function* ({
+            sessionId,
+            turnId,
+          }: {
+            readonly sessionId: string;
+            readonly turnId: string;
+          }) {
+            const context = (yield* Ref.get(activeTurns)).get(turnId);
+            if (context?.providerThread.nativeThreadRef?.nativeId !== sessionId) return false;
+            const mcpSession = yield* readMcpSession(context.projectionThreadId);
+            return mcpSession?.browserToolsAvailable === true;
+          }),
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: CODEX_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          ),
+        );
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
@@ -1657,6 +1682,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           environment: {
             ...(resolvedRuntime?.environment ?? adapterOptions.environment),
             ...input.hookApprovalEnvironment,
+            ...browserAccess.environment,
           },
         });
         const additionalContextByThread = yield* Ref.make(
@@ -1742,7 +1768,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
         );
-        const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         const turnTokenUsageByThread = new Map<string, CodexTurnTokenUsageState>();
         const usageStateForThread = (nativeThreadId: string) => {
           let state = turnTokenUsageByThread.get(nativeThreadId);
