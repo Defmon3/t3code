@@ -128,6 +128,9 @@ jobs:
 
       - name: Build approval explanation worker
         uses: astral-sh/setup-uv@v7
+        with:
+          working-directory: apps/server/approval-worker
+          cache-dependency-glob: uv.lock
 
       - name: Package approval explanation worker
         shell: bash
