@@ -50,6 +50,7 @@ export const handleHookApprovalRequest = Effect.fn("HookApprovalHttp.handleHookA
       reason: input.reason,
       cwd: input.cwd,
       ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.bypass ? { bypass: input.bypass } : {}),
     });
     return HttpServerResponse.jsonUnsafe(response, {
       headers: { "cache-control": "no-store" },

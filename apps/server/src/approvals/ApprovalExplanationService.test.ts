@@ -13,6 +13,7 @@ import {
   TurnItemId,
   type ApprovalExplanationInput,
   type ApprovalExplanationContent,
+  type HookApprovalBypass,
   type OrchestrationV2RuntimeRequest,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -42,6 +43,18 @@ const nodeId = NodeId.make("approval-node");
 const modelSelection = createModelSelection(ProviderInstanceId.make("codex"), "test-model");
 const nativeInput: ApprovalExplanationInput = { threadId, requestId, source: "native" };
 const command = "git restore --source=HEAD --staged --worktree -- src/app.ts";
+const bypass = {
+  rule: "destructive-command",
+  technique: "shell-wrapper",
+  tier: 1,
+  steps: [{ command, triggered: true }],
+  reasoning: "The wrapper restores the file.",
+  runtime: "codex",
+  model: "test-model",
+  sessionId: "",
+  threadTitle: "",
+  threadId: "",
+} satisfies HookApprovalBypass;
 const content = {
   judgement: { verdict: "unsafe", reason: "Discards staged and unstaged edits to src/app.ts." },
   operations: [
@@ -344,50 +357,65 @@ it.effect("starts generation when a pending request gains its command later", ()
   }),
 );
 
-it.effect("generates hook explanations before any client asks and caches the result", () =>
-  Effect.gen(function* () {
-    const started = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const completed = yield* Deferred.make<void>();
-    let requests = 0;
-    yield* runWith(
-      Effect.gen(function* () {
-        yield* seed;
-        const hooks = yield* Hooks.HookApprovalRegistry;
-        const credential = yield* hooks.issue({
-          threadId,
-          providerInstanceId: modelSelection.instanceId,
-        });
-        const snapshot = yield* hooks.subscribe().pipe(
-          Stream.filter((requests) => requests.length > 0),
-          Stream.runHead,
-          Effect.forkScoped,
-        );
-        const response = yield* hooks
-          .request(credential.token, { command, cwd: "/hook-workspace", reason: "Restore file" })
-          .pipe(Effect.forkScoped);
-        const request = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
-        yield* Deferred.await(started);
-        yield* Deferred.succeed(release, undefined);
-        yield* Deferred.await(completed);
-        const service = yield* ApprovalExplanations.ApprovalExplanationService;
-        expect(
-          yield* service.explain({ source: "hook", requestId: request.requestId, threadId }),
-        ).toEqual({ status: "ready", ...content });
-        expect(requests).toBe(1);
-        yield* hooks.respond({ requestId: request.requestId, decision: "deny" });
-        expect(yield* Fiber.join(response)).toEqual({ decision: "deny" });
-      }),
-      () =>
+it.effect.each([undefined, bypass])(
+  "generates hook explanations eagerly and caches the result (%j)",
+  (metadata) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const completed = yield* Deferred.make<void>();
+      let requests = 0;
+      yield* runWith(
         Effect.gen(function* () {
-          requests += 1;
-          yield* Deferred.succeed(started, undefined);
-          yield* Deferred.await(release);
-          yield* Deferred.succeed(completed, undefined);
-          return content;
+          yield* seed;
+          const hooks = yield* Hooks.HookApprovalRegistry;
+          const credential = yield* hooks.issue({
+            threadId,
+            providerInstanceId: modelSelection.instanceId,
+          });
+          const snapshot = yield* hooks.subscribe().pipe(
+            Stream.filter((requests) => requests.length > 0),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+          const response = yield* hooks
+            .request(credential.token, {
+              command,
+              cwd: "/hook-workspace",
+              reason: "Restore file",
+              ...(metadata ? { bypass: metadata } : {}),
+            })
+            .pipe(Effect.forkScoped);
+          const request = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
+          yield* Deferred.await(started);
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(completed);
+          const service = yield* ApprovalExplanations.ApprovalExplanationService;
+          expect(
+            yield* service.explain({ source: "hook", requestId: request.requestId, threadId }),
+          ).toEqual({ status: "ready", ...content });
+          expect(requests).toBe(1);
+          yield* hooks.respond({ requestId: request.requestId, decision: "deny" });
+          expect(yield* Fiber.join(response)).toEqual({ decision: "deny" });
         }),
-    );
-  }),
+        (request) =>
+          Effect.gen(function* () {
+            expect(request).toEqual({
+              cwd: "/hook-workspace",
+              workingDirectory: "/hook-workspace",
+              command,
+              reason: metadata
+                ? `Restore file\nBypass detection: ${JSON.stringify(metadata)}`
+                : "Restore file",
+            });
+            requests += 1;
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(release);
+            yield* Deferred.succeed(completed, undefined);
+            return content;
+          }),
+      );
+    }),
 );
 
 it.effect.each([

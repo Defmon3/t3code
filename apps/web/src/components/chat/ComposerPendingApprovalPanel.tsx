@@ -3,7 +3,8 @@ import {
   fullAccessOverrideExplanation,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { memo } from "react";
-import { ShieldIcon } from "lucide-react";
+import { hookApprovalBypassSteps } from "@t3tools/client-runtime/state/hook-approvals";
+import { ShieldIcon, ShieldAlertIcon } from "lucide-react";
 import { type PendingApproval } from "../../session-logic";
 import { InlineButton } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -26,8 +27,9 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   commandDetailId,
 }: ComposerPendingApprovalPanelProps) {
   const Detail = approval.requestKind === "mcp-elicitation" ? "span" : "code";
-  const fallbackLabel =
-    approval.requestKind === "mcp-elicitation"
+  const fallbackLabel = approval.bypass
+    ? "BYPASS ATTEMPT"
+    : approval.requestKind === "mcp-elicitation"
       ? "App access approval"
       : approval.requestKind === "command"
         ? "Command approval"
@@ -59,10 +61,18 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           approval.requestKind === "command" ? "text-xs" : "text-2xs",
         )}
       >
-        {approval.requestKind === "command" ? (
+        {approval.bypass ? (
+          <ShieldAlertIcon className="size-4 shrink-0 text-destructive" aria-hidden />
+        ) : approval.requestKind === "command" ? (
           <ShieldIcon className="size-4 shrink-0 text-warning" aria-hidden />
         ) : null}
-        <span className="shrink-0 font-medium text-warning">{fallbackLabel}</span>
+        <span
+          className={
+            approval.bypass ? "font-semibold text-destructive" : "shrink-0 font-medium text-warning"
+          }
+        >
+          {fallbackLabel}
+        </span>
         {approval.appName ? <span className="min-w-0 truncate">{approval.appName}</span> : null}
         {approval.fullAccessOverride ? (
           <Popover>
@@ -84,6 +94,15 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           <span className="ml-auto shrink-0 tabular-nums">1/{pendingCount}</span>
         ) : null}
       </span>
+      {approval.bypass ? (
+        <span className="flex w-full min-w-0 flex-col gap-1 text-sm wrap-anywhere">
+          <span className="font-semibold text-destructive">Rule: {approval.bypass.rule}</span>
+          <span>
+            Technique: {approval.bypass.technique} · Tier {approval.bypass.tier}
+          </span>
+          <span className="whitespace-pre-wrap">{approval.bypass.reasoning}</span>
+        </span>
+      ) : null}
       <Detail
         id={commandDetailId}
         aria-label={detailAriaLabel}
@@ -93,6 +112,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
             ? cn(
                 "whitespace-pre-wrap rounded-md border border-border bg-background/50 p-3 font-mono text-sm leading-relaxed wrap-anywhere",
                 commandExpanded ? "max-h-96" : "max-h-24",
+                approval.bypass && "border-destructive bg-destructive/10",
               )
             : approval.requestKind === "mcp-elicitation"
               ? "max-h-20 whitespace-pre-wrap font-sans wrap-break-word"
@@ -103,15 +123,47 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
       >
         {approval.responseCapability === "not_resumable"
           ? "Provider process is gone. Interrupt or restart the run to respond."
-          : (approval.command ?? approval.detail ?? fallbackLabel)}
+          : approval.bypass
+            ? hookApprovalBypassSteps(approval.bypass).map((step, index) => (
+                <span
+                  key={step.key}
+                  className={cn(
+                    "block whitespace-pre-wrap wrap-anywhere",
+                    step.triggered && "bg-destructive/10 font-semibold text-destructive",
+                  )}
+                >
+                  <span className="font-sans">
+                    Step {index + 1}
+                    {step.triggered ? " · TRIGGERED" : ""}:{" "}
+                  </span>
+                  {step.command}
+                </span>
+              ))
+            : (approval.command ?? approval.detail ?? fallbackLabel)}
       </Detail>
+      {approval.bypass ? (
+        <span className="flex w-full min-w-0 flex-col gap-1 text-xs wrap-anywhere">
+          <span>
+            Runtime: {approval.bypass.runtime} · Model: {approval.bypass.model}
+          </span>
+          {commandExpanded ? (
+            <>
+              <span>Session: {approval.bypass.sessionId}</span>
+              <span>Thread: {approval.bypass.threadTitle}</span>
+              <span>Thread ID: {approval.bypass.threadId}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">Expand to see session and thread details.</span>
+          )}
+        </span>
+      ) : null}
       {approval.cwd ? (
         <span className="flex w-full min-w-0 flex-wrap gap-x-3 gap-y-1 text-sm">
           <span className="font-medium">Working directory</span>
           <code className="min-w-0 wrap-anywhere">{approval.cwd}</code>
         </span>
       ) : null}
-      {approval.reason ? (
+      {approval.reason && approval.reason !== approval.bypass?.rule ? (
         <span
           className={cn(
             "w-full min-w-0 whitespace-pre-wrap text-muted-foreground wrap-break-word",

@@ -2,6 +2,7 @@ import {
   RuntimeRequestId,
   type EnvironmentId,
   type ExecutionEnvironmentCapabilities,
+  type HookApprovalBypass,
   type HookApprovalDecision,
   type HookApprovalDuration,
   type HookApprovalGrant,
@@ -64,6 +65,19 @@ const hookApprovalOptions = [
   { decision: "acceptForSession", label: "Approve for this session" },
   { decision: "accept", label: "Approve once" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
+
+const bypassApprovalOptions = hookApprovalOptions.filter(
+  (option) => option.decision !== "acceptForSession",
+);
+
+export function hookApprovalBypassSteps(bypass: HookApprovalBypass) {
+  const occurrences = new Map<string, number>();
+  return bypass.steps.map((step) => {
+    const occurrence = occurrences.get(step.command) ?? 0;
+    occurrences.set(step.command, occurrence + 1);
+    return { ...step, key: `${occurrence}:${step.command}` };
+  });
+}
 
 export function scopeHookApprovalRequests(
   environmentId: EnvironmentId,
@@ -133,19 +147,29 @@ export function createPendingHookApprovals(
         cwd: request.cwd,
         hookRequestId: request.requestId,
         reason: request.reason,
-        sessionApprovalScope: request.scope
-          ? `${scopeLabel}: ${request.scope.label}`
-          : unscopedDescription,
+        ...(request.bypass
+          ? { bypass: request.bypass }
+          : {
+              sessionApprovalScope: request.scope
+                ? `${scopeLabel}: ${request.scope.label}`
+                : unscopedDescription,
+            }),
         responseCapability: "live",
         supportsFeedback: true,
-        supportsTimedApproval,
+        supportsTimedApproval: supportsTimedApproval && request.bypass === undefined,
         detail: [
           request.reason,
           `Command:\n${request.command}`,
           `Working directory:\n${request.cwd}`,
-          request.scope ? `${scopeLabel}:\n${request.scope.label}` : unscopedDescription,
+          ...(request.bypass
+            ? [
+                `Bypass attempt: ${request.bypass.rule}`,
+                `Technique: ${request.bypass.technique} (tier ${request.bypass.tier})`,
+                request.bypass.reasoning,
+              ]
+            : [request.scope ? `${scopeLabel}:\n${request.scope.label}` : unscopedDescription]),
         ].join("\n\n"),
-        options: hookApprovalOptions,
+        options: request.bypass ? bypassApprovalOptions : hookApprovalOptions,
       },
     };
   });
@@ -193,6 +217,9 @@ export function hookApprovalResponseTarget(
   readonly environmentId: EnvironmentId;
   readonly input: EnvironmentRpcInput<typeof WS_METHODS.hookApprovalsRespond>;
 } {
+  if (request.bypass && (decision === "allow-session" || duration !== undefined)) {
+    throw new RangeError("Bypass attempts allow only a one-shot approval or rejection.");
+  }
   return {
     environmentId: request.environmentId,
     input: {

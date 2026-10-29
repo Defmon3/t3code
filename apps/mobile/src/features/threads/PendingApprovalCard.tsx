@@ -1,6 +1,9 @@
 import { Button } from "../../components/ui/Button";
 import type { ProviderApprovalOption, RuntimeRequestId, ScopedThreadRef } from "@t3tools/contracts";
-import { hookApprovalDurations } from "@t3tools/client-runtime/state/hook-approvals";
+import {
+  hookApprovalBypassSteps,
+  hookApprovalDurations,
+} from "@t3tools/client-runtime/state/hook-approvals";
 import { Menu } from "../../components/ui/Menu";
 import {
   FULL_ACCESS_OVERRIDE_QUESTION,
@@ -19,6 +22,7 @@ import {
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
 
 import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import type { PendingApproval } from "../../lib/threadActivity";
 import { cn } from "../../lib/cn";
 
@@ -37,6 +41,7 @@ const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
 ];
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
+  const bypass = props.approval.bypass;
   const options: ReadonlyArray<ProviderApprovalOption> =
     props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
   const warning = options.find((option) => option.warning)?.warning;
@@ -61,13 +66,44 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
     }
   }
   return (
-    <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
-      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-        Approval needed
-      </Text>
+    <View
+      className={cn(
+        "gap-2.5 rounded-[20px] border p-4",
+        bypass ? "border-danger-border bg-danger" : "border-border bg-card-alt",
+      )}
+    >
+      {bypass ? (
+        <View className="flex-row items-center gap-2">
+          <SymbolView
+            name="exclamationmark.triangle"
+            size={16}
+            tintColorClassName="accent-danger-foreground"
+          />
+          <Text className="min-w-0 flex-1 font-t3-bold text-sm text-danger-foreground">
+            BYPASS ATTEMPT
+          </Text>
+        </View>
+      ) : (
+        <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
+          Approval needed
+        </Text>
+      )}
       <Text className="font-t3-bold text-lg text-foreground">
         {props.approval.appName ?? props.approval.requestKind}
       </Text>
+      {bypass ? (
+        <View className="gap-1">
+          <Text selectable className="font-t3-bold text-sm text-danger-foreground">
+            Rule: {bypass.rule}
+          </Text>
+          <Text selectable className="text-sm text-foreground">
+            Technique: {bypass.technique} · Tier {bypass.tier}
+          </Text>
+          <Text selectable className="text-sm leading-normal text-foreground">
+            {bypass.reasoning}
+          </Text>
+        </View>
+      ) : null}
       {isCommand ? (
         <ScrollView
           className={
@@ -79,14 +115,58 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           accessibilityLabel="Command"
           showsVerticalScrollIndicator
         >
-          <Text selectable className="p-3 font-mono text-base leading-normal text-foreground">
-            {props.approval.command ?? props.approval.detail ?? "Command details unavailable"}
-          </Text>
+          {bypass ? (
+            <View className="gap-1 p-3">
+              {hookApprovalBypassSteps(bypass).map((step, index) => (
+                <Text
+                  key={step.key}
+                  selectable
+                  className={cn(
+                    "font-mono text-base leading-normal",
+                    step.triggered
+                      ? "bg-danger font-t3-bold text-danger-foreground"
+                      : "text-foreground",
+                  )}
+                >
+                  Step {index + 1}
+                  {step.triggered ? " · TRIGGERED" : ""}: {step.command}
+                </Text>
+              ))}
+            </View>
+          ) : (
+            <Text selectable className="p-3 font-mono text-base leading-normal text-foreground">
+              {props.approval.command ?? props.approval.detail ?? "Command details unavailable"}
+            </Text>
+          )}
         </ScrollView>
       ) : props.approval.detail ? (
         <Text className="font-sans text-sm leading-normal text-foreground-secondary">
           {props.approval.detail}
         </Text>
+      ) : null}
+      {bypass ? (
+        <View className="gap-1">
+          <Text selectable className="text-xs text-foreground">
+            Runtime: {bypass.runtime} · Model: {bypass.model}
+          </Text>
+          {commandExpanded ? (
+            <>
+              <Text selectable className="text-xs text-foreground">
+                Session: {bypass.sessionId}
+              </Text>
+              <Text selectable className="text-xs text-foreground">
+                Thread: {bypass.threadTitle}
+              </Text>
+              <Text selectable className="text-xs text-foreground">
+                Thread ID: {bypass.threadId}
+              </Text>
+            </>
+          ) : (
+            <Text className="text-xs text-foreground-secondary">
+              Expand to see session and thread details.
+            </Text>
+          )}
+        </View>
       ) : null}
       {isCommand && props.approval.cwd ? (
         <View className="gap-1">
@@ -96,7 +176,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           </Text>
         </View>
       ) : null}
-      {props.approval.reason ? (
+      {props.approval.reason && props.approval.reason !== bypass?.rule ? (
         <Text className="font-sans text-xs leading-normal text-warning-foreground">
           {props.approval.reason}
         </Text>

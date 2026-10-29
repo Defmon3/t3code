@@ -9,12 +9,14 @@ import {
   type HookApprovalDecision,
   type HookApprovalDuration,
   type HookApprovalGrant,
+  type HookApprovalBypass,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   createPendingHookApprovals,
+  hookApprovalBypassSteps,
   hasHookApprovalsCapability,
   hasHookApprovalGrantsCapability,
   hookApprovalGrantsForThread,
@@ -43,7 +45,96 @@ function request(requestId: string, createdAt: string): HookApprovalRequest {
   };
 }
 
+const bypass: HookApprovalBypass = {
+  rule: "Never change another session's settings without approval",
+  technique: "Chaining a permitted inspection with a prohibited settings change",
+  tier: 2,
+  steps: [
+    { command: 'Write-Output "a; b"', triggered: false },
+    {
+      command: 'Set-Content -LiteralPath "C:/workspace/other-session/settings.json" -Value "{}"',
+      triggered: true,
+    },
+  ],
+  reasoning: "The second command changes settings belonging to another active session.",
+  runtime: "codex",
+  model: "gpt-6.1-sol",
+  sessionId: "0123456789abcdef0123456789abcdef0123456789abcdef",
+  threadTitle: "Investigate another session's settings without changing its configuration",
+  threadId: "fedcba9876543210fedcba9876543210fedcba9876543210",
+};
+
 describe("hook approvals", () => {
+  it("keeps repeated bypass command steps distinct", () => {
+    const steps = hookApprovalBypassSteps({
+      ...bypass,
+      steps: [
+        { command: "git status;", triggered: false },
+        { command: "git status;", triggered: true },
+        { command: "git status;", triggered: false },
+      ],
+    });
+
+    expect(new Set(steps.map((step) => step.key)).size).toBe(3);
+    expect(steps.map((step) => step.triggered)).toEqual([false, true, false]);
+  });
+
+  it.each([false, true])(
+    "preserves bypass steps and offers only one-shot decisions with timed capability %s",
+    (supportsTimedApproval) => {
+      const [pending] = createPendingHookApprovals(
+        scopeHookApprovalRequests(environmentA, [
+          { ...request("bypass", "2026-09-07T12:00:00.000Z"), bypass },
+        ]),
+        [],
+        supportsTimedApproval,
+      );
+
+      expect(pending?.approval.bypass).toEqual(bypass);
+      expect(pending?.approval.options).toEqual([
+        { decision: "decline", label: "Reject" },
+        { decision: "accept", label: "Approve once" },
+      ]);
+      expect(pending?.approval.supportsTimedApproval).toBe(false);
+      expect(pending?.approval.sessionApprovalScope).toBeUndefined();
+      expect(pending?.approval.detail).toContain(bypass.rule);
+      expect(pending?.approval.detail).toContain(bypass.reasoning);
+      expect(pending?.approval.detail).not.toContain("Session approval");
+    },
+  );
+
+  it.each([
+    ["allow-session", undefined],
+    ["allow-session", "session"],
+    ["allow", "15-minutes"],
+    ["deny", "1-hour"],
+  ] satisfies ReadonlyArray<readonly [HookApprovalDecision, HookApprovalDuration | undefined]>)(
+    "rejects remembered bypass decisions: %s %s",
+    (decision, duration) => {
+      const [pending] = scopeHookApprovalRequests(environmentA, [
+        { ...request("bypass", "2026-09-07T12:00:00.000Z"), bypass },
+      ]);
+
+      expect(() => hookApprovalResponseTarget(pending!, decision, undefined, duration)).toThrow(
+        "Bypass attempts allow only a one-shot approval or rejection.",
+      );
+    },
+  );
+
+  it.each(["allow", "deny"] satisfies HookApprovalDecision[])(
+    "routes a one-shot bypass %s to its originating environment",
+    (decision) => {
+      const [pending] = scopeHookApprovalRequests(environmentB, [
+        { ...request("bypass", "2026-09-07T12:00:00.000Z"), bypass },
+      ]);
+
+      expect(hookApprovalResponseTarget(pending!, decision)).toEqual({
+        environmentId: environmentB,
+        input: { requestId: "bypass", decision },
+      });
+    },
+  );
+
   it("replaces a mirrored generic request with one rich card and the hook response target", () => {
     const hookRequest = scopeHookApprovalRequests(environmentA, [
       request("mirrored", "2026-09-07T12:00:00.000Z"),

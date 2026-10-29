@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   HookApprovalDuration,
+  HookApprovalBypass,
   ThreadId,
   OrchestrationV2ThreadProjection,
   OrchestrationV2RuntimeRequest,
@@ -54,6 +55,7 @@ export interface ThreadPendingApproval {
   readonly command?: string;
   readonly cwd?: string;
   readonly hookRequestId?: string;
+  readonly bypass?: HookApprovalBypass;
   readonly sessionApprovalScope?: string;
   readonly reason?: string;
   readonly fullAccessOverride?: ProviderApprovalFullAccessOverride;

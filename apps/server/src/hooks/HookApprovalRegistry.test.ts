@@ -1,6 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
+import {
+  type HookApprovalBypass,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -21,6 +26,181 @@ const makeRegistry = (options: HookApprovalRegistry.HookApprovalRegistryOptions 
     .make(options)
     .pipe(Effect.provideService(HttpServer.HttpServer, server), Effect.provide(NodeServices.layer));
 const input = { command: "python task.py", reason: "Run task", cwd: "G:/repo" };
+const bypass = {
+  rule: "remote-command",
+  technique: "encoded-command",
+  tier: 2,
+  steps: [{ command: input.command, triggered: true }],
+  reasoning: "The command conceals a remote action.",
+  runtime: "codex",
+  model: "",
+  sessionId: "native-session",
+  threadTitle: "",
+  threadId: "untrusted-thread",
+} satisfies HookApprovalBypass;
+
+it.effect.each(["session", "15-minutes", "1-hour"] as const)(
+  "keeps bypass requests pending when a matching %s grant is created or reused",
+  (duration) =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry();
+      const threadId = ThreadId.make("thread-bypass-grants");
+      const issued = yield* registry.issue({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const waiting = yield* registry
+        .request(issued.token, { ...input, bypass })
+        .pipe(Effect.forkScoped);
+      const bypassRequest = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      )[0]!;
+      const ordinary = yield* registry.request(issued.token, input).pipe(Effect.forkScoped);
+      const ordinaryRequest = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 2),
+          Stream.runHead,
+        ),
+      ).find((request) => !request.bypass)!;
+
+      expect(
+        yield* registry.respond({
+          requestId: ordinaryRequest.requestId,
+          decision: "allow-session",
+          duration,
+        }),
+      ).toBe(true);
+      expect(yield* Fiber.join(ordinary)).toEqual({ decision: "allow" });
+      expect(yield* registry.getPending(bypassRequest.requestId)).toMatchObject({
+        threadId,
+        bypass,
+      });
+
+      const repeated = yield* registry
+        .request(issued.token, { ...input, bypass })
+        .pipe(Effect.forkScoped);
+      const requests = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((entries) => entries.length === 2),
+          Stream.runHead,
+        ),
+      );
+      expect(requests.every((request) => request.bypass !== undefined)).toBe(true);
+      yield* registry.revokeAll;
+      expect(yield* Fiber.join(waiting)).toEqual({ decision: "deny" });
+      expect(yield* Fiber.join(repeated)).toEqual({ decision: "deny" });
+    }),
+);
+
+it.effect.each([
+  { decision: "allow-session" },
+  { decision: "allow", duration: "15-minutes" },
+  { decision: "allow", duration: "1-hour" },
+  { decision: "allow", duration: "session" },
+  { decision: "deny", duration: "session" },
+] as const)("rejects bypass grant response %j without consuming the request", (response) =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry();
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-bypass-response"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const waiting = yield* registry
+      .request(issued.token, { ...input, bypass })
+      .pipe(Effect.forkScoped);
+    const pending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+
+    expect(yield* registry.respond({ requestId: pending.requestId, ...response })).toBe(false);
+    expect(yield* registry.getPending(pending.requestId)).toEqual(pending);
+    expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual([]);
+    expect(
+      yield* registry.respond({
+        requestId: pending.requestId,
+        decision: "deny",
+        feedback: "Keep this blocked.",
+      }),
+    ).toBe(true);
+    expect(yield* Fiber.join(waiting)).toEqual({
+      decision: "deny",
+      feedback: "Keep this blocked.",
+    });
+  }),
+);
+
+it.effect("never remembers a one-shot bypass approval", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry();
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-bypass-once"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const waiting = yield* registry
+      .request(issued.token, { ...input, bypass })
+      .pipe(Effect.forkScoped);
+    const pending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+
+    expect(yield* registry.respond({ requestId: pending.requestId, decision: "allow" })).toBe(true);
+    expect(yield* Fiber.join(waiting)).toEqual({ decision: "allow" });
+    expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual([]);
+    const repeated = yield* registry
+      .request(issued.token, { ...input, bypass })
+      .pipe(Effect.forkScoped);
+    const next = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+    expect(next.requestId).not.toBe(pending.requestId);
+    yield* registry.respond({ requestId: next.requestId, decision: "deny" });
+    expect(yield* Fiber.join(repeated)).toEqual({ decision: "deny" });
+  }),
+);
+
+it.effect.each([
+  { options: {}, milliseconds: 20 * 60_000 },
+  { options: { timeout: "1 second" }, milliseconds: 1_000 },
+] as const)("denies bypass requests at their timeout (%j)", ({ options, milliseconds }) =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(options);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-bypass-timeout"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const waiting = yield* registry
+      .request(issued.token, { ...input, bypass })
+      .pipe(Effect.forkScoped);
+    const pending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+
+    yield* TestClock.adjust(milliseconds - 1);
+    expect(yield* registry.getPending(pending.requestId)).toEqual(pending);
+    yield* TestClock.adjust(1);
+    expect(yield* Fiber.join(waiting)).toEqual({ decision: "deny" });
+    expect(yield* registry.getPending(pending.requestId)).toBeUndefined();
+    expect(yield* registry.respond({ requestId: pending.requestId, decision: "allow" })).toBe(
+      false,
+    );
+    expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual([]);
+  }),
+);
 
 it.effect.each([
   { duration: "15-minutes", minutes: 15 },

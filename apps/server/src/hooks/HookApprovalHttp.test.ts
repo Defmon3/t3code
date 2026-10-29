@@ -3,6 +3,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   HookApprovalRespondInput,
+  type HookApprovalBypass,
   type HookApprovalHttpResponse,
   ProviderInstanceId,
   ThreadId,
@@ -31,6 +32,21 @@ import { HookApprovalRegistry } from "./HookApprovalRegistry.ts";
 import * as HookApprovalRegistryModule from "./HookApprovalRegistry.ts";
 
 const decodeHookApprovalResponse = Schema.decodeUnknownSync(HookApprovalRespondInput);
+const bypass = {
+  rule: "remote-command",
+  technique: "encoded-command",
+  tier: 2,
+  steps: [
+    { command: "git status", triggered: false },
+    { command: "ssh remote.example hostname", triggered: true },
+  ],
+  reasoning: "A local wrapper executes a remote command.",
+  runtime: "",
+  model: "",
+  sessionId: "",
+  threadTitle: "",
+  threadId: "untrusted-routing-thread",
+} satisfies HookApprovalBypass;
 
 const request = (body: unknown, authorization?: string) =>
   HttpServerRequest.fromWeb(
@@ -100,6 +116,83 @@ it.effect("rejects malformed hook approval payloads", () =>
 
     expect(response.status).toBe(400);
   }),
+);
+
+it.effect.each(
+  [
+    { ...bypass, rule: "" },
+    { ...bypass, technique: "" },
+    { ...bypass, tier: 0 },
+    { ...bypass, tier: 1.5 },
+    { ...bypass, tier: 3 },
+    { ...bypass, steps: [] },
+    { ...bypass, steps: [{ command: "", triggered: true }] },
+    { ...bypass, steps: [{ command: "git status", triggered: "true" }] },
+    { ...bypass, runtime: undefined },
+    null,
+  ].map((metadata) => ({ metadata })),
+)("rejects malformed bypass metadata %j", ({ metadata: invalidBypass }) =>
+  Effect.gen(function* () {
+    const response = yield* run(
+      request(
+        { command: "git status", reason: "Check state", cwd: "C:/repo", bypass: invalidBypass },
+        "Bearer valid",
+      ),
+      hookApprovals(),
+    );
+
+    expect(response.status).toBe(400);
+  }),
+);
+
+it.effect.each([1, 2] as const)(
+  "preserves tier %s bypass metadata and routes only through the authenticated credential",
+  (tier) =>
+    Effect.gen(function* () {
+      const registry = yield* HookApprovalRegistryModule.__testing
+        .make()
+        .pipe(Effect.provide(NodeServices.layer));
+      const threadId = ThreadId.make("hook-bypass-authenticated-thread");
+      const credential = yield* registry.issue({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const metadata = { ...bypass, tier };
+      const body = {
+        command: "ssh remote.example hostname",
+        reason: "Run remote command",
+        cwd: "C:/repo",
+        scope: { key: "remote:example", label: "Remote example" },
+        threadId: bypass.threadId,
+        bypass: metadata,
+      };
+      const unauthorized = yield* run(request(body, "Bearer unknown"), registry);
+      expect(unauthorized.status).toBe(401);
+      const waiting = yield* run(request(body, `Bearer ${credential.token}`), registry).pipe(
+        Effect.forkScoped,
+      );
+      const pending = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      )[0]!;
+
+      expect(pending).toMatchObject({
+        threadId,
+        command: body.command,
+        reason: body.reason,
+        cwd: body.cwd,
+        scope: body.scope,
+        bypass: metadata,
+      });
+      expect(yield* registry.respond({ requestId: pending.requestId, decision: "deny" })).toBe(
+        true,
+      );
+      const response = yield* Fiber.join(waiting);
+      expect(response.status).toBe(200);
+      expect(responseJson(response)).toEqual({ decision: "deny" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect.each([undefined, { key: "remote:notrory", label: "Remote access to notrory" }])(

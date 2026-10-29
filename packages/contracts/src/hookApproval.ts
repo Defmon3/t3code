@@ -20,6 +20,22 @@ export const HookApprovalScope = Schema.Struct({
 });
 export type HookApprovalScope = typeof HookApprovalScope.Type;
 
+export const HookApprovalBypass = Schema.Struct({
+  rule: Schema.String.check(Schema.isNonEmpty()),
+  technique: Schema.String.check(Schema.isNonEmpty()),
+  tier: Schema.Literals([1, 2]),
+  steps: Schema.NonEmptyArray(
+    Schema.Struct({ command: Schema.String.check(Schema.isNonEmpty()), triggered: Schema.Boolean }),
+  ),
+  reasoning: Schema.String,
+  runtime: Schema.String,
+  model: Schema.String,
+  sessionId: Schema.String,
+  threadTitle: Schema.String,
+  threadId: Schema.String,
+});
+export type HookApprovalBypass = typeof HookApprovalBypass.Type;
+
 export const HookApprovalDecision = Schema.Literals(["allow", "allow-session", "deny"]);
 export type HookApprovalDecision = typeof HookApprovalDecision.Type;
 
@@ -47,6 +63,7 @@ export const HookApprovalRequest = Schema.Struct({
   cwd: HookApprovalWorkingDirectory,
   scope: Schema.optional(HookApprovalScope),
   createdAt: Schema.DateTimeUtc,
+  bypass: Schema.optionalKey(HookApprovalBypass),
 });
 export type HookApprovalRequest = typeof HookApprovalRequest.Type;
 
@@ -63,6 +80,7 @@ export const HookApprovalHttpRequest = Schema.Struct({
   reason: HookApprovalReason,
   cwd: HookApprovalWorkingDirectory,
   scope: Schema.optional(HookApprovalScope),
+  bypass: Schema.optionalKey(HookApprovalBypass),
 });
 export type HookApprovalHttpRequest = typeof HookApprovalHttpRequest.Type;
 

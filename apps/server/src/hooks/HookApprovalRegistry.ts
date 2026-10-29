@@ -3,6 +3,7 @@ import {
   ProviderInstanceId,
   type ProviderSessionId,
   ThreadId,
+  type HookApprovalBypass,
   type HookApprovalDecision,
   type HookApprovalGrant,
   type HookApprovalHttpResponse,
@@ -59,6 +60,7 @@ export interface HookApprovalRequestInput {
   readonly reason: string;
   readonly cwd: string;
   readonly scope?: HookApprovalScope;
+  readonly bypass?: HookApprovalBypass;
 }
 export interface HookApprovalRegistryShape {
   readonly resetThread: (threadId: ThreadId) => Effect.Effect<void>;
@@ -102,6 +104,7 @@ export class HookApprovalRegistry extends Context.Service<
 >()("t3/hooks/HookApprovalRegistry") {}
 
 const requestTimeout = Duration.seconds(300);
+const bypassRequestTimeout = Duration.minutes(20);
 const tokenFromBytes = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
 const bytesToHex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -433,7 +436,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
           const grant = current.sessionAllowances.get(
             allowanceKey(credential.providerSessionId, input.scope),
           );
-          if (grant && grantIsActive(grant, createdAt))
+          if (!input.bypass && grant && grantIsActive(grant, createdAt))
             return [{ _tag: "allowed" as const, credential }, current] as const;
           const request: HookApprovalRequest = {
             requestId,
@@ -442,6 +445,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
             reason: input.reason,
             cwd: input.cwd,
             ...(input.scope ? { scope: input.scope } : {}),
+            ...(input.bypass ? { bypass: input.bypass } : {}),
             createdAt,
           };
           return [
@@ -474,7 +478,9 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
       });
       if (result._tag === "denied") return { decision: "deny" } as const;
       if (result._tag === "allowed") return { decision: "allow" } as const;
-      const timeout = Effect.sleep(options.timeout ?? requestTimeout).pipe(
+      const timeout = Effect.sleep(
+        options.timeout ?? (input.bypass ? bypassRequestTimeout : requestTimeout),
+      ).pipe(
         Effect.andThen(removePending(requestId)),
         Effect.flatMap((pending) => finish(pending, "deny")),
         Effect.andThen(Deferred.await(completion)),
@@ -492,21 +498,24 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
       requestId,
       decision,
       feedback,
-      duration = "session",
+      duration,
     }) {
       const now = yield* DateTime.now;
       const expiresAt =
-        duration === "session"
+        duration === undefined || duration === "session"
           ? null
           : DateTime.add(now, { minutes: duration === "15-minutes" ? 15 : 60 });
       const removed = yield* SubscriptionRef.modify(state, (current) => {
         const entry = current.pending.get(requestId);
         if (!entry) return [undefined, current] as const;
+        if (entry.request.bypass && (decision === "allow-session" || duration !== undefined))
+          return [undefined, current] as const;
         const key = allowanceKey(entry.providerSessionId, entry.request.scope);
         const nextPending = new Map(current.pending);
         const matching = Array.from(nextPending.entries()).flatMap(([id, pending]) =>
           id === requestId ||
           (decision === "allow-session" &&
+            !pending.request.bypass &&
             allowanceKey(pending.providerSessionId, pending.request.scope) === key)
             ? (nextPending.delete(id), [pending])
             : [],

@@ -1,4 +1,5 @@
 import {
+  HookApprovalBypass,
   RuntimeRequestId,
   type ApprovalExplanationInput,
   type ApprovalExplanationResult,
@@ -37,6 +38,7 @@ const generationFailure = {
 } as const;
 const explanationKey = (input: ApprovalExplanationInput) =>
   JSON.stringify([input.threadId, input.source, input.requestId]);
+const encodeBypass = Schema.encodeSync(Schema.fromJsonString(HookApprovalBypass));
 const encodeCommandSnapshot = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -82,7 +84,13 @@ const make = Effect.gen(function* () {
       if (request?.threadId !== input.threadId) return undefined;
       const thread = yield* projections.getThread(input.threadId);
       return thread.deletedAt === null
-        ? { command: request.command, cwd: request.cwd, reason: request.reason }
+        ? {
+            command: request.command,
+            cwd: request.cwd,
+            reason: request.bypass
+              ? `${request.reason}\nBypass detection: ${encodeBypass(request.bypass)}`
+              : request.reason,
+          }
         : undefined;
     }
     const thread = yield* projections.getThread(input.threadId);
