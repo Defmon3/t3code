@@ -227,6 +227,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
   [WS_METHODS.hookApprovalsSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.hookApprovalsSubscribeGrants]: AuthOrchestrationReadScope,
+  [WS_METHODS.hookApprovalsRevokeGrant]: AuthOrchestrationOperateScope,
   [WS_METHODS.hookApprovalsRespond]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 

@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  HookApprovalDuration,
   ThreadId,
   OrchestrationV2ThreadProjection,
   OrchestrationV2RuntimeRequest,
@@ -18,6 +19,7 @@ export type ApprovalResponder = (
   requestId: RuntimeRequestId,
   decision: ProviderApprovalDecision,
   feedback?: string,
+  duration?: HookApprovalDuration,
 ) => Promise<AtomCommandResult<unknown, unknown> | undefined>;
 
 /** Feedback belongs to the displayed request, which may be a native child's tool call. */
@@ -59,6 +61,7 @@ export interface ThreadPendingApproval {
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
   readonly responseCapability: "live" | "not_resumable";
   readonly supportsFeedback?: boolean;
+  readonly supportsTimedApproval?: boolean;
 }
 
 export const FULL_ACCESS_OVERRIDE_QUESTION = "Why am I being asked this?";

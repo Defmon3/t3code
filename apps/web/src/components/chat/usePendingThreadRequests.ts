@@ -2,6 +2,7 @@ import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type HookApprovalDuration,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
   type ScopedThreadRef,
@@ -21,6 +22,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   createPendingHookApprovals,
+  hasHookApprovalGrantsCapability,
   findPendingHookApproval,
   hookApprovalDecisionForProviderDecision,
   hookApprovalResponseTarget,
@@ -58,6 +60,7 @@ import {
   pendingHookApprovalRequestsAtom,
 } from "../../state/hookApprovals";
 import { readEnvironmentScope } from "../../state/session";
+import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -151,6 +154,10 @@ export function usePendingThreadRequests(input: {
     reportFailure: false,
   });
   const hookApprovalRequests = useAtomValue(pendingHookApprovalRequestsAtom);
+  const hookApprovalConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const supportsTimedApproval = hasHookApprovalGrantsCapability(
+    hookApprovalConfig?.environment.capabilities,
+  );
   const respondToThreadUserInput = useOrchestrationCommand(threadEnvironment.respondToUserInput, {
     reportFailure: false,
   });
@@ -173,6 +180,7 @@ export function usePendingThreadRequests(input: {
   const pendingHookApprovals = createPendingHookApprovals(
     hookApprovalsForThread(hookApprovalRequests, environmentId, activeThreadId),
     pendingRequests.approvals.map((approval) => approval.requestId),
+    supportsTimedApproval,
   );
   const pendingApprovals =
     pendingRequests.approvals.length === 0 && pendingHookApprovals.length === 0
@@ -283,6 +291,7 @@ export function usePendingThreadRequests(input: {
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
     feedback?: string,
+    duration?: HookApprovalDuration,
   ) => {
     if (!activeThreadId || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
       return;
@@ -296,6 +305,11 @@ export function usePendingThreadRequests(input: {
       existing.includes(requestId) ? existing : [...existing, requestId],
     );
     const hookApproval = findPendingHookApproval(pendingHookApprovals, requestId);
+    if (duration !== undefined && (!hookApproval || !supportsTimedApproval)) {
+      setThreadError(activeThreadId, "Timed custom hook approvals are unavailable on this server.");
+      setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      return;
+    }
     const hookDecision = hookApprovalDecisionForProviderDecision(decision);
     if (hookApproval !== null && hookDecision === null) {
       setThreadError(activeThreadId, "Unsupported custom hook approval decision.");
@@ -305,7 +319,7 @@ export function usePendingThreadRequests(input: {
     const result =
       hookApproval !== null && hookDecision !== null
         ? await respondToHookApproval(
-            hookApprovalResponseTarget(hookApproval.request, hookDecision, feedback),
+            hookApprovalResponseTarget(hookApproval.request, hookDecision, feedback, duration),
           )
         : await respondToThreadApproval({
             environmentId,

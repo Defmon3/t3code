@@ -16,6 +16,13 @@ const descriptor = {
 describe("ExecutionEnvironmentDescriptor", () => {
   it("preserves optional hook approval support under version skew", () => {
     expect(decodeDescriptor(descriptor).capabilities.hookApprovals).toBeUndefined();
+    expect(decodeDescriptor(descriptor).capabilities.hookApprovalGrants).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, hookApprovalGrants: true },
+      }).capabilities.hookApprovalGrants,
+    ).toBe(true);
     expect(
       decodeDescriptor({
         ...descriptor,

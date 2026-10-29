@@ -20,6 +20,7 @@ import { useCallback, useRef, useState } from "react";
 
 import {
   type EnvironmentId,
+  type HookApprovalDuration,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
   type ThreadId,
@@ -36,7 +37,12 @@ import {
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
-import { environmentThreadDetails, threadEnvironment } from "../state/threads";
+import {
+  environmentThreadDetails,
+  hookApprovalEnvironment,
+  pendingHookApprovalRequestsAtom,
+  threadEnvironment,
+} from "../state/threads";
 import {
   buildPendingUserInputAnswers,
   setPendingUserInputCustomAnswer,
@@ -48,6 +54,15 @@ import { useSelectedThreadPendingRequests } from "./use-thread-detail";
 import { useThreadSelection } from "./use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
 import { readEnvironmentScope } from "./session";
+import {
+  createPendingHookApprovals,
+  findPendingHookApproval,
+  hasHookApprovalGrantsCapability,
+  hookApprovalDecisionForProviderDecision,
+  hookApprovalResponseTarget,
+  hookApprovalsForThread,
+  mergePendingHookApprovals,
+} from "@t3tools/client-runtime/state/hook-approvals";
 
 const EMPTY_PENDING_REQUESTS: PendingThreadRequests = { approvals: [], userInputs: [] };
 
@@ -177,17 +192,42 @@ export function useSelectedThreadRequests() {
     "thread user input dismissal",
   );
   const { selectedThread: selectedThreadShell } = useThreadSelection();
+  const respondToHookApproval = useAtomCommand(
+    hookApprovalEnvironment.respond,
+    "custom hook approval response",
+  );
+  const hookApprovalRequests = useAtomValue(pendingHookApprovalRequestsAtom);
+  const questionServerConfigs = useServerConfigs();
+  const supportsTimedApproval = hasHookApprovalGrantsCapability(
+    selectedThreadShell
+      ? questionServerConfigs.get(selectedThreadShell.environmentId)?.environment.capabilities
+      : null,
+  );
   const pendingRequests = useSelectedThreadPendingRequests();
   const userInputDraftsByRequestKey = useAtomValue(userInputDraftsByRequestKeyAtom);
   const userInputResponsesInFlight = useRef(new Set<string>());
   const [respondingApprovalId, setRespondingApprovalId] = useState<RuntimeRequestId | null>(null);
   const [respondingUserInputId, setRespondingUserInputId] = useState<RuntimeRequestId | null>(null);
 
-  const activePendingApprovals = pendingRequests?.approvals ?? EMPTY_PENDING_REQUESTS.approvals;
+  const nativePendingApprovals = pendingRequests?.approvals ?? EMPTY_PENDING_REQUESTS.approvals;
+  const pendingHookApprovals = selectedThreadShell
+    ? createPendingHookApprovals(
+        hookApprovalsForThread(
+          hookApprovalRequests,
+          selectedThreadShell.environmentId,
+          selectedThreadShell.id,
+        ),
+        nativePendingApprovals.map((approval) => approval.requestId),
+        supportsTimedApproval,
+      )
+    : [];
+  const activePendingApprovals = mergePendingHookApprovals(
+    nativePendingApprovals,
+    pendingHookApprovals,
+  );
   const activePendingApproval = activePendingApprovals[0] ?? null;
   const activePendingUserInputs = pendingRequests?.userInputs ?? EMPTY_PENDING_REQUESTS.userInputs;
   const activePendingUserInput = activePendingUserInputs[0] ?? null;
-  const questionServerConfigs = useServerConfigs();
   const attachmentDrafts = useAtomValue(
     questionAttachmentDraftsAtom(
       selectedThreadShell
@@ -288,7 +328,12 @@ export function useSelectedThreadRequests() {
   );
 
   const onRespondToApproval = useCallback(
-    async (requestId: RuntimeRequestId, decision: ProviderApprovalDecision, feedback?: string) => {
+    async (
+      requestId: RuntimeRequestId,
+      decision: ProviderApprovalDecision,
+      feedback?: string,
+      duration?: HookApprovalDuration,
+    ) => {
       if (
         !selectedThreadShell ||
         !readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope)
@@ -302,20 +347,46 @@ export function useSelectedThreadRequests() {
         return;
       }
 
+      const hookApproval = findPendingHookApproval(pendingHookApprovals, requestId);
+      if (duration !== undefined && (!hookApproval || !supportsTimedApproval)) {
+        Dialog.alert(
+          "Approval unavailable",
+          "Timed custom hook approvals are unavailable on this server.",
+        );
+        return;
+      }
+      const hookDecision = hookApprovalDecisionForProviderDecision(decision);
+      if (hookApproval && hookDecision === null) {
+        Dialog.alert("Approval unavailable", "Unsupported custom hook approval decision.");
+        return;
+      }
       setRespondingApprovalId(requestId);
-      const result = await respondToApproval({
-        environmentId: selectedThreadShell.environmentId,
-        input: {
-          threadId: selectedThreadShell.id,
-          requestId,
-          decision,
-          ...(feedback === undefined ? {} : { feedback }),
-        },
-      });
+      const result =
+        hookApproval && hookDecision
+          ? await respondToHookApproval(
+              hookApprovalResponseTarget(hookApproval.request, hookDecision, feedback, duration),
+            )
+          : await respondToApproval({
+              environmentId: selectedThreadShell.environmentId,
+              input: {
+                threadId: selectedThreadShell.id,
+                requestId,
+                decision,
+                ...(feedback === undefined ? {} : { feedback }),
+              },
+            });
       setRespondingApprovalId((current) => (current === requestId ? null : current));
       return result;
     },
-    [activePendingApprovals, respondToApproval, selectedThreadShell],
+    [
+      activePendingApprovals,
+      pendingHookApprovals,
+      respondToApproval,
+      respondToHookApproval,
+      selectedThreadShell,
+      setRespondingApprovalId,
+      supportsTimedApproval,
+    ],
   );
 
   const onSubmitUserInput = useCallback(async () => {
@@ -404,6 +475,7 @@ export function useSelectedThreadRequests() {
     activePendingUserInputAnswers,
     respondToUserInput,
     selectedThreadShell,
+    setRespondingUserInputId,
   ]);
 
   const onDismissUserInput = useCallback(async () => {
@@ -434,7 +506,7 @@ export function useSelectedThreadRequests() {
       );
     }
     return result;
-  }, [activePendingUserInput, dismissUserInput, selectedThreadShell]);
+  }, [activePendingUserInput, dismissUserInput, selectedThreadShell, setRespondingUserInputId]);
 
   return {
     activePendingApproval,

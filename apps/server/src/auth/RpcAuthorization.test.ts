@@ -30,6 +30,14 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("allows reading hook grants while protecting grant revocation", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.hookApprovalsSubscribeGrants)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.hookApprovalsRevokeGrant)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
   it("requires operation permission to spend provider resources explaining approvals", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.approvalsExplain)).toBe(
       AuthOrchestrationOperateScope,

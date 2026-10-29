@@ -1,7 +1,8 @@
 import { type ProviderApprovalOption, type RuntimeRequestId } from "@t3tools/contracts";
+import { hookApprovalDurations } from "@t3tools/client-runtime/state/hook-approvals";
 import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
 import { memo, useId, useRef, useState } from "react";
-import { EllipsisIcon, TriangleAlertIcon } from "lucide-react";
+import { ChevronDownIcon, EllipsisIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -13,6 +14,7 @@ interface ComposerPendingApprovalActionsProps {
   isResponding: boolean;
   canRespond: boolean;
   supportsFeedback?: boolean | undefined;
+  supportsTimedApproval?: boolean | undefined;
   disabled?: boolean;
   options?: ReadonlyArray<ProviderApprovalOption> | undefined;
   onRespondToApproval: ApprovalResponder;
@@ -35,6 +37,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   isResponding,
   canRespond,
   supportsFeedback = false,
+  supportsTimedApproval = false,
   disabled = false,
   options = DEFAULT_APPROVAL_OPTIONS,
   onRespondToApproval,
@@ -127,6 +130,57 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         </Button>
       ) : null}
       {primaryOptions.map((option) => {
+        if (supportsTimedApproval && option.decision === "acceptForSession") {
+          return (
+            <span key={option.decision} className="flex max-w-full items-center gap-1">
+              <Button
+                size="sm-multiline"
+                variant="outline"
+                disabled={responseDisabled}
+                onClick={() => {
+                  if (!responseDisabled)
+                    void onRespondToApproval(
+                      requestId,
+                      "acceptForSession",
+                      undefined,
+                      "15-minutes",
+                    );
+                }}
+              >
+                Approve for 15 min
+              </Button>
+              <Menu>
+                <MenuTrigger
+                  disabled={responseDisabled}
+                  render={
+                    <Button size="icon-sm" variant="outline" aria-label="Approval duration" />
+                  }
+                >
+                  <ChevronDownIcon />
+                </MenuTrigger>
+                <MenuPopup {...composerFloatingLayerProps} side="top" align="end" width="content">
+                  {hookApprovalDurations.map((choice) => (
+                    <MenuItem
+                      key={choice.duration}
+                      disabled={responseDisabled}
+                      onClick={() => {
+                        if (!responseDisabled)
+                          void onRespondToApproval(
+                            requestId,
+                            "acceptForSession",
+                            undefined,
+                            choice.duration,
+                          );
+                      }}
+                    >
+                      {choice.label}
+                    </MenuItem>
+                  ))}
+                </MenuPopup>
+              </Menu>
+            </span>
+          );
+        }
         const button = (
           <Button
             key={option.decision}

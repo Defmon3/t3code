@@ -357,6 +357,11 @@ const issue = {
 
 it.effect.each([
   {
+    tag: WS_METHODS.hookApprovalsRevokeGrant,
+    scope: AuthOrchestrationOperateScope,
+    input: { grantId: "custom-hook-grant" },
+  },
+  {
     tag: WS_METHODS.issuesRunAction,
     scope: AuthSourceControlWriteScope,
     input: { ...issue, action: "close" },

@@ -68,6 +68,8 @@ const hookApprovals = (
   request: () => Effect.succeed({ decision: "deny" }),
   respond: () => Effect.succeed(false),
   subscribe: () => Stream.empty,
+  subscribeGrants: () => Stream.empty,
+  revokeGrant: () => Effect.void,
   getPending: () => Effect.die("unused"),
   revokeThread: () => Effect.void,
   revokeProviderSession: () => Effect.void,
@@ -138,11 +140,15 @@ it.effect.each([undefined, { key: "remote:notrory", label: "Remote access to not
         );
         const approval = requests[0]!;
         expect(approval.scope).toEqual(scope);
-        yield* registry.respond({ requestId: approval.requestId, decision: "allow-session" });
+        yield* registry.respond({
+          requestId: approval.requestId,
+          decision: "allow-session",
+          duration: "15-minutes",
+        });
         const completed = yield* Fiber.join(response);
 
         expect(completed.status).toBe(200);
-        expect(yield* completed.json).toEqual({ decision: "allow-session" });
+        expect(yield* completed.json).toEqual({ decision: "allow" });
         const repeated = yield* client.post("/hook-approvals", {
           headers: { authorization: `Bearer ${credential.token}` },
           body: HttpBody.jsonUnsafe({
@@ -207,7 +213,7 @@ it.effect.each(["deny", "allow", "allow-session"] as const)(
         const response = yield* Fiber.join(pending);
         expect(response.status).toBe(200);
         expect(responseJson(response)).toEqual({
-          decision,
+          decision: decision === "allow-session" ? "allow" : decision,
           ...(decision === "deny" ? { feedback: "Keep this work on the local machine." } : {}),
         });
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),

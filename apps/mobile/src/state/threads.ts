@@ -1,4 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
+import { AVAILABLE_CONNECTION_STATE } from "@t3tools/client-runtime/connection";
+import {
+  type ScopedHookApprovalRequest,
+  createHookApprovalEnvironmentAtoms,
+  hasHookApprovalsCapability,
+  scopeHookApprovalRequests,
+  sortHookApprovalRequests,
+} from "@t3tools/client-runtime/state/hook-approvals";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
@@ -23,6 +31,7 @@ import {
   selectThreadCreationDetail,
 } from "./pending-thread-creation";
 import { environmentShell } from "./shell";
+import { serverEnvironment } from "./server";
 import { threadOutboxManager } from "./thread-outbox";
 
 export const threadFamilies = createThreadFamilyAtoms(
@@ -45,6 +54,33 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
 });
+
+export const hookApprovalEnvironment = createHookApprovalEnvironmentAtoms(connectionAtomRuntime);
+
+export const pendingHookApprovalRequestsAtom = Atom.make(
+  (get): ReadonlyArray<ScopedHookApprovalRequest> => {
+    const catalog = get(environmentCatalog.catalogValueAtom);
+    const requests = [...catalog.entries.keys()].flatMap((environmentId) => {
+      const connection = Option.getOrElse(
+        AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
+        () => AVAILABLE_CONNECTION_STATE,
+      );
+      if (connection.phase !== "connected") return [];
+      if (
+        !hasHookApprovalsCapability(
+          get(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities,
+        )
+      )
+        return [];
+      const result = get(hookApprovalEnvironment.requests({ environmentId, input: {} }));
+      return scopeHookApprovalRequests(
+        environmentId,
+        Option.getOrElse(AsyncResult.value(result), () => []),
+      );
+    });
+    return sortHookApprovalRequests(requests);
+  },
+).pipe(Atom.withLabel("mobile-pending-hook-approvals"));
 
 /** Keeps the subagent tree under `rootThreadId` in the thread list while the caller shows it. */
 export function useThreadFamily(

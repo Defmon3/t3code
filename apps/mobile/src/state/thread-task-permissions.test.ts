@@ -1,12 +1,15 @@
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
+  HookApprovalRequestId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   RuntimeRequestId,
+  ThreadId,
   TurnItemId,
   type ModelSelection,
   type OrchestrationV2ThreadProjection,
@@ -20,6 +23,7 @@ import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import type { PendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import { sendApprovalFeedback } from "@t3tools/client-runtime/state/thread-requests";
 import { AsyncResult, type Atom } from "effect/reactivity";
+import type { ScopedHookApprovalRequest } from "@t3tools/client-runtime/state/hook-approvals";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -33,6 +37,8 @@ const state = vi.hoisted(() => ({
   serverConfig: null as ServerConfig | null,
   projection: null as OrchestrationV2ThreadProjection | null,
   pendingRequests: { approvals: [], userInputs: [] } as PendingThreadRequests,
+  hookRequests: [] as ReadonlyArray<ScopedHookApprovalRequest>,
+  hookApprovalRespond: vi.fn(),
   enqueue: vi.fn(async () => undefined),
   clearDraft: vi.fn(),
   approve: vi.fn(),
@@ -85,7 +91,10 @@ vi.mock("@effect/atom-react", async () => {
   const { appAtomRegistry } = await import("./atom-registry");
   return { useAtomValue: <A>(atom: Atom.Atom<A>) => appAtomRegistry.get(atom) };
 });
-vi.mock("./entities", () => ({ useServerConfigs: () => new Map() }));
+vi.mock("./entities", () => ({
+  useServerConfigs: () =>
+    new Map(state.serverConfig ? [[EnvironmentId.make("secondary"), state.serverConfig]] : []),
+}));
 vi.mock("./session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     scope === AuthOrchestrationOperateScope && state.grantedEnvironments.has(environmentId),
@@ -110,6 +119,10 @@ vi.mock("./use-atom-command", () => ({ useAtomCommand: <A>(command: A) => comman
 vi.mock("./threads", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
+    hookApprovalEnvironment: { respond: state.hookApprovalRespond },
+    get pendingHookApprovalRequestsAtom() {
+      return Atom.make(state.hookRequests);
+    },
     environmentThreadDetails: {
       queueWorkflowAtom: () => Atom.make(null),
       checkpointSummariesAtom: () => Atom.make([]),
@@ -182,6 +195,7 @@ beforeEach(() => {
   state.connectionState = "connected";
   state.draft = { text: "Keep my draft", attachments: [], modelSelection: undefined };
   state.projection = null;
+  state.hookRequests = [];
   state.serverConfig = {
     providers: [{ instanceId: "codex", driver: "codex", enabled: true }],
     environment: { capabilities: {} },
@@ -199,11 +213,77 @@ beforeEach(() => {
   };
   vi.clearAllMocks();
   state.approve.mockResolvedValue(AsyncResult.success(undefined));
+  state.hookApprovalRespond.mockResolvedValue(AsyncResult.success(undefined));
   state.answer.mockResolvedValue(AsyncResult.success(undefined));
   state.feedback.mockResolvedValue(AsyncResult.success({ feedbackId: "feedback" }));
 });
 
 describe("mobile task permissions", () => {
+  it.each(["15-minutes", "1-hour", "session"] as const)(
+    "sends a %s hook approval only to its source environment",
+    async (duration) => {
+      state.grantedEnvironments.add("secondary");
+      if (state.serverConfig === null) throw new Error("Missing server fixture");
+      state.serverConfig = {
+        ...state.serverConfig,
+        environment: {
+          ...state.serverConfig.environment,
+          capabilities: {
+            ...state.serverConfig.environment.capabilities,
+            hookApprovalGrants: true,
+          },
+        },
+      };
+      state.hookRequests = [
+        {
+          environmentId: EnvironmentId.make("secondary"),
+          requestId: HookApprovalRequestId.make("custom-hook"),
+          threadId: ThreadId.make("thread"),
+          command: "git status",
+          reason: "Review worktree",
+          cwd: "C:/workspace",
+          createdAt: v2Now,
+        },
+      ];
+      const requests = useSelectedThreadRequests();
+      const approval = requests.activePendingApprovals.find(
+        (pending) => pending.hookRequestId === "custom-hook",
+      );
+      if (!approval) throw new Error("Missing custom hook approval");
+
+      const result = await requests.onRespondToApproval(
+        approval.requestId,
+        "acceptForSession",
+        undefined,
+        duration,
+      );
+
+      expect(approval.supportsTimedApproval).toBe(true);
+      expect(result?._tag).toBe("Success");
+      expect(state.hookApprovalRespond).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "secondary",
+        input: { requestId: "custom-hook", decision: "allow-session", duration },
+      });
+      expect(state.approve).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps timed approval data away from native provider requests", async () => {
+    state.grantedEnvironments.add("secondary");
+    const requests = useSelectedThreadRequests();
+
+    const result = await requests.onRespondToApproval(
+      RuntimeRequestId.make("approval"),
+      "acceptForSession",
+      undefined,
+      "15-minutes",
+    );
+
+    expect(result).toBeUndefined();
+    expect(state.approve).not.toHaveBeenCalled();
+    expect(state.hookApprovalRespond).not.toHaveBeenCalled();
+  });
+
   it("consumes an approval reply without queueing a parent message", async () => {
     state.grantedEnvironments.add("secondary");
     const composer = useThreadComposerState();

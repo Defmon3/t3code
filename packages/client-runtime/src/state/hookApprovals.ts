@@ -3,6 +3,8 @@ import {
   type EnvironmentId,
   type ExecutionEnvironmentCapabilities,
   type HookApprovalDecision,
+  type HookApprovalDuration,
+  type HookApprovalGrant,
   type HookApprovalRequest,
   type ProviderApprovalDecision,
   type ProviderApprovalOption,
@@ -34,6 +36,28 @@ export function hasHookApprovalsCapability(
 ): boolean {
   return capabilities?.hookApprovals === true;
 }
+
+export function hasHookApprovalGrantsCapability(
+  capabilities: Pick<ExecutionEnvironmentCapabilities, "hookApprovalGrants"> | null | undefined,
+): boolean {
+  return capabilities?.hookApprovalGrants === true;
+}
+
+export function hookApprovalGrantsForThread(
+  grants: ReadonlyArray<HookApprovalGrant>,
+  threadId: ThreadId | null,
+): ReadonlyArray<HookApprovalGrant> {
+  return grants.filter((grant) => grant.threadId === threadId);
+}
+
+export const hookApprovalDurations = [
+  { duration: "15-minutes", label: "15 minutes" },
+  { duration: "1-hour", label: "1 hour" },
+  { duration: "session", label: "This session" },
+] satisfies ReadonlyArray<{
+  duration: HookApprovalDuration;
+  label: string;
+}>;
 
 const hookApprovalOptions = [
   { decision: "decline", label: "Reject" },
@@ -81,6 +105,7 @@ function hookApprovalPendingRequestId(
 export function createPendingHookApprovals(
   requests: ReadonlyArray<ScopedHookApprovalRequest>,
   occupiedRequestIds: ReadonlyArray<RuntimeRequestId>,
+  supportsTimedApproval = false,
 ): ReadonlyArray<PendingHookApproval> {
   const occupied = new Set(occupiedRequestIds);
 
@@ -92,6 +117,10 @@ export function createPendingHookApprovals(
       requestId = hookApprovalPendingRequestId(request, collisionIndex);
     }
     occupied.add(requestId);
+    const scopeLabel = supportsTimedApproval ? "Scope" : "Session scope";
+    const unscopedDescription = supportsTimedApproval
+      ? "This thread only."
+      : "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.";
 
     return {
       request,
@@ -105,17 +134,16 @@ export function createPendingHookApprovals(
         hookRequestId: request.requestId,
         reason: request.reason,
         sessionApprovalScope: request.scope
-          ? `Session scope: ${request.scope.label}`
-          : "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
+          ? `${scopeLabel}: ${request.scope.label}`
+          : unscopedDescription,
         responseCapability: "live",
         supportsFeedback: true,
+        supportsTimedApproval,
         detail: [
           request.reason,
           `Command:\n${request.command}`,
           `Working directory:\n${request.cwd}`,
-          request.scope
-            ? `Session scope:\n${request.scope.label}`
-            : "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
+          request.scope ? `${scopeLabel}:\n${request.scope.label}` : unscopedDescription,
         ].join("\n\n"),
         options: hookApprovalOptions,
       },
@@ -160,6 +188,7 @@ export function hookApprovalResponseTarget(
   request: ScopedHookApprovalRequest,
   decision: HookApprovalDecision,
   feedback?: string,
+  duration?: HookApprovalDuration,
 ): {
   readonly environmentId: EnvironmentId;
   readonly input: EnvironmentRpcInput<typeof WS_METHODS.hookApprovalsRespond>;
@@ -169,6 +198,7 @@ export function hookApprovalResponseTarget(
     input: {
       requestId: request.requestId,
       decision,
+      ...(decision === "allow-session" && duration !== undefined ? { duration } : {}),
       ...(decision === "deny" && feedback?.trim() ? { feedback: feedback.trim() } : {}),
     },
   };
@@ -178,6 +208,19 @@ export function createHookApprovalEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
+    grants: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:hook-approvals:grants",
+      tag: WS_METHODS.hookApprovalsSubscribeGrants,
+      idleTtlMs: 0,
+    }),
+    revoke: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hook-approvals:revoke",
+      tag: WS_METHODS.hookApprovalsRevokeGrant,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.grantId]),
+      },
+    }),
     requests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:hook-approvals:requests",
       tag: WS_METHODS.hookApprovalsSubscribe,

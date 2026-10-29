@@ -23,6 +23,22 @@ export type HookApprovalScope = typeof HookApprovalScope.Type;
 export const HookApprovalDecision = Schema.Literals(["allow", "allow-session", "deny"]);
 export type HookApprovalDecision = typeof HookApprovalDecision.Type;
 
+export const HookApprovalDuration = Schema.Literals(["15-minutes", "1-hour", "session"]);
+export type HookApprovalDuration = typeof HookApprovalDuration.Type;
+
+export const HookApprovalGrant = Schema.Struct({
+  grantId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  scope: Schema.optional(HookApprovalScope),
+  expiresAt: Schema.NullOr(Schema.DateTimeUtc),
+});
+export type HookApprovalGrant = typeof HookApprovalGrant.Type;
+
+export const HookApprovalRevokeGrantInput = Schema.Struct({
+  grantId: TrimmedNonEmptyString,
+});
+export type HookApprovalRevokeGrantInput = typeof HookApprovalRevokeGrantInput.Type;
+
 export const HookApprovalRequest = Schema.Struct({
   requestId: HookApprovalRequestId,
   threadId: ThreadId,
@@ -37,6 +53,7 @@ export type HookApprovalRequest = typeof HookApprovalRequest.Type;
 export const HookApprovalRespondInput = Schema.Struct({
   requestId: HookApprovalRequestId,
   decision: HookApprovalDecision,
+  duration: Schema.optional(HookApprovalDuration),
   feedback: Schema.optional(TrimmedNonEmptyString),
 });
 export type HookApprovalRespondInput = typeof HookApprovalRespondInput.Type;

@@ -114,6 +114,7 @@ export function ComposerCommandApproval({
           options={approval.options}
           canRespond={approval.responseCapability === "live"}
           supportsFeedback={approval.supportsFeedback}
+          supportsTimedApproval={approval.supportsTimedApproval}
           onRespondToApproval={onRespondToApproval}
           commandExpansion={{ expanded, detailId, onToggle: () => setExpanded((value) => !value) }}
         />

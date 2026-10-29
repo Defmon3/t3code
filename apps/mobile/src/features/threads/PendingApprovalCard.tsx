@@ -1,5 +1,7 @@
 import { Button } from "../../components/ui/Button";
 import type { ProviderApprovalOption, RuntimeRequestId, ScopedThreadRef } from "@t3tools/contracts";
+import { hookApprovalDurations } from "@t3tools/client-runtime/state/hook-approvals";
+import { Menu } from "../../components/ui/Menu";
 import {
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
@@ -182,21 +184,67 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
             onPress={() => setCommandExpanded((expanded) => !expanded)}
           />
         ) : null}
-        {options.map((option) => (
-          <Button
-            key={option.decision}
-            label={option.label}
-            tone={
-              option.decision === "accept"
-                ? "primary"
-                : option.decision === "decline"
-                  ? "danger"
-                  : "secondary"
-            }
-            disabled={responseDisabled}
-            onPress={() => void props.onRespond(props.approval.requestId, option.decision)}
-          />
-        ))}
+        {options.map((option) =>
+          props.approval.supportsTimedApproval && option.decision === "acceptForSession" ? (
+            <View key={option.decision} className="flex-row flex-wrap items-center gap-2.5">
+              <Button
+                label="Approve for 15 min"
+                tone="secondary"
+                disabled={responseDisabled}
+                onPress={() => {
+                  if (!responseDisabled)
+                    void props.onRespond(
+                      props.approval.requestId,
+                      "acceptForSession",
+                      undefined,
+                      "15-minutes",
+                    );
+                }}
+              />
+              <Menu
+                title="Approval duration"
+                actions={hookApprovalDurations.map((choice) => ({
+                  id: choice.duration,
+                  title: choice.label,
+                  attributes: { disabled: responseDisabled },
+                }))}
+                onPressAction={({ nativeEvent }) => {
+                  const choice = hookApprovalDurations.find(
+                    (value) => value.duration === nativeEvent.event,
+                  );
+                  if (!responseDisabled && choice)
+                    void props.onRespond(
+                      props.approval.requestId,
+                      "acceptForSession",
+                      undefined,
+                      choice.duration,
+                    );
+                }}
+              >
+                <Button
+                  label="▾"
+                  accessibilityLabel="Approval duration"
+                  disabled={responseDisabled}
+                  onPress={() => {}}
+                />
+              </Menu>
+            </View>
+          ) : (
+            <Button
+              key={option.decision}
+              label={option.label}
+              tone={
+                option.decision === "accept"
+                  ? "primary"
+                  : option.decision === "decline"
+                    ? "danger"
+                    : "secondary"
+              }
+              disabled={responseDisabled}
+              onPress={() => void props.onRespond(props.approval.requestId, option.decision)}
+            />
+          ),
+        )}
         {canRejectWithReason ? (
           <Button
             label="Reject with reason"

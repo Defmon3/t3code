@@ -4,6 +4,7 @@ import {
   type ProviderSessionId,
   ThreadId,
   type HookApprovalDecision,
+  type HookApprovalGrant,
   type HookApprovalHttpResponse,
   type HookApprovalRequest,
   type HookApprovalRespondInput,
@@ -30,7 +31,7 @@ interface Credential {
 }
 interface SuspendedSession extends Credential {
   readonly nativeThreadId: string;
-  readonly allowances: ReadonlyArray<string>;
+  readonly allowances: ReadonlyMap<string, HookApprovalGrant>;
 }
 interface Pending {
   readonly runtimeSessionId?: ProviderSessionId | undefined;
@@ -42,7 +43,7 @@ interface State {
   readonly suspendedSessions: ReadonlyMap<ThreadId, SuspendedSession>;
   readonly credentials: ReadonlyMap<string, Credential>;
   readonly pending: ReadonlyMap<string, Pending>;
-  readonly sessionAllowances: ReadonlySet<string>;
+  readonly sessionAllowances: ReadonlyMap<string, HookApprovalGrant>;
 }
 type RequestState =
   | { readonly _tag: "denied" }
@@ -83,6 +84,8 @@ export interface HookApprovalRegistryShape {
   ) => Effect.Effect<HookApprovalHttpResponse>;
   readonly respond: (input: HookApprovalRespondInput) => Effect.Effect<boolean>;
   readonly subscribe: () => Stream.Stream<ReadonlyArray<HookApprovalRequest>>;
+  readonly subscribeGrants: () => Stream.Stream<ReadonlyArray<HookApprovalGrant>>;
+  readonly revokeGrant: (grantId: string) => Effect.Effect<void>;
   readonly getPending: (requestId: string) => Effect.Effect<HookApprovalRequest | undefined>;
   readonly subscribePending: () => Stream.Stream<ReadonlyArray<HookApprovalPending>>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
@@ -109,6 +112,8 @@ const endpointHost = (hostname: string) => {
     hostname === "0.0.0.0" || hostname === "::" || hostname === "[::]" ? "127.0.0.1" : hostname;
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 };
+const grantIsActive = (grant: HookApprovalGrant, now: DateTime.Utc) =>
+  grant.expiresAt === null || DateTime.toEpochMillis(grant.expiresAt) > DateTime.toEpochMillis(now);
 const snapshot = (state: State) => Array.from(state.pending.values(), ({ request }) => request);
 export interface HookApprovalRegistryOptions {
   readonly timeout?: Duration.Input;
@@ -117,6 +122,7 @@ export interface HookApprovalRegistryOptions {
 const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
   options: HookApprovalRegistryOptions = {},
 ) {
+  const scope = yield* Effect.scope;
   const crypto = yield* Crypto.Crypto;
   const server = yield* HttpServer.HttpServer;
   if (server.address._tag !== "InetAddressV4" && server.address._tag !== "InetAddressV6")
@@ -126,7 +132,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
     suspendedSessions: new Map(),
     credentials: new Map(),
     pending: new Map(),
-    sessionAllowances: new Set(),
+    sessionAllowances: new Map(),
   });
   const hash = (token: string) =>
     crypto
@@ -173,9 +179,11 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
           suspendedSessions.set(credential.threadId, {
             ...credential,
             nativeThreadId: credential.nativeThreadId,
-            allowances: Array.from(current.sessionAllowances)
-              .filter((key) => key.startsWith(prefix))
-              .map((key) => key.slice(prefix.length)),
+            allowances: new Map(
+              Array.from(current.sessionAllowances)
+                .filter(([key]) => key.startsWith(prefix))
+                .map(([key, grant]) => [key.slice(prefix.length), grant]),
+            ),
           });
         }
       }
@@ -199,15 +207,35 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
           suspendedSessions,
           credentials,
           pending,
-          sessionAllowances: new Set(
+          sessionAllowances: new Map(
             Array.from(current.sessionAllowances).filter(
-              (key) =>
+              ([key]) =>
                 !Array.from(sessions).some((sessionId) => key.startsWith(`${sessionId}\u0000`)),
             ),
           ),
         },
       ] as const;
     });
+  const removeGrants = Effect.fn("HookApprovalRegistry.removeGrants")(
+    (predicate: (grant: HookApprovalGrant) => boolean) =>
+      SubscriptionRef.update(state, (current) => ({
+        ...current,
+        sessionAllowances: new Map(
+          Array.from(current.sessionAllowances).filter(([, grant]) => !predicate(grant)),
+        ),
+        suspendedSessions: new Map(
+          Array.from(current.suspendedSessions, ([threadId, session]) => [
+            threadId,
+            {
+              ...session,
+              allowances: new Map(
+                Array.from(session.allowances).filter(([, grant]) => !predicate(grant)),
+              ),
+            },
+          ]),
+        ),
+      })),
+  );
   return HookApprovalRegistry.of({
     resetThread: Effect.fn("HookApprovalRegistry.resetThread")(function* (threadId) {
       const removed = yield* SubscriptionRef.modify(state, (current) => {
@@ -228,9 +256,9 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
             ...current,
             pending,
             suspendedSessions,
-            sessionAllowances: new Set(
+            sessionAllowances: new Map(
               Array.from(current.sessionAllowances).filter(
-                (key) => !Array.from(sessions).some((id) => key.startsWith(`${id}\u0000`)),
+                ([key]) => !Array.from(sessions).some((id) => key.startsWith(`${id}\u0000`)),
               ),
             ),
           },
@@ -242,7 +270,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
       yield* SubscriptionRef.update(state, (current) => {
         const credentials = new Map(current.credentials);
         const suspendedSessions = new Map(current.suspendedSessions);
-        const sessionAllowances = new Set(current.sessionAllowances);
+        const sessionAllowances = new Map(current.sessionAllowances);
         for (const [token, credential] of credentials) {
           if (
             credential.providerSessionId !== input.providerSessionId ||
@@ -256,7 +284,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
             credential.nativeThreadId !== undefined &&
             credential.nativeThreadId !== input.nativeThreadId
           ) {
-            for (const key of sessionAllowances)
+            for (const key of sessionAllowances.keys())
               if (key.startsWith(prefix)) sessionAllowances.delete(key);
           }
           const suspended = suspendedSessions.get(input.threadId);
@@ -264,7 +292,8 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
             suspended?.nativeThreadId === input.nativeThreadId &&
             suspended.providerInstanceId === input.providerInstanceId
           ) {
-            for (const scope of suspended.allowances) sessionAllowances.add(`${prefix}${scope}`);
+            for (const [key, grant] of suspended.allowances)
+              sessionAllowances.set(`${prefix}${key}`, grant);
           }
           suspendedSessions.delete(input.threadId);
           credentials.set(token, { ...credential, nativeThreadId: input.nativeThreadId });
@@ -330,9 +359,11 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
           suspendedSessions.set(threadId, {
             ...credential,
             nativeThreadId: credential.nativeThreadId,
-            allowances: Array.from(current.sessionAllowances)
-              .filter((key) => key.startsWith(prefix))
-              .map((key) => key.slice(prefix.length)),
+            allowances: new Map(
+              Array.from(current.sessionAllowances)
+                .filter(([key]) => key.startsWith(prefix))
+                .map(([key, grant]) => [key.slice(prefix.length), grant]),
+            ),
           });
         }
         const sessions = new Set(
@@ -363,9 +394,9 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
             suspendedSessions,
             credentials,
             pending,
-            sessionAllowances: new Set(
+            sessionAllowances: new Map(
               Array.from(current.sessionAllowances).filter(
-                (key) =>
+                ([key]) =>
                   !Array.from(sessions).some((sessionId) => key.startsWith(`${sessionId}\u0000`)),
               ),
             ),
@@ -399,9 +430,10 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
         (current): readonly [RequestState, State] => {
           const credential = current.credentials.get(tokenHash);
           if (!credential) return [{ _tag: "denied" as const }, current] as const;
-          if (
-            current.sessionAllowances.has(allowanceKey(credential.providerSessionId, input.scope))
-          )
+          const grant = current.sessionAllowances.get(
+            allowanceKey(credential.providerSessionId, input.scope),
+          );
+          if (grant && grantIsActive(grant, createdAt))
             return [{ _tag: "allowed" as const, credential }, current] as const;
           const request: HookApprovalRequest = {
             requestId,
@@ -460,7 +492,13 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
       requestId,
       decision,
       feedback,
+      duration = "session",
     }) {
+      const now = yield* DateTime.now;
+      const expiresAt =
+        duration === "session"
+          ? null
+          : DateTime.add(now, { minutes: duration === "15-minutes" ? 15 : 60 });
       const removed = yield* SubscriptionRef.modify(state, (current) => {
         const entry = current.pending.get(requestId);
         if (!entry) return [undefined, current] as const;
@@ -475,7 +513,12 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
         );
         const allowances =
           decision === "allow-session"
-            ? new Set(current.sessionAllowances).add(key)
+            ? new Map(current.sessionAllowances).set(key, {
+                grantId: requestId,
+                threadId: entry.request.threadId,
+                ...(entry.request.scope ? { scope: entry.request.scope } : {}),
+                expiresAt,
+              })
             : current.sessionAllowances;
         return [
           matching,
@@ -483,6 +526,15 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
         ] as const;
       });
       if (!removed) return false;
+      if (decision === "allow-session" && expiresAt !== null) {
+        yield* Effect.gen(function* () {
+          const currentTime = yield* DateTime.now;
+          yield* Effect.sleep(
+            DateTime.toEpochMillis(expiresAt) - DateTime.toEpochMillis(currentTime),
+          );
+          yield* removeGrants((grant) => grant.grantId === requestId);
+        }).pipe(Effect.interruptible, Effect.forkIn(scope));
+      }
       yield* Effect.logDebug("hook-approval.responded", {
         requestId,
         decision,
@@ -492,12 +544,31 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
         scopeKey: removed[0]?.request.scope?.key,
         resolvedCount: removed.length,
       });
-      yield* Effect.forEach(removed, (pending) => finish(pending, decision, feedback), {
-        discard: true,
-      });
+      yield* Effect.forEach(
+        removed,
+        (pending) => finish(pending, decision === "allow-session" ? "allow" : decision, feedback),
+        { discard: true },
+      );
       return true;
     }, Effect.uninterruptible),
     subscribe: () => SubscriptionRef.changes(state).pipe(Stream.map(snapshot)),
+    subscribeGrants: () =>
+      SubscriptionRef.changes(state).pipe(
+        Stream.map((current) => [
+          ...current.sessionAllowances.values(),
+          ...Array.from(current.suspendedSessions.values()).flatMap((session) =>
+            Array.from(session.allowances.values()),
+          ),
+        ]),
+        Stream.changesWith(
+          (previous, next) =>
+            previous.length === next.length &&
+            previous.every((grant, index) => grant === next[index]),
+        ),
+      ),
+    revokeGrant: Effect.fn("HookApprovalRegistry.revokeGrant")((grantId) =>
+      removeGrants((grant) => grant.grantId === grantId),
+    ),
     getPending: Effect.fn("HookApprovalRegistry.getPending")((requestId) =>
       SubscriptionRef.get(state).pipe(
         Effect.map((current) => current.pending.get(requestId)?.request),
@@ -540,7 +611,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
           {
             credentials: new Map(),
             pending: new Map(),
-            sessionAllowances: new Set<string>(),
+            sessionAllowances: new Map<string, HookApprovalGrant>(),
             suspendedSessions: new Map(),
           },
         ] as const,

@@ -7,6 +7,8 @@ import {
   ThreadId,
   type HookApprovalRequest,
   type HookApprovalDecision,
+  type HookApprovalDuration,
+  type HookApprovalGrant,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
@@ -14,6 +16,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createPendingHookApprovals,
   hasHookApprovalsCapability,
+  hasHookApprovalGrantsCapability,
+  hookApprovalGrantsForThread,
   mergePendingHookApprovals,
   findPendingHookApproval,
   hookApprovalDecisionForProviderDecision,
@@ -85,6 +89,73 @@ describe("hook approvals", () => {
     expect(hasHookApprovalsCapability({})).toBe(false);
     expect(hasHookApprovalsCapability({ hookApprovals: false })).toBe(false);
     expect(hasHookApprovalsCapability({ hookApprovals: true })).toBe(true);
+  });
+  it("requires explicit grant support before offering timed approval", () => {
+    const requests = scopeHookApprovalRequests(environmentA, [
+      request("timed", "2026-09-07T12:00:00.000Z"),
+    ]);
+
+    expect(hasHookApprovalGrantsCapability(undefined)).toBe(false);
+    expect(hasHookApprovalGrantsCapability({})).toBe(false);
+    expect(hasHookApprovalGrantsCapability({ hookApprovalGrants: false })).toBe(false);
+    expect(hasHookApprovalGrantsCapability({ hookApprovalGrants: true })).toBe(true);
+    expect(createPendingHookApprovals(requests, [])[0]?.approval.supportsTimedApproval).toBe(false);
+    expect(createPendingHookApprovals(requests, [], true)[0]?.approval).toMatchObject({
+      supportsTimedApproval: true,
+      sessionApprovalScope: "This thread only.",
+    });
+    expect(createPendingHookApprovals(requests, [], true)[0]?.approval.detail).not.toContain(
+      "expires when",
+    );
+  });
+
+  it.each(["15-minutes", "1-hour", "session"] satisfies HookApprovalDuration[])(
+    "sends %s with the remembered approval to its originating environment",
+    (duration) => {
+      const [pending] = scopeHookApprovalRequests(environmentB, [
+        request("timed", "2026-09-07T12:00:00.000Z"),
+      ]);
+
+      expect(hookApprovalResponseTarget(pending!, "allow-session", undefined, duration)).toEqual({
+        environmentId: environmentB,
+        input: { requestId: "timed", decision: "allow-session", duration },
+      });
+      expect(hookApprovalResponseTarget(pending!, "allow", undefined, duration).input).toEqual({
+        requestId: "timed",
+        decision: "allow",
+      });
+    },
+  );
+
+  it("preserves the shown scope and keeps active grants in the selected thread", () => {
+    const [pending] = createPendingHookApprovals(
+      scopeHookApprovalRequests(environmentA, [
+        {
+          ...request("scoped", "2026-09-07T12:00:00.000Z"),
+          scope: { key: "git", label: "Git commits" },
+        },
+      ]),
+      [],
+      true,
+    );
+    const grants: ReadonlyArray<HookApprovalGrant> = [
+      {
+        grantId: "grant-scoped",
+        threadId: pending!.request.threadId,
+        scope: { key: "git", label: "Git commits" },
+        expiresAt: null,
+      },
+      {
+        grantId: "grant-other",
+        threadId: ThreadId.make("other"),
+        expiresAt: DateTime.makeUnsafe("2026-09-07T12:15:00.000Z"),
+      },
+    ];
+
+    expect(pending?.approval.sessionApprovalScope).toBe("Scope: Git commits");
+    expect(hookApprovalGrantsForThread(grants, pending!.request.threadId)).toEqual([grants[0]]);
+    expect(hookApprovalGrantsForThread(grants, null)).toEqual([]);
+    expect(hookApprovalGrantsForThread([], pending!.request.threadId)).toEqual([]);
   });
   it("orders snapshots from two environments and removes a resolved request", () => {
     const firstSnapshot = sortHookApprovalRequests([

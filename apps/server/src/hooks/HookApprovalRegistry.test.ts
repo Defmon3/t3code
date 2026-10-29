@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -20,6 +21,177 @@ const makeRegistry = (options: HookApprovalRegistry.HookApprovalRegistryOptions 
     .make(options)
     .pipe(Effect.provideService(HttpServer.HttpServer, server), Effect.provide(NodeServices.layer));
 const input = { command: "python task.py", reason: "Run task", cwd: "G:/repo" };
+
+it.effect.each([
+  { duration: "15-minutes", minutes: 15 },
+  { duration: "1-hour", minutes: 60 },
+] as const)(
+  "expires $duration grants at the deadline and publishes removal",
+  ({ duration, minutes }) =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry();
+      const threadId = ThreadId.make("thread-timed");
+      const issued = yield* registry.issue({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const scope = { key: "repo:timed", label: "Timed repository access" };
+      const waiting = yield* registry
+        .request(issued.token, { ...input, scope })
+        .pipe(Effect.forkScoped);
+      const pending = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      )[0]!;
+      const now = yield* DateTime.now;
+
+      yield* registry.respond({
+        requestId: pending.requestId,
+        decision: "allow-session",
+        duration,
+      });
+
+      expect(yield* Fiber.join(waiting)).toEqual({ decision: "allow" });
+      const grants = Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead));
+      expect(grants).toEqual([
+        {
+          grantId: pending.requestId,
+          threadId,
+          scope,
+          expiresAt: DateTime.add(now, { minutes }),
+        },
+      ]);
+      yield* TestClock.adjust(minutes * 60_000 - 1);
+      expect(yield* registry.request(issued.token, { ...input, scope })).toEqual({
+        decision: "allow",
+      });
+      const removal = yield* registry.subscribeGrants().pipe(
+        Stream.filter((entries) => entries.length === 0),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* TestClock.adjust(1);
+      expect(Option.getOrThrow(yield* Fiber.join(removal))).toEqual([]);
+      const next = yield* registry
+        .request(issued.token, { ...input, scope })
+        .pipe(Effect.forkScoped);
+      const nextPending = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      )[0]!;
+      yield* registry.respond({ requestId: nextPending.requestId, decision: "deny" });
+      expect(yield* Fiber.join(next)).toEqual({ decision: "deny" });
+      yield* registry.revokeGrant(pending.requestId);
+    }),
+);
+
+it.effect("revokes a session grant without revoking its credential", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry();
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-session-revoke"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const first = yield* registry.request(issued.token, input).pipe(Effect.forkScoped);
+    const pending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+    yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" });
+    expect(yield* Fiber.join(first)).toEqual({ decision: "allow" });
+    yield* TestClock.adjust("2 hours");
+    const grant = Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))[0]!;
+    expect(grant.expiresAt).toBeNull();
+    expect(yield* registry.request(issued.token, input)).toEqual({ decision: "allow" });
+
+    yield* registry.revokeGrant(grant.grantId);
+    yield* registry.revokeGrant(grant.grantId);
+
+    expect(yield* registry.isTokenActive(issued.token)).toBe(true);
+    expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual([]);
+    const next = yield* registry.request(issued.token, input).pipe(Effect.forkScoped);
+    const nextPending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+    yield* registry.respond({ requestId: nextPending.requestId, decision: "deny" });
+    expect(yield* Fiber.join(next)).toEqual({ decision: "deny" });
+  }),
+);
+
+it.effect.each(["restore", "expire", "revoke"] as const)(
+  "%s preserves timed grant identity and deadline across suspended conversation bindings",
+  (action) =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry();
+      const identity = {
+        threadId: ThreadId.make("thread-suspended-grant"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeSessionId: ProviderSessionId.make("runtime-suspended-grant"),
+      };
+      const issued = yield* registry.issue(identity);
+      const binding = {
+        ...identity,
+        providerSessionId: issued.providerSessionId,
+        nativeThreadId: "native-suspended-grant",
+      };
+      yield* registry.bindConversation(binding);
+      const first = yield* registry.request(issued.token, input).pipe(Effect.forkScoped);
+      const pending = Option.getOrThrow(
+        yield* registry.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      )[0]!;
+      yield* registry.respond({
+        requestId: pending.requestId,
+        decision: "allow-session",
+        duration: "15-minutes",
+      });
+      expect(yield* Fiber.join(first)).toEqual({ decision: "allow" });
+      const grants = Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead));
+      yield* registry.suspendProviderSession(issued.providerSessionId);
+      expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual(
+        grants,
+      );
+
+      if (action === "expire") yield* TestClock.adjust("15 minutes");
+      if (action === "revoke") yield* registry.revokeGrant(pending.requestId);
+      const replacement = yield* registry.issue(identity);
+      yield* registry.bindConversation({
+        ...binding,
+        providerSessionId: replacement.providerSessionId,
+      });
+
+      if (action === "restore") {
+        expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual(
+          grants,
+        );
+        expect(yield* registry.request(replacement.token, input)).toEqual({ decision: "allow" });
+      } else {
+        expect(Option.getOrThrow(yield* registry.subscribeGrants().pipe(Stream.runHead))).toEqual(
+          [],
+        );
+        const next = yield* registry.request(replacement.token, input).pipe(Effect.forkScoped);
+        const nextPending = Option.getOrThrow(
+          yield* registry.subscribe().pipe(
+            Stream.filter((requests) => requests.length === 1),
+            Stream.runHead,
+          ),
+        )[0]!;
+        yield* registry.respond({ requestId: nextPending.requestId, decision: "deny" });
+        expect(yield* Fiber.join(next)).toEqual({ decision: "deny" });
+      }
+    }),
+);
 
 it.effect("denies invalid and revoked tokens", () =>
   Effect.gen(function* () {
@@ -74,7 +246,7 @@ it.effect("remembers unscoped custom hook approvals only for the authenticated s
     expect(
       yield* registry.respond({ requestId: unscoped.requestId, decision: "allow-session" }),
     ).toBe(true);
-    expect(yield* Fiber.join(first)).toEqual({ decision: "allow-session" });
+    expect(yield* Fiber.join(first)).toEqual({ decision: "allow" });
     expect(yield* registry.request(issued.token, { ...input, command: "git status" })).toEqual({
       decision: "allow",
     });
@@ -107,56 +279,66 @@ it.effect("remembers unscoped custom hook approvals only for the authenticated s
   }),
 );
 
-it.effect.each([undefined, { key: "repo:one", label: "repo one" }])(
-  "resolves matching pending approvals together for scope %j",
-  (scope) =>
-    Effect.gen(function* () {
-      const registry = yield* makeRegistry();
-      const issued = yield* registry.issue({
-        threadId: ThreadId.make("thread-batch"),
-        providerInstanceId: ProviderInstanceId.make("codex"),
-      });
-      const other = yield* registry.issue({
-        threadId: ThreadId.make("thread-batch-other"),
-        providerInstanceId: ProviderInstanceId.make("codex"),
-      });
-      const matchingInput = { ...input, ...(scope ? { scope } : {}) };
-      const isolatedInput = {
-        ...input,
-        ...(scope ? {} : { scope: { key: "unscoped", label: "Explicit unscoped key" } }),
-      };
-      const update = yield* Effect.forkScoped(
-        registry.subscribe().pipe(
-          Stream.filter((pending) => pending.length === 4),
-          Stream.runHead,
-        ),
-      );
-      const first = yield* Effect.forkScoped(registry.request(issued.token, matchingInput));
-      const second = yield* Effect.forkScoped(
-        registry.request(issued.token, { ...matchingInput, command: "git diff" }),
-      );
-      const isolated = yield* Effect.forkScoped(registry.request(issued.token, isolatedInput));
-      const otherSession = yield* Effect.forkScoped(registry.request(other.token, matchingInput));
-      const pending = Option.getOrThrow(yield* Fiber.join(update));
-      const selected = pending.find(
-        (request) => request.threadId === "thread-batch" && request.scope?.key === scope?.key,
-      )!;
+it.effect.each(
+  [undefined, { key: "repo:one", label: "repo one" }].flatMap((scope) =>
+    (["session", "15-minutes", "1-hour"] as const).map((duration) => ({ scope, duration })),
+  ),
+)("resolves matching pending approvals together for %j", ({ scope, duration }) =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry();
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-batch"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const other = yield* registry.issue({
+      threadId: ThreadId.make("thread-batch-other"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    const matchingInput = { ...input, ...(scope ? { scope } : {}) };
+    const isolatedInput = {
+      ...input,
+      ...(scope ? {} : { scope: { key: "unscoped", label: "Explicit unscoped key" } }),
+    };
+    const update = yield* Effect.forkScoped(
+      registry.subscribe().pipe(
+        Stream.filter((pending) => pending.length === 4),
+        Stream.runHead,
+      ),
+    );
+    const first = yield* Effect.forkScoped(registry.request(issued.token, matchingInput));
+    const second = yield* Effect.forkScoped(
+      registry.request(issued.token, { ...matchingInput, command: "git diff" }),
+    );
+    const isolated = yield* Effect.forkScoped(registry.request(issued.token, isolatedInput));
+    const otherSession = yield* Effect.forkScoped(registry.request(other.token, matchingInput));
+    const pending = Option.getOrThrow(yield* Fiber.join(update));
+    const selected = pending.find(
+      (request) => request.threadId === "thread-batch" && request.scope?.key === scope?.key,
+    )!;
 
-      expect(
-        yield* registry.respond({ requestId: selected.requestId, decision: "allow-session" }),
-      ).toBe(true);
-      expect(yield* Fiber.join(first)).toEqual({ decision: "allow-session" });
-      expect(yield* Fiber.join(second)).toEqual({ decision: "allow-session" });
-      const remaining = Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead));
-      expect(remaining).toHaveLength(2);
-      expect(remaining.some((request) => request.threadId === "thread-batch-other")).toBe(true);
-      expect(
-        yield* registry.respond({ requestId: selected.requestId, decision: "allow-session" }),
-      ).toBe(false);
-      yield* registry.revokeAll;
-      expect(yield* Fiber.join(isolated)).toEqual({ decision: "deny" });
-      expect(yield* Fiber.join(otherSession)).toEqual({ decision: "deny" });
-    }),
+    expect(
+      yield* registry.respond({
+        requestId: selected.requestId,
+        decision: "allow-session",
+        duration,
+      }),
+    ).toBe(true);
+    expect(yield* Fiber.join(first)).toEqual({ decision: "allow" });
+    expect(yield* Fiber.join(second)).toEqual({ decision: "allow" });
+    const remaining = Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead));
+    expect(remaining).toHaveLength(2);
+    expect(remaining.some((request) => request.threadId === "thread-batch-other")).toBe(true);
+    expect(
+      yield* registry.respond({
+        requestId: selected.requestId,
+        decision: "allow-session",
+        duration,
+      }),
+    ).toBe(false);
+    yield* registry.revokeAll;
+    expect(yield* Fiber.join(isolated)).toEqual({ decision: "deny" });
+    expect(yield* Fiber.join(otherSession)).toEqual({ decision: "deny" });
+  }),
 );
 
 it.effect.each(["allow", "deny"] as const)(
@@ -215,7 +397,7 @@ it.effect.each(["replacement", "thread", "session", "all"] as const)(
       const first = yield* Effect.forkScoped(registry.request(issued.token, input));
       const pending = Option.getOrThrow(yield* Fiber.join(update))[0]!;
       yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" });
-      expect(yield* Fiber.join(first)).toEqual({ decision: "allow-session" });
+      expect(yield* Fiber.join(first)).toEqual({ decision: "allow" });
       expect(yield* registry.request(issued.token, input)).toEqual({ decision: "allow" });
 
       if (lifecycle === "thread") yield* registry.revokeThread(threadId);
@@ -262,7 +444,7 @@ it.effect("restores only matching native scopes and ignores stale conversation b
       ),
     )[0]!;
     yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" });
-    expect(yield* Fiber.join(waiting)).toEqual({ decision: "allow-session" });
+    expect(yield* Fiber.join(waiting)).toEqual({ decision: "allow" });
 
     const replacement = yield* registry.issue(identity);
     yield* registry.bindConversation({ ...binding, nativeThreadId: "codex:stale-native" });
@@ -451,7 +633,7 @@ it.effect(
       const initial = yield* Effect.forkScoped(registry.request(first.token, { ...input, scope }));
       const initialPending = Option.getOrThrow(yield* Fiber.join(initialUpdate))[0]!;
       yield* registry.respond({ requestId: initialPending.requestId, decision: "allow-session" });
-      expect(yield* Fiber.join(initial)).toEqual({ decision: "allow-session" });
+      expect(yield* Fiber.join(initial)).toEqual({ decision: "allow" });
       expect(
         yield* registry.request(first.token, { ...input, command: "python another.py", scope }),
       ).toEqual({ decision: "allow" });

@@ -639,7 +639,7 @@ it.effect.each([
           ),
         )[0]!;
         yield* hooks.respond({ requestId: pending.requestId, decision: "allow-session" });
-        assert.deepEqual(yield* Fiber.join(first), { decision: "allow-session" });
+        assert.deepEqual(yield* Fiber.join(first), { decision: "allow" });
 
         yield* manager.release({
           providerSessionId,

@@ -1955,6 +1955,8 @@ export const layerWsRpc = (
       const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.approvalsExplain]: (input) => approvalExplanations.explain(input),
         [WS_METHODS.hookApprovalsSubscribe]: () => hookApprovals.subscribe(),
+        [WS_METHODS.hookApprovalsSubscribeGrants]: () => hookApprovals.subscribeGrants(),
+        [WS_METHODS.hookApprovalsRevokeGrant]: (input) => hookApprovals.revokeGrant(input.grantId),
         [WS_METHODS.hookApprovalsRespond]: (input) =>
           hookApprovals.respond(input).pipe(
             Effect.flatMap((responded) =>

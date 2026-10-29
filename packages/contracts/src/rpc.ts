@@ -27,6 +27,8 @@ import * as Schema from "effect/Schema";
 import { ApprovalExplanationInput, ApprovalExplanationResult } from "./approvalExplanation.ts";
 import {
   HookApprovalRequest,
+  HookApprovalGrant,
+  HookApprovalRevokeGrantInput,
   HookApprovalRespondError,
   HookApprovalRespondInput,
 } from "./hookApproval.ts";
@@ -593,6 +595,8 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   hookApprovalsSubscribe: "hookApprovals.subscribe",
   hookApprovalsRespond: "hookApprovals.respond",
+  hookApprovalsSubscribeGrants: "hookApprovals.subscribeGrants",
+  hookApprovalsRevokeGrant: "hookApprovals.revokeGrant",
   approvalsExplain: "approvals.explain",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
@@ -2170,6 +2174,17 @@ const WsHookApprovalsSubscribeRpc = Rpc.make(WS_METHODS.hookApprovalsSubscribe, 
   stream: true,
   error: EnvironmentAuthorizationError,
 });
+const WsHookApprovalsSubscribeGrantsRpc = Rpc.make(WS_METHODS.hookApprovalsSubscribeGrants, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(HookApprovalGrant),
+  stream: true,
+  error: EnvironmentAuthorizationError,
+});
+const WsHookApprovalsRevokeGrantRpc = Rpc.make(WS_METHODS.hookApprovalsRevokeGrant, {
+  payload: HookApprovalRevokeGrantInput,
+  success: Schema.Void,
+  error: EnvironmentAuthorizationError,
+});
 const WsApprovalsExplainRpc = Rpc.make(WS_METHODS.approvalsExplain, {
   payload: ApprovalExplanationInput,
   success: ApprovalExplanationResult,
@@ -2314,6 +2329,8 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   WsHookApprovalsSubscribeRpc,
+  WsHookApprovalsSubscribeGrantsRpc,
+  WsHookApprovalsRevokeGrantRpc,
   WsApprovalsExplainRpc,
   WsHookApprovalsRespondRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
