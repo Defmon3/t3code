@@ -20,7 +20,6 @@ import type {
   ModelSelection,
   ProjectId,
   PreviewAnnotationPayload,
-  ProviderApprovalDecision,
   ThreadContextRecord,
   ProviderInteractionMode,
   ResolvedKeybindingsConfig,
@@ -38,6 +37,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
@@ -484,10 +484,7 @@ export interface ChatComposerProps {
   onResume: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
-  onRespondToApproval: (
-    requestId: RuntimeRequestId,
-    decision: ProviderApprovalDecision,
-  ) => Promise<unknown>;
+  onRespondToApproval: ApprovalResponder;
   onSelectActivePendingUserInputOption: (questionId: string, optionValue: string) => void;
   onAdvanceActivePendingUserInput: () => void;
   onDismissActivePendingUserInput: (requestId: RuntimeRequestId) => void;
@@ -3456,6 +3453,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </ComposerBanner.Content>
                     <ComposerBanner.Actions>
                       <ComposerPendingApprovalActions
+                        key={activePendingApproval.requestId}
                         requestId={activePendingApproval.requestId}
                         disabled={!canOperateThread}
                         isResponding={respondingRequestIds.includes(
@@ -3463,6 +3461,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         )}
                         options={activePendingApproval.options}
                         canRespond={activePendingApproval.responseCapability === "live"}
+                        supportsFeedback={activePendingApproval.supportsFeedback}
                         onRespondToApproval={onRespondToApproval}
                       />
                     </ComposerBanner.Actions>

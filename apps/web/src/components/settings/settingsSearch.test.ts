@@ -53,6 +53,24 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
+  it.each(["Gemini", "Wonton", "approval explanation", "approval API key"])(
+    "finds the environment approval explanation key with %s",
+    (query) => {
+      expect(searchSettings(query)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "approval-explanation-api-key",
+            to: "/settings/threads",
+            scope: "environment",
+          }),
+        ]),
+      );
+      expect(getSettingsSearchTargetScope("approval-explanation-api-key")?.scope).toBe(
+        "environment",
+      );
+    },
+  );
+
   it("matches titles, sections, and remembered setting details", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);

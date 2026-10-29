@@ -1,6 +1,9 @@
 import { assert, it, vi } from "@effect/vitest";
+import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   NodeId,
+  ProviderInstanceId,
   ProviderSessionId,
   RuntimeRequestId,
   ThreadId,
@@ -8,7 +11,10 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -30,6 +36,69 @@ const resolvedRuntimeRequest = (
   createdAt: DateTime.makeUnsafe("2026-07-29T00:00:00.000Z"),
   resolvedAt: DateTime.makeUnsafe("2026-07-29T00:00:01.000Z"),
 });
+
+it.effect("delivers mirrored hook denial feedback to the waiting hook", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-hook-feedback");
+      const providerSessionId = ProviderSessionId.make("session-hook-feedback");
+      const hooks = yield* HookApprovalRegistry.__testing
+        .make()
+        .pipe(Effect.provide(NodeServices.layer));
+      const credential = yield* hooks.issue({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeSessionId: providerSessionId,
+      });
+      const response = yield* hooks
+        .request(credential.token, {
+          command: "git status",
+          cwd: "C:/repo",
+          reason: "Check state",
+        })
+        .pipe(Effect.forkScoped);
+      const pending = Option.getOrThrow(
+        yield* hooks.subscribe().pipe(
+          Stream.filter((requests) => requests.length === 1),
+          Stream.runHead,
+        ),
+      )[0]!;
+      const requestId = RuntimeRequestId.make(`custom-hook:${pending.requestId}`);
+      yield* Effect.gen(function* () {
+        const service = yield* RuntimeRequestService.RuntimeRequestServiceV2;
+        yield* service.respond({
+          threadId,
+          providerSessionId,
+          requestId,
+          decision: "decline",
+          feedback: "Use a local command.",
+        });
+      }).pipe(
+        Effect.provide(
+          RuntimeRequestService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(ProjectionStore.ProjectionStoreV2)({
+                  getRuntimeRequest: () =>
+                    Effect.succeed(resolvedRuntimeRequest(requestId, providerSessionId)),
+                }),
+                Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+                  get: () => Effect.die("Hook responses must not reach native provider sessions."),
+                }),
+                Layer.succeed(HookApprovalRegistry.HookApprovalRegistry, hooks),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      assert.deepEqual(yield* Fiber.join(response), {
+        decision: "deny",
+        feedback: "Use a local command.",
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ),
+);
 
 it.effect("routes mirrored hook responses through the hook registry", () =>
   Effect.gen(function* () {

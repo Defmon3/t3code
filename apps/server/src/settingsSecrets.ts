@@ -155,5 +155,19 @@ export function mapSettingsSecrets(
       ) as EasDeviceHostConfig,
   );
 
-  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources, easDeviceHosts };
+  const approvalKey = map({
+    secretName: "approval-explanation-api-key",
+    kind: "field",
+    value: settings.approvalExplanationApiKey,
+    redacted: settings.approvalExplanationApiKey === SECRET_REDACTED,
+    sensitive: true,
+  });
+  return {
+    ...settings,
+    approvalExplanationApiKey: approvalKey.redacted ? SECRET_REDACTED : approvalKey.value,
+    providerInstances,
+    sourceControlHosts,
+    usageLimitSources,
+    easDeviceHosts,
+  };
 }

@@ -54,6 +54,7 @@ import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeConte
 import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
+import { ApprovalExplanationSettings } from "./ApprovalExplanationSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
   getCustomModelOptionsByInstance,
@@ -1823,6 +1824,7 @@ export function ThreadsSettingsPanel() {
             )
           }
         />
+        <ApprovalExplanationSettings />
         <AdvancedSettings
           targetIds={[
             searchableSetting("thread-title-instructions").id,

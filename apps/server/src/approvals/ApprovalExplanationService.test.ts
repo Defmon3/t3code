@@ -16,11 +16,6 @@ import {
   type OrchestrationV2RuntimeRequest,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import {
-  decodeJsonReply,
-  fromRunner,
-  type Runner,
-} from "@t3tools/provider-core/server/textGenerationOperations";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -37,8 +32,7 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
-import * as Settings from "../serverSettings.ts";
-import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as ApprovalExplanationGenerator from "./ApprovalExplanationGenerator.ts";
 import * as ApprovalExplanations from "./ApprovalExplanationService.ts";
 
 const threadId = ThreadId.make("approval-thread");
@@ -72,9 +66,6 @@ const stores = Layer.mergeAll(
 const dependencies = Layer.mergeAll(
   EventSink.layer.pipe(Layer.provideMerge(stores)),
   Hooks.layer.pipe(Layer.provide(Layer.succeed(HttpServer.HttpServer, server))),
-  Settings.layerTest({
-    textGenerationModelSelection: { ...modelSelection, model: "global-model" },
-  }),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 const seed = Effect.gen(function* () {
@@ -199,13 +190,18 @@ const writeRequest = Effect.fn("test.writeApprovalRequest")(function* (
 
 const runWith = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-  runner: Runner = (request) => decodeJsonReply(request, "Fixture", JSON.stringify(content)),
+  generate: ApprovalExplanationGenerator.ApprovalExplanationGenerator["Service"]["generate"] = () =>
+    Effect.succeed(content),
 ) =>
   effect.pipe(
     Effect.provide(
       ApprovalExplanations.layer.pipe(
         Layer.provideMerge(dependencies),
-        Layer.provide(Layer.succeed(TextGeneration.TextGeneration, fromRunner("Fixture", runner))),
+        Layer.provide(
+          Layer.succeed(ApprovalExplanationGenerator.ApprovalExplanationGenerator, {
+            generate,
+          }),
+        ),
       ),
     ),
     Effect.scoped,
@@ -218,24 +214,17 @@ it.effect.each(["/workspace/project-worktree", null])(
       Effect.gen(function* () {
         yield* seed;
         yield* writeRequest("pending", "command", true, workingDirectory);
-        const settings = yield* Settings.ServerSettingsService;
-        yield* settings.updateSettings({
-          projectSettingsOverrides: {
-            [projectId]: { textGenerationModelSelection: modelSelection },
-          },
-        });
         const service = yield* ApprovalExplanations.ApprovalExplanationService;
         expect(yield* service.explain(nativeInput)).toEqual({ status: "ready", ...content });
       }),
       (request) => {
-        expect(request.cwd).toBe("/workspace/project-worktree");
-        expect(request.modelSelection).toEqual(modelSelection);
-        expect(JSON.parse(request.prompt.split("\n\n").at(-1)!)).toEqual({
+        expect(request).toEqual({
+          cwd: "/workspace/project-worktree",
           command,
           reason: "Restore the file to its committed contents.",
-          workingDirectory,
+          workingDirectory: workingDirectory ?? undefined,
         });
-        return decodeJsonReply(request, "Fixture", JSON.stringify(content));
+        return Effect.succeed(content);
       },
     ),
 );
@@ -275,12 +264,12 @@ it.effect("deduplicates simultaneous clients and caches only this pending reques
         expect(yield* service.explain(nativeInput)).toEqual({ status: "ready", ...content });
         expect(requests).toBe(1);
       }),
-      (request) =>
+      () =>
         Effect.gen(function* () {
           requests += 1;
           yield* Deferred.succeed(started, undefined);
           yield* Deferred.await(release);
-          return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+          return content;
         }),
     );
   }),
@@ -304,11 +293,11 @@ it.effect("discards a late result after the approval was answered", () =>
           reason: "request_not_pending",
         });
       }),
-      (request) =>
+      () =>
         Effect.gen(function* () {
           yield* Deferred.succeed(started, undefined);
           yield* Deferred.await(release);
-          return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+          return content;
         }),
     );
   }),
@@ -337,12 +326,12 @@ it.effect("keeps shared generation alive when one client leaves", () =>
         expect(wasInterrupted).toBe(false);
         expect(requests).toBe(1);
       }),
-      (request) =>
+      () =>
         Effect.gen(function* () {
           requests += 1;
           yield* Deferred.succeed(started, undefined);
           yield* Deferred.await(release);
-          return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+          return content;
         }).pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined))),
     );
   }),
@@ -395,7 +384,7 @@ it.effect("deduplicates replacement clients while obsolete generation is stoppin
             );
           }
           yield* Deferred.await(release);
-          return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+          return content;
         }),
     );
   }),
@@ -439,11 +428,11 @@ it.effect(
         (request) =>
           Effect.gen(function* () {
             if (request.cwd === refreshedDirectory) {
-              return yield* decodeJsonReply(request, "Fixture", JSON.stringify(refreshedContent));
+              return refreshedContent;
             }
             yield* Deferred.succeed(started, undefined);
             yield* Deferred.await(release);
-            return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+            return content;
           }).pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined))),
       );
     }),
@@ -474,18 +463,20 @@ it.effect("explains a custom hook and keeps its approval action usable", () =>
       ).toEqual({ status: "unavailable", reason: "request_not_pending" });
       expect(yield* service.explain(input)).toEqual({ status: "ready", ...content });
       expect(yield* hooks.respond({ requestId: request.requestId, decision: "deny" })).toBe(true);
-      expect(yield* Fiber.join(response)).toBe("deny");
+      expect(yield* Fiber.join(response)).toEqual({ decision: "deny" });
       expect(yield* service.explain(input)).toEqual({
         status: "unavailable",
         reason: "request_not_pending",
       });
     }),
     (request) => {
-      expect(request.cwd).toBe("/hook-workspace");
-      expect(JSON.parse(request.prompt.split("\n\n").at(-1)!)).toMatchObject({
+      expect(request).toEqual({
+        cwd: "/hook-workspace",
         workingDirectory: "/hook-workspace",
+        command,
+        reason: "Restore file",
       });
-      return decodeJsonReply(request, "Fixture", JSON.stringify(content));
+      return Effect.succeed(content);
     },
   ),
 );
@@ -574,7 +565,7 @@ it.effect.each(["allow", "deny"] as const)(
           expect(yield* hooks.respond({ requestId: request.requestId, decision })).toBe(true);
 
           yield* Deferred.await(interrupted);
-          expect(yield* Fiber.join(response)).toBe(decision);
+          expect(yield* Fiber.join(response)).toEqual({ decision });
           expect(yield* Fiber.join(explanation)).toEqual({
             status: "unavailable",
             reason: "request_not_pending",
@@ -589,7 +580,7 @@ it.effect.each(["allow", "deny"] as const)(
     }),
 );
 
-it.effect.each(["failed", "unsupported", "defect"] as const)(
+it.effect.each(["failed", "missing-api-key", "defect"] as const)(
   "reports %s generation without hanging or resolving the approval",
   (outcome) =>
     runWith(
@@ -598,8 +589,8 @@ it.effect.each(["failed", "unsupported", "defect"] as const)(
         yield* writeRequest();
         const service = yield* ApprovalExplanations.ApprovalExplanationService;
         expect(yield* service.explain(nativeInput)).toMatchObject(
-          outcome === "unsupported"
-            ? { status: "unavailable", reason: "provider_unsupported" }
+          outcome === "missing-api-key"
+            ? { status: "error", message: "Approval explanation API key is not configured." }
             : { status: "error" },
         );
         const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -611,8 +602,10 @@ it.effect.each(["failed", "unsupported", "defect"] as const)(
           : Effect.fail(
               new TextGenerationError({
                 operation: "generateApprovalExplanation",
-                detail: "Secret provider failure details",
-                ...(outcome === "unsupported" ? { reason: "provider_unsupported" as const } : {}),
+                detail:
+                  outcome === "missing-api-key"
+                    ? "Approval explanation API key is not configured."
+                    : "Secret provider failure details",
               }),
             ),
     ),
@@ -627,3 +620,27 @@ it.effect("reports a missing thread honestly without generating", () =>
     () => Effect.die("Generation must not run for a missing thread"),
   ),
 );
+
+it.effect("retries a pending explanation after a generation failure", () => {
+  let attempts = 0;
+  return runWith(
+    Effect.gen(function* () {
+      yield* seed;
+      yield* writeRequest();
+      const service = yield* ApprovalExplanations.ApprovalExplanationService;
+      expect(yield* service.explain(nativeInput)).toMatchObject({ status: "error" });
+      expect(yield* service.explain(nativeInput)).toEqual({ status: "ready", ...content });
+    }),
+    () => {
+      attempts += 1;
+      return attempts === 1
+        ? Effect.fail(
+            new TextGenerationError({
+              operation: "generateApprovalExplanation",
+              detail: "Unavailable",
+            }),
+          )
+        : Effect.succeed(content);
+    },
+  );
+});

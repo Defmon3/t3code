@@ -2823,6 +2823,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       : {}),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(process.env.T3CODE_BUNDLE_APPROVAL_WORKER === "1"
+        ? [{ from: "apps/desktop/prod-resources/approval-worker", to: "approval-worker" }]
+        : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
@@ -3829,6 +3832,13 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
+  if (process.env.T3CODE_BUNDLE_APPROVAL_WORKER === "1") {
+    const workerName = options.platform === "win" ? "t3-approval-worker.exe" : "t3-approval-worker";
+    const source = path.join(repoRoot, "apps/server/approval-worker/dist", workerName);
+    const destination = path.join(stageProdResourcesDir, "approval-worker", workerName);
+    yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
+    yield* fs.copyFile(source, destination);
+  }
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
   const configuredMacPasskeySigning =

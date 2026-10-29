@@ -168,7 +168,7 @@ it("keeps custom hook choices alongside a provider approval with the same native
   });
   expect(hookApproval?.detail).toContain(hookRequest.command);
   expect(hookApproval?.detail).toContain(hookRequest.reason);
-  expect(hookApproval?.supportsFeedback).not.toBe(true);
+  expect(hookApproval?.supportsFeedback).toBe(true);
 });
 
 it("retains answers, selections and question position after leaving chat, including while the projection reloads", async () => {

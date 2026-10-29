@@ -3,7 +3,6 @@ import {
   type ApprovalExplanationInput,
   type ApprovalExplanationResult,
 } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -19,8 +18,7 @@ import * as HookApprovalRegistry from "../hooks/HookApprovalRegistry.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as ApprovalExplanationGenerator from "./ApprovalExplanationGenerator.ts";
 
 export class ApprovalExplanationService extends Context.Service<
   ApprovalExplanationService,
@@ -53,8 +51,7 @@ const make = Effect.gen(function* () {
   const hooks = yield* HookApprovalRegistry.HookApprovalRegistry;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
-  const settings = yield* ServerSettings.ServerSettingsService;
-  const generation = yield* TextGeneration.TextGeneration;
+  const generation = yield* ApprovalExplanationGenerator.ApprovalExplanationGenerator;
   const events = yield* EventSink.EventSinkV2;
   const scope = yield* Effect.scope;
   const pending = new Map<
@@ -132,16 +129,11 @@ const make = Effect.gen(function* () {
           if (Option.isNone(project)) {
             return { status: "unavailable", reason: "project_unavailable" } as const;
           }
-          const resolvedSettings = resolveProjectSettings(
-            yield* settings.getSettings,
-            thread.projectId,
-          ).settings;
-          const content = yield* generation.generateApprovalExplanation({
+          const content = yield* generation.generate({
             cwd: command.cwd ?? thread.worktreePath ?? project.value.workspaceRoot,
             workingDirectory: command.cwd,
             command: command.command,
             reason: command.reason,
-            modelSelection: resolvedSettings.textGenerationModelSelection,
           });
           return { status: "ready", ...content } as const;
         }).pipe(
@@ -151,8 +143,9 @@ const make = Effect.gen(function* () {
               cause,
             }).pipe(
               Effect.as(
-                cause._tag === "TextGenerationError" && cause.reason === "provider_unsupported"
-                  ? ({ status: "unavailable", reason: "provider_unsupported" } as const)
+                cause._tag === "TextGenerationError" &&
+                  cause.detail === "Approval explanation API key is not configured."
+                  ? ({ status: "error", message: cause.detail } as const)
                   : generationFailure,
               ),
             ),
@@ -176,7 +169,13 @@ const make = Effect.gen(function* () {
                 cause,
               }).pipe(Effect.as(generationFailure)),
           ),
-          Effect.flatMap((value) => Deferred.succeed(result, value)),
+          Effect.flatMap((value) =>
+            Effect.sync(() => {
+              if (value.status === "error" && pending.get(key)?.result === result) {
+                pending.delete(key);
+              }
+            }).pipe(Effect.andThen(Deferred.succeed(result, value))),
+          ),
           Effect.onExit((exit) =>
             (Exit.isFailure(exit)
               ? Deferred.succeed(

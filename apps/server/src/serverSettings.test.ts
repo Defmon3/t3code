@@ -68,6 +68,29 @@ const layerServerSettingsWithSecrets = () =>
     ),
   );
 
+it.effect("stores the approval explanation key separately and supports clearing it", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettingsModule.ServerSettingsService;
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const config = yield* ServerConfig.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    yield* settings.updateSettings({ approvalExplanationApiKey: "test-approval-key" });
+    const saved = yield* settings.getSettings;
+    assert.equal(saved.approvalExplanationApiKey, "test-approval-key");
+    assert.equal(
+      ServerSettingsModule.redactServerSettingsForClient(saved).approvalExplanationApiKey,
+      "••••••",
+    );
+    assert.notInclude(yield* fs.readFileString(config.settingsPath), "test-approval-key");
+    assert.isTrue(Option.isSome(yield* secrets.get("approval-explanation-api-key")));
+    yield* settings.updateSettings({ approvalExplanationApiKey: "" });
+    assert.equal((yield* settings.getSettings).approvalExplanationApiKey, "");
+    assert.isTrue(Option.isNone(yield* secrets.get("approval-explanation-api-key")));
+  }).pipe(
+    Effect.provide(layerServerSettingsWithSecrets().pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
+);
+
 const layerFailingSecretStore = (cause: ServerSecretStore.SecretStoreError) =>
   Layer.succeed(
     ServerSecretStore.ServerSecretStore,

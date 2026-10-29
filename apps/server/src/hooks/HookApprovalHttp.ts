@@ -1,4 +1,4 @@
-import { HookApprovalHttpRequest, type HookApprovalHttpResponse } from "@t3tools/contracts";
+import { HookApprovalHttpRequest } from "@t3tools/contracts";
 import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -45,13 +45,13 @@ export const handleHookApprovalRequest = Effect.fn("HookApprovalHttp.handleHookA
     );
     if (!input) return malformedRequest;
 
-    const decision = yield* hookApprovals.request(token, {
+    const response = yield* hookApprovals.request(token, {
       command: input.command,
       reason: input.reason,
       cwd: input.cwd,
       ...(input.scope ? { scope: input.scope } : {}),
     });
-    return HttpServerResponse.jsonUnsafe({ decision } satisfies HookApprovalHttpResponse, {
+    return HttpServerResponse.jsonUnsafe(response, {
       headers: { "cache-control": "no-store" },
     });
   },

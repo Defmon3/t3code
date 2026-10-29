@@ -37,6 +37,7 @@ export type HookApprovalRequest = typeof HookApprovalRequest.Type;
 export const HookApprovalRespondInput = Schema.Struct({
   requestId: HookApprovalRequestId,
   decision: HookApprovalDecision,
+  feedback: Schema.optional(TrimmedNonEmptyString),
 });
 export type HookApprovalRespondInput = typeof HookApprovalRespondInput.Type;
 
@@ -50,6 +51,7 @@ export type HookApprovalHttpRequest = typeof HookApprovalHttpRequest.Type;
 
 export const HookApprovalHttpResponse = Schema.Struct({
   decision: HookApprovalDecision,
+  feedback: Schema.optional(TrimmedNonEmptyString),
 });
 export type HookApprovalHttpResponse = typeof HookApprovalHttpResponse.Type;
 

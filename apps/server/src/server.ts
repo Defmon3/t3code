@@ -5,6 +5,7 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
 import * as ApprovalExplanationService from "./approvals/ApprovalExplanationService.ts";
+import * as ApprovalExplanationGenerator from "./approvals/ApprovalExplanationGenerator.ts";
 import * as HookApprovalHttp from "./hooks/HookApprovalHttp.ts";
 import { synchronizeHookApprovalPhase } from "./hooks/HookApprovalPhase.ts";
 import * as EventSink from "./orchestration-v2/EventSink.ts";
@@ -742,6 +743,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
 );
 
 const layerRuntimeDependencies = ApprovalExplanationService.layer.pipe(
+  Layer.provide(ApprovalExplanationGenerator.layer.pipe(Layer.provide(layerServerSettings))),
   Layer.provide(ProjectionStoreV2.layer),
   Layer.provideMerge(layerRuntimeCoreDependencies),
   Layer.provideMerge(layerUsage),

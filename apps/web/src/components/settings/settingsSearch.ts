@@ -629,6 +629,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles prompt custom style naming rename regenerate"],
   },
   {
+    id: "approval-explanation-api-key",
+    title: "Approval explanations",
+    to: "/settings/threads",
+    scope: "environment",
+    searchTerms: ["Gemini Wonton approval command explanation API key secret credential"],
+  },
+  {
     id: "app-version",
     title: "Version",
     to: "/settings/about",

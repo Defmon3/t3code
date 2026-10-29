@@ -1,18 +1,16 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import {
   approvalExplanationTarget,
   approvalExplanationView,
   approvalJudgementLabels,
 } from "@t3tools/client-runtime/state/approval-explanations";
-import type {
-  ProviderApprovalDecision,
-  RuntimeRequestId,
-  ScopedThreadRef,
-} from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
 import { useId, useState } from "react";
 import type { PendingApproval } from "../../session-logic";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -30,16 +28,13 @@ export function ComposerCommandApproval({
   readonly threadRef: ScopedThreadRef;
   readonly disabled: boolean;
   readonly isResponding: boolean;
-  readonly onRespondToApproval: (
-    requestId: RuntimeRequestId,
-    decision: ProviderApprovalDecision,
-  ) => Promise<unknown>;
+  readonly onRespondToApproval: ApprovalResponder;
 }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
-  const result = useAtomValue(
-    approvalExplanationAtom(approvalExplanationTarget(threadRef, approval)),
-  );
+  const explanationAtom = approvalExplanationAtom(approvalExplanationTarget(threadRef, approval));
+  const result = useAtomValue(explanationAtom);
+  const refreshExplanation = useAtomRefresh(explanationAtom);
   const explanation = approvalExplanationView(result);
   return (
     <ComposerBanner.Row layout="approval-stacked" data-chat-composer-collapsed-controls="true">
@@ -96,6 +91,18 @@ export function ComposerCommandApproval({
             ) : (
               <span className="whitespace-pre-wrap wrap-anywhere">{explanation.message}</span>
             )}
+            {explanation.status === "error" ? (
+              <span>
+                <Button
+                  size="sm-multiline"
+                  variant="outline"
+                  disabled={result.waiting}
+                  onClick={refreshExplanation}
+                >
+                  Retry explanation
+                </Button>
+              </span>
+            ) : null}
           </div>
         </div>
       </ComposerBanner.Content>
@@ -106,6 +113,7 @@ export function ComposerCommandApproval({
           isResponding={isResponding}
           options={approval.options}
           canRespond={approval.responseCapability === "live"}
+          supportsFeedback={approval.supportsFeedback}
           onRespondToApproval={onRespondToApproval}
           commandExpansion={{ expanded, detailId, onToggle: () => setExpanded((value) => !value) }}
         />

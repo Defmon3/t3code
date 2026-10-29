@@ -50,6 +50,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as HookApprovalRegistry from "../hooks/HookApprovalRegistry.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -327,6 +328,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly beforeOpen?: (input: {
       readonly providerSessionId: ProviderSessionId;
       readonly initialProviderItemIdentityVersion?: 2;
+      readonly hookApprovalEnvironment?: Readonly<Record<string, string>>;
     }) => Effect.Effect<void>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
@@ -466,6 +468,7 @@ function layerTest(input: {
   readonly beforeOpen?: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly initialProviderItemIdentityVersion?: 2;
+    readonly hookApprovalEnvironment?: Readonly<Record<string, string>>;
   }) => Effect.Effect<void>;
   readonly failReleaseEventWrites?: boolean;
   readonly flakyReleaseWrites?: FlakyReleaseWrites;
@@ -485,6 +488,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly hookApprovals?: HookApprovalRegistry.HookApprovalRegistryShape;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -562,6 +566,9 @@ function layerTest(input: {
           layerTestStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.hookApprovals === undefined
+            ? []
+            : [Layer.succeed(HookApprovalRegistry.HookApprovalRegistry, input.hookApprovals)]),
         ),
       ),
     ),
@@ -572,6 +579,132 @@ const fakeHttpServer = HttpServer.HttpServer.of({
   address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
   serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
 });
+
+it.effect.each([
+  "same",
+  "different",
+  "runtime-error",
+  "manual-stop",
+  "idle-stop",
+  "deletion",
+  "switch",
+  "logout",
+  "shutdown",
+] as const)(
+  "restores hook approvals only for a continuing native conversation (%s)",
+  (conversation) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const tokens = yield* Queue.unbounded<string>();
+      const hooks = yield* HookApprovalRegistry.__testing
+        .make()
+        .pipe(
+          Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
+          Effect.provide(NodeServices.layer),
+        );
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-hook-idle-resume");
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* sink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const openInput = { threadId, providerSessionId, modelSelection, runtimePolicy };
+        const runtime = yield* manager.open(openInput);
+        const firstToken = yield* Queue.take(tokens);
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+          nativeThreadId: "native-hook-original",
+        });
+        yield* runtime.resumeThread({ threadId, providerThread });
+        const requestInput = {
+          command: "ssh notrory status",
+          reason: "Remote access",
+          cwd: "C:/repo",
+          scope: { key: "remote:notrory", label: "Remote access to notrory" },
+        };
+        const first = yield* hooks.request(firstToken, requestInput).pipe(Effect.forkScoped);
+        const pending = Option.getOrThrow(
+          yield* hooks.subscribe().pipe(
+            Stream.filter((entries) => entries.length === 1),
+            Stream.runHead,
+          ),
+        )[0]!;
+        yield* hooks.respond({ requestId: pending.requestId, decision: "allow-session" });
+        assert.deepEqual(yield* Fiber.join(first), { decision: "allow-session" });
+
+        yield* manager.release({
+          providerSessionId,
+          reason:
+            conversation === "runtime-error"
+              ? "runtime_error"
+              : conversation === "manual-stop"
+                ? "manual_shutdown"
+                : "idle_timeout",
+        });
+        if (conversation === "idle-stop") yield* manager.close(providerSessionId);
+        if (conversation === "deletion")
+          yield* manager.detach({ providerSessionId, threadId, revokeMcpCredential: true });
+        if (conversation === "switch") yield* manager.detach({ providerSessionId, threadId });
+        if (conversation === "logout") yield* manager.closeInstance(modelSelection.instanceId);
+        if (conversation === "shutdown") yield* manager.shutdown;
+        const shouldRemember = conversation === "same" || conversation === "runtime-error";
+        assert.isFalse(yield* hooks.isTokenActive(firstToken));
+        const nativeThreadId =
+          conversation === "different" ? "native-hook-different" : "native-hook-original";
+        const replacement = yield* manager.open({
+          ...openInput,
+          initialNativeThreadId: nativeThreadId,
+        });
+        const replacementToken = yield* Queue.take(tokens);
+        yield* replacement.resumeThread({
+          threadId,
+          providerThread: makeProviderThread({
+            idAllocator,
+            threadId,
+            providerSessionId,
+            now,
+            nativeThreadId,
+          }),
+        });
+        const update = yield* hooks
+          .subscribe()
+          .pipe(Stream.drop(1), Stream.runHead, Effect.forkScoped);
+        const repeated = yield* hooks
+          .request(replacementToken, requestInput)
+          .pipe(Effect.forkScoped);
+        const requests = Option.getOrThrow(yield* Fiber.join(update));
+        assert.lengthOf(requests, shouldRemember ? 0 : 1);
+        if (!shouldRemember)
+          yield* hooks.respond({ requestId: requests[0]!.requestId, decision: "deny" });
+        assert.deepEqual(yield* Fiber.join(repeated), {
+          decision: shouldRemember ? "allow" : "deny",
+        });
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60_000,
+            hookApprovals: hooks,
+            beforeOpen: (input) => {
+              const token = input.hookApprovalEnvironment?.T3_HOOK_APPROVAL_TOKEN;
+              return token === undefined
+                ? Effect.die("Missing hook credential")
+                : Queue.offer(tokens, token).pipe(Effect.asVoid);
+            },
+          }),
+        ),
+      );
+    }),
+);
 
 const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-provider-session-manager")),

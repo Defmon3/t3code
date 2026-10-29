@@ -108,6 +108,7 @@ export function createPendingHookApprovals(
           ? `Session scope: ${request.scope.label}`
           : "Session approval applies to unscoped custom hook requests in this provider session and expires when the provider session ends.",
         responseCapability: "live",
+        supportsFeedback: true,
         detail: [
           request.reason,
           `Command:\n${request.command}`,
@@ -158,13 +159,18 @@ export function hookApprovalDecisionForProviderDecision(
 export function hookApprovalResponseTarget(
   request: ScopedHookApprovalRequest,
   decision: HookApprovalDecision,
+  feedback?: string,
 ): {
   readonly environmentId: EnvironmentId;
   readonly input: EnvironmentRpcInput<typeof WS_METHODS.hookApprovalsRespond>;
 } {
   return {
     environmentId: request.environmentId,
-    input: { requestId: request.requestId, decision },
+    input: {
+      requestId: request.requestId,
+      decision,
+      ...(decision === "deny" && feedback?.trim() ? { feedback: feedback.trim() } : {}),
+    },
   };
 }
 

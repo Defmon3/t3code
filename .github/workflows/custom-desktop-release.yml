@@ -62,6 +62,25 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@v6
 
+      - name: Load T3 Connect public configuration
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { parseEnv } from 'node:util';
+          const config = parseEnv(readFileSync('.env.example', 'utf8'));
+          const names = [
+            'T3CODE_CLERK_PUBLISHABLE_KEY',
+            'T3CODE_CLERK_JWT_TEMPLATE',
+            'T3CODE_CLERK_CLI_OAUTH_CLIENT_ID',
+            'T3CODE_RELAY_URL',
+          ];
+          for (const name of names) {
+            if (!config[name]?.trim()) throw new Error(`Missing T3 Connect public setting: ${name}`);
+          }
+          appendFileSync(process.env.GITHUB_ENV, names.map(name => `${name}=${config[name]}\n`).join(''));
+          NODE
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -107,8 +126,27 @@ jobs:
         shell: bash
         run: vp run --filter @t3tools/desktop ensure:electron
 
+      - name: Build approval explanation worker
+        uses: astral-sh/setup-uv@v7
+
+      - name: Package approval explanation worker
+        shell: bash
+        working-directory: apps/server/approval-worker
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          uv run --locked --group build pyinstaller --onefile --name t3-approval-worker --distpath dist --workpath build --specpath build \
+            --collect-all genai_prices --collect-data certifi \
+            --copy-metadata genai-prices --copy-metadata pydantic-ai-slim --copy-metadata google-genai \
+            --copy-metadata httpx2 --copy-metadata httpcore2 worker.py
+          worker=dist/t3-approval-worker
+          if [[ "$RUNNER_OS" == "Windows" ]]; then worker="$worker.exe"; fi
+          printf '%s\n' '{"kind":"cancel","id":"startup"}' | "$worker"
+
       - name: Build desktop artifact
         shell: bash
+        env:
+          T3CODE_BUNDLE_APPROVAL_WORKER: "1"
         run: |
           set -euo pipefail
           vp run dist:desktop:artifact \

@@ -1222,6 +1222,7 @@ export const ServerSettings = Schema.Struct({
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   issueTracking: IssueTrackingSettings,
+  approvalExplanationApiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -1551,6 +1552,7 @@ export const ServerSettingsPatch = Schema.Struct({
       connections: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, IssueTrackerSettings)),
     }),
   ),
+  approvalExplanationApiKey: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   threadTitleInstructions: Schema.optionalKey(TrimmedString),
   branchNamingMode: Schema.optionalKey(BranchNamingMode),

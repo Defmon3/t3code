@@ -305,7 +305,7 @@ export function usePendingThreadRequests(input: {
     const result =
       hookApproval !== null && hookDecision !== null
         ? await respondToHookApproval(
-            hookApprovalResponseTarget(hookApproval.request, hookDecision),
+            hookApprovalResponseTarget(hookApproval.request, hookDecision, feedback),
           )
         : await respondToThreadApproval({
             environmentId,

@@ -30,9 +30,9 @@ it.effect("denies invalid and revoked tokens", () =>
       providerInstanceId: ProviderInstanceId.make("codex"),
     });
     expect(issued.endpoint).toBe("http://[::1]:43123/hook-approvals");
-    expect(yield* registry.request("invalid", input)).toBe("deny");
+    expect(yield* registry.request("invalid", input)).toEqual({ decision: "deny" });
     yield* registry.revokeThread(threadId);
-    expect(yield* registry.request(issued.token, input)).toBe("deny");
+    expect(yield* registry.request(issued.token, input)).toEqual({ decision: "deny" });
   }),
 );
 
@@ -55,7 +55,7 @@ it.effect("allows one request and consumes duplicate responses", () =>
     expect(yield* registry.respond({ requestId: request.requestId, decision: "allow" })).toBe(
       false,
     );
-    expect(yield* Fiber.join(requestFiber)).toBe("allow");
+    expect(yield* Fiber.join(requestFiber)).toEqual({ decision: "allow" });
   }),
 );
 
@@ -74,11 +74,13 @@ it.effect("remembers unscoped custom hook approvals only for the authenticated s
     expect(
       yield* registry.respond({ requestId: unscoped.requestId, decision: "allow-session" }),
     ).toBe(true);
-    expect(yield* Fiber.join(first)).toBe("allow-session");
-    expect(yield* registry.request(issued.token, { ...input, command: "git status" })).toBe(
-      "allow",
-    );
-    expect(yield* registry.request(issued.token, { ...input, command: "git diff" })).toBe("allow");
+    expect(yield* Fiber.join(first)).toEqual({ decision: "allow-session" });
+    expect(yield* registry.request(issued.token, { ...input, command: "git status" })).toEqual({
+      decision: "allow",
+    });
+    expect(yield* registry.request(issued.token, { ...input, command: "git diff" })).toEqual({
+      decision: "allow",
+    });
 
     const other = yield* registry.issue({
       threadId: ThreadId.make("thread-other"),
@@ -100,8 +102,8 @@ it.effect("remembers unscoped custom hook approvals only for the authenticated s
     const pending = Option.getOrThrow(yield* Fiber.join(update));
     expect(pending.map((request) => request.threadId).sort()).toEqual(["thread-3", "thread-other"]);
     yield* registry.revokeAll;
-    expect(yield* Fiber.join(otherRequest)).toBe("deny");
-    expect(yield* Fiber.join(scopedRequest)).toBe("deny");
+    expect(yield* Fiber.join(otherRequest)).toEqual({ decision: "deny" });
+    expect(yield* Fiber.join(scopedRequest)).toEqual({ decision: "deny" });
   }),
 );
 
@@ -143,8 +145,8 @@ it.effect.each([undefined, { key: "repo:one", label: "repo one" }])(
       expect(
         yield* registry.respond({ requestId: selected.requestId, decision: "allow-session" }),
       ).toBe(true);
-      expect(yield* Fiber.join(first)).toBe("allow-session");
-      expect(yield* Fiber.join(second)).toBe("allow-session");
+      expect(yield* Fiber.join(first)).toEqual({ decision: "allow-session" });
+      expect(yield* Fiber.join(second)).toEqual({ decision: "allow-session" });
       const remaining = Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead));
       expect(remaining).toHaveLength(2);
       expect(remaining.some((request) => request.threadId === "thread-batch-other")).toBe(true);
@@ -152,8 +154,8 @@ it.effect.each([undefined, { key: "repo:one", label: "repo one" }])(
         yield* registry.respond({ requestId: selected.requestId, decision: "allow-session" }),
       ).toBe(false);
       yield* registry.revokeAll;
-      expect(yield* Fiber.join(isolated)).toBe("deny");
-      expect(yield* Fiber.join(otherSession)).toBe("deny");
+      expect(yield* Fiber.join(isolated)).toEqual({ decision: "deny" });
+      expect(yield* Fiber.join(otherSession)).toEqual({ decision: "deny" });
     }),
 );
 
@@ -180,7 +182,7 @@ it.effect.each(["allow", "deny"] as const)(
       const selected = pending.find((request) => request.command === input.command)!;
 
       yield* registry.respond({ requestId: selected.requestId, decision });
-      expect(yield* Fiber.join(first)).toBe(decision);
+      expect(yield* Fiber.join(first)).toEqual({ decision });
       expect(Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead))).toHaveLength(1);
       const nextUpdate = yield* Effect.forkScoped(
         registry.subscribe().pipe(
@@ -191,8 +193,8 @@ it.effect.each(["allow", "deny"] as const)(
       const next = yield* Effect.forkScoped(registry.request(issued.token, input));
       expect(Option.getOrThrow(yield* Fiber.join(nextUpdate))).toHaveLength(2);
       yield* registry.revokeAll;
-      expect(yield* Fiber.join(second)).toBe("deny");
-      expect(yield* Fiber.join(next)).toBe("deny");
+      expect(yield* Fiber.join(second)).toEqual({ decision: "deny" });
+      expect(yield* Fiber.join(next)).toEqual({ decision: "deny" });
     }),
 );
 
@@ -213,14 +215,14 @@ it.effect.each(["replacement", "thread", "session", "all"] as const)(
       const first = yield* Effect.forkScoped(registry.request(issued.token, input));
       const pending = Option.getOrThrow(yield* Fiber.join(update))[0]!;
       yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" });
-      expect(yield* Fiber.join(first)).toBe("allow-session");
-      expect(yield* registry.request(issued.token, input)).toBe("allow");
+      expect(yield* Fiber.join(first)).toEqual({ decision: "allow-session" });
+      expect(yield* registry.request(issued.token, input)).toEqual({ decision: "allow" });
 
       if (lifecycle === "thread") yield* registry.revokeThread(threadId);
       if (lifecycle === "session") yield* registry.revokeProviderSession(issued.providerSessionId);
       if (lifecycle === "all") yield* registry.revokeAll;
       const replacement = yield* registry.issue(issueInput);
-      expect(yield* registry.request(issued.token, input)).toBe("deny");
+      expect(yield* registry.request(issued.token, input)).toEqual({ decision: "deny" });
       const nextUpdate = yield* Effect.forkScoped(
         registry.subscribe().pipe(
           Stream.filter((requests) => requests.length === 1),
@@ -230,8 +232,78 @@ it.effect.each(["replacement", "thread", "session", "all"] as const)(
       const next = yield* Effect.forkScoped(registry.request(replacement.token, input));
       expect(Option.getOrThrow(yield* Fiber.join(nextUpdate))).toHaveLength(1);
       yield* registry.revokeAll;
-      expect(yield* Fiber.join(next)).toBe("deny");
+      expect(yield* Fiber.join(next)).toEqual({ decision: "deny" });
     }),
+);
+
+it.effect("restores only matching native scopes and ignores stale conversation bindings", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry();
+    const identity = {
+      threadId: ThreadId.make("thread-conversation-rotation"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeSessionId: ProviderSessionId.make("runtime-conversation-rotation"),
+    };
+    const first = yield* registry.issue(identity);
+    const binding = {
+      ...identity,
+      providerSessionId: first.providerSessionId,
+      nativeThreadId: "codex:native-original",
+    };
+    yield* registry.bindConversation(binding);
+    const scope = { key: "remote:notrory", label: "Remote access to notrory" };
+    const waiting = yield* registry
+      .request(first.token, { ...input, scope })
+      .pipe(Effect.forkScoped);
+    const pending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+    yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" });
+    expect(yield* Fiber.join(waiting)).toEqual({ decision: "allow-session" });
+
+    const replacement = yield* registry.issue(identity);
+    yield* registry.bindConversation({ ...binding, nativeThreadId: "codex:stale-native" });
+    yield* registry.bindConversation({
+      ...binding,
+      providerSessionId: replacement.providerSessionId,
+    });
+    yield* registry.revokeProviderSession(first.providerSessionId);
+    expect(yield* registry.request(replacement.token, { ...input, scope })).toEqual({
+      decision: "allow",
+    });
+    const other = yield* registry
+      .request(replacement.token, {
+        ...input,
+        scope: { key: "remote:other-host", label: "Other host" },
+      })
+      .pipe(Effect.forkScoped);
+    const otherPending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+    expect(otherPending.scope?.key).toBe("remote:other-host");
+    yield* registry.respond({ requestId: otherPending.requestId, decision: "deny" });
+    expect(yield* Fiber.join(other)).toEqual({ decision: "deny" });
+
+    yield* registry.resetThread(identity.threadId);
+    expect(yield* registry.isTokenActive(replacement.token)).toBe(true);
+    const reset = yield* registry
+      .request(replacement.token, { ...input, scope })
+      .pipe(Effect.forkScoped);
+    const resetPending = Option.getOrThrow(
+      yield* registry.subscribe().pipe(
+        Stream.filter((requests) => requests.length === 1),
+        Stream.runHead,
+      ),
+    )[0]!;
+    yield* registry.respond({ requestId: resetPending.requestId, decision: "deny" });
+    expect(yield* Fiber.join(reset)).toEqual({ decision: "deny" });
+  }),
 );
 
 it.effect("replaces a thread credential atomically", () =>
@@ -284,12 +356,12 @@ it.effect("routes concurrent credentials to their native sessions and revokes on
       "thread-native-one",
     );
     yield* registry.revokeProviderSession(first.providerSessionId);
-    expect(yield* Fiber.join(firstRequest)).toBe("deny");
+    expect(yield* Fiber.join(firstRequest)).toEqual({ decision: "deny" });
     const remaining = Option.getOrThrow(yield* registry.subscribePending().pipe(Stream.runHead));
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.runtimeSessionId).toBe(secondSession);
     yield* registry.respond({ requestId: remaining[0]!.request.requestId, decision: "allow" });
-    expect(yield* Fiber.join(secondRequest)).toBe("allow");
+    expect(yield* Fiber.join(secondRequest)).toEqual({ decision: "allow" });
   }),
 );
 
@@ -307,7 +379,7 @@ it.effect("expires pending approvals without retaining a late session allowance"
     const request = yield* Effect.forkScoped(registry.request(issued.token, { ...input, scope }));
     const pending = Option.getOrThrow(yield* Fiber.join(pendingSnapshot))[0]!;
     yield* TestClock.adjust("1 second");
-    expect(yield* Fiber.join(request)).toBe("deny");
+    expect(yield* Fiber.join(request)).toEqual({ decision: "deny" });
     expect(
       yield* registry.respond({ requestId: pending.requestId, decision: "allow-session" }),
     ).toBe(false);
@@ -317,7 +389,7 @@ it.effect("expires pending approvals without retaining a late session allowance"
     const next = yield* Effect.forkScoped(registry.request(issued.token, { ...input, scope }));
     expect(Option.getOrThrow(yield* Fiber.join(nextSnapshot))).toHaveLength(1);
     yield* registry.revokeAll;
-    expect(yield* Fiber.join(next)).toBe("deny");
+    expect(yield* Fiber.join(next)).toEqual({ decision: "deny" });
   }),
 );
 
@@ -335,7 +407,7 @@ it.effect("keeps an approval that wins before its deadline", () =>
     const pending = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
     expect(yield* registry.respond({ requestId: pending.requestId, decision: "allow" })).toBe(true);
     yield* TestClock.adjust("1 second");
-    expect(yield* Fiber.join(request)).toBe("allow");
+    expect(yield* Fiber.join(request)).toEqual({ decision: "allow" });
   }),
 );
 
@@ -358,7 +430,7 @@ it.effect(
       const reconnectSnapshot = Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead));
       expect(reconnectSnapshot).toHaveLength(1);
       yield* registry.revokeThread(threadId);
-      expect(yield* Fiber.join(waiting)).toBe("deny");
+      expect(yield* Fiber.join(waiting)).toEqual({ decision: "deny" });
       expect(Option.getOrThrow(yield* registry.subscribe().pipe(Stream.runHead))).toEqual([]);
     }),
 );
@@ -379,10 +451,10 @@ it.effect(
       const initial = yield* Effect.forkScoped(registry.request(first.token, { ...input, scope }));
       const initialPending = Option.getOrThrow(yield* Fiber.join(initialUpdate))[0]!;
       yield* registry.respond({ requestId: initialPending.requestId, decision: "allow-session" });
-      expect(yield* Fiber.join(initial)).toBe("allow-session");
+      expect(yield* Fiber.join(initial)).toEqual({ decision: "allow-session" });
       expect(
         yield* registry.request(first.token, { ...input, command: "python another.py", scope }),
-      ).toBe("allow");
+      ).toEqual({ decision: "allow" });
 
       const otherScope = { key: "repo:two", label: "repo two" };
       const otherScopeUpdate = yield* Effect.forkScoped(
@@ -415,6 +487,6 @@ it.effect(
       );
       expect(Option.getOrThrow(yield* Fiber.join(otherSessionUpdate))).toHaveLength(1);
       yield* registry.revokeAll;
-      expect(yield* Fiber.join(otherSessionRequest)).toBe("deny");
+      expect(yield* Fiber.join(otherSessionRequest)).toEqual({ decision: "deny" });
     }),
 );

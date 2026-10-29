@@ -201,6 +201,7 @@ interface LiveSessionEntry {
   >;
   readonly requestEventPermit: Semaphore.Semaphore;
   readonly scope: Scope.Closeable;
+  readonly hookCredentialId?: string;
   readonly idleGeneration: number;
   readonly busyTurns: ReadonlySet<string>;
   readonly lastActivityAtMs: number;
@@ -975,7 +976,14 @@ export const layerWithOptions = (
         readonly gracefulSubscribers?: boolean;
       }) =>
         Effect.acquireUseRelease(
-          removeLiveEntry(input),
+          removeLiveEntry(input).pipe(
+            Effect.tap(() =>
+              Option.isSome(hookApprovals) &&
+              (input.reason === "manual_shutdown" || input.reason === "server_shutdown")
+                ? hookApprovals.value.revokeRuntimeSession(input.providerSessionId)
+                : Effect.void,
+            ),
+          ),
           ([entry, releasedAt]) =>
             Option.match(entry, {
               onNone: () => Effect.void,
@@ -1000,6 +1008,13 @@ export const layerWithOptions = (
                       entry,
                       input.detail ?? `Provider session released: ${input.reason}.`,
                     );
+                  }
+                  if (
+                    Option.isSome(hookApprovals) &&
+                    entry.hookCredentialId !== undefined &&
+                    (input.reason === "idle_timeout" || input.reason === "runtime_error")
+                  ) {
+                    yield* hookApprovals.value.suspendProviderSession(entry.hookCredentialId);
                   }
                   const closeExit = yield* closeScopeWithin(entry.scope, {
                     providerSessionId: input.providerSessionId,
@@ -1679,8 +1694,24 @@ export const layerWithOptions = (
         eventSubscribers: Ref.Ref<
           ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
         >,
+        hookCredentialId?: string,
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
+        const bindHookConversation = (
+          threadId: ThreadId,
+          providerThread: OrchestrationV2ProviderThread,
+        ) =>
+          Option.isSome(hookApprovals) &&
+          hookCredentialId !== undefined &&
+          providerThread.nativeThreadRef !== null
+            ? hookApprovals.value.bindConversation({
+                threadId,
+                providerSessionId: hookCredentialId,
+                runtimeSessionId: providerSessionId,
+                providerInstanceId: runtime.instanceId,
+                nativeThreadId: `${providerThread.nativeThreadRef.driver}:${providerThread.nativeThreadRef.nativeId}`,
+              })
+            : Effect.void;
         const subscribeEvents = makeEventSubscription(eventSubscribers);
         const turnMetrics = (operation: string, model?: string) =>
           withMetrics({
@@ -1707,7 +1738,14 @@ export const layerWithOptions = (
                 providerInstanceId: runtime.instanceId,
               }),
             ).pipe(
+              Effect.andThen(
+                Option.isSome(hookApprovals) &&
+                  input.existingProviderThread?.nativeThreadRef == null
+                  ? hookApprovals.value.resetThread(input.threadId)
+                  : Effect.void,
+              ),
               Effect.andThen(runtime.ensureThread(input)),
+              Effect.tap((providerThread) => bindHookConversation(input.threadId, providerThread)),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,
@@ -1753,6 +1791,7 @@ export const layerWithOptions = (
               Effect.flatMap((loaded) =>
                 loaded ? Effect.succeed(input.providerThread) : runtime.resumeThread(input),
               ),
+              Effect.tap((providerThread) => bindHookConversation(threadId, providerThread)),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,
@@ -1780,6 +1819,9 @@ export const layerWithOptions = (
               }),
             ).pipe(
               Effect.andThen(runtime.forkThread(input)),
+              Effect.tap((providerThread) =>
+                bindHookConversation(input.targetThreadId, providerThread),
+              ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,
@@ -2049,6 +2091,7 @@ export const layerWithOptions = (
             ),
           { concurrency: "unbounded", discard: true },
         );
+        if (Option.isSome(hookApprovals)) yield* hookApprovals.value.revokeAll;
       });
       yield* Effect.addFinalizer(() =>
         shutdown.pipe(
@@ -2194,9 +2237,16 @@ export const layerWithOptions = (
               const eventSubscribers = yield* Ref.make<
                 ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
               >(new Map());
-              const exposedRuntime = decorateRuntime(runtime, eventSubscribers);
+              const exposedRuntime = decorateRuntime(
+                runtime,
+                eventSubscribers,
+                hookCredential?.providerSessionId,
+              );
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
+                ...(hookCredential === undefined
+                  ? {}
+                  : { hookCredentialId: hookCredential.providerSessionId }),
                 attachedThreadIds: new Set([input.threadId]),
                 loadedProviderThreadKeyByThread: new Map(),
                 mcpCredentialIdByThread:
@@ -2291,6 +2341,8 @@ export const layerWithOptions = (
           ),
         closeInstance: Effect.fn("ProviderSessionManager.closeInstance")(
           function* (instanceId) {
+            if (Option.isSome(hookApprovals))
+              yield* hookApprovals.value.revokeProviderInstance(instanceId);
             const active = [...(yield* Ref.get(sessions)).values()].filter(
               (entry) => entry.runtime.instanceId === instanceId,
             );
@@ -2325,6 +2377,11 @@ export const layerWithOptions = (
         release: releaseEntry,
         detach: Effect.fn("ProviderSessionManager.detach")(
           function* (input) {
+            if (Option.isSome(hookApprovals)) {
+              yield* input.revokeMcpCredential === true
+                ? hookApprovals.value.revokeThread(input.threadId)
+                : hookApprovals.value.resetThread(input.threadId);
+            }
             const key = sessionKey(input.providerSessionId);
             const currentEntry = (yield* Ref.get(sessions)).get(key);
             let detachedProviderThreads: ReadonlyArray<OrchestrationV2ProviderThread> = [];

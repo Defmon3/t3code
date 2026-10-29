@@ -1,17 +1,14 @@
 import { Button } from "../../components/ui/Button";
-import type {
-  ProviderApprovalDecision,
-  ProviderApprovalOption,
-  RuntimeRequestId,
-  ScopedThreadRef,
-} from "@t3tools/contracts";
+import type { ProviderApprovalOption, RuntimeRequestId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
+  sendApprovalFeedback,
+  type ApprovalResponder,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import {
   approvalExplanationTarget,
   approvalExplanationView,
@@ -19,7 +16,7 @@ import {
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
 
-import { AppText as Text } from "../../components/ui/AppText";
+import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
 import type { PendingApproval } from "../../lib/threadActivity";
 import { cn } from "../../lib/cn";
 
@@ -28,10 +25,7 @@ export interface PendingApprovalCardProps {
   readonly approval: PendingApproval;
   readonly threadRef: ScopedThreadRef;
   readonly respondingApprovalId: RuntimeRequestId | null;
-  readonly onRespond: (
-    requestId: RuntimeRequestId,
-    decision: ProviderApprovalDecision,
-  ) => Promise<unknown>;
+  readonly onRespond: ApprovalResponder;
 }
 
 const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
@@ -48,7 +42,22 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
   const [explanationOpen, setExplanationOpen] = useState(false);
   const [commandExpanded, setCommandExpanded] = useState(false);
+  const [reason, setReason] = useState<string | null>(null);
+  const [feedbackFailed, setFeedbackFailed] = useState(false);
   const isCommand = props.approval.requestKind === "command";
+  const responseDisabled = disabled || !props.canOperateThread;
+  const canRejectWithReason =
+    props.approval.supportsFeedback && options.some((option) => option.decision === "decline");
+
+  async function rejectWithReason() {
+    if (responseDisabled || reason === null) return;
+    if (await sendApprovalFeedback(props.approval, reason, props.onRespond)) {
+      setReason(null);
+      setFeedbackFailed(false);
+    } else {
+      setFeedbackFailed(true);
+    }
+  }
   return (
     <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
@@ -123,6 +132,47 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
       {isCommand ? (
         <CommandApprovalExplanation approval={props.approval} threadRef={props.threadRef} />
       ) : null}
+      {canRejectWithReason && reason !== null ? (
+        <View className="gap-2">
+          <Text className="font-t3-bold text-sm text-foreground">Reason for rejection</Text>
+          <AppTextInput
+            autoFocus
+            multiline
+            accessibilityLabel="Reason for rejection"
+            placeholder="Tell the agent what to change"
+            textAlignVertical="top"
+            value={reason}
+            editable={!responseDisabled}
+            onChangeText={(text) => {
+              setReason(text);
+              setFeedbackFailed(false);
+            }}
+          />
+          {feedbackFailed ? (
+            <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+              Rejection failed. Your reason is kept. Try again.
+            </Text>
+          ) : null}
+          <View className="flex-row flex-wrap gap-2.5">
+            <Button
+              label="Cancel"
+              tone="secondary"
+              disabled={props.respondingApprovalId === props.approval.requestId}
+              onPress={() => {
+                setReason(null);
+                setFeedbackFailed(false);
+              }}
+            />
+            <Button
+              label="Reject and send reason"
+              tone="danger"
+              loading={props.respondingApprovalId === props.approval.requestId}
+              disabled={responseDisabled || !reason.trim()}
+              onPress={() => void rejectWithReason()}
+            />
+          </View>
+        </View>
+      ) : null}
       <View className="flex-row flex-wrap gap-2.5">
         {isCommand ? (
           <Button
@@ -143,10 +193,22 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
                   ? "danger"
                   : "secondary"
             }
-            disabled={disabled || !props.canOperateThread}
+            disabled={responseDisabled}
             onPress={() => void props.onRespond(props.approval.requestId, option.decision)}
           />
         ))}
+        {canRejectWithReason ? (
+          <Button
+            label="Reject with reason"
+            tone="secondary"
+            expanded={reason !== null}
+            disabled={responseDisabled}
+            onPress={() => {
+              setReason((value) => (value === null ? "" : null));
+              setFeedbackFailed(false);
+            }}
+          />
+        ) : null}
       </View>
       {!props.canOperateThread ? (
         <Text className="font-sans text-xs text-foreground-muted">
@@ -164,9 +226,9 @@ function CommandApprovalExplanation({
   readonly approval: PendingApproval;
   readonly threadRef: ScopedThreadRef;
 }) {
-  const result = useAtomValue(
-    approvalExplanationAtom(approvalExplanationTarget(threadRef, approval)),
-  );
+  const explanationAtom = approvalExplanationAtom(approvalExplanationTarget(threadRef, approval));
+  const result = useAtomValue(explanationAtom);
+  const refreshExplanation = useAtomRefresh(explanationAtom);
   const explanation = approvalExplanationView(result);
   return (
     <View className="gap-2 border-t border-border pt-3" accessibilityLiveRegion="polite">
@@ -219,6 +281,15 @@ function CommandApprovalExplanation({
           {explanation.message}
         </Text>
       )}
+      {explanation.status === "error" ? (
+        <Button
+          label="Retry explanation"
+          tone="secondary"
+          disabled={result.waiting}
+          loading={result.waiting}
+          onPress={refreshExplanation}
+        />
+      ) : null}
     </View>
   );
 }

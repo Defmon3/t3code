@@ -6,6 +6,7 @@ import {
   RuntimeRequestId,
   ThreadId,
   type HookApprovalRequest,
+  type HookApprovalDecision,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
@@ -21,7 +22,8 @@ import {
   scopeHookApprovalRequests,
   sortHookApprovalRequests,
 } from "./hookApprovals.ts";
-import { derivePendingThreadRequests } from "./threadRequests.ts";
+import { derivePendingThreadRequests, sendApprovalFeedback } from "./threadRequests.ts";
+import { AsyncResult } from "effect/reactivity";
 
 const environmentA = EnvironmentId.make("environment-a");
 const environmentB = EnvironmentId.make("environment-b");
@@ -112,6 +114,60 @@ describe("hook approvals", () => {
     });
   });
 
+  it.each([
+    ["deny", "  Use the staging host instead.  ", "Use the staging host instead."],
+    ["deny", "   ", undefined],
+    ["deny", undefined, undefined],
+    ["allow", "Use the staging host instead.", undefined],
+    ["allow-session", "Use the staging host instead.", undefined],
+  ] satisfies ReadonlyArray<
+    readonly [HookApprovalDecision, string | undefined, string | undefined]
+  >)(
+    "includes feedback only for a rejection with a reason: %s %s",
+    (decision, feedback, expected) => {
+      const [pending] = scopeHookApprovalRequests(environmentB, [
+        request("remote", "2026-09-07T12:00:00.000Z"),
+      ]);
+
+      expect(hookApprovalResponseTarget(pending!, decision, feedback)).toEqual({
+        environmentId: environmentB,
+        input: {
+          requestId: "remote",
+          decision,
+          ...(expected === undefined ? {} : { feedback: expected }),
+        },
+      });
+    },
+  );
+
+  it("sends a hook rejection reason to its originating environment and request", async () => {
+    const [pending] = createPendingHookApprovals(
+      scopeHookApprovalRequests(environmentB, [request("remote", "2026-09-07T12:00:00.000Z")]),
+      [],
+    );
+    let response: ReturnType<typeof hookApprovalResponseTarget> | undefined;
+
+    const sent = await sendApprovalFeedback(
+      pending!.approval,
+      "  Use staging.  ",
+      async (id, decision, feedback) => {
+        const hook = findPendingHookApproval([pending!], id)!;
+        response = hookApprovalResponseTarget(
+          hook.request,
+          hookApprovalDecisionForProviderDecision(decision)!,
+          feedback,
+        );
+        return AsyncResult.success(undefined);
+      },
+    );
+
+    expect(sent).toBe(true);
+    expect(response).toEqual({
+      environmentId: environmentB,
+      input: { requestId: "remote", decision: "deny", feedback: "Use staging." },
+    });
+  });
+
   it("maps hook approvals to collision-safe composer approvals", () => {
     const [hookRequest] = scopeHookApprovalRequests(environmentA, [
       {
@@ -131,6 +187,7 @@ describe("hook approvals", () => {
       reason: "reason hook-request",
       sessionApprovalScope: "Session scope: Git commits",
       responseCapability: "live",
+      supportsFeedback: true,
       detail:
         "reason hook-request\n\nCommand:\ncommand hook-request\n\nWorking directory:\nC:/workspace/hook-request\n\nSession scope:\nGit commits",
       options: [

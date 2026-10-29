@@ -124,6 +124,7 @@ export const layer: Layer.Layer<
               !(yield* hookApprovals.value.respond({
                 requestId: HookApprovalRequestId.make(input.requestId.slice("custom-hook:".length)),
                 decision,
+                ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
               }))
             ) {
               return yield* new RuntimeRequestResponseExecutionError({
