@@ -26,6 +26,7 @@ const decodeResponse = Schema.decodeUnknownSync(
   ),
 );
 const decodeContent = Schema.decodeUnknownSync(Schema.fromJsonString(ApprovalExplanationContent));
+const encodeRequest = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const responseJsonSchema = toJsonSchemaObject(ApprovalExplanationContent);
 
 export class ApprovalExplanationGenerator extends Context.Service<
@@ -74,7 +75,7 @@ const make = Effect.gen(function* () {
           {
             method: "POST",
             headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-            body: JSON.stringify({
+            body: encodeRequest({
               contents: [{ role: "user", parts: [{ text: prompt }] }],
               generationConfig: {
                 thinkingConfig: { thinkingBudget: 0 },
