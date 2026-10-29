@@ -268,7 +268,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           props.approval.supportsTimedApproval && option.decision === "acceptForSession" ? (
             <View key={option.decision} className="flex-row flex-wrap items-center gap-2.5">
               <Button
-                label="Approve for 15 min"
+                label="Approve for this session"
                 tone="secondary"
                 disabled={responseDisabled}
                 onPress={() => {
@@ -277,7 +277,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
                       props.approval.requestId,
                       "acceptForSession",
                       undefined,
-                      "15-minutes",
+                      "session",
                     );
                 }}
               />

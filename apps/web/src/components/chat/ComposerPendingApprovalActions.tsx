@@ -139,15 +139,10 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                 disabled={responseDisabled}
                 onClick={() => {
                   if (!responseDisabled)
-                    void onRespondToApproval(
-                      requestId,
-                      "acceptForSession",
-                      undefined,
-                      "15-minutes",
-                    );
+                    void onRespondToApproval(requestId, "acceptForSession", undefined, "session");
                 }}
               >
-                Approve for 15 min
+                Approve for this session
               </Button>
               <Menu>
                 <MenuTrigger
