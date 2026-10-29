@@ -1730,10 +1730,11 @@ export const make = Effect.gen(function* () {
       upstreamRef: string | null;
       defaultBranch: string | null;
       remoteName?: string;
+      localBranchExists?: boolean;
     },
   ) {
     const headContext = yield* resolveBranchHeadContext(cwd, details);
-    if (details.upstreamRef === null) {
+    if (details.upstreamRef === null && details.localBranchExists !== false) {
       const remoteName = yield* findPublishedBranchRemote(cwd, details.branch).pipe(
         Effect.orElseSucceed(() => null),
       );
@@ -2493,24 +2494,40 @@ export const make = Effect.gen(function* () {
       .filter((remoteName) => remoteName.length > 0);
     const [firstRemoteName] = remoteNames;
     if (firstRemoteName === undefined) return null;
-    const branchRef = yield* remember(
-      `branchRef\u0000${branch}`,
-      gitCore
-        .execute({
-          operation: "GitManager.branchPullRequest.branchRef",
-          cwd: cacheCwd,
-          args: [
-            "for-each-ref",
-            "--format=%(refname)%00%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)",
-            `refs/heads/${branch}`,
-          ],
-        })
-        .pipe(Effect.map((result) => result.stdout)),
-    );
     const expectedRefName = `refs/heads/${branch}`;
-    const exactBranch = (branchRef ?? "")
-      .split("\n")
-      .find((line) => line.split("\u0000", 1)[0] === expectedRefName);
+    const branchRefNames = new Set([
+      expectedRefName,
+      ...remoteNames.map((remote) => `refs/remotes/${remote}/${branch}`),
+    ]);
+    const branchRefs = yield* remember(
+      `branchRef\u0000${branch}`,
+      rememberPrLookupGitState(
+        cacheCwd,
+        "branchRefs",
+        true,
+        gitCore
+          .execute({
+            operation: "GitManager.branchPullRequest.branchRef",
+            cwd: cacheCwd,
+            args: [
+              "for-each-ref",
+              "--format=%(refname)%00%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)",
+              "refs/heads",
+              "refs/remotes",
+            ],
+          })
+          .pipe(Effect.map((result) => result.stdout)),
+      ).pipe(
+        Effect.map((refs) =>
+          (refs ?? "")
+            .split("\n")
+            .filter((line) => branchRefNames.has(line.split("\u0000", 1)[0] ?? ""))
+            .join("\n"),
+        ),
+      ),
+    );
+    const refLines = (branchRefs ?? "").split("\n");
+    const exactBranch = refLines.find((line) => line.split("\u0000", 1)[0] === expectedRefName);
     const [refName = "", savedUpstream = "", savedRemoteName = "", savedRemoteRef = ""] =
       exactBranch?.split("\u0000") ?? [];
     const localBranchExists = refName.length > 0;
@@ -2528,31 +2545,10 @@ export const make = Effect.gen(function* () {
       const upstreamBranch = savedRemoteRef.replace(/^refs\/heads\//, "");
       upstreamRef = `${remoteName}/${upstreamBranch}`;
     } else if (!localBranchExists) {
-      const trackingRemotes = yield* remember(
-        `trackingRemotes\u0000${branch}`,
-        gitCore
-          .execute({
-            operation: "GitManager.branchPullRequest.remoteTrackingRefs",
-            cwd: cacheCwd,
-            args: ["for-each-ref", "--format=%(refname)", "refs/remotes"],
-          })
-          .pipe(
-            Effect.map((trackingRefs) => {
-              const refNames = new Set(
-                trackingRefs.stdout
-                  .split("\n")
-                  .map((remoteRef) => remoteRef.trim())
-                  .filter((remoteRef) => remoteRef.length > 0),
-              );
-              return remoteNames
-                .filter((candidate) => refNames.has(`refs/remotes/${candidate}/${branch}`))
-                .join("\n");
-            }),
-          ),
+      const refNames = new Set(refLines.map((line) => line.split("\u0000", 1)[0]));
+      const matchingRemoteNames = remoteNames.filter((candidate) =>
+        refNames.has(`refs/remotes/${candidate}/${branch}`),
       );
-      const matchingRemoteNames = (trackingRemotes ?? "")
-        .split("\n")
-        .filter((candidate) => candidate.length > 0);
       if (matchingRemoteNames.length > 1) {
         return yield* new GitManagerError({
           operation: "branchPullRequest",

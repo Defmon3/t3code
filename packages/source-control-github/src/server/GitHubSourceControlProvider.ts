@@ -441,6 +441,27 @@ export const make = Effect.gen(function* () {
       timeoutMs: 5_000,
     });
 
+  const readRepositoryGitState = (cwd: string) =>
+    Effect.all([
+      gitRead(cwd, ["remote", "-v"]),
+      gitRead(cwd, ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"]),
+    ]);
+  const repositoryGitReads = new Map<string, ReturnType<typeof readRepositoryGitState>>();
+  const shareRepositoryGitState = Effect.fn("GitHubSourceControlProvider.readRepositoryGitState")(
+    function* (cwd: string) {
+      const pending = repositoryGitReads.get(cwd);
+      if (pending !== undefined) return yield* pending;
+      const read = yield* Effect.cachedWithTTL(
+        readRepositoryGitState(cwd).pipe(
+          Effect.ensuring(Effect.sync(() => repositoryGitReads.delete(cwd))),
+        ),
+        0,
+      );
+      repositoryGitReads.set(cwd, read);
+      return yield* read;
+    },
+  );
+
   const resolveRepository = Effect.fn("GitHubSourceControlProvider.resolveRepository")(
     function* (input: {
       readonly cwd: string;
@@ -454,10 +475,9 @@ export const make = Effect.gen(function* () {
         const locator = parseGitHubRepositorySelector(envRepository, defaultHost);
         if (locator !== null) return locator;
       }
-      const [remotes, resolved] = yield* Effect.all([
-        gitRead(input.cwd, ["remote", "-v"]),
-        gitRead(input.cwd, ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"]),
-      ]).pipe(Effect.orElseSucceed(() => [null, null] as const));
+      const [remotes, resolved] = yield* shareRepositoryGitState(input.cwd).pipe(
+        Effect.orElseSucceed(() => [null, null] as const),
+      );
       const { host, locator } = resolveGitHubRepository({
         remotes: remotes?.exitCode === 0 ? remotes.stdout : "",
         resolved: resolved?.exitCode === 0 ? resolved.stdout : "",

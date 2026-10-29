@@ -939,9 +939,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       let branchReads = 0;
       const gate = {
         matches: (args: ReadonlyArray<string>) =>
-          args[0] === "for-each-ref" &&
-          args.at(-1) === "refs/heads/feature/racing-upstream" &&
-          ++branchReads === 1,
+          args[0] === "for-each-ref" && args.includes("refs/heads") && ++branchReads === 1,
         reached: yield* Deferred.make<void>(),
         release: yield* Deferred.make<void>(),
       };
@@ -1166,6 +1164,57 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         updatedAt: "2026-04-08T15:00:00.000Z",
       });
     }),
+  );
+
+  it.effect(
+    "shares one ref inventory across branch PR lookups and refreshes after invalidation",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const gitCommands: string[] = [];
+        const gate = {
+          matches: (args: ReadonlyArray<string>) =>
+            args[0] === "for-each-ref" && args.includes("refs/heads"),
+          reached: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
+        const { manager } = yield* makeManager({ gitCommands, gitSpawnGate: gate });
+        const lookups = yield* Effect.forEach(
+          ["feature/missing-first", "feature/missing-second"],
+          (branch) => manager.branchPullRequest({ cwd: repoDir, branch }),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(gate.reached);
+        yield* Deferred.succeed(gate.release, undefined);
+        expect(yield* Fiber.join(lookups)).toEqual([null, null]);
+        const inventoryReads = () =>
+          gitCommands.filter(
+            (command) =>
+              command.startsWith("for-each-ref --format=%(refname)%00%(upstream:short)") ||
+              command === "for-each-ref --format=%(refname) refs/remotes",
+          );
+        expect(inventoryReads()).toHaveLength(1);
+        expect(
+          gitCommands.some((command) =>
+            command.startsWith("for-each-ref --format=%(refname)%00%(objectname)"),
+          ),
+        ).toBe(false);
+
+        expect(
+          yield* manager.branchPullRequest({ cwd: repoDir, branch: "feature/missing-third" }),
+        ).toBeNull();
+        expect(inventoryReads()).toHaveLength(2);
+
+        yield* manager.invalidateStatus(repoDir);
+        expect(
+          yield* manager.branchPullRequest({ cwd: repoDir, branch: "feature/missing-first" }),
+        ).toBeNull();
+        expect(inventoryReads()).toHaveLength(3);
+      }),
   );
 
   it.effect("branch PR lookup uses the saved name after the local branch is deleted", () =>

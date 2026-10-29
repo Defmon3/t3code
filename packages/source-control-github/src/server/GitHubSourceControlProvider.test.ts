@@ -3,11 +3,14 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Queue from "effect/Queue";
+import * as Tracer from "effect/Tracer";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
@@ -157,6 +160,7 @@ function harness(input: {
   readonly localBranches?: ReadonlyArray<string>;
   readonly resolved?: string;
   readonly gitFailure?: unknown;
+  readonly process?: SourceControlHost.SourceControlHost["Service"]["process"];
 }) {
   const git: Array<readonly [string, unknown]> = [];
   const graphqlCalls: Array<GraphQlCall> = [];
@@ -191,7 +195,7 @@ function harness(input: {
   };
   const host = TestSourceControlHost.layer({
     git: hostGit,
-    process: {
+    process: input.process ?? {
       run: (args) =>
         Effect.succeed(
           args.args[0] === "remote"
@@ -249,6 +253,72 @@ const githubContext = (host: string) => ({
 });
 
 describe("GitHubSourceControlProvider repository resolution", () => {
+  it.effect("shares concurrent repository probes while later calls read current remotes", () => {
+    const paths: string[] = [];
+    return Effect.gen(function* () {
+      const entered = yield* Queue.unbounded<void>();
+      const release = yield* Deferred.make<void>();
+      let probes = 0;
+      let repository = "acme/web";
+      const tracer = Tracer.make({
+        span: (options) => {
+          if (options.name === "GitHubSourceControlProvider.resolveRepository") {
+            Queue.offerUnsafe(entered, undefined);
+          }
+          return new Tracer.NativeSpan(options);
+        },
+      });
+      const { layer } = harness({
+        remotes: "",
+        process: {
+          run: (input) =>
+            Effect.sync(() => probes++).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.map(() =>
+                input.args[0] === "remote"
+                  ? processOutput(remotesOutput(["origin", `git@github.com:${repository}.git`]))
+                  : processOutput("", 1),
+              ),
+            ),
+        },
+        api: {
+          rest: (input) =>
+            Effect.sync(() => {
+              paths.push(input.path);
+              return restResponse({
+                full_name: repository,
+                html_url: `https://github.com/${repository}`,
+                ssh_url: `git@github.com:${repository}.git`,
+                default_branch: "main",
+              });
+            }),
+        },
+      });
+      yield* Effect.gen(function* () {
+        const provider = yield* GitHubSourceControlProvider.make;
+        const reads = yield* Effect.all(
+          Array.from({ length: 6 }, () => provider.getDefaultBranch({ cwd: "/repo" })),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.withTracer(tracer), Effect.forkChild);
+        yield* Effect.forEach(Array.from({ length: 6 }), () => Queue.take(entered));
+        yield* Deferred.succeed(release, undefined);
+        assert.deepStrictEqual(
+          yield* Fiber.join(reads),
+          Array.from({ length: 6 }, () => "main"),
+        );
+        assert.strictEqual(probes, 2);
+
+        repository = "acme/changed";
+        assert.strictEqual(yield* provider.getDefaultBranch({ cwd: "/repo" }), "main");
+        assert.strictEqual(probes, 4);
+        assert.deepStrictEqual(paths, [
+          ...Array.from({ length: 6 }, () => "repos/acme/web"),
+          "repos/acme/changed",
+        ]);
+      }).pipe(Effect.provide(layer), Effect.provideService(HostProcess.Environment, {}));
+    });
+  });
+
   it.effect("reads the repository gh would pick from the remotes", () => {
     const paths: string[] = [];
     const { layer } = harness({
