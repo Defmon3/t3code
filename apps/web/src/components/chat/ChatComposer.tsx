@@ -183,7 +183,6 @@ import {
   serializeComposerIssueMention,
 } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
-import { HookApprovalGrants } from "./HookApprovalGrants";
 import {
   ComposerAttachButton,
   ComposerAttachmentFileList,
@@ -3421,7 +3420,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
           <ComposerBannerStack items={shelfItems} />
-          {routeThreadRef ? <HookApprovalGrants threadRef={routeThreadRef} /> : null}
           {showComposerTopDrawer ? (
             <ComposerBanner.Attachment>
               <ComposerBanner.Root

@@ -5,7 +5,6 @@ import {
   type HookApprovalBypass,
   type HookApprovalDecision,
   type HookApprovalDuration,
-  type HookApprovalGrant,
   type HookApprovalRequest,
   type ProviderApprovalDecision,
   type ProviderApprovalOption,
@@ -42,13 +41,6 @@ export function hasHookApprovalGrantsCapability(
   capabilities: Pick<ExecutionEnvironmentCapabilities, "hookApprovalGrants"> | null | undefined,
 ): boolean {
   return capabilities?.hookApprovalGrants === true;
-}
-
-export function hookApprovalGrantsForThread(
-  grants: ReadonlyArray<HookApprovalGrant>,
-  threadId: ThreadId | null,
-): ReadonlyArray<HookApprovalGrant> {
-  return grants.filter((grant) => grant.threadId === threadId);
 }
 
 export const hookApprovalDurations = [
@@ -235,19 +227,6 @@ export function createHookApprovalEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
-    grants: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:hook-approvals:grants",
-      tag: WS_METHODS.hookApprovalsSubscribeGrants,
-      idleTtlMs: 0,
-    }),
-    revoke: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:hook-approvals:revoke",
-      tag: WS_METHODS.hookApprovalsRevokeGrant,
-      concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.grantId]),
-      },
-    }),
     requests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:hook-approvals:requests",
       tag: WS_METHODS.hookApprovalsSubscribe,

@@ -21,8 +21,7 @@ not prevent the agent from asking questions about the task.
 Custom hook requests also offer approval for **15 minutes**, **1 hour**, or **This session**.
 Use the arrow beside the approval button to approve for a different duration, or choose **Approve once**.
 Remembered approvals apply only to the current thread and the scope shown on the request.
-They expire automatically. The conversation shows the expiry time or session label and a
-**Revoke** button to end the approval early.
+They expire automatically.
 
 ## Provider differences
 

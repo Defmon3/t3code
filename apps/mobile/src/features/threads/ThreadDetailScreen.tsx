@@ -13,7 +13,6 @@ import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entitie
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
-import { HookApprovalGrants } from "./HookApprovalGrants";
 import { ChatGptUsageLimitNotice } from "./ChatGptUsageLimitNotice";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -1498,12 +1497,6 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                       />
                     </Animated.View>
                   ) : null}
-                  <HookApprovalGrants
-                    threadRef={{
-                      environmentId: props.environmentId,
-                      threadId: props.selectedThread.id,
-                    }}
-                  />
                   {props.activePendingApproval || props.activePendingUserInput ? (
                     <Animated.View
                       className="shrink-0 gap-3 px-4 pb-3"

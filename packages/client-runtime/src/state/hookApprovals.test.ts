@@ -8,7 +8,6 @@ import {
   type HookApprovalRequest,
   type HookApprovalDecision,
   type HookApprovalDuration,
-  type HookApprovalGrant,
   type HookApprovalBypass,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -19,7 +18,6 @@ import {
   hookApprovalBypassSteps,
   hasHookApprovalsCapability,
   hasHookApprovalGrantsCapability,
-  hookApprovalGrantsForThread,
   mergePendingHookApprovals,
   findPendingHookApproval,
   hookApprovalDecisionForProviderDecision,
@@ -218,7 +216,7 @@ describe("hook approvals", () => {
     },
   );
 
-  it("preserves the shown scope and keeps active grants in the selected thread", () => {
+  it("preserves the shown scope for timed approval", () => {
     const [pending] = createPendingHookApprovals(
       scopeHookApprovalRequests(environmentA, [
         {
@@ -229,24 +227,7 @@ describe("hook approvals", () => {
       [],
       true,
     );
-    const grants: ReadonlyArray<HookApprovalGrant> = [
-      {
-        grantId: "grant-scoped",
-        threadId: pending!.request.threadId,
-        scope: { key: "git", label: "Git commits" },
-        expiresAt: null,
-      },
-      {
-        grantId: "grant-other",
-        threadId: ThreadId.make("other"),
-        expiresAt: DateTime.makeUnsafe("2026-09-07T12:15:00.000Z"),
-      },
-    ];
-
     expect(pending?.approval.sessionApprovalScope).toBe("Scope: Git commits");
-    expect(hookApprovalGrantsForThread(grants, pending!.request.threadId)).toEqual([grants[0]]);
-    expect(hookApprovalGrantsForThread(grants, null)).toEqual([]);
-    expect(hookApprovalGrantsForThread([], pending!.request.threadId)).toEqual([]);
   });
   it("orders snapshots from two environments and removes a resolved request", () => {
     const firstSnapshot = sortHookApprovalRequests([
