@@ -3,6 +3,7 @@ import { AVAILABLE_CONNECTION_STATE } from "@t3tools/client-runtime/connection";
 import {
   type ScopedHookApprovalRequest,
   createHookApprovalEnvironmentAtoms,
+  createChildApprovalAtoms,
   hasHookApprovalsCapability,
   scopeHookApprovalRequests,
   sortHookApprovalRequests,
@@ -81,6 +82,23 @@ export const pendingHookApprovalRequestsAtom = Atom.make(
     return sortHookApprovalRequests(requests);
   },
 ).pipe(Atom.withLabel("mobile-pending-hook-approvals"));
+
+export const childApprovals = createChildApprovalAtoms(connectionAtomRuntime, {
+  threadsAtom: environmentThreadShells.environmentThreadsAtom,
+  hookRequestsAtom: pendingHookApprovalRequestsAtom,
+  capabilitiesAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get) => get(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities,
+    ),
+  ),
+  connectedAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get) =>
+        Option.getOrNull(AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))))
+          ?.phase === "connected",
+    ),
+  ),
+});
 
 /** Keeps the subagent tree under `rootThreadId` in the thread list while the caller shows it. */
 export function useThreadFamily(

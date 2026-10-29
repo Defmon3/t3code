@@ -1444,6 +1444,20 @@ const OrchestrationV2SecretRequestFields = {
   secretStatus: OrchestrationV2SecretRequestStatus,
 } as const;
 
+const ApprovalRequestTurnItem = Schema.Struct({
+  ...OrchestrationV2TurnItemBaseFields,
+  type: Schema.Literal("approval_request"),
+  requestId: RuntimeRequestId,
+  requestKind: ProviderRequestKind,
+  prompt: Schema.optional(Schema.String),
+  command: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+  fullAccessOverride: Schema.optional(ProviderApprovalFullAccessOverride),
+  appName: Schema.optional(Schema.String),
+  options: Schema.optional(Schema.Array(ProviderApprovalOption)),
+});
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1538,19 +1552,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     patterns: Schema.optional(Schema.Array(Schema.String)),
     results: Schema.optional(Schema.Array(OrchestrationV2WebSearchResult)),
   }),
-  Schema.Struct({
-    ...OrchestrationV2TurnItemBaseFields,
-    type: Schema.Literal("approval_request"),
-    requestId: RuntimeRequestId,
-    requestKind: ProviderRequestKind,
-    prompt: Schema.optional(Schema.String),
-    command: Schema.optional(Schema.String),
-    cwd: Schema.optional(Schema.String),
-    reason: Schema.optional(Schema.String),
-    fullAccessOverride: Schema.optional(ProviderApprovalFullAccessOverride),
-    appName: Schema.optional(Schema.String),
-    options: Schema.optional(Schema.Array(ProviderApprovalOption)),
-  }),
+  ApprovalRequestTurnItem,
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("checkpoint"),
@@ -3823,6 +3825,26 @@ export const OrchestrationV2GetTurnItemResult = Schema.Struct({
   item: Schema.NullOr(OrchestrationV2TurnItem),
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
+
+export const PendingApprovalDetailsInput = Schema.Struct({
+  threadId: ThreadId,
+  requestId: RuntimeRequestId,
+});
+export type PendingApprovalDetailsInput = typeof PendingApprovalDetailsInput.Type;
+
+export const PendingApprovalDetails = Schema.NullOr(
+  Schema.Struct({ request: OrchestrationV2RuntimeRequest, item: ApprovalRequestTurnItem }),
+);
+export type PendingApprovalDetails = typeof PendingApprovalDetails.Type;
+
+export class PendingApprovalDetailsError extends Schema.TaggedError<PendingApprovalDetailsError>()(
+  "PendingApprovalDetailsError",
+  { threadId: ThreadId, requestId: RuntimeRequestId, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Failed to read pending approval details.";
+  }
+}
 
 const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
   "invalid-path": "Workflow scripts must be absolute .js paths.",

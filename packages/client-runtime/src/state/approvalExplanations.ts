@@ -32,7 +32,7 @@ export function approvalExplanationTarget(
   return {
     environmentId: threadRef.environmentId,
     input: {
-      threadId: threadRef.threadId,
+      threadId: approval.originThreadId ?? threadRef.threadId,
       source: approval.hookRequestId === undefined ? "native" : "hook",
       requestId: approval.hookRequestId ?? approval.requestId,
     },

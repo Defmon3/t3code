@@ -5,16 +5,22 @@ import {
   ProviderSessionId,
   RuntimeRequestId,
   ThreadId,
+  TurnItemId,
+  type PendingApprovalDetails,
+  type OrchestrationV2ThreadShell,
   type HookApprovalRequest,
   type HookApprovalDecision,
   type HookApprovalDuration,
   type HookApprovalBypass,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Cause from "effect/Cause";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   createPendingHookApprovals,
+  createChildApprovalAtoms,
+  childApprovalResponseTarget,
   hookApprovalBypassSteps,
   hasHookApprovalsCapability,
   hasHookApprovalGrantsCapability,
@@ -27,7 +33,12 @@ import {
   sortHookApprovalRequests,
 } from "./hookApprovals.ts";
 import { derivePendingThreadRequests, sendApprovalFeedback } from "./threadRequests.ts";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { EnvironmentRegistry } from "../connection/registry.ts";
+import { approvalExplanationTarget } from "./approvalExplanations.ts";
+import { v2Now, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 
 const environmentA = EnvironmentId.make("environment-a");
 const environmentB = EnvironmentId.make("environment-b");
@@ -63,6 +74,198 @@ const bypass: HookApprovalBypass = {
 };
 
 describe("hook approvals", () => {
+  it("refreshes split child approval context on shell events and keeps duplicate native ids scoped", () => {
+    const parentRef = { environmentId: environmentA, threadId: v2ThreadShell.id };
+    const requestId = RuntimeRequestId.make("same-native-request");
+    const firstId = ThreadId.make("native-child-first");
+    const secondId = ThreadId.make("native-child-second");
+    const initialRevision = DateTime.formatIso(v2Now);
+    const nextTime = DateTime.add(v2Now, { seconds: 1 });
+    const refreshingTime = DateTime.add(nextTime, { seconds: 1 });
+    const failedTime = DateTime.add(refreshingTime, { seconds: 1 });
+    const child = (id: ThreadId): OrchestrationV2ThreadShell => ({
+      ...v2ThreadShell,
+      id,
+      status: "waiting",
+      lineage: {
+        ...v2ThreadShell.lineage,
+        parentThreadId: parentRef.threadId,
+        relationshipToParent: "subagent",
+      },
+      pendingRuntimeRequest: { id: requestId, kind: "command", createdAt: v2Now },
+    });
+    const details = (threadId: ThreadId): NonNullable<PendingApprovalDetails> => ({
+      request: {
+        id: requestId,
+        nodeId: NodeId.make("approval-node"),
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "command",
+        status: "pending",
+        responseCapability: {
+          type: "live",
+          providerSessionId: ProviderSessionId.make("approval-session"),
+        },
+        createdAt: v2Now,
+        resolvedAt: null,
+      },
+      item: {
+        id: TurnItemId.make(`approval-item-${threadId}`),
+        threadId,
+        runId: null,
+        nodeId: NodeId.make("approval-node"),
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status: "running",
+        title: null,
+        startedAt: v2Now,
+        completedAt: null,
+        updatedAt: v2Now,
+        type: "approval_request",
+        requestId,
+        requestKind: "command",
+        prompt: "Read repository status",
+        command: "git status",
+      },
+    });
+    const threads = Atom.make<ReadonlyArray<OrchestrationV2ThreadShell>>([
+      child(firstId),
+      child(secondId),
+    ]);
+    const connected = Atom.make(true);
+    const capabilities = Atom.make({ repositoryIdentity: false, pendingApprovalDetails: true });
+    const runtime = Atom.runtime(
+      Layer.effect(EnvironmentRegistry, Effect.die("Unexpected approval transport")),
+    );
+    const approvals = createChildApprovalAtoms(runtime, {
+      threadsAtom: () => threads,
+      hookRequestsAtom: Atom.make([]),
+      capabilitiesAtom: () => capabilities,
+      connectedAtom: () => connected,
+    });
+    const target = (threadId: ThreadId, revision: string) => ({
+      environmentId: environmentA,
+      input: { threadId, requestId },
+      revision,
+    });
+    const registry = AtomRegistry.make({
+      initialValues: [
+        [approvals.details(target(firstId, initialRevision)), AsyncResult.success(null)],
+        [
+          approvals.details(target(secondId, initialRevision)),
+          AsyncResult.success(details(secondId)),
+        ],
+        [
+          approvals.details(target(firstId, DateTime.formatIso(nextTime))),
+          AsyncResult.success(details(firstId)),
+        ],
+        [
+          approvals.details(target(firstId, DateTime.formatIso(refreshingTime))),
+          AsyncResult.initial(),
+        ],
+        [
+          approvals.details(target(firstId, DateTime.formatIso(failedTime))),
+          AsyncResult.failure(Cause.die("Details could not be loaded")),
+        ],
+      ],
+    });
+    const pending = approvals.pending(parentRef);
+    const unmount = registry.mount(pending);
+    try {
+      expect(registry.get(pending).entries.map((entry) => entry.threadRef.threadId)).toEqual([
+        secondId,
+      ]);
+
+      registry.set(threads, [{ ...child(firstId), updatedAt: nextTime }, child(secondId)]);
+      const visible = registry.get(pending).entries;
+
+      expect(visible).toHaveLength(2);
+      expect(new Set(visible.map((entry) => entry.key)).size).toBe(2);
+      expect(
+        visible.map(
+          (entry) => childApprovalResponseTarget(entry, "decline", "Use staging").target.input,
+        ),
+      ).toEqual([
+        { threadId: firstId, requestId, decision: "decline", feedback: "Use staging" },
+        { threadId: secondId, requestId, decision: "decline", feedback: "Use staging" },
+      ]);
+      registry.set(threads, [{ ...child(firstId), updatedAt: refreshingTime }, child(secondId)]);
+      expect(registry.get(pending).entries[0]).toBe(visible[0]);
+      registry.set(threads, [{ ...child(firstId), updatedAt: failedTime }, child(secondId)]);
+      const unavailable = registry.get(pending).entries[0]!;
+      expect(unavailable.detailsUnavailable).toBe(true);
+      expect(unavailable.approval.responseCapability).toBe("live");
+      expect(() => childApprovalResponseTarget(unavailable, "accept")).toThrow(
+        "Approval details are unavailable.",
+      );
+      registry.set(capabilities, { repositoryIdentity: false, pendingApprovalDetails: false });
+      expect(registry.get(pending).entries).toEqual([]);
+      registry.set(threads, [{ ...child(secondId), pendingRuntimeRequest: null }]);
+      expect(registry.get(pending).entries).toEqual([]);
+      registry.set(connected, false);
+      registry.set(threads, [child(firstId)]);
+      expect(registry.get(pending).entries).toEqual([]);
+    } finally {
+      unmount();
+      registry.dispose();
+    }
+  });
+
+  it("shows nested subagent approvals in the parent queue and explains the originating request", () => {
+    const parent = v2ThreadShell.id;
+    const child = ThreadId.make("approval-child");
+    const nested = ThreadId.make("approval-nested");
+    const unrelated = ThreadId.make("approval-unrelated");
+    const childShell = (id: ThreadId, parentThreadId: ThreadId) => ({
+      ...v2ThreadShell,
+      id,
+      lineage: {
+        ...v2ThreadShell.lineage,
+        parentThreadId,
+        relationshipToParent: "subagent" as const,
+      },
+    });
+    const shells = [childShell(nested, child), childShell(child, parent)];
+    const createdAt = DateTime.formatIso(v2Now);
+    const requests = scopeHookApprovalRequests(environmentA, [
+      { ...request("parent", createdAt), threadId: parent },
+      { ...request("child", createdAt), threadId: child },
+      { ...request("nested", createdAt), threadId: nested },
+      { ...request("unrelated", createdAt), threadId: unrelated },
+    ]);
+
+    const visible = hookApprovalsForThread(requests, environmentA, parent, shells);
+    const approvals = createPendingHookApprovals(visible, [], true);
+
+    expect(visible.map((pending) => pending.threadId)).toEqual([parent, child, nested]);
+    expect(
+      approvalExplanationTarget(
+        { environmentId: environmentA, threadId: parent },
+        approvals[2]!.approval,
+      ).input,
+    ).toMatchObject({ threadId: nested, source: "hook", requestId: "nested" });
+    expect(
+      hookApprovalResponseTarget(approvals[2]!.request, "allow-session", undefined, "15-minutes"),
+    ).toMatchObject({
+      environmentId: environmentA,
+      input: { requestId: "nested", duration: "15-minutes" },
+    });
+    expect(hookApprovalsForThread(requests, environmentB, parent, shells)).toEqual([]);
+    expect(
+      hookApprovalsForThread(requests, environmentA, parent, []).map((pending) => pending.threadId),
+    ).toEqual([parent]);
+    expect(hookApprovalsForThread([], environmentA, parent, shells)).toEqual([]);
+    expect(
+      hookApprovalsForThread(requests, environmentA, parent, [
+        childShell(nested, child),
+        { ...childShell(child, parent), deletedAt: v2Now },
+      ]).map((pending) => pending.threadId),
+    ).toEqual([parent]);
+  });
+
   it("keeps repeated bypass command steps distinct", () => {
     const steps = hookApprovalBypassSteps({
       ...bypass,

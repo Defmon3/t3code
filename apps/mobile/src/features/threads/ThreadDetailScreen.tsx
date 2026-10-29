@@ -165,6 +165,7 @@ import type {
   ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+import { ChildApprovalCard } from "./ChildApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
@@ -1497,6 +1498,13 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                       />
                     </Animated.View>
                   ) : null}
+                  <ChildApprovalCard
+                    threadRef={{
+                      environmentId: props.environmentId,
+                      threadId: props.selectedThread.id,
+                    }}
+                    canOperateThread={props.canOperateThread}
+                  />
                   {props.activePendingApproval || props.activePendingUserInput ? (
                     <Animated.View
                       className="shrink-0 gap-3 px-4 pb-3"

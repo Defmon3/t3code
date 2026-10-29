@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ProjectId,
   ThreadId,
+  RuntimeRequestId,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthSourceControlWriteScope,
@@ -158,6 +159,43 @@ describe("RPC scope middleware", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect.each([false, true])(
+  "requires read permission for pending approval details (%s)",
+  (allowed) =>
+    Effect.gen(function* () {
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RPC_REQUIRED_SCOPES,
+            typeof WS_METHODS.approvalsGetPending
+          > => tag !== WS_METHODS.approvalsGetPending,
+        ),
+      );
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.approvalsGetPending, () => Effect.succeed(null)),
+            RpcAuthorization.layer(allowed ? [AuthOrchestrationReadScope] : []),
+          ),
+        ),
+      );
+      const response = client[WS_METHODS.approvalsGetPending]({
+        threadId: ThreadId.make("thread"),
+        requestId: RuntimeRequestId.make("request"),
+      });
+      if (allowed) {
+        expect(yield* response).toBeNull();
+      } else {
+        expect(yield* response.pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthOrchestrationReadScope,
+        });
+      }
+    }).pipe(Effect.scoped),
+);
 
 describe("settings mutation authorization", () => {
   const group = WsRpcGroup.omit(

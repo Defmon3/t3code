@@ -5,6 +5,9 @@ import {
   RuntimeRequestId,
   HookApprovalRequestId,
   ThreadId,
+  PendingApprovalDetailsError,
+  type PendingApprovalDetails,
+  type PendingApprovalDetailsInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -51,6 +54,9 @@ export class RuntimeRequestResponseExecutionError extends Schema.TaggedError<Run
 const isRuntimeRequestResponseExecutionError = Schema.is(RuntimeRequestResponseExecutionError);
 
 export interface RuntimeRequestServiceV2Shape {
+  readonly getPendingApproval: (
+    input: PendingApprovalDetailsInput,
+  ) => Effect.Effect<PendingApprovalDetails, PendingApprovalDetailsError>;
   readonly respond: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
@@ -78,6 +84,31 @@ export const layer: Layer.Layer<
     const hookApprovals = yield* Effect.serviceOption(HookApprovalRegistry.HookApprovalRegistry);
 
     return RuntimeRequestServiceV2.of({
+      getPendingApproval: Effect.fn("RuntimeRequestService.getPendingApproval")(
+        function* (input) {
+          const thread = yield* projections.getThread(input.threadId);
+          if (thread.deletedAt !== null) return null;
+          const { request, item } = yield* projections.getRuntimeResponseContext(
+            input.threadId,
+            input.requestId,
+          );
+          if (
+            request?.status !== "pending" ||
+            request.id !== input.requestId ||
+            request.kind === "user_input" ||
+            item?.type !== "approval_request" ||
+            item.requestId !== input.requestId ||
+            item.threadId !== input.threadId
+          ) {
+            return null;
+          }
+          return { request, item };
+        },
+        (effect, input) =>
+          effect.pipe(
+            Effect.mapError((cause) => new PendingApprovalDetailsError({ ...input, cause })),
+          ),
+      ),
       respond: Effect.fn("RuntimeRequestService.respond")(
         function* (input) {
           const request = yield* projections.getRuntimeRequest(input.threadId, input.requestId);

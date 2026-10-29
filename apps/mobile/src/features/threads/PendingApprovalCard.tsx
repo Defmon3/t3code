@@ -30,6 +30,7 @@ import type { PendingApproval } from "../../lib/threadActivity";
 import { cn } from "../../lib/cn";
 
 export interface PendingApprovalCardProps {
+  readonly disabled?: boolean;
   readonly canOperateThread: boolean;
   readonly approval: PendingApproval;
   readonly threadRef: ScopedThreadRef;
@@ -56,7 +57,8 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
     props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
   const warning = options.find((option) => option.warning)?.warning;
   const canRespond = props.approval.responseCapability === "live";
-  const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
+  const disabled =
+    props.disabled || !canRespond || props.respondingApprovalId === props.approval.requestId;
   const [explanationOpen, setExplanationOpen] = useState(false);
   const [commandExpanded, setCommandExpanded] = useState(false);
   const [reason, setReason] = useState<string | null>(null);

@@ -217,6 +217,7 @@ export const make = Effect.gen(function* () {
       repositoryIdentity: true,
       gitHistory: true,
       hookApprovals: true,
+      pendingApprovalDetails: true,
       hookApprovalGrants: true,
       connectionProbe: true,
       attachmentUploads: true,

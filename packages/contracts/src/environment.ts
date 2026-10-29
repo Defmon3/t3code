@@ -73,6 +73,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   gitHistory: Schema.optionalKey(Schema.Boolean),
   hookApprovals: Schema.optionalKey(Schema.Boolean),
+  pendingApprovalDetails: Schema.optionalKey(Schema.Boolean),
   hookApprovalGrants: Schema.optionalKey(Schema.Boolean),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   attachmentUploads: Schema.optionalKey(Schema.Boolean),

@@ -145,6 +145,7 @@ function layerExecutorFor(input: {
     Layer.succeed(
       RuntimeRequestService.RuntimeRequestServiceV2,
       RuntimeRequestService.RuntimeRequestServiceV2.of({
+        getPendingApproval: () => Effect.die("unused pending approval read"),
         respond: input.respond ?? (() => Effect.void),
       }),
     ),

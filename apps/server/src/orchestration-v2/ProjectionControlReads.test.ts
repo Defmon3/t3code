@@ -13,6 +13,7 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
+  TurnItemId,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -192,6 +193,103 @@ const storageCases = (["sqlite", "memory"] as const).map((storage) => ({
       ? ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))
       : ProjectionStore.layerMemory,
 }));
+
+it.effect.each(storageCases)("$storage: reads only pending approval details", ({ storeLayer }) =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const service = yield* RuntimeRequestService.RuntimeRequestServiceV2;
+    const now = yield* DateTime.now;
+    const events = fixtureEvents(now);
+    yield* Effect.forEach(events, (event) => store.apply(event), { discard: true });
+    const requestEvent = events.find((event) => event.type === "runtime-request.updated")!;
+    const threadEvent = events.find((event) => event.type === "thread.created")!;
+    yield* store.apply({
+      ...requestEvent,
+      payload: { ...requestEvent.payload, status: "pending" },
+    });
+    assert.isNull(yield* service.getPendingApproval({ threadId, requestId }));
+    const item = {
+      id: TurnItemId.make("item:control-approval"),
+      threadId,
+      runId,
+      nodeId,
+      providerThreadId,
+      providerTurnId,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "waiting" as const,
+      title: null,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+      type: "approval_request" as const,
+      requestId,
+      requestKind: "command" as const,
+      command: "git status",
+    };
+    yield* store.apply({
+      id: EventId.make("control:approval-item"),
+      threadId,
+      occurredAt: now,
+      type: "turn-item.updated",
+      payload: item,
+    });
+    for (const status of ["pending", "resolved", "cancelled", "expired"] as const) {
+      const request = { ...requestEvent.payload, status };
+      yield* store.apply({ ...requestEvent, payload: request });
+      assert.deepEqual(
+        yield* service.getPendingApproval({ threadId, requestId }),
+        status === "pending" ? { request, item } : null,
+      );
+    }
+    yield* store.apply({
+      ...requestEvent,
+      payload: { ...requestEvent.payload, status: "pending" },
+    });
+    assert.isNull(
+      yield* service.getPendingApproval({
+        threadId,
+        requestId: RuntimeRequestId.make("request:missing"),
+      }),
+    );
+    const otherThreadId = ThreadId.make("thread:other-control-approval");
+    yield* store.apply({
+      ...threadEvent,
+      threadId: otherThreadId,
+      payload: { ...threadEvent.payload, id: otherThreadId },
+    });
+    assert.isNull(yield* service.getPendingApproval({ threadId: otherThreadId, requestId }));
+    const missingThread = yield* service
+      .getPendingApproval({
+        threadId: ThreadId.make("thread:missing-control-approval"),
+        requestId,
+      })
+      .pipe(Effect.flip);
+    assert.equal(missingThread._tag, "PendingApprovalDetailsError");
+    yield* store.apply({
+      ...requestEvent,
+      payload: { ...requestEvent.payload, status: "pending", kind: "user_input" },
+    });
+    assert.isNull(yield* service.getPendingApproval({ threadId, requestId }));
+    yield* store.apply({
+      ...requestEvent,
+      payload: { ...requestEvent.payload, status: "pending" },
+    });
+    yield* store.apply({
+      ...threadEvent,
+      payload: { ...threadEvent.payload, deletedAt: now },
+    });
+    assert.isNull(yield* service.getPendingApproval({ threadId, requestId }));
+  }).pipe(
+    Effect.provide(
+      RuntimeRequestService.layer.pipe(
+        Layer.provideMerge(storeLayer),
+        Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      ),
+    ),
+  ),
+);
 
 it.effect.each(storageCases)(
   "$storage: finds the active root turn without an attempt reverse link",

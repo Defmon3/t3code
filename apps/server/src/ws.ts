@@ -126,6 +126,7 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as HookApprovalRegistry from "./hooks/HookApprovalRegistry.ts";
 import * as ApprovalExplanationService from "./approvals/ApprovalExplanationService.ts";
+import * as RuntimeRequestService from "./orchestration-v2/RuntimeRequestService.ts";
 import { HookApprovalRespondError } from "@t3tools/contracts";
 
 import * as GuestShareService from "./guest/GuestShareService.ts";
@@ -1331,6 +1332,7 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const hookApprovals = yield* HookApprovalRegistry.HookApprovalRegistry;
       const approvalExplanations = yield* ApprovalExplanationService.ApprovalExplanationService;
+      const runtimeRequests = yield* RuntimeRequestService.RuntimeRequestServiceV2;
 
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -1954,6 +1956,7 @@ export const layerWsRpc = (
 
       const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.approvalsExplain]: (input) => approvalExplanations.explain(input),
+        [WS_METHODS.approvalsGetPending]: (input) => runtimeRequests.getPendingApproval(input),
         [WS_METHODS.hookApprovalsSubscribe]: () => hookApprovals.subscribe(),
         [WS_METHODS.hookApprovalsSubscribeGrants]: () => hookApprovals.subscribeGrants(),
         [WS_METHODS.hookApprovalsRevokeGrant]: (input) => hookApprovals.revokeGrant(input.grantId),

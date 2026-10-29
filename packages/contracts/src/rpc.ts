@@ -4,6 +4,9 @@ import {
   OrchestrationV2SearchThreadResult,
   OrchestrationV2SearchThreadsInput,
   OrchestrationV2SearchThreadsResult,
+  PendingApprovalDetails,
+  PendingApprovalDetailsInput,
+  PendingApprovalDetailsError,
 } from "./orchestrationV2.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
@@ -598,6 +601,7 @@ export const WS_METHODS = {
   hookApprovalsSubscribeGrants: "hookApprovals.subscribeGrants",
   hookApprovalsRevokeGrant: "hookApprovals.revokeGrant",
   approvalsExplain: "approvals.explain",
+  approvalsGetPending: "approvals.getPending",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2190,6 +2194,11 @@ const WsApprovalsExplainRpc = Rpc.make(WS_METHODS.approvalsExplain, {
   success: ApprovalExplanationResult,
   error: EnvironmentAuthorizationError,
 });
+const WsApprovalsGetPendingRpc = Rpc.make(WS_METHODS.approvalsGetPending, {
+  payload: PendingApprovalDetailsInput,
+  success: PendingApprovalDetails,
+  error: Schema.Union([PendingApprovalDetailsError, EnvironmentAuthorizationError]),
+});
 const WsHookApprovalsRespondRpc = Rpc.make(WS_METHODS.hookApprovalsRespond, {
   payload: HookApprovalRespondInput,
   success: Schema.Void,
@@ -2332,6 +2341,7 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsHookApprovalsSubscribeGrantsRpc,
   WsHookApprovalsRevokeGrantRpc,
   WsApprovalsExplainRpc,
+  WsApprovalsGetPendingRpc,
   WsHookApprovalsRespondRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,

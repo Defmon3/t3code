@@ -49,6 +49,7 @@ export async function declinePendingApprovals(
 
 export interface ThreadPendingApproval {
   readonly requestId: RuntimeRequestId;
+  readonly originThreadId?: ThreadId;
   readonly requestKind: ProviderRequestKind;
   readonly createdAt: string;
   readonly detail?: string;
