@@ -12,7 +12,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import * as ProcessRunner from "./processRunner.ts";
-import * as WindowsGitWorker from "./WindowsGitWorker.ts";
+import * as WindowsProcessWorker from "./WindowsProcessWorker.ts";
 
 type ChildProcessCommand = {
   readonly command: string;
@@ -81,7 +81,10 @@ const runWith =
 describe("runProcess", () => {
   it.effect("extends the injected host environment with command overrides in the worker", () =>
     Effect.gen(function* () {
-      const worker = WindowsGitWorker.WindowsGitWorker.of({
+      const worker = WindowsProcessWorker.WindowsProcessWorker.of({
+        spawn: () => {
+          throw new Error("Unexpected streaming spawn");
+        },
         run: (input) =>
           Effect.succeed({
             code: 0,
@@ -98,7 +101,7 @@ describe("runProcess", () => {
           ChildProcessSpawner.ChildProcessSpawner,
           makeSpawner(() => Effect.succeed(makeHandle({}))),
         ),
-        Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+        Effect.provideService(WindowsProcessWorker.WindowsProcessWorker, worker),
       );
       const output = yield* runner.run({
         command: "git",
@@ -122,7 +125,10 @@ describe("runProcess", () => {
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const cancelled = yield* Deferred.make<void>();
-        const worker = WindowsGitWorker.WindowsGitWorker.of({
+        const worker = WindowsProcessWorker.WindowsProcessWorker.of({
+          spawn: () => {
+            throw new Error("Unexpected streaming spawn");
+          },
           run: () =>
             Deferred.succeed(started, undefined).pipe(
               Effect.andThen(Effect.never),
@@ -134,7 +140,7 @@ describe("runProcess", () => {
             ChildProcessSpawner.ChildProcessSpawner,
             makeSpawner(() => Effect.succeed(makeHandle({}))),
           ),
-          Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+          Effect.provideService(WindowsProcessWorker.WindowsProcessWorker, worker),
         );
         const running = yield* runner
           .run({ command: "git", args: [], timeout: "1 second", timeoutBehavior })
@@ -175,7 +181,10 @@ describe("runProcess", () => {
     "routes $platform $command streaming=$streaming to $expected",
     ({ platform, command, streaming, expected }) =>
       Effect.gen(function* () {
-        const worker = WindowsGitWorker.WindowsGitWorker.of({
+        const worker = WindowsProcessWorker.WindowsProcessWorker.of({
+          spawn: () => {
+            throw new Error("Unexpected streaming spawn");
+          },
           run: () =>
             Effect.succeed({
               code: 0,
@@ -190,7 +199,7 @@ describe("runProcess", () => {
             ChildProcessSpawner.ChildProcessSpawner,
             makeSpawner(() => Effect.succeed(makeHandle({ stdout: "native" }))),
           ),
-          Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+          Effect.provideService(WindowsProcessWorker.WindowsProcessWorker, worker),
         );
         const chunks: string[] = [];
         const output = yield* runner.run({
@@ -214,7 +223,10 @@ describe("runProcess", () => {
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const nativeCommands: string[] = [];
-      const worker = WindowsGitWorker.WindowsGitWorker.of({
+      const worker = WindowsProcessWorker.WindowsProcessWorker.of({
+        spawn: () => {
+          throw new Error("Unexpected streaming spawn");
+        },
         run: () =>
           Deferred.succeed(started, undefined).pipe(
             Effect.andThen(Deferred.await(release)),
@@ -235,7 +247,7 @@ describe("runProcess", () => {
       );
       const runner = yield* ProcessRunner.make().pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, native),
-        Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+        Effect.provideService(WindowsProcessWorker.WindowsProcessWorker, worker),
       );
       const git = yield* runner.run({ command: "git", args: ["status"] }).pipe(Effect.forkChild);
       yield* Deferred.await(started);

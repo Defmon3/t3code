@@ -9,14 +9,117 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import * as WindowsGitWorker from "./WindowsGitWorker.ts";
+import * as WindowsProcessWorker from "./WindowsProcessWorker.ts";
 
-const layer = Layer.merge(NodeServices.layer, WindowsGitWorker.layer);
+const layer = Layer.merge(NodeServices.layer, WindowsProcessWorker.layer);
 
-describe("WindowsGitWorker", () => {
+describe("WindowsProcessWorker", () => {
+  it.live("streams input and output and reports process exit", () =>
+    Effect.gen(function* () {
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
+      const command = yield* HostProcess.ExecutablePath;
+      const child = worker.spawn({
+        command,
+        args: [
+          "-e",
+          "process.stdin.on('data', data => process.stdout.write(data)); process.stdin.on('end', () => process.exitCode = 7)",
+        ],
+        env: process.env,
+        signal: yield* Effect.abortSignal,
+      });
+      const completed = Effect.promise(async () => {
+        const chunks: Buffer[] = [];
+        child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+        const exit = new Promise<number | null>((resolve, reject) => {
+          child.on("error", reject);
+          child.once("exit", resolve);
+        });
+        child.stdin.end("hello 雪");
+        const code = await exit;
+        return { text: Buffer.concat(chunks).toString(), code };
+      });
+      expect(yield* completed).toEqual({ text: "hello 雪", code: 7 });
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("aborts even when stdout is not consumed", () => {
+    const abort = new AbortController();
+    return Effect.gen(function* () {
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
+      const command = yield* HostProcess.ExecutablePath;
+      const child = worker.spawn({
+        command,
+        args: ["-e", "process.stdout.write(Buffer.alloc(1024 * 1024)); process.stdin.resume()"],
+        env: process.env,
+        signal: abort.signal,
+      });
+      yield* Effect.promise(async () => {
+        const exit = new Promise<void>((resolve, reject) => {
+          child.on("error", reject);
+          child.once("exit", () => resolve());
+        });
+        await new Promise<void>((resolve, reject) => {
+          child.stdout.once("readable", resolve);
+          child.stdout.once("error", reject);
+        });
+        abort.abort();
+        await exit;
+      });
+      expect(child.killed).toBe(true);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
+
+  it.live("cancels a process whose signal is already aborted", () => {
+    const abort = new AbortController();
+    abort.abort();
+    return Effect.gen(function* () {
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
+      const command = yield* HostProcess.ExecutablePath;
+      const child = worker.spawn({
+        command,
+        args: ["-e", "process.stdin.resume()"],
+        env: process.env,
+        signal: abort.signal,
+      });
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            child.on("error", reject);
+            child.once("exit", () => resolve());
+          }),
+      );
+      expect(child.killed).toBe(true);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
+
+  it.live("reports a streaming spawn error and accepts another process", () =>
+    Effect.gen(function* () {
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
+      const child = worker.spawn({
+        command: "missing-t3-worker-executable",
+        args: [],
+        env: process.env,
+        signal: yield* Effect.abortSignal,
+      });
+      const error = yield* Effect.promise(
+        () => new Promise<Error>((resolve) => child.on("error", resolve)),
+      );
+      expect(error.message).toContain("ENOENT");
+      const command = yield* HostProcess.ExecutablePath;
+      const output = yield* worker.run({
+        command,
+        args: ["-e", "process.stdout.write('ready')"],
+        env: process.env,
+        shell: false,
+        maxOutputBytes: 100,
+        outputMode: "error",
+      });
+      expect(new TextDecoder().decode(output.stdout)).toBe("ready");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
   it.live("isolates concurrent commands and preserves cwd and environment", () =>
     Effect.gen(function* () {
-      const worker = yield* WindowsGitWorker.WindowsGitWorker;
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
       const command = yield* HostProcess.ExecutablePath;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -77,7 +180,7 @@ describe("WindowsGitWorker", () => {
         const address = server.address();
         if (address === null || typeof address === "string")
           throw new Error("Expected TCP address");
-        const worker = yield* WindowsGitWorker.WindowsGitWorker;
+        const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
         const command = yield* HostProcess.ExecutablePath;
         const client = `require('node:net').connect(${address.port},'127.0.0.1')`;
         const input = {
@@ -108,7 +211,7 @@ describe("WindowsGitWorker", () => {
 
   it.live("preserves stdin, both output streams, and nonzero exit codes", () =>
     Effect.gen(function* () {
-      const worker = yield* WindowsGitWorker.WindowsGitWorker;
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
       const command = yield* HostProcess.ExecutablePath;
       const output = yield* worker.run({
         command,
@@ -134,7 +237,7 @@ describe("WindowsGitWorker", () => {
     "honors the output byte limit in %s mode",
     (outputMode) =>
       Effect.gen(function* () {
-        const worker = yield* WindowsGitWorker.WindowsGitWorker;
+        const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
         const command = yield* HostProcess.ExecutablePath;
         const read = worker.run({
           command,
@@ -152,7 +255,7 @@ describe("WindowsGitWorker", () => {
         } else {
           const error = yield* read.pipe(Effect.flip);
           expect(error).toMatchObject({
-            _tag: "GitWorkerOutputLimitError",
+            _tag: "ProcessWorkerOutputLimitError",
             stream: "stdout",
             maxBytes: 3,
           });
@@ -165,7 +268,7 @@ describe("WindowsGitWorker", () => {
     { invalid: "nul", code: "ERR_INVALID_ARG_VALUE" },
   ])("reports a $invalid executable and accepts the next command", ({ invalid, code }) =>
     Effect.gen(function* () {
-      const worker = yield* WindowsGitWorker.WindowsGitWorker;
+      const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const dir = yield* fs.makeTempDirectoryScoped();
@@ -182,7 +285,7 @@ describe("WindowsGitWorker", () => {
           command: invalid === "nul" ? "git\u0000" : path.join(dir, "missing-command.exe"),
         })
         .pipe(Effect.flip);
-      expect(error).toMatchObject({ _tag: "GitWorkerError", phase: "spawn", code });
+      expect(error).toMatchObject({ _tag: "ProcessWorkerError", phase: "spawn", code });
       const command = yield* HostProcess.ExecutablePath;
       const output = yield* worker.run({ ...options, command });
       expect(new TextDecoder().decode(output.stdout)).toBe("ready");

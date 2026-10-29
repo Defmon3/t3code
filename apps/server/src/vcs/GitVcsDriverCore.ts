@@ -1243,8 +1243,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           hostPlatform === "win32" &&
           !resolved.shell &&
           input.progress?.onStdoutLine === undefined &&
-          input.progress?.onStderrLine === undefined &&
-          input.forceKillAfterMs === undefined;
+          input.progress?.onStderrLine === undefined;
         const result = yield* buffered
           ? processRunner
               .run({
@@ -1254,6 +1253,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 env: spawnEnv,
                 stdin: input.stdin,
                 timeout: Duration.infinity,
+                forceKillAfterMs: input.forceKillAfterMs,
                 maxOutputBytes,
                 outputMode: appendTruncationMarker ? "truncate" : "error",
               })

@@ -116,6 +116,39 @@ const makeFailedHandle = (stderr: string) =>
   });
 
 describe("Windows buffered Git execution", () => {
+  it.effect("preserves the termination delay for buffered commands", () =>
+    Effect.gen(function* () {
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          ProcessRunner.ProcessRunner.of({
+            run: (input) =>
+              Effect.succeed({
+                code: ChildProcessSpawner.ExitCode(0),
+                stdout: String(input.forceKillAfterMs),
+                stderr: "",
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              }),
+          }),
+        ),
+      );
+      const output = yield* driver.execute({
+        operation: "test.forceKill",
+        cwd: "/repo",
+        args: ["status"],
+        forceKillAfterMs: 1234,
+      });
+      assert.equal(output.stdout, "1234");
+    }).pipe(
+      Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+      Effect.provideService(HostProcess.Platform, "win32"),
+    ),
+  );
+
   it.live(
     "runs buffered commands without the main-thread spawner and preserves output failures",
     () =>
@@ -133,6 +166,10 @@ describe("Windows buffered Git execution", () => {
         const output = yield* driver.execute(input);
         assert.equal(output.stdout, "é雪\n");
         assert.equal(output.exitCode, 0);
+
+        const withForceKill = yield* driver.execute({ ...input, forceKillAfterMs: 1_000 });
+        assert.equal(withForceKill.stdout, "é雪\n");
+        assert.equal(withForceKill.exitCode, 0);
 
         const envOutput = yield* driver.execute({
           ...input,
@@ -179,48 +216,42 @@ describe("Windows buffered Git execution", () => {
       ),
   );
 
-  it.effect.each(["stdout", "stderr", "forceKillAfter"] as const)(
-    "preserves direct execution for %s",
-    (mode) =>
-      Effect.gen(function* () {
-        const driver = yield* makeGitVcsDriverCore().pipe(
-          Effect.provideService(
-            ProcessRunner.ProcessRunner,
-            ProcessRunner.ProcessRunner.of({
-              run: () => Effect.die("Streaming Git must retain live output"),
-            }),
-          ),
-          Effect.provideService(
-            ChildProcessSpawner.ChildProcessSpawner,
-            ChildProcessSpawner.make(() =>
-              Effect.succeed(
-                ChildProcessSpawner.makeHandle({
-                  ...makeSuccessfulHandle("stdout\n"),
-                  stderr: Stream.encodeText(Stream.make("stderr\n")),
-                }),
-              ),
+  it.effect.each(["stdout", "stderr"] as const)("preserves direct execution for %s", (mode) =>
+    Effect.gen(function* () {
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          ProcessRunner.ProcessRunner.of({
+            run: () => Effect.die("Streaming Git must retain live output"),
+          }),
+        ),
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              ChildProcessSpawner.makeHandle({
+                ...makeSuccessfulHandle("stdout\n"),
+                stderr: Stream.encodeText(Stream.make("stderr\n")),
+              }),
             ),
           ),
-        );
-        const lines: string[] = [];
-        const onLine = (line: string) => Effect.sync(() => void lines.push(line));
-        const output = yield* driver.execute({
-          operation: "test.directGitOutput",
-          cwd: "/repo",
-          args: ["status"],
-          ...(mode === "forceKillAfter"
-            ? { forceKillAfterMs: 1234 }
-            : {
-                progress: mode === "stdout" ? { onStdoutLine: onLine } : { onStderrLine: onLine },
-              }),
-        });
-        assert.equal(output.stdout, "stdout\n");
-        assert.equal(output.stderr, "stderr\n");
-        assert.deepEqual(lines, mode === "forceKillAfter" ? [] : [mode]);
-      }).pipe(
-        Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
-        Effect.provideService(HostProcess.Platform, "win32"),
-      ),
+        ),
+      );
+      const lines: string[] = [];
+      const onLine = (line: string) => Effect.sync(() => void lines.push(line));
+      const output = yield* driver.execute({
+        operation: "test.directGitOutput",
+        cwd: "/repo",
+        args: ["status"],
+        progress: mode === "stdout" ? { onStdoutLine: onLine } : { onStderrLine: onLine },
+      });
+      assert.equal(output.stdout, "stdout\n");
+      assert.equal(output.stderr, "stderr\n");
+      assert.deepEqual(lines, [mode]);
+    }).pipe(
+      Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+      Effect.provideService(HostProcess.Platform, "win32"),
+    ),
   );
 });
 

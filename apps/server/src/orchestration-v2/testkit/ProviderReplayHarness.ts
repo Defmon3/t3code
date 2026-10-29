@@ -12,7 +12,7 @@ import type { MigrationError } from "effect/sql/Migrator";
 import type { SqlError } from "effect/sql/SqlError";
 
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
-import type { GitWorkerError } from "../../WindowsGitWorker.ts";
+import type { ProcessWorkerError } from "../../WindowsProcessWorker.ts";
 import * as ServerConfig from "../../config.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -202,7 +202,7 @@ export function runOrchestratorV2ProviderReplayScenario<
   OrchestratorV2ScenarioResult,
   | Orchestrator.OrchestratorV2Error
   | OrchestratorV2ScenarioStepError
-  | GitWorkerError
+  | ProcessWorkerError
   | Error
   | MigrationError
   | PlatformError.PlatformError
@@ -248,7 +248,7 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
   | EventSink.EventSinkV2
   | CommandOutputRecorder.CommandOutputRecorder
   | ProviderSessionManager.ProviderSessionManagerV2,
-  Error | GitWorkerError | MigrationError | PlatformError.PlatformError | SqlError
+  Error | ProcessWorkerError | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const layerRegistry = harness.makeProviderAdapterRegistryLayer(
     scenario.transcript,
@@ -280,7 +280,7 @@ export function layerWithRegistry<Error>(
   | EventSink.EventSinkV2
   | ProviderSessionManager.ProviderSessionManagerV2
   | CommandOutputRecorder.CommandOutputRecorder,
-  Error | GitWorkerError | MigrationError | PlatformError.PlatformError | SqlError
+  Error | ProcessWorkerError | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,

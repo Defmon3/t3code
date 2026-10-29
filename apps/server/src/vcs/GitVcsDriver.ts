@@ -1446,8 +1446,8 @@ export const make = Effect.gen(function* () {
 });
 
 export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver).pipe(
-  Layer.provide(VcsProcess.layerWithWindowsGitWorker),
+  Layer.provide(VcsProcess.layerWithWindowsProcessWorker),
 );
 export const layer = Layer.effect(GitVcsDriver, make).pipe(
-  Layer.provide(ProcessRunner.layerWithWindowsGitWorker),
+  Layer.provide(ProcessRunner.layerWithWindowsProcessWorker),
 );

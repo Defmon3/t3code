@@ -444,5 +444,5 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(WorkspaceEntries, make).pipe(
   Layer.provide(WorkspaceSearchIndex.WorkspaceSearchIndexMap.layer),
-  Layer.provide(VcsProcess.layerWithWindowsGitWorker),
+  Layer.provide(VcsProcess.layerWithWindowsProcessWorker),
 );

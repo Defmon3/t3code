@@ -11,7 +11,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as WindowsGitWorker from "./WindowsGitWorker.ts";
+import * as WindowsProcessWorker from "./WindowsProcessWorker.ts";
 import {
   collectUint8StreamText,
   decodeUtf8,
@@ -24,6 +24,7 @@ export interface ProcessRunInput {
   readonly cwd?: string | undefined;
   readonly spawnCwd?: string | undefined;
   readonly timeout?: Duration.Input | undefined;
+  readonly forceKillAfterMs?: number | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly stdin?: string | undefined;
   /** Receives every stdout chunk, including bytes beyond the buffered output limit. */
@@ -305,7 +306,10 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
             }
           : {}),
         shell: spawnCommand.shell,
-        forceKillAfter: FORCE_KILL_AFTER,
+        forceKillAfter:
+          input.forceKillAfterMs === undefined
+            ? FORCE_KILL_AFTER
+            : Duration.millis(input.forceKillAfterMs),
       }),
     )
     .pipe(
@@ -391,7 +395,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
 });
 
 const runGitInWorker = Effect.fn("processRunner.runProcessCore")(function* (
-  worker: WindowsGitWorker.WindowsGitWorker["Service"],
+  worker: WindowsProcessWorker.WindowsProcessWorker["Service"],
   input: ProcessRunInput,
 ) {
   yield* Effect.annotateCurrentSpan({
@@ -420,10 +424,11 @@ const runGitInWorker = Effect.fn("processRunner.runProcessCore")(function* (
       stdin: input.stdin,
       maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
       outputMode: input.outputMode ?? "error",
+      forceKillAfterMs: input.forceKillAfterMs,
     })
     .pipe(
       Effect.mapError((error): ProcessRunError => {
-        if (error._tag === "GitWorkerOutputLimitError") {
+        if (error._tag === "ProcessWorkerOutputLimitError") {
           return new ProcessOutputLimitError({
             ...invocation,
             stream: error.stream,
@@ -471,7 +476,7 @@ export const make = Effect.fn("ProcessRunner.make")(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const platform = yield* HostProcess.Platform;
   const gitWorker = Option.getOrUndefined(
-    yield* Effect.serviceOption(WindowsGitWorker.WindowsGitWorker),
+    yield* Effect.serviceOption(WindowsProcessWorker.WindowsProcessWorker),
   );
 
   const run: ProcessRunner["Service"]["run"] = (input) =>
@@ -492,12 +497,12 @@ export const make = Effect.fn("ProcessRunner.make")(function* () {
 
 export const layer = Layer.effect(ProcessRunner, make());
 
-export const layerWithWindowsGitWorker = Layer.effect(ProcessRunner, make()).pipe(
-  Layer.provide(
-    Layer.unwrap(
-      Effect.map(HostProcess.Platform, (platform) =>
-        platform === "win32" ? WindowsGitWorker.layer : Layer.empty,
-      ),
-    ),
+export const layerWindowsProcessWorker = Layer.unwrap(
+  Effect.map(HostProcess.Platform, (platform) =>
+    platform === "win32" ? WindowsProcessWorker.layer : Layer.empty,
   ),
+);
+
+export const layerWithWindowsProcessWorker = Layer.effect(ProcessRunner, make()).pipe(
+  Layer.provide(layerWindowsProcessWorker),
 );

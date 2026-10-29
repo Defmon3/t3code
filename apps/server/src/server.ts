@@ -374,13 +374,13 @@ const layerRepositoryIdentityResolver = Layer.effect(
   }),
 ).pipe(
   Layer.provide(layerSourceControlProviderRegistry),
-  Layer.provide(ProcessRunner.layerWithWindowsGitWorker),
+  Layer.provide(ProcessRunner.layerWithWindowsProcessWorker),
 );
 
 const IssueServiceLive = IssueService.layer.pipe(
   Layer.provide(IssueProviderRegistry.layer),
   Layer.provide(layerSourceControlProviderRegistry),
-  Layer.provide(VcsProcess.layerWithWindowsGitWorker),
+  Layer.provide(VcsProcess.layerWithWindowsProcessWorker),
   Layer.provide(SourceControlRateLimit.layer),
 );
 
@@ -703,6 +703,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 );
 
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
+  Layer.provideMerge(ProcessRunner.layerWindowsProcessWorker),
   Layer.provideMerge(layerPtyAdapter),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
   Layer.provideMerge(
@@ -1144,7 +1145,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(VcsProcess.layerWithWindowsGitWorker),
+      Layer.provide(VcsProcess.layerWithWindowsProcessWorker),
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(layerPlatformServices),
     );
