@@ -19,7 +19,7 @@ import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
 
 const GIT_HISTORY_ROW_HEIGHT_REM = 1.875;
 const DEFAULT_INTERFACE_FONT_SIZE = 16;
-export const GIT_HISTORY_ROW_HEIGHT = GIT_HISTORY_ROW_HEIGHT_REM * DEFAULT_INTERFACE_FONT_SIZE;
+const GIT_HISTORY_ROW_HEIGHT = GIT_HISTORY_ROW_HEIGHT_REM * DEFAULT_INTERFACE_FONT_SIZE;
 const LANE_WIDTH = 11;
 const GRAPH_HORIZONTAL_PADDING = 6;
 const MAX_GRAPH_WIDTH = 104;
@@ -151,16 +151,18 @@ function CommitSubject({
   repositoryIdentity?: RepositoryIdentity | null | undefined;
 }) {
   const parts = subject.split(/(#[0-9]+)/g);
-  return parts.map((part, index) => {
+  let offset = 0;
+  return parts.map((part) => {
+    const start = offset;
+    offset += part.length;
     if (!/^#[0-9]+$/.test(part)) return part;
     const className = "font-semibold text-primary hover:text-primary hover:underline";
     const url = commitReferenceUrl(repositoryIdentity, subject, Number(part.slice(1)));
     return url ? (
-      <Tooltip key={`${part}:${index}`}>
+      <Tooltip key={`${part}:${start}`}>
         <TooltipTrigger
           render={
             <a
-              key={`${part}:${index}`}
               className={`${className} pointer-events-auto`}
               href={url}
               target="_blank"
@@ -173,7 +175,7 @@ function CommitSubject({
         <TooltipPopup>{`Open ${part} on repository host`}</TooltipPopup>
       </Tooltip>
     ) : (
-      <span key={`${part}:${index}`} className={className}>
+      <span key={`${part}:${start}`} className={className}>
         {part}
       </span>
     );

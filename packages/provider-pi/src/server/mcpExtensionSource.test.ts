@@ -530,6 +530,7 @@ describe("Pi issue instructions", () => {
         { systemPrompt: "Pi system prompt" },
         { ui: { notify: () => undefined } },
       );
+      assert.isDefined(prompt);
       assert.equal(prompt.systemPrompt.includes("<issue_linking>"), available);
       if (available) {
         assert.include(

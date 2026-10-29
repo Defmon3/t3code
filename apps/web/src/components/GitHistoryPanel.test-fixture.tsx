@@ -595,6 +595,5 @@ export {
   renderPanel,
   secondaryCommitHash,
   stubResizeObserver,
-  visitElements,
   workspacePath,
 };

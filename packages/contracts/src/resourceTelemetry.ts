@@ -150,7 +150,7 @@ export const ResourceMonitorReadHistoryCommand = Schema.Struct({
 export type ResourceMonitorReadHistoryCommand = typeof ResourceMonitorReadHistoryCommand.Type;
 
 export const RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS = 512;
-export const RESOURCE_MONITOR_DISCOVERY_MAX_ROOT_PATH_BYTES = 16 * 1024;
+const RESOURCE_MONITOR_DISCOVERY_MAX_ROOT_PATH_BYTES = 16 * 1024;
 export const RESOURCE_MONITOR_DISCOVERY_MAX_PROCESSES = 512;
 export const RESOURCE_MONITOR_DISCOVERY_MAX_TOTAL_PROCESSES = 4_096;
 

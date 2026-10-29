@@ -390,5 +390,6 @@ export function createVcsEnvironmentAtoms<R, E>(
 export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
+/** @public Required by downstream inferred VCS environment types. */
 export { vcsHistoryRevisionAtom } from "./vcsRefInvalidation.ts";
 export * from "./vcsStatusRevalidation.ts";

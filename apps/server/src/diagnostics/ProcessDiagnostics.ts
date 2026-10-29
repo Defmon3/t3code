@@ -77,7 +77,7 @@ export interface HostCpuTicks {
   readonly total: number;
 }
 
-export function hostCpuTicks(cpus: readonly NodeOS.CpuInfo[]): HostCpuTicks {
+function hostCpuTicks(cpus: readonly NodeOS.CpuInfo[]): HostCpuTicks {
   return cpus.reduce(
     (ticks, cpu) => ({
       idle: ticks.idle + cpu.times.idle,
