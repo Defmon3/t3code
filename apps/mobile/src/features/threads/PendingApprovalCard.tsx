@@ -15,11 +15,13 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   approvalExplanationTarget,
   approvalExplanationView,
+  approvalJudgementLabels,
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import type { PendingApproval } from "../../lib/threadActivity";
+import { cn } from "../../lib/cn";
 
 export interface PendingApprovalCardProps {
   readonly canOperateThread: boolean;
@@ -169,14 +171,54 @@ function CommandApprovalExplanation({
   return (
     <View className="gap-2 border-t border-border pt-3" accessibilityLiveRegion="polite">
       <Text className="font-t3-bold text-sm text-foreground">AI explanation</Text>
-      <Text className="font-sans text-sm leading-normal text-foreground">
-        {explanation.status === "ready" ? explanation.explanation : explanation.message}
-      </Text>
-      {explanation.status === "ready" && explanation.risk ? (
-        <Text className="rounded-lg border border-warning-border bg-warning p-2 font-sans text-sm leading-normal text-warning-foreground">
-          {explanation.risk}
+      {explanation.status === "ready" ? (
+        <>
+          <Text
+            className={cn(
+              "font-t3-bold text-sm leading-normal",
+              explanation.judgement.verdict === "safe"
+                ? "text-foreground"
+                : explanation.judgement.verdict === "unsafe"
+                  ? "text-danger-foreground"
+                  : "text-warning-foreground",
+            )}
+          >
+            AI judgement: {approvalJudgementLabels[explanation.judgement.verdict]}
+          </Text>
+          <Text className="font-sans text-sm leading-normal text-foreground">
+            {explanation.judgement.reason}
+          </Text>
+          <View className="gap-1" role="list">
+            {explanation.operations.map((operation) => (
+              <View
+                key={JSON.stringify(operation)}
+                className="flex-row items-start gap-2"
+                role="listitem"
+                accessible
+              >
+                <Text className="text-sm leading-normal text-foreground-secondary" aria-hidden>
+                  •
+                </Text>
+                <View className="min-w-0 flex-1 gap-0.5">
+                  <Text selectable className="text-sm leading-normal text-foreground">
+                    <Text className="font-t3-bold">{operation.action}: </Text>
+                    <Text className="font-mono">{operation.detail}</Text>
+                  </Text>
+                  {operation.note ? (
+                    <Text className="text-sm leading-normal text-foreground-secondary">
+                      {operation.note}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+            ))}
+          </View>
+        </>
+      ) : (
+        <Text className="font-sans text-sm leading-normal text-foreground">
+          {explanation.message}
         </Text>
-      ) : null}
+      )}
     </View>
   );
 }

@@ -25,9 +25,26 @@ const input: WorkItemMatchGenerationInput = {
 };
 
 it.effect.each([
-  { explanation: "Reads the repository status.", risk: null },
-  { explanation: "Restores the committed file.", risk: "Discards staged and unstaged edits." },
-])("decodes approval explanations with concrete risk or no specific warning", (content) =>
+  {
+    judgement: { verdict: "safe", reason: "Only reads repository status." },
+    operations: [{ action: "Git status", detail: "Read repository status.", note: null }],
+  },
+  {
+    judgement: { verdict: "unsafe", reason: "Discards staged and unstaged edits." },
+    operations: [{ action: "Git restore", detail: "Restore src/app.ts from HEAD.", note: null }],
+  },
+  {
+    judgement: { verdict: "uncertain", reason: "Agent actions depend on unseen instructions." },
+    operations: [
+      { action: "SCP copy", detail: "Copy audit-brief.txt to build-host.", note: null },
+      {
+        action: "SSH run",
+        detail: "Run Claude with audit-brief.txt on build-host.",
+        note: "Permission checks are bypassed.",
+      },
+    ],
+  },
+])("decodes structured operations and one overall judgement", (content) =>
   Effect.gen(function* () {
     const generation = fromRunner("Fixture", (request) => {
       expect(request.operation).toBe("generateApprovalExplanation");
@@ -45,9 +62,28 @@ it.effect.each([
 );
 
 it.effect.each([
-  { explanation: "", risk: null },
-  { explanation: "Reads status." },
-  { explanation: "Reads status.", risk: "" },
+  { explanation: "Reads status.", risk: null },
+  { judgement: { verdict: "safe", reason: "Only reads status." }, operations: [] },
+  {
+    judgement: { verdict: "unknown", reason: "Only reads status." },
+    operations: [{ action: "Read", detail: "Read status.", note: null }],
+  },
+  {
+    judgement: { verdict: "safe", reason: "" },
+    operations: [{ action: "Read", detail: "Read status.", note: null }],
+  },
+  {
+    judgement: { verdict: "safe", reason: "Only reads status." },
+    operations: [{ action: "", detail: "Read status.", note: null }],
+  },
+  {
+    judgement: { verdict: "safe", reason: "Only reads status." },
+    operations: [{ action: "Read", detail: "", note: null }],
+  },
+  {
+    judgement: { verdict: "safe", reason: "Only reads status." },
+    operations: [{ action: "Read", detail: "Read status.", note: 1 }],
+  },
 ])("rejects malformed approval explanation output", (output) =>
   Effect.gen(function* () {
     const generation = fromRunner("Fixture", (request) =>

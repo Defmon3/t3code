@@ -10,8 +10,17 @@ export const ApprovalExplanationInput = Schema.Struct({
 export type ApprovalExplanationInput = typeof ApprovalExplanationInput.Type;
 
 export const ApprovalExplanationContent = Schema.Struct({
-  explanation: TrimmedNonEmptyString,
-  risk: Schema.NullOr(TrimmedNonEmptyString),
+  judgement: Schema.Struct({
+    verdict: Schema.Literals(["safe", "unsafe", "uncertain"]),
+    reason: TrimmedNonEmptyString,
+  }),
+  operations: Schema.NonEmptyArray(
+    Schema.Struct({
+      action: TrimmedNonEmptyString,
+      detail: TrimmedNonEmptyString,
+      note: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type ApprovalExplanationContent = typeof ApprovalExplanationContent.Type;
 

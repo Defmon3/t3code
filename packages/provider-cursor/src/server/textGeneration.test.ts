@@ -78,10 +78,14 @@ beforeEach(() => {
 describe("CursorTextGeneration", () => {
   it.effect("explains an approval with no tools offered to the model", () =>
     Effect.gen(function* () {
+      const content = {
+        judgement: { verdict: "safe", reason: "Only reads repository status." },
+        operations: [{ action: "Git status", detail: "Read repository status.", note: null }],
+      } as const;
       cursorSdkMock.prompt.mockResolvedValueOnce({
         id: "approval-explanation",
         status: "finished",
-        result: JSON.stringify({ explanation: "Reads Git status.", risk: null }),
+        result: JSON.stringify(content),
       });
       const generation = yield* makeCursorTextGeneration(cursorSettings, {
         CURSOR_API_KEY: "test-key",
@@ -92,7 +96,7 @@ describe("CursorTextGeneration", () => {
           command: "git status",
           modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
         }),
-      ).toEqual({ explanation: "Reads Git status.", risk: null });
+      ).toEqual(content);
       expect(cursorSdkMock.create).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }));
     }).pipe(Effect.provide(layerTest)),
   );

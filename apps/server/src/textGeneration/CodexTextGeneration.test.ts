@@ -12,7 +12,11 @@ import * as Scope from "effect/Scope";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect } from "vite-plus/test";
 
-import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  ProviderInstanceId,
+  type ApprovalExplanationContent,
+} from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
@@ -25,6 +29,10 @@ const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
   ProviderInstanceId.make("codex"),
   "gpt-5.4-mini",
 );
+const approvalContent = {
+  judgement: { verdict: "unsafe", reason: "Discards staged and unstaged edits to src/app.ts." },
+  operations: [{ action: "Git restore", detail: "Restore src/app.ts from HEAD.", note: null }],
+} satisfies ApprovalExplanationContent;
 
 const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-codex-text-generation-test-",
@@ -189,10 +197,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
   it.effect("explains commands with shell execution and web access disabled", () =>
     withFakeCodexEnv(
       {
-        output: JSON.stringify({
-          explanation: "Restores the committed file.",
-          risk: "Discards staged and unstaged edits.",
-        }),
+        output: JSON.stringify(approvalContent),
         requireArg:
           'features.shell_tool=false --config features.unified_exec=false --config features.multi_agent=false --config web_search="disabled"',
       },
@@ -204,10 +209,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
               command: "git restore --staged --worktree -- src/app.ts",
               modelSelection: DEFAULT_TEST_MODEL_SELECTION,
             }),
-          ).toEqual({
-            explanation: "Restores the committed file.",
-            risk: "Discards staged and unstaged edits.",
-          });
+          ).toEqual(approvalContent);
         }),
     ),
   );

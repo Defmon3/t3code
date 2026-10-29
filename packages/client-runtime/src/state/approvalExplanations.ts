@@ -46,8 +46,14 @@ export function approvalExplanationTarget(
 }
 
 export type ApprovalExplanationView =
-  | { readonly status: "ready"; readonly explanation: string; readonly risk: string | null }
+  | Extract<ApprovalExplanationResult, { readonly status: "ready" }>
   | { readonly status: "loading" | "unavailable" | "error"; readonly message: string };
+
+export const approvalJudgementLabels = {
+  safe: "Safe",
+  unsafe: "Unsafe",
+  uncertain: "Uncertain",
+} as const;
 
 export function approvalExplanationView(
   result: AsyncResult.AsyncResult<ApprovalExplanationResult, unknown>,

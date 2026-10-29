@@ -262,7 +262,13 @@ function createTextGeneration(
   overrides: Partial<FakeGitTextGeneration> = {},
 ): TextGeneration.TextGeneration["Service"] {
   const implementation: FakeGitTextGeneration = {
-    generateApprovalExplanation: () => Effect.succeed({ explanation: "Reads status.", risk: null }),
+    generateApprovalExplanation: () =>
+      Effect.succeed({
+        judgement: { verdict: "safe" as const, reason: "Only reads repository status." },
+        operations: [
+          { action: "Git status", detail: "Read repository status.", note: null },
+        ] as const,
+      }),
     generateCommitMessage: (input) =>
       Effect.succeed({
         subject: "Implement stacked git actions",

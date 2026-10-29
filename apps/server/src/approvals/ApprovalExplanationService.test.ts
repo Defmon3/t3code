@@ -12,6 +12,7 @@ import {
   ThreadId,
   TurnItemId,
   type ApprovalExplanationInput,
+  type ApprovalExplanationContent,
   type OrchestrationV2RuntimeRequest,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -48,9 +49,15 @@ const modelSelection = createModelSelection(ProviderInstanceId.make("codex"), "t
 const nativeInput: ApprovalExplanationInput = { threadId, requestId, source: "native" };
 const command = "git restore --source=HEAD --staged --worktree -- src/app.ts";
 const content = {
-  explanation: "Replaces src/app.ts in the index and working tree with the committed version.",
-  risk: "Uncommitted staged and unstaged changes to src/app.ts would be discarded.",
-};
+  judgement: { verdict: "unsafe", reason: "Discards staged and unstaged edits to src/app.ts." },
+  operations: [
+    {
+      action: "Git restore",
+      detail: "Restore src/app.ts from HEAD in the index and working tree.",
+      note: null,
+    },
+  ],
+} satisfies ApprovalExplanationContent;
 const now = DateTime.makeUnsafe("2026-10-28T10:00:00.000Z");
 const isoNow = IsoDateTime.make("2026-10-28T10:00:00.000Z");
 const server = HttpServer.HttpServer.of({
@@ -306,7 +313,10 @@ it.effect(
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const refreshedDirectory = "/workspace/refreshed";
-      const refreshedContent = { explanation: "Reads the repository status.", risk: null };
+      const refreshedContent = {
+        judgement: { verdict: "safe", reason: "Only reads repository status." },
+        operations: [{ action: "Git status", detail: "Read repository status.", note: null }],
+      } satisfies ApprovalExplanationContent;
       yield* runWith(
         Effect.gen(function* () {
           yield* seed;

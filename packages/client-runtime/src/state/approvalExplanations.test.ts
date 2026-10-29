@@ -46,8 +46,27 @@ const environmentId = EnvironmentId.make("approval-environment");
 const threadRef = { environmentId, threadId: v2ThreadId };
 const ready: ApprovalExplanationResult = {
   status: "ready",
-  explanation: "Lists changed files.",
-  risk: null,
+  judgement: { verdict: "safe", reason: "Only reads repository status." },
+  operations: [{ action: "Inspect", detail: "Changed repository files", note: null }],
+};
+const unsafeReady: ApprovalExplanationResult = {
+  status: "ready",
+  judgement: { verdict: "unsafe", reason: "Uncommitted changes will be lost." },
+  operations: [{ action: "Restore", detail: "Tracked repository files", note: null }],
+};
+const uncertainReady: ApprovalExplanationResult = {
+  status: "ready",
+  judgement: { verdict: "uncertain", reason: "Claude's instructions are not shown." },
+  operations: [
+    {
+      action: "SCP copy",
+      detail: "audit-brief_0123456789abcdef0123456789abcdef01234567.txt → build-host",
+      note: "overwrite",
+    },
+    { action: "Read", detail: "audit-brief.txt on build-host", note: null },
+    { action: "SSH run", detail: "Claude on build-host", note: "permission checks bypassed" },
+    { action: "Write log", detail: "audit-result.log", note: "overwrite" },
+  ],
 };
 
 const makeHarness = Effect.fn("TestApprovalExplanations.makeHarness")(function* (
@@ -174,11 +193,7 @@ describe("approval explanations", () => {
         expect(yield* AtomRegistry.getResult(h.registry, next, { suspendOnWaiting: true })).toEqual(
           ready,
         );
-        const previousResult: ApprovalExplanationResult = {
-          status: "ready",
-          explanation: "Restores tracked files.",
-          risk: "Uncommitted changes will be lost.",
-        };
+        const previousResult = unsafeReady;
         yield* Deferred.succeed(predecessor, previousResult);
         expect(
           yield* AtomRegistry.getResult(h.registry, previous, { suspendOnWaiting: true }),
@@ -227,11 +242,7 @@ describe("approval explanations", () => {
           yield* AtomRegistry.mount(h.registry, next);
           expect(yield* Queue.take(h.requests)).toEqual(originalInput);
           expect(approvalExplanationView(h.registry.get(next)).status).toBe("loading");
-          const restored: ApprovalExplanationResult = {
-            status: "ready",
-            explanation: "Restores tracked files.",
-            risk: "Uncommitted changes will be lost.",
-          };
+          const restored = unsafeReady;
           yield* Deferred.succeed(successor, restored);
           expect(
             yield* AtomRegistry.getResult(h.registry, next, { suspendOnWaiting: true }),
@@ -270,15 +281,8 @@ describe("approval explanations", () => {
     expect(approvalExplanationView(AsyncResult.initial())).toMatchObject({ status: "loading" });
   });
 
-  it.each([
-    {
-      status: "ready",
-      explanation: "Restores tracked files.",
-      risk: "Uncommitted changes will be lost.",
-    },
-    { status: "ready", explanation: "Lists changed files.", risk: null },
-  ] satisfies ReadonlyArray<ApprovalExplanationResult>)(
-    "preserves the generated explanation and risk: $risk",
+  it.each([ready, unsafeReady, uncertainReady])(
+    "preserves the $judgement.verdict judgement and every operation, filename and neutral note",
     (result) => {
       expect(approvalExplanationView(AsyncResult.success(result))).toEqual(result);
     },

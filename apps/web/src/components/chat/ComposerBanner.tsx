@@ -181,21 +181,23 @@ function Icon({ className, ...props }: ComponentProps<"span">) {
   );
 }
 
-function Content({ className, ...props }: ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="composer-banner-content"
-      className={cn(
-        "col-start-2 row-start-1 flex min-w-0 items-center gap-1 *:data-[slot=composer-banner-separator]:mx-0",
-        "@max-[560px]:group-data-[composer-banner-layout=approval]/banner-row:col-end-4",
-        "group-data-[composer-banner-layout=approval-stacked]/banner-row:w-full",
-        "group-not-has-[>[data-slot=composer-banner-icon]]/banner-row:col-[1/3] group-not-has-[>[data-slot=composer-banner-icon]]/banner-row:ps-2 sm:group-not-has-[>[data-slot=composer-banner-icon]]/banner-row:ps-1.5",
-        "group-not-has-[>[data-slot=composer-banner-icon],>[data-slot=composer-banner-actions]]/banner-row:pe-2 sm:group-not-has-[>[data-slot=composer-banner-icon],>[data-slot=composer-banner-actions]]/banner-row:pe-1.5",
-        className,
-      )}
-      {...props}
-    />
-  );
+function Content({ className, render, ...props }: useRender.ComponentProps<"span">) {
+  const contentProps = {
+    "data-slot": "composer-banner-content",
+    className: cn(
+      "col-start-2 row-start-1 flex min-w-0 items-center gap-1 *:data-[slot=composer-banner-separator]:mx-0",
+      "@max-[560px]:group-data-[composer-banner-layout=approval]/banner-row:col-end-4",
+      "group-data-[composer-banner-layout=approval-stacked]/banner-row:w-full",
+      "group-not-has-[>[data-slot=composer-banner-icon]]/banner-row:col-[1/3] group-not-has-[>[data-slot=composer-banner-icon]]/banner-row:ps-2 sm:group-not-has-[>[data-slot=composer-banner-icon]]/banner-row:ps-1.5",
+      "group-not-has-[>[data-slot=composer-banner-icon],>[data-slot=composer-banner-actions]]/banner-row:pe-2 sm:group-not-has-[>[data-slot=composer-banner-icon],>[data-slot=composer-banner-actions]]/banner-row:pe-1.5",
+      className,
+    ),
+  };
+  return useRender({
+    defaultTagName: "span",
+    render,
+    props: mergeProps<"span">(contentProps, props),
+  });
 }
 
 function Separator() {
