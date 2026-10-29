@@ -274,5 +274,5 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
 });
 
 export const layer = Layer.effect(RepositoryIdentityResolver, make()).pipe(
-  Layer.provide(ProcessRunner.layer),
+  Layer.provide(ProcessRunner.layerWithWindowsGitWorker),
 );

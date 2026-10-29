@@ -672,7 +672,7 @@ function makeManager(input?: {
           ),
         ),
       )
-    : GitVcsDriver.layer;
+    : Layer.effect(GitVcsDriver.GitVcsDriver, GitVcsDriver.make);
   const layerVcsDriver = (watchesGitSpawns ? Layer.fresh(gitVcsDriver) : gitVcsDriver).pipe(
     Layer.provide(layerGitDriverSpawner),
     Layer.provideMerge(VcsProcess.layer),

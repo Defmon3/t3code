@@ -46,6 +46,7 @@ import {
 } from "@t3tools/contracts";
 import { isMissingExecutable } from "@t3tools/source-control-core/server/discovery";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as ProcessRunner from "../processRunner.ts";
 import {
   makeGitVcsDriverCore,
   PATCH_RENDER_PREFIX_ARGS,
@@ -1444,5 +1445,9 @@ export const make = Effect.gen(function* () {
   return GitVcsDriver.of(git);
 });
 
-export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver);
-export const layer = Layer.effect(GitVcsDriver, make);
+export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver).pipe(
+  Layer.provide(VcsProcess.layerWithWindowsGitWorker),
+);
+export const layer = Layer.effect(GitVcsDriver, make).pipe(
+  Layer.provide(ProcessRunner.layerWithWindowsGitWorker),
+);

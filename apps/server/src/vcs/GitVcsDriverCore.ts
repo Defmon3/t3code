@@ -57,6 +57,7 @@ import {
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -1195,6 +1196,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const providedRunner = yield* Effect.serviceOption(ProcessRunner.ProcessRunner);
+  const processRunner = Option.isSome(providedRunner)
+    ? providedRunner.value
+    : yield* ProcessRunner.make();
   const { worktreesDir } = yield* ServerConfig.ServerConfig;
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
@@ -1234,91 +1239,170 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         const env = { ...baseEnv, ...explicitBareRepositoryEnv(baseEnv, hostPlatform) };
         const spawnEnv = { ...env, ...windowsLongPathConfigEnv(hostPlatform, env) };
         const resolved = yield* resolveSpawnCommand("git", [], { env: spawnEnv });
-        // cmd wrappers truncate multiline commits; leave git.cmd handling to Node lookup.
-        const executable = resolved.shell ? "git" : resolved.command;
-        const child = yield* commandSpawner
-          .spawn(
-            ChildProcess.make(executable, commandInput.args, {
-              cwd: commandInput.cwd,
-              env: spawnEnv,
-              forceKillAfter: input.forceKillAfterMs,
-            }),
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new GitCommandError({
-                  ...gitCommandContext(commandInput),
-                  detail: "Failed to spawn Git process.",
-                  cause,
+        const buffered =
+          hostPlatform === "win32" &&
+          !resolved.shell &&
+          input.progress?.onStdoutLine === undefined &&
+          input.progress?.onStderrLine === undefined &&
+          input.forceKillAfterMs === undefined;
+        const result = yield* buffered
+          ? processRunner
+              .run({
+                command: resolved.command,
+                args: commandInput.args,
+                cwd: commandInput.cwd,
+                env: spawnEnv,
+                stdin: input.stdin,
+                timeout: Duration.infinity,
+                maxOutputBytes,
+                outputMode: appendTruncationMarker ? "truncate" : "error",
+              })
+              .pipe(
+                Effect.catchTags({
+                  ProcessSpawnError: (cause) =>
+                    fileSystem.readDirectory(commandInput.cwd).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new GitCommandError({
+                            ...gitCommandContext(commandInput),
+                            detail: "Failed to spawn Git process.",
+                            cause,
+                          }),
+                      ),
+                      Effect.flatMap(() => Effect.fail(cause)),
+                    ),
                 }),
-            ),
-          );
-
-        const [stdout, stderr, exitCode] = yield* Effect.all(
-          [
-            collectOutput(
-              commandInput,
-              child.stdout,
-              maxOutputBytes,
-              appendTruncationMarker,
-              input.progress?.onStdoutLine,
-              input.keepLineCallbacksAfterTruncation,
-            ),
-            collectOutput(
-              commandInput,
-              child.stderr,
-              maxOutputBytes,
-              appendTruncationMarker,
-              input.progress?.onStderrLine,
-              input.keepLineCallbacksAfterTruncation,
-            ),
-            child.exitCode.pipe(
-              Effect.mapError(
-                (cause) =>
-                  new GitCommandError({
+                Effect.mapError((cause) => {
+                  if (cause._tag === "GitCommandError") return cause;
+                  if (cause._tag === "ProcessOutputLimitError") {
+                    return new GitCommandError({
+                      ...gitCommandContext(commandInput),
+                      detail: `Git output exceeded ${maxOutputBytes} bytes and was truncated.`,
+                      outputLength: cause.observedBytes,
+                    });
+                  }
+                  const details = {
+                    ProcessSpawnError: "Failed to spawn Git process.",
+                    ProcessStdinError: "Failed to write Git process input.",
+                    ProcessReadError:
+                      cause._tag === "ProcessReadError" && cause.stream === "exitCode"
+                        ? "Failed to read Git process exit code."
+                        : "Failed to read Git process output.",
+                    ProcessTimeoutError: "Git command timed out.",
+                  };
+                  return new GitCommandError({
                     ...gitCommandContext(commandInput),
-                    detail: "Failed to read Git process exit code.",
+                    detail: details[cause._tag],
                     cause,
+                  });
+                }),
+                Effect.flatMap((output) =>
+                  output.code === null
+                    ? Effect.fail(
+                        new GitCommandError({
+                          ...gitCommandContext(commandInput),
+                          detail: "Failed to read Git process exit code.",
+                        }),
+                      )
+                    : Effect.succeed({
+                        exitCode: output.code,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                        stdoutTruncated: output.stdoutTruncated,
+                        stderrTruncated: output.stderrTruncated,
+                      }),
+                ),
+              )
+          : Effect.gen(function* () {
+              // cmd wrappers truncate multiline commits; leave git.cmd handling to Node lookup.
+              const executable = resolved.shell ? "git" : resolved.command;
+              const child = yield* commandSpawner
+                .spawn(
+                  ChildProcess.make(executable, commandInput.args, {
+                    cwd: commandInput.cwd,
+                    env: spawnEnv,
+                    forceKillAfter: input.forceKillAfterMs,
                   }),
-              ),
-            ),
-            input.stdin === undefined
-              ? Effect.void
-              : Stream.run(Stream.encodeText(Stream.make(input.stdin)), child.stdin).pipe(
+                )
+                .pipe(
                   Effect.mapError(
                     (cause) =>
                       new GitCommandError({
                         ...gitCommandContext(commandInput),
-                        detail: "Failed to write Git process input.",
+                        detail: "Failed to spawn Git process.",
                         cause,
                       }),
                   ),
-                ),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.map(([stdout, stderr, exitCode]) => [stdout, stderr, exitCode] as const));
+                );
+
+              const [stdout, stderr, exitCode] = yield* Effect.all(
+                [
+                  collectOutput(
+                    commandInput,
+                    child.stdout,
+                    maxOutputBytes,
+                    appendTruncationMarker,
+                    input.progress?.onStdoutLine,
+                    input.keepLineCallbacksAfterTruncation,
+                  ),
+                  collectOutput(
+                    commandInput,
+                    child.stderr,
+                    maxOutputBytes,
+                    appendTruncationMarker,
+                    input.progress?.onStderrLine,
+                    input.keepLineCallbacksAfterTruncation,
+                  ),
+                  child.exitCode.pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new GitCommandError({
+                          ...gitCommandContext(commandInput),
+                          detail: "Failed to read Git process exit code.",
+                          cause,
+                        }),
+                    ),
+                  ),
+                  input.stdin === undefined
+                    ? Effect.void
+                    : Stream.run(Stream.encodeText(Stream.make(input.stdin)), child.stdin).pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new GitCommandError({
+                              ...gitCommandContext(commandInput),
+                              detail: "Failed to write Git process input.",
+                              cause,
+                            }),
+                        ),
+                      ),
+                ],
+                { concurrency: "unbounded" },
+              ).pipe(
+                Effect.map(([stdout, stderr, exitCode]) => [stdout, stderr, exitCode] as const),
+              );
+              return {
+                exitCode,
+                stdout: stdout.text,
+                stderr: stderr.text,
+                stdoutTruncated: stdout.truncated,
+                stderrTruncated: stderr.truncated,
+              };
+            });
         yield* trace2Monitor.flush;
 
-        if (!input.allowNonZeroExit && exitCode !== 0) {
-          const reason = classifyGitFailure(stderr.text);
+        if (!input.allowNonZeroExit && result.exitCode !== 0) {
+          const reason = classifyGitFailure(result.stderr);
           return yield* new GitCommandError({
             ...gitCommandContext(commandInput),
             ...(reason === null ? {} : { reason }),
             detail: gitFailureDetail(reason),
-            exitCode,
-            stdoutLength: stdout.text.length,
-            stderrLength: stderr.text.length,
+            exitCode: result.exitCode,
+            stdoutLength: result.stdout.length,
+            stderrLength: result.stderr.length,
           });
         }
 
-        return {
-          exitCode,
-          stdout: stdout.text,
-          stderr: stderr.text,
-          stdoutTruncated: stdout.truncated,
-          stderrTruncated: stderr.truncated,
-        } satisfies GitVcsDriver.ExecuteGitResult;
+        return result satisfies GitVcsDriver.ExecuteGitResult;
       });
 
       const execution = runGitCommand().pipe(Effect.scoped);

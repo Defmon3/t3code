@@ -372,7 +372,10 @@ const layerRepositoryIdentityResolver = Layer.effect(
       }),
     });
   }),
-).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
+).pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(ProcessRunner.layerWithWindowsGitWorker),
+);
 
 const IssueServiceLive = IssueService.layer.pipe(
   Layer.provide(IssueProviderRegistry.layer),

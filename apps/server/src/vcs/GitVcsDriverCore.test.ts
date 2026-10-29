@@ -31,6 +31,7 @@ import {
 } from "@t3tools/contracts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import {
   makeGitVcsDriverCore,
   parseGitCheckoutProgressLine,
@@ -40,7 +41,6 @@ import {
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { gitConfigEnv } from "./VcsProcess.ts";
 
-const decodeReviewDiffPreviewInput = Schema.decodeEffect(ReviewDiffPreviewInput);
 const encodeGitCommandError = Schema.encodeEffect(Schema.fromJsonString(GitCommandError));
 const decodeVcsRef = Schema.decodeUnknownSync(VcsRef);
 const decodeVcsListRefsResult = Schema.decodeUnknownSync(VcsListRefsResult);
@@ -114,6 +114,115 @@ const makeFailedHandle = (stderr: string) =>
     exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
     stderr: Stream.encodeText(Stream.make(stderr)),
   });
+
+describe("Windows buffered Git execution", () => {
+  it.live(
+    "runs buffered commands without the main-thread spawner and preserves output failures",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-worker-core-" });
+        const input = {
+          operation: "test.workerGitOutput",
+          cwd,
+          args: ["config", "--file", "-", "--get", "t3.probe"],
+          stdin: "[t3]\nprobe = é雪\n",
+        };
+
+        const output = yield* driver.execute(input);
+        assert.equal(output.stdout, "é雪\n");
+        assert.equal(output.exitCode, 0);
+
+        const envOutput = yield* driver.execute({
+          ...input,
+          args: ["config", "--get", "t3.probe"],
+          env: gitConfigEnv(process.env, "t3.probe", "from environment", "win32"),
+        });
+        assert.equal(envOutput.stdout, "from environment\n");
+
+        const truncated = yield* driver.execute({
+          ...input,
+          maxOutputBytes: 3,
+          appendTruncationMarker: true,
+        });
+        assert.equal(truncated.stdout, "é\uFFFD");
+        assert.isTrue(truncated.stdoutTruncated);
+
+        const limitError = yield* driver.execute({ ...input, maxOutputBytes: 3 }).pipe(Effect.flip);
+        assert.include(limitError.detail, "exceeded 3 bytes");
+        assert.isAbove(limitError.outputLength ?? 0, 3);
+
+        const missing = { ...input, args: ["config", "--file", "-", "--get", "t3.missing"] };
+        const failed = yield* driver.execute(missing).pipe(Effect.flip);
+        assert.equal(failed.exitCode, 1);
+        assert.equal((yield* driver.execute({ ...missing, allowNonZeroExit: true })).exitCode, 1);
+        const notRepository = yield* driver
+          .execute({ ...input, args: ["rev-parse", "--show-toplevel"] })
+          .pipe(Effect.flip);
+        assert.equal(notRepository.reason, "not_a_repository");
+        assert.isFalse((yield* driver.listRefs({ cwd: `${cwd}/missing` })).isRepo);
+      }).pipe(
+        Effect.provide(
+          GitVcsDriver.layer.pipe(
+            Layer.provide(
+              Layer.succeed(
+                ChildProcessSpawner.ChildProcessSpawner,
+                ChildProcessSpawner.make(() => Effect.die("Unexpected main-thread Git spawn")),
+              ),
+            ),
+            Layer.provide(layerServerConfig),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+        Effect.provideService(HostProcess.Platform, "win32"),
+      ),
+  );
+
+  it.effect.each(["stdout", "stderr", "forceKillAfter"] as const)(
+    "preserves direct execution for %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(
+            ProcessRunner.ProcessRunner,
+            ProcessRunner.ProcessRunner.of({
+              run: () => Effect.die("Streaming Git must retain live output"),
+            }),
+          ),
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.succeed(
+                ChildProcessSpawner.makeHandle({
+                  ...makeSuccessfulHandle("stdout\n"),
+                  stderr: Stream.encodeText(Stream.make("stderr\n")),
+                }),
+              ),
+            ),
+          ),
+        );
+        const lines: string[] = [];
+        const onLine = (line: string) => Effect.sync(() => void lines.push(line));
+        const output = yield* driver.execute({
+          operation: "test.directGitOutput",
+          cwd: "/repo",
+          args: ["status"],
+          ...(mode === "forceKillAfter"
+            ? { forceKillAfterMs: 1234 }
+            : {
+                progress: mode === "stdout" ? { onStdoutLine: onLine } : { onStderrLine: onLine },
+              }),
+        });
+        assert.equal(output.stdout, "stdout\n");
+        assert.equal(output.stderr, "stderr\n");
+        assert.deepEqual(lines, mode === "forceKillAfter" ? [] : [mode]);
+      }).pipe(
+        Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+        Effect.provideService(HostProcess.Platform, "win32"),
+      ),
+  );
+});
 
 describe("Git output collection", () => {
   // Git writes in arbitrary chunk sizes; one byte per chunk splits every
@@ -924,7 +1033,7 @@ describe("rejected git refs", () => {
 
   const failWith = (stderr: string) => {
     const spawner = ChildProcessSpawner.make(() => Effect.succeed(makeFailedHandle(stderr)));
-    const layer = GitVcsDriver.layer.pipe(
+    const layer = Layer.effect(GitVcsDriver.GitVcsDriver, GitVcsDriver.make).pipe(
       Layer.provide(layerServerConfig),
       Layer.provideMerge(
         Layer.merge(

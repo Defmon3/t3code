@@ -23,6 +23,7 @@ import * as ServerConfig from "../config.ts";
 import { gitCommandDuration, gitCommandsTotal } from "../observability/Metrics.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import type { GitWorkerError } from "../WindowsGitWorker.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import type * as VcsDriver from "./VcsDriver.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
@@ -69,7 +70,7 @@ const makeCaptureStore = Effect.fn("test.makeCaptureStore")(function* (
   );
 });
 
-type GitContractError = GitCommandError | PlatformError.PlatformError;
+type GitContractError = GitCommandError | GitWorkerError | PlatformError.PlatformError;
 
 runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
   name: "Git",
