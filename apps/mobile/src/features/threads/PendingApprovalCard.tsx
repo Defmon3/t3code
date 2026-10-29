@@ -13,13 +13,16 @@ import {
 } from "@t3tools/client-runtime/state/thread-requests";
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import {
   approvalExplanationTarget,
   approvalExplanationView,
   approvalJudgementLabels,
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 
 import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -41,6 +44,13 @@ const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
 ];
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferencesReady = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  const rememberedDuration = AsyncResult.isSuccess(preferences)
+    ? (preferences.value.rememberedHookApprovalDuration ??
+      DEFAULT_CLIENT_SETTINGS.rememberedHookApprovalDuration)
+    : DEFAULT_CLIENT_SETTINGS.rememberedHookApprovalDuration;
   const bypass = props.approval.bypass;
   const options: ReadonlyArray<ProviderApprovalOption> =
     props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
@@ -268,43 +278,45 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           props.approval.supportsTimedApproval && option.decision === "acceptForSession" ? (
             <View key={option.decision} className="flex-row flex-wrap items-center gap-2.5">
               <Button
-                label="Approve for this session"
+                label={hookApprovalDurations[rememberedDuration].approvalLabel}
                 tone="secondary"
-                disabled={responseDisabled}
+                disabled={responseDisabled || !preferencesReady}
                 onPress={() => {
-                  if (!responseDisabled)
+                  if (!responseDisabled && preferencesReady)
                     void props.onRespond(
                       props.approval.requestId,
                       "acceptForSession",
                       undefined,
-                      "session",
+                      rememberedDuration,
                     );
                 }}
               />
               <Menu
                 title="Approval duration"
-                actions={hookApprovalDurations.map((choice) => ({
+                actions={Object.values(hookApprovalDurations).map((choice) => ({
                   id: choice.duration,
                   title: choice.label,
-                  attributes: { disabled: responseDisabled },
+                  attributes: { disabled: responseDisabled || !preferencesReady },
                 }))}
                 onPressAction={({ nativeEvent }) => {
-                  const choice = hookApprovalDurations.find(
+                  const choice = Object.values(hookApprovalDurations).find(
                     (value) => value.duration === nativeEvent.event,
                   );
-                  if (!responseDisabled && choice)
+                  if (!responseDisabled && preferencesReady && choice) {
+                    savePreferences({ rememberedHookApprovalDuration: choice.duration });
                     void props.onRespond(
                       props.approval.requestId,
                       "acceptForSession",
                       undefined,
                       choice.duration,
                     );
+                  }
                 }}
               >
                 <Button
                   label="▾"
                   accessibilityLabel="Approval duration"
-                  disabled={responseDisabled}
+                  disabled={responseDisabled || !preferencesReady}
                   onPress={() => {}}
                 />
               </Menu>

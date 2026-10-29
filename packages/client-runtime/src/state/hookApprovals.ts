@@ -43,14 +43,22 @@ export function hasHookApprovalGrantsCapability(
   return capabilities?.hookApprovalGrants === true;
 }
 
-export const hookApprovalDurations = [
-  { duration: "15-minutes", label: "15 minutes" },
-  { duration: "1-hour", label: "1 hour" },
-  { duration: "session", label: "This session" },
-] satisfies ReadonlyArray<{
-  duration: HookApprovalDuration;
-  label: string;
-}>;
+export const hookApprovalDurations = {
+  "15-minutes": {
+    duration: "15-minutes",
+    label: "15 minutes",
+    approvalLabel: "Approve for 15 min",
+  },
+  "1-hour": { duration: "1-hour", label: "1 hour", approvalLabel: "Approve for 1 hour" },
+  session: {
+    duration: "session",
+    label: "This session",
+    approvalLabel: "Approve for this session",
+  },
+} satisfies Record<
+  HookApprovalDuration,
+  { duration: HookApprovalDuration; label: string; approvalLabel: string }
+>;
 
 const hookApprovalOptions = [
   { decision: "decline", label: "Reject" },

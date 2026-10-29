@@ -60,6 +60,56 @@ function makePreferencesState(
 }
 
 describe("mobile preferences state", () => {
+  it.effect("keeps the last approval duration across other edits and a new client state", () =>
+    Effect.gen(function* () {
+      let persisted: MobilePreferences.Preferences = {};
+      const service = {
+        load: Effect.sync(() => persisted),
+        savePatch: (patch: Partial<MobilePreferences.Preferences>) =>
+          Effect.sync(() => {
+            persisted = { ...persisted, ...patch };
+            return persisted;
+          }),
+      };
+      const state = makePreferencesState(service);
+      const registry = AtomRegistry.make();
+      const unmountPreferences = registry.mount(state.preferencesAtom);
+      const unmountUpdate = registry.mount(state.updatePreferencesAtom);
+      yield* AtomRegistry.getResult(registry, state.preferencesAtom, { suspendOnWaiting: true });
+
+      for (const duration of ["1-hour", "session"] as const) {
+        registry.set(state.updatePreferencesAtom, { rememberedHookApprovalDuration: duration });
+        yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
+          suspendOnWaiting: true,
+        });
+      }
+      registry.set(state.updatePreferencesAtom, { codeWordBreak: true });
+      yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
+        suspendOnWaiting: true,
+      });
+      unmountUpdate();
+      unmountPreferences();
+      registry.dispose();
+
+      const reloaded = makePreferencesState(service);
+      const reloadedRegistry = AtomRegistry.make();
+      const unmountReloaded = reloadedRegistry.mount(reloaded.preferencesAtom);
+      const preferences = yield* AtomRegistry.getResult(
+        reloadedRegistry,
+        reloaded.preferencesAtom,
+        {
+          suspendOnWaiting: true,
+        },
+      );
+      expect(preferences).toEqual({
+        rememberedHookApprovalDuration: "session",
+        codeWordBreak: true,
+      });
+      unmountReloaded();
+      reloadedRegistry.dispose();
+    }),
+  );
+
   it.effect("preserves an optimistic patch when the initial load finishes later", () =>
     Effect.gen(function* () {
       const pendingLoad = deferred<MobilePreferences.Preferences>();

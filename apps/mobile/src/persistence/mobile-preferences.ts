@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import {
   EnvironmentId,
+  HookApprovalDuration,
   PullRequestInvolvement,
   PullRequestListFilters,
   PullRequestListState,
@@ -85,8 +86,10 @@ const ThreadProject = Schema.Struct({
   projectId: Schema.NonEmptyString,
 });
 const isThreadProject = Schema.is(ThreadProject);
+const decodeHookApprovalDuration = Schema.decodeUnknownSync(HookApprovalDuration);
 
 export interface Preferences {
+  readonly rememberedHookApprovalDuration?: HookApprovalDuration;
   readonly navigationTabOrder?: readonly string[];
   readonly hiddenNavigationTabs?: readonly string[];
   readonly pullRequestHideTestFiles?: boolean;
@@ -167,6 +170,7 @@ export class MobilePreferencesStore extends Context.Service<
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
+    rememberedHookApprovalDuration?: HookApprovalDuration;
     navigationTabOrder?: readonly string[];
     hiddenNavigationTabs?: readonly string[];
     pullRequestHideTestFiles?: boolean;
@@ -203,6 +207,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
   } = {};
+
+  if (parsed.rememberedHookApprovalDuration !== undefined) {
+    preferences.rememberedHookApprovalDuration = decodeHookApprovalDuration(
+      parsed.rememberedHookApprovalDuration,
+    );
+  }
 
   if (Array.isArray(parsed.hiddenNavigationTabs)) {
     preferences.hiddenNavigationTabs = parsed.hiddenNavigationTabs.filter(
@@ -520,7 +530,12 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
       }
     }
 
-    return parsed === null ? {} : sanitizePreferences(parsed);
+    if (parsed === null) return {};
+    const parsedPreferences = parsed;
+    return yield* Effect.try({
+      try: () => sanitizePreferences(parsedPreferences),
+      catch: (cause) => new MobilePreferencesLoadError({ cause }),
+    });
   });
 
   const load = lock

@@ -8,6 +8,11 @@ import { Textarea } from "../ui/textarea";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import {
+  persistClientSettingsPatch,
+  useClientSettings,
+  useClientSettingsHydrated,
+} from "../../hooks/useSettings";
 
 interface ComposerPendingApprovalActionsProps {
   requestId: RuntimeRequestId;
@@ -43,6 +48,10 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   onRespondToApproval,
   commandExpansion,
 }: ComposerPendingApprovalActionsProps) {
+  const rememberedDuration = useClientSettings(
+    (settings) => settings.rememberedHookApprovalDuration,
+  );
+  const preferencesReady = useClientSettingsHydrated();
   const [reason, setReason] = useState<string | null>(null);
   const [feedbackFailed, setFeedbackFailed] = useState(false);
   const reasonId = useId();
@@ -136,17 +145,22 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
               <Button
                 size="sm-multiline"
                 variant="outline"
-                disabled={responseDisabled}
+                disabled={responseDisabled || !preferencesReady}
                 onClick={() => {
-                  if (!responseDisabled)
-                    void onRespondToApproval(requestId, "acceptForSession", undefined, "session");
+                  if (!responseDisabled && preferencesReady)
+                    void onRespondToApproval(
+                      requestId,
+                      "acceptForSession",
+                      undefined,
+                      rememberedDuration,
+                    );
                 }}
               >
-                Approve for this session
+                {hookApprovalDurations[rememberedDuration].approvalLabel}
               </Button>
               <Menu>
                 <MenuTrigger
-                  disabled={responseDisabled}
+                  disabled={responseDisabled || !preferencesReady}
                   render={
                     <Button size="icon-sm" variant="outline" aria-label="Approval duration" />
                   }
@@ -154,18 +168,22 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                   <ChevronDownIcon />
                 </MenuTrigger>
                 <MenuPopup {...composerFloatingLayerProps} side="top" align="end" width="content">
-                  {hookApprovalDurations.map((choice) => (
+                  {Object.values(hookApprovalDurations).map((choice) => (
                     <MenuItem
                       key={choice.duration}
-                      disabled={responseDisabled}
+                      disabled={responseDisabled || !preferencesReady}
                       onClick={() => {
-                        if (!responseDisabled)
+                        if (!responseDisabled && preferencesReady) {
+                          void persistClientSettingsPatch({
+                            rememberedHookApprovalDuration: choice.duration,
+                          });
                           void onRespondToApproval(
                             requestId,
                             "acceptForSession",
                             undefined,
                             choice.duration,
                           );
+                        }
                       }}
                     >
                       {choice.label}

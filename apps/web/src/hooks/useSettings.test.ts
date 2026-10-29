@@ -34,6 +34,25 @@ afterEach(() => {
 });
 
 describe("client settings hydration", () => {
+  it("keeps the last selected approval duration through other edits and a reload", async () => {
+    let persisted: ClientSettings | null = null;
+    const persist = async (settings: ClientSettings) => {
+      persisted = settings;
+    };
+    await ensureClientSettingsHydrated();
+    expect(getClientSettings().rememberedHookApprovalDuration).toBe("15-minutes");
+
+    await persistClientSettingsPatch({ rememberedHookApprovalDuration: "1-hour" }, persist);
+    await persistClientSettingsPatch({ rememberedHookApprovalDuration: "session" }, persist);
+    await persistClientSettingsPatch({ timestampFormat: "24-hour" }, persist);
+    __resetClientSettingsPersistenceForTests();
+    persistenceMocks.getClientSettings.mockResolvedValue(persisted);
+    await ensureClientSettingsHydrated();
+
+    expect(getClientSettings().rememberedHookApprovalDuration).toBe("session");
+    expect(getClientSettings().timestampFormat).toBe("24-hour");
+  });
+
   const savedSettings = {
     ...DEFAULT_CLIENT_SETTINGS,
     timestampFormat: "12-hour" as const,

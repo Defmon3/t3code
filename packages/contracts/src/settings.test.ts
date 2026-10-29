@@ -27,6 +27,27 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("remembered hook approval duration", () => {
+  it("starts existing clients at 15 minutes without resetting an omitted patch", () => {
+    expect(decodeClientSettings({}).rememberedHookApprovalDuration).toBe("15-minutes");
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("rememberedHookApprovalDuration");
+  });
+
+  it.each(["15-minutes", "1-hour", "session"])("persists the selected %s duration", (duration) => {
+    const patch = decodeClientSettingsPatch({ rememberedHookApprovalDuration: duration });
+    const settings = decodeClientSettings({ ...decodeClientSettings({}), ...patch });
+
+    expect(
+      decodeClientSettings(encodeClientSettings(settings)).rememberedHookApprovalDuration,
+    ).toBe(duration);
+  });
+
+  it.each(["once", "forever", "", null, 15])("rejects an invalid duration %s", (duration) => {
+    expect(() => decodeClientSettings({ rememberedHookApprovalDuration: duration })).toThrow();
+    expect(() => decodeClientSettingsPatch({ rememberedHookApprovalDuration: duration })).toThrow();
+  });
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
