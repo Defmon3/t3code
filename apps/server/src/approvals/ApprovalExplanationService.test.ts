@@ -139,53 +139,61 @@ const writeRequest = Effect.fn("test.writeApprovalRequest")(function* (
   workingDirectory: string | null = "/workspace/project-worktree",
   commandText = command,
 ) {
-  const projections = yield* ProjectionStore.ProjectionStoreV2;
-  yield* projections.apply({
-    id: EventId.make(`request-${status}`),
-    type: "runtime-request.updated",
-    threadId,
-    occurredAt: now,
-    payload: {
-      id: requestId,
-      nodeId,
-      providerTurnId: null,
-      nativeRequestRef: null,
-      kind,
-      status,
-      responseCapability: { type: "message" },
-      createdAt: now,
-      resolvedAt: null,
-    },
-  });
-  yield* projections.apply({
-    id: EventId.make("approval-item"),
-    type: "turn-item.updated",
-    threadId,
-    occurredAt: now,
-    payload: {
-      id: TurnItemId.make("approval-item"),
-      threadId,
-      runId: null,
-      nodeId,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: 1,
-      status: "running",
-      startedAt: now,
-      completedAt: null,
-      updatedAt: now,
-      type: "approval_request",
-      title: null,
-      requestId,
-      requestKind: kind === "command" ? "command" : "file-change",
-      prompt: commandText,
-      ...(includeCommand
-        ? { command: commandText, ...(workingDirectory === null ? {} : { cwd: workingDirectory }) }
-        : {}),
-      reason: "Restore the file to its committed contents.",
-    },
+  const events = yield* EventSink.EventSinkV2;
+  const sequence = yield* events.latestSequence();
+  yield* events.write({
+    events: [
+      {
+        id: EventId.make(`request-${sequence}`),
+        type: "runtime-request.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind,
+          status,
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      },
+      {
+        id: EventId.make(`approval-item-${sequence}`),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("approval-item"),
+          threadId,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "approval_request",
+          title: null,
+          requestId,
+          requestKind: kind === "command" ? "command" : "file-change",
+          prompt: commandText,
+          ...(includeCommand
+            ? {
+                command: commandText,
+                ...(workingDirectory === null ? {} : { cwd: workingDirectory }),
+              }
+            : {}),
+          reason: "Restore the file to its committed contents.",
+        },
+      },
+    ],
   });
 });
 
@@ -306,12 +314,100 @@ it.effect("discards a late result after the approval was answered", () =>
   }),
 );
 
+it.effect("keeps shared generation alive when one client leaves", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const interrupted = yield* Deferred.make<void>();
+    let requests = 0;
+    yield* runWith(
+      Effect.gen(function* () {
+        yield* seed;
+        yield* writeRequest();
+        const service = yield* ApprovalExplanations.ApprovalExplanationService;
+        const first = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        const second = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
+
+        yield* Fiber.interrupt(first);
+        const wasInterrupted = yield* Deferred.isDone(interrupted);
+        yield* Deferred.succeed(release, undefined);
+
+        expect(yield* Fiber.join(second)).toEqual({ status: "ready", ...content });
+        expect(wasInterrupted).toBe(false);
+        expect(requests).toBe(1);
+      }),
+      (request) =>
+        Effect.gen(function* () {
+          requests += 1;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+        }).pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined))),
+    );
+  }),
+);
+
+it.effect("deduplicates replacement clients while obsolete generation is stopping", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const stopping = yield* Deferred.make<void>();
+    const finishStopping = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const refreshedDirectory = "/workspace/refreshed";
+    let requests = 0;
+    yield* runWith(
+      Effect.gen(function* () {
+        yield* seed;
+        yield* writeRequest();
+        const service = yield* ApprovalExplanations.ApprovalExplanationService;
+        const predecessor = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* writeRequest("pending", "command", true, refreshedDirectory, "git status");
+        const replacement = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
+        yield* Deferred.await(stopping);
+        const sharedReplacement = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
+
+        yield* Deferred.succeed(release, undefined);
+        const sharedResult = yield* Fiber.join(sharedReplacement);
+        yield* Deferred.succeed(finishStopping, undefined);
+
+        expect(sharedResult).toEqual({ status: "ready", ...content });
+        expect(yield* Fiber.join(replacement)).toEqual(sharedResult);
+        expect(yield* Fiber.join(predecessor)).toEqual({
+          status: "unavailable",
+          reason: "request_not_pending",
+        });
+        expect(requests).toBe(2);
+        expect(yield* service.explain(nativeInput)).toEqual(sharedResult);
+      }).pipe(Effect.ensuring(Deferred.succeed(finishStopping, undefined))),
+      (request) =>
+        Effect.gen(function* () {
+          requests += 1;
+          if (request.cwd !== refreshedDirectory) {
+            return yield* Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() =>
+                Deferred.succeed(stopping, undefined).pipe(
+                  Effect.andThen(Deferred.await(finishStopping)),
+                ),
+              ),
+            );
+          }
+          yield* Deferred.await(release);
+          return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
+        }),
+    );
+  }),
+);
+
 it.effect(
   "regenerates a refreshed pending command and discards its predecessor's late explanation",
   () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
       const refreshedDirectory = "/workspace/refreshed";
       const refreshedContent = {
         judgement: { verdict: "safe", reason: "Only reads repository status." },
@@ -329,6 +425,7 @@ it.effect(
             status: "ready",
             ...refreshedContent,
           });
+          expect(yield* Deferred.isDone(interrupted)).toBe(true);
           yield* Deferred.succeed(release, undefined);
           expect(yield* Fiber.join(predecessor)).toEqual({
             status: "unavailable",
@@ -347,7 +444,7 @@ it.effect(
             yield* Deferred.succeed(started, undefined);
             yield* Deferred.await(release);
             return yield* decodeJsonReply(request, "Fixture", JSON.stringify(content));
-          }),
+          }).pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined))),
       );
     }),
 );
@@ -391,6 +488,105 @@ it.effect("explains a custom hook and keeps its approval action usable", () =>
       return decodeJsonReply(request, "Fixture", JSON.stringify(content));
     },
   ),
+);
+
+it.effect.each(["resolved", "cancelled", "deleted"] as const)(
+  "stops generation and releases waiting clients when a native approval is %s",
+  (outcome) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      yield* runWith(
+        Effect.gen(function* () {
+          yield* seed;
+          yield* writeRequest();
+          const service = yield* ApprovalExplanations.ApprovalExplanationService;
+          const explanation = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
+          yield* Deferred.await(started);
+
+          if (outcome === "deleted") {
+            const projections = yield* ProjectionStore.ProjectionStoreV2;
+            const events = yield* EventSink.EventSinkV2;
+            const thread = yield* projections.getThread(threadId);
+            yield* events.write({
+              events: [
+                {
+                  id: EventId.make("thread-deleted"),
+                  type: "thread.deleted",
+                  threadId,
+                  occurredAt: now,
+                  payload: { ...thread, deletedAt: now },
+                },
+              ],
+            });
+          } else {
+            yield* writeRequest(outcome);
+          }
+
+          yield* Deferred.await(interrupted);
+          expect(yield* Fiber.join(explanation)).toEqual({
+            status: "unavailable",
+            reason: "request_not_pending",
+          });
+        }),
+        () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          ),
+      );
+    }),
+);
+
+it.effect.each(["allow", "deny"] as const)(
+  "stops generation when a pending hook approval receives %s",
+  (decision) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      yield* runWith(
+        Effect.gen(function* () {
+          yield* seed;
+          const hooks = yield* Hooks.HookApprovalRegistry;
+          const credential = yield* hooks.issue({
+            threadId,
+            providerInstanceId: modelSelection.instanceId,
+          });
+          const snapshot = yield* hooks.subscribe().pipe(
+            Stream.filter((requests) => requests.length > 0),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+          const response = yield* hooks
+            .request(credential.token, {
+              command,
+              cwd: "/hook-workspace",
+              reason: "Restore file",
+            })
+            .pipe(Effect.forkScoped);
+          const request = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
+          const service = yield* ApprovalExplanations.ApprovalExplanationService;
+          const explanation = yield* service
+            .explain({ source: "hook", requestId: request.requestId, threadId })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(started);
+
+          expect(yield* hooks.respond({ requestId: request.requestId, decision })).toBe(true);
+
+          yield* Deferred.await(interrupted);
+          expect(yield* Fiber.join(response)).toBe(decision);
+          expect(yield* Fiber.join(explanation)).toEqual({
+            status: "unavailable",
+            reason: "request_not_pending",
+          });
+        }),
+        () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          ),
+      );
+    }),
 );
 
 it.effect.each(["failed", "unsupported", "defect"] as const)(

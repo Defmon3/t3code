@@ -26,9 +26,9 @@ interface PendingRpcAckRequest {
 }
 
 const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
-// Background reports nobody waits on. A busy host delays them first, and warning
-// about a request the user never made does not say what is wrong.
+// why: These requests run in the background or show their own waiting status.
 const untrackedRpcAckMethods = new Set<string>([
+  WS_METHODS.approvalsExplain,
   WS_METHODS.serverGetUsageSummary,
   WS_METHODS.serverReportClientActivity,
 ]);

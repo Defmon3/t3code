@@ -5,12 +5,14 @@ import {
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as HookApprovalRegistry from "../hooks/HookApprovalRegistry.ts";
@@ -61,8 +63,19 @@ const make = Effect.gen(function* () {
       readonly input: ApprovalExplanationInput;
       readonly snapshot: string;
       readonly result: Deferred.Deferred<ApprovalExplanationResult>;
+      readonly scope: Scope.Closeable;
     }
   >();
+
+  const invalidate = Effect.fn("ApprovalExplanationService.invalidate")(function* (
+    key: string,
+    entry = pending.get(key),
+  ) {
+    if (!entry) return;
+    if (pending.get(key) === entry) pending.delete(key);
+    yield* Deferred.succeed(entry.result, unavailable);
+    yield* Scope.close(entry.scope, Exit.void);
+  });
 
   const readCommand = Effect.fn("ApprovalExplanationService.readCommand")(function* (
     input: ApprovalExplanationInput,
@@ -88,70 +101,98 @@ const make = Effect.gen(function* () {
 
   const explain = Effect.fn("ApprovalExplanationService.explain")(
     function* (input: ApprovalExplanationInput) {
-      const command = yield* readCommand(input);
-      if (command === undefined) return unavailable;
-      if (command === "not_command") return { status: "unavailable", reason: command } as const;
       const key = explanationKey(input);
+      const command = yield* readCommand(input);
+      if (command === undefined || command === "not_command") {
+        yield* invalidate(key);
+        return command === undefined
+          ? unavailable
+          : ({ status: "unavailable", reason: command } as const);
+      }
       const snapshot = encodeCommandSnapshot(command);
-      const result = yield* Deferred.make<ApprovalExplanationResult>();
-      const existing = pending.get(key);
-      if (existing?.snapshot === snapshot) return yield* Deferred.await(existing.result);
-      pending.set(key, { input, snapshot, result });
-      yield* Effect.gen(function* () {
-        const thread = yield* projections.getThread(input.threadId);
-        const project = yield* projects.get(thread.projectId);
-        if (Option.isNone(project)) {
-          return { status: "unavailable", reason: "project_unavailable" } as const;
+      const response = yield* Effect.gen(function* () {
+        const result = yield* Deferred.make<ApprovalExplanationResult>();
+        const jobScope = yield* Scope.fork(scope);
+        const existing = pending.get(key);
+        if (existing?.snapshot === snapshot) {
+          yield* Scope.close(jobScope, Exit.void);
+          return existing.result;
         }
-        const resolvedSettings = resolveProjectSettings(
-          yield* settings.getSettings,
-          thread.projectId,
-        ).settings;
-        const content = yield* generation.generateApprovalExplanation({
-          cwd: command.cwd ?? thread.worktreePath ?? project.value.workspaceRoot,
-          workingDirectory: command.cwd,
-          command: command.command,
-          reason: command.reason,
-          modelSelection: resolvedSettings.textGenerationModelSelection,
-        });
-        return { status: "ready", ...content } as const;
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Approval explanation failed", {
-            threadId: input.threadId,
-            cause,
-          }).pipe(
-            Effect.as(
-              cause._tag === "TextGenerationError" && cause.reason === "provider_unsupported"
-                ? ({ status: "unavailable", reason: "provider_unsupported" } as const)
-                : generationFailure,
+        pending.set(key, { input, snapshot, result, scope: jobScope });
+        yield* Effect.gen(function* () {
+          const current = yield* readCommand(input);
+          if (
+            current === undefined ||
+            current === "not_command" ||
+            encodeCommandSnapshot(current) !== snapshot
+          )
+            return unavailable;
+          const thread = yield* projections.getThread(input.threadId);
+          const project = yield* projects.get(thread.projectId);
+          if (Option.isNone(project)) {
+            return { status: "unavailable", reason: "project_unavailable" } as const;
+          }
+          const resolvedSettings = resolveProjectSettings(
+            yield* settings.getSettings,
+            thread.projectId,
+          ).settings;
+          const content = yield* generation.generateApprovalExplanation({
+            cwd: command.cwd ?? thread.worktreePath ?? project.value.workspaceRoot,
+            workingDirectory: command.cwd,
+            command: command.command,
+            reason: command.reason,
+            modelSelection: resolvedSettings.textGenerationModelSelection,
+          });
+          return { status: "ready", ...content } as const;
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Approval explanation failed", {
+              threadId: input.threadId,
+              cause,
+            }).pipe(
+              Effect.as(
+                cause._tag === "TextGenerationError" && cause.reason === "provider_unsupported"
+                  ? ({ status: "unavailable", reason: "provider_unsupported" } as const)
+                  : generationFailure,
+              ),
             ),
           ),
-        ),
-        Effect.flatMap((value) =>
-          readCommand(input).pipe(
-            Effect.map((current) =>
-              current === undefined ||
-              current === "not_command" ||
-              encodeCommandSnapshot(current) !== snapshot
-                ? unavailable
-                : value,
+          Effect.flatMap((value) =>
+            readCommand(input).pipe(
+              Effect.map((current) =>
+                current === undefined ||
+                current === "not_command" ||
+                encodeCommandSnapshot(current) !== snapshot
+                  ? unavailable
+                  : value,
+              ),
             ),
           ),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Approval explanation could not finish", {
-            threadId: input.threadId,
-            cause,
-          }).pipe(Effect.as(generationFailure)),
-        ),
-        Effect.flatMap((value) => Deferred.succeed(result, value)),
-        Effect.onExit((exit) =>
-          Exit.isFailure(exit) ? Deferred.succeed(result, generationFailure) : Effect.void,
-        ),
-        Effect.forkIn(scope),
-      );
-      return yield* Deferred.await(result);
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("Approval explanation could not finish", {
+                threadId: input.threadId,
+                cause,
+              }).pipe(Effect.as(generationFailure)),
+          ),
+          Effect.flatMap((value) => Deferred.succeed(result, value)),
+          Effect.onExit((exit) =>
+            (Exit.isFailure(exit)
+              ? Deferred.succeed(
+                  result,
+                  Cause.hasInterruptsOnly(exit.cause) ? unavailable : generationFailure,
+                )
+              : Effect.void
+            ).pipe(Effect.andThen(Scope.close(jobScope, exit))),
+          ),
+          Effect.interruptible,
+          Effect.forkIn(jobScope),
+        );
+        if (existing) yield* invalidate(key, existing);
+        return result;
+      }).pipe(Effect.uninterruptible);
+      return yield* Deferred.await(response);
     },
     (effect, input) =>
       effect.pipe(
@@ -171,10 +212,11 @@ const make = Effect.gen(function* () {
 
   yield* hooks.subscribe().pipe(
     Stream.runForEach((requests) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const ids = new Set(requests.map((request) => request.requestId as string));
         for (const [key, entry] of pending) {
-          if (entry.input.source === "hook" && !ids.has(entry.input.requestId)) pending.delete(key);
+          if (entry.input.source === "hook" && !ids.has(entry.input.requestId))
+            yield* invalidate(key);
         }
       }),
     ),
@@ -186,15 +228,15 @@ const make = Effect.gen(function* () {
     events.stream({ afterSequence, eventType: "thread.deleted" }),
   ).pipe(
     Stream.runForEach(({ event }) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (event.type === "thread.deleted") {
           for (const [key, entry] of pending) {
-            if (entry.input.threadId === event.threadId) pending.delete(key);
+            if (entry.input.threadId === event.threadId) yield* invalidate(key);
           }
           return;
         }
         if (event.type !== "runtime-request.updated" || event.payload.status === "pending") return;
-        pending.delete(
+        yield* invalidate(
           explanationKey({
             threadId: event.threadId,
             source: "native",
