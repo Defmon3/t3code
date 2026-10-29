@@ -2372,11 +2372,15 @@ export const make = Effect.gen(function* () {
     string,
     { readonly readAtMs: number; readonly value: string | null }
   >();
-  const rememberPrLookupGitState = Effect.fn("GitManager.rememberPrLookupGitState")(function* <E>(
+  const prLookupGitReadsByKey = new Map<
+    string,
+    { readonly read: Effect.Effect<string | null, GitCommandError>; awaiters: number }
+  >();
+  const rememberPrLookupGitState = Effect.fn("GitManager.rememberPrLookupGitState")(function* (
     cwd: string,
     key: string,
     fresh: boolean,
-    read: Effect.Effect<string | null, E>,
+    read: Effect.Effect<string | null, GitCommandError>,
   ) {
     const entryKey = `${cwd}\u0000${key}`;
     const readAtMs = yield* Clock.currentTimeMillis;
@@ -2391,7 +2395,24 @@ export const make = Effect.gen(function* () {
     // invalidateStatus bumps the epoch. A read that started before a T3 git
     // action, or before a newer read finished, must not replace their state.
     const epoch = prLookupEpoch(cwd);
-    const value = yield* read;
+    const pendingKey = `${entryKey}\u0000${epoch}`;
+    const sharedRead = yield* Effect.cachedWithTTL(read, Duration.zero);
+    let pending = prLookupGitReadsByKey.get(pendingKey);
+    if (pending === undefined) {
+      pending = { read: sharedRead, awaiters: 0 };
+      prLookupGitReadsByKey.set(pendingKey, pending);
+    }
+    const shared = pending;
+    shared.awaiters++;
+    const value = yield* shared.read.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (--shared.awaiters === 0 && prLookupGitReadsByKey.get(pendingKey) === shared) {
+            prLookupGitReadsByKey.delete(pendingKey);
+          }
+        }),
+      ),
+    );
     const latest = prLookupGitStateByKey.get(entryKey);
     if (prLookupEpoch(cwd) !== epoch || (latest !== undefined && latest.readAtMs > readAtMs)) {
       return value;
@@ -2454,7 +2475,7 @@ export const make = Effect.gen(function* () {
     branch: string,
     options: { readonly refresh: boolean; readonly freshGitState: boolean },
   ) {
-    const remember = <E>(key: string, read: Effect.Effect<string | null, E>) =>
+    const remember = (key: string, read: Effect.Effect<string | null, GitCommandError>) =>
       rememberPrLookupGitState(cacheCwd, key, options.freshGitState, read);
     const remotes = yield* remember(
       "remotes",

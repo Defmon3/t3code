@@ -8,15 +8,18 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type {
@@ -869,6 +872,50 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect(
+    "shares concurrent fresh branch PR metadata reads without reusing later fresh reads",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const reads = yield* Queue.unbounded<void>();
+        const tracer = Tracer.make({
+          span: (options) => {
+            if (options.name === "GitManager.rememberPrLookupGitState") {
+              Queue.offerUnsafe(reads, undefined);
+            }
+            return new Tracer.NativeSpan(options);
+          },
+        });
+        const gate = {
+          matches: (args: ReadonlyArray<string>) => args[0] === "remote",
+          reached: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
+        const gitCommands: string[] = [];
+        const { manager } = yield* makeManager({ gitCommands, gitSpawnGate: gate });
+        const lookup = manager.branchPullRequest(
+          { cwd: repoDir, branch: "main" },
+          { freshGitState: true },
+        );
+
+        const concurrent = yield* Effect.forkChild(
+          Effect.all(
+            Array.from({ length: 6 }, () => lookup),
+            { concurrency: "unbounded" },
+          ).pipe(Effect.withTracer(tracer)),
+        );
+        yield* Effect.forEach(Array.from({ length: 6 }), () => Queue.take(reads));
+        yield* Deferred.await(gate.reached);
+        yield* Deferred.succeed(gate.release, undefined);
+        expect(yield* Fiber.join(concurrent)).toEqual(Array.from({ length: 6 }, () => null));
+        expect(gitCommands.filter((command) => command === "remote")).toHaveLength(1);
+
+        expect(yield* lookup).toBeNull();
+        expect(gitCommands.filter((command) => command === "remote")).toHaveLength(2);
+      }),
+  );
+
   it.effect("a git read in flight during a T3 git action does not outlive it", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -889,9 +936,12 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           updatedAt: "2026-04-07T15:00:00Z",
         },
       ];
+      let branchReads = 0;
       const gate = {
         matches: (args: ReadonlyArray<string>) =>
-          args[0] === "for-each-ref" && args.at(-1) === "refs/heads/feature/racing-upstream",
+          args[0] === "for-each-ref" &&
+          args.at(-1) === "refs/heads/feature/racing-upstream" &&
+          ++branchReads === 1,
         reached: yield* Deferred.make<void>(),
         release: yield* Deferred.make<void>(),
       };
@@ -913,11 +963,60 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* Deferred.await(gate.reached);
       yield* runGit(repoDir, ["branch", "--set-upstream-to=origin/feature/raced-head"]);
       yield* manager.invalidateStatus(repoDir);
+      expect((yield* lookup)?.number).toBe(238);
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(inFlight);
 
       expect((yield* lookup)?.number).toBe(238);
     }),
+  );
+
+  it.effect.each(["failure", "cancellation"] as const)(
+    "shared branch PR metadata reads recover after %s",
+    (outcome) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        if (outcome === "failure") yield* removePath(NodePath.join(repoDir, ".git"));
+        const reads = yield* Queue.unbounded<void>();
+        const tracer = Tracer.make({
+          span: (options) => {
+            if (options.name === "GitManager.rememberPrLookupGitState") {
+              Queue.offerUnsafe(reads, undefined);
+            }
+            return new Tracer.NativeSpan(options);
+          },
+        });
+        const gate = {
+          matches: (args: ReadonlyArray<string>) => args[0] === "remote",
+          reached: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
+        const gitCommands: string[] = [];
+        const { manager } = yield* makeManager({ gitCommands, gitSpawnGate: gate });
+        const lookup = manager
+          .branchPullRequest({ cwd: repoDir, branch: "main" }, { freshGitState: true })
+          .pipe(Effect.withTracer(tracer));
+
+        const first = yield* Effect.forkChild(lookup);
+        const second = yield* Effect.forkChild(lookup);
+        yield* Queue.take(reads);
+        yield* Queue.take(reads);
+        yield* Deferred.await(gate.reached);
+        if (outcome === "cancellation") yield* Fiber.interrupt(first);
+        yield* Deferred.succeed(gate.release, undefined);
+        if (outcome === "failure") {
+          expect(Exit.isFailure(yield* Fiber.await(first))).toBe(true);
+          expect(Exit.isFailure(yield* Fiber.await(second))).toBe(true);
+          yield* initRepo(repoDir);
+        } else {
+          expect(yield* Fiber.join(second)).toBeNull();
+        }
+        expect(gitCommands.filter((command) => command === "remote")).toHaveLength(1);
+
+        expect(yield* lookup).toBeNull();
+        expect(gitCommands.filter((command) => command === "remote")).toHaveLength(2);
+      }),
   );
 
   it.effect("branch PR lookup notifies linked threads when draft status changes", () =>
