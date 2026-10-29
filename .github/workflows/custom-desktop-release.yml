@@ -126,30 +126,8 @@ jobs:
         shell: bash
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      - name: Build approval explanation worker
-        uses: astral-sh/setup-uv@v7
-        with:
-          working-directory: apps/server/approval-worker
-          cache-dependency-glob: uv.lock
-
-      - name: Package approval explanation worker
-        shell: bash
-        working-directory: apps/server/approval-worker
-        run: |
-          set -euo pipefail
-          mkdir -p build
-          uv run --locked --group build pyinstaller --onefile --name t3-approval-worker --distpath dist --workpath build --specpath build \
-            --collect-all genai_prices --collect-data certifi \
-            --copy-metadata genai-prices --copy-metadata pydantic-ai-slim --copy-metadata google-genai \
-            --copy-metadata httpx2 --copy-metadata httpcore2 worker.py
-          worker=dist/t3-approval-worker
-          if [[ "$RUNNER_OS" == "Windows" ]]; then worker="$worker.exe"; fi
-          printf '%s\n' '{"kind":"cancel","id":"startup"}' | "$worker"
-
       - name: Build desktop artifact
         shell: bash
-        env:
-          T3CODE_BUNDLE_APPROVAL_WORKER: "1"
         run: |
           set -euo pipefail
           vp run dist:desktop:artifact \

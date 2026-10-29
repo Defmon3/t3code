@@ -1,12 +1,12 @@
 # Approval explanations
 
-Checks short operation bullets and one overall advisory AI judgement from the production Pydantic AI worker. Commands are inert fixture text. The runner never executes them or opens their paths.
+Checks short operation bullets and one overall advisory AI judgement from the production Gemini generator. Commands are inert fixture text. The runner never executes them or opens their paths.
 
 | Model                 | Thinking budget |
 | --------------------- | --------------- |
 | gemini-3.1-flash-lite | 0               |
 
-Uses the same worker, model, and thinking budget as the application. Set `T3CODE_APPROVAL_EXPLANATION_API_KEY` and `T3CODE_APPROVAL_EXPLANATION_WORKER` in the process environment. Usage and monetary cost are unavailable because the worker does not expose them.
+Uses the same generator, model, and thinking budget as the application. Set `T3CODE_APPROVAL_EXPLANATION_API_KEY` in the process environment. Usage and monetary cost are unavailable because the generator does not expose them.
 
 From the repository root:
 

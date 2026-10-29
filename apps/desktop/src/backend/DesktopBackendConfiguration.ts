@@ -533,15 +533,6 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
-        ...(environment.isPackaged
-          ? {
-              T3CODE_APPROVAL_EXPLANATION_WORKER: environment.path.join(
-                environment.resourcesPath,
-                "approval-worker",
-                environment.platform === "win32" ? "t3-approval-worker.exe" : "t3-approval-worker",
-              ),
-            }
-          : {}),
       },
       extendEnv: true,
       bootstrap,

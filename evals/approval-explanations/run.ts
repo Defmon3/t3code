@@ -237,8 +237,6 @@ const main = Effect.gen(function* () {
   const repoRoot = path.resolve(import.meta.dirname, "../..");
   if (!process.env.T3CODE_APPROVAL_EXPLANATION_API_KEY?.trim())
     return yield* Effect.die(new Error("Set T3CODE_APPROVAL_EXPLANATION_API_KEY."));
-  if (!process.env.T3CODE_APPROVAL_EXPLANATION_WORKER?.trim())
-    return yield* Effect.die(new Error("Set T3CODE_APPROVAL_EXPLANATION_WORKER."));
   const generation = yield* ApprovalExplanationGenerator.ApprovalExplanationGenerator;
   const baseline = values.baseline
     ? yield* fs.readFileString(values.baseline).pipe(Effect.flatMap(decodeResults))
@@ -251,7 +249,7 @@ const main = Effect.gen(function* () {
     "# Approval explanations",
     "",
     `Model: ${MODEL}. Thinking budget: ${THINKING_BUDGET}. Samples per case: ${samples}.`,
-    "Cost: unavailable, the production worker does not expose usage.",
+    "Cost: unavailable, the production generator does not expose usage.",
     "",
     "| Case | Passed samples | Baseline | Case result |",
     "| --- | --- | --- | --- |",

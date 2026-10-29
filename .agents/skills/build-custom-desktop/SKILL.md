@@ -20,8 +20,8 @@ Preserve unrelated work. Never silently omit requested changes or ship a reduced
   `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
   `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`, and `T3CODE_RELAY_URL`. The custom workflow loads these from
   `.env.example`; a missing value must fail the build instead of disabling Connect.
-- Bundle the native approval explanation worker for Windows and Linux with
-  `T3CODE_BUNDLE_APPROVAL_WORKER=1`, and pass its startup smoke check on each platform.
+- Include approval explanations in the server on both platforms. Gemini requests run directly
+  in T3, with structured responses and thinking disabled; no separate worker is required.
 - Preserve all integrated features and the custom updater configuration. Missing required
   configuration, dependencies, or bundled components must be fixed before publishing.
 - Keep private API keys in encrypted environment settings, outside the published installers.
@@ -79,8 +79,8 @@ After the workflow succeeds:
 - Confirm the assets include the Windows `.exe` and `.blockmap`, the Linux `.AppImage` and `.deb`,
   `latest.yml`, and `latest-linux.yml`.
 - Confirm both manifests contain the requested version and reference their matching installers.
-- Confirm both platform builds loaded T3 Connect's public configuration, bundled the approval
-  explanation worker, and passed its startup smoke check.
+- Confirm both platform builds loaded T3 Connect's public configuration and include approval
+  explanations in the server.
 - Retain the previous installer and release for rollback.
 
 If the build fails, return the command, exit status, and final error output. Do not claim an
