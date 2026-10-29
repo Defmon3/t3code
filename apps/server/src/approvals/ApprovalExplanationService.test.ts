@@ -129,63 +129,72 @@ const writeRequest = Effect.fn("test.writeApprovalRequest")(function* (
   includeCommand = true,
   workingDirectory: string | null = "/workspace/project-worktree",
   commandText = command,
+  order: "together" | "request-first" | "item-first" | "item-only" = "together",
 ) {
   const events = yield* EventSink.EventSinkV2;
   const sequence = yield* events.latestSequence();
-  yield* events.write({
-    events: [
-      {
-        id: EventId.make(`request-${sequence}`),
-        type: "runtime-request.updated",
-        threadId,
-        occurredAt: now,
-        payload: {
-          id: requestId,
-          nodeId,
-          providerTurnId: null,
-          nativeRequestRef: null,
-          kind,
-          status,
-          responseCapability: { type: "message" },
-          createdAt: now,
-          resolvedAt: null,
-        },
+  const batch = [
+    {
+      id: EventId.make(`request-${sequence}`),
+      type: "runtime-request.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: requestId,
+        nodeId,
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind,
+        status,
+        responseCapability: { type: "message" },
+        createdAt: now,
+        resolvedAt: null,
       },
-      {
-        id: EventId.make(`approval-item-${sequence}`),
-        type: "turn-item.updated",
+    },
+    {
+      id: EventId.make(`approval-item-${sequence}`),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: TurnItemId.make("approval-item"),
         threadId,
-        occurredAt: now,
-        payload: {
-          id: TurnItemId.make("approval-item"),
-          threadId,
-          runId: null,
-          nodeId,
-          providerThreadId: null,
-          providerTurnId: null,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: 1,
-          status: "running",
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-          type: "approval_request",
-          title: null,
-          requestId,
-          requestKind: kind === "command" ? "command" : "file-change",
-          prompt: commandText,
-          ...(includeCommand
-            ? {
-                command: commandText,
-                ...(workingDirectory === null ? {} : { cwd: workingDirectory }),
-              }
-            : {}),
-          reason: "Restore the file to its committed contents.",
-        },
+        runId: null,
+        nodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "running",
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+        type: "approval_request",
+        title: null,
+        requestId,
+        requestKind: kind === "command" ? "command" : "file-change",
+        prompt: commandText,
+        ...(includeCommand
+          ? {
+              command: commandText,
+              ...(workingDirectory === null ? {} : { cwd: workingDirectory }),
+            }
+          : {}),
+        reason: "Restore the file to its committed contents.",
       },
-    ],
-  });
+    },
+  ] as const satisfies Parameters<typeof events.write>[0]["events"];
+  if (order === "together") {
+    yield* events.write({ events: batch });
+  } else if (order === "item-only") {
+    yield* events.write({ events: [batch[1]] });
+  } else {
+    const [request, item] = batch;
+    for (const event of order === "request-first" ? [request, item] : [item, request]) {
+      yield* events.write({ events: [event] });
+    }
+  }
 });
 
 const runWith = <A, E, R>(
@@ -206,6 +215,61 @@ const runWith = <A, E, R>(
     ),
     Effect.scoped,
   );
+
+const deleteThread = Effect.gen(function* () {
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const events = yield* EventSink.EventSinkV2;
+  const thread = yield* projections.getThread(threadId);
+  yield* events.write({
+    events: [
+      {
+        id: EventId.make("thread-deleted"),
+        type: "thread.deleted",
+        threadId,
+        occurredAt: now,
+        payload: { ...thread, deletedAt: now },
+      },
+    ],
+  });
+});
+
+it.effect.each(["together", "request-first", "item-first"] as const)(
+  "generates native explanations before any client asks and caches the result (%s)",
+  (order) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const completed = yield* Deferred.make<void>();
+      let requests = 0;
+      yield* runWith(
+        Effect.gen(function* () {
+          yield* seed;
+          yield* writeRequest(
+            "pending",
+            "command",
+            true,
+            "/workspace/project-worktree",
+            command,
+            order,
+          );
+          yield* Deferred.await(started);
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(completed);
+          const service = yield* ApprovalExplanations.ApprovalExplanationService;
+          expect(yield* service.explain(nativeInput)).toEqual({ status: "ready", ...content });
+          expect(requests).toBe(1);
+        }),
+        () =>
+          Effect.gen(function* () {
+            requests += 1;
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(release);
+            yield* Deferred.succeed(completed, undefined);
+            return content;
+          }),
+      );
+    }),
+);
 
 it.effect.each(["/workspace/project-worktree", null])(
   "explains native commands without inventing an unknown working directory (%s)",
@@ -229,6 +293,103 @@ it.effect.each(["/workspace/project-worktree", null])(
     ),
 );
 
+it.effect("starts an already pending native command when the service starts", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    yield* seed;
+    yield* writeRequest();
+    yield* Effect.gen(function* () {
+      yield* Deferred.await(started);
+      const service = yield* ApprovalExplanations.ApprovalExplanationService;
+      expect(yield* service.explain(nativeInput)).toEqual({ status: "ready", ...content });
+    }).pipe(
+      Effect.provide(
+        ApprovalExplanations.layer.pipe(
+          Layer.provide(
+            Layer.succeed(ApprovalExplanationGenerator.ApprovalExplanationGenerator, {
+              generate: () => Deferred.succeed(started, undefined).pipe(Effect.as(content)),
+            }),
+          ),
+        ),
+      ),
+    );
+  }).pipe(Effect.provide(dependencies), Effect.scoped),
+);
+
+it.effect("starts generation when a pending request gains its command later", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    yield* runWith(
+      Effect.gen(function* () {
+        yield* seed;
+        yield* writeRequest("pending", "command", false);
+        const service = yield* ApprovalExplanations.ApprovalExplanationService;
+        expect(yield* service.explain(nativeInput)).toEqual({
+          status: "unavailable",
+          reason: "not_command",
+        });
+        yield* writeRequest(
+          "pending",
+          "command",
+          true,
+          "/workspace/project-worktree",
+          command,
+          "item-only",
+        );
+        yield* Deferred.await(started);
+        expect(yield* service.explain(nativeInput)).toEqual({ status: "ready", ...content });
+      }),
+      () => Deferred.succeed(started, undefined).pipe(Effect.as(content)),
+    );
+  }),
+);
+
+it.effect("generates hook explanations before any client asks and caches the result", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const completed = yield* Deferred.make<void>();
+    let requests = 0;
+    yield* runWith(
+      Effect.gen(function* () {
+        yield* seed;
+        const hooks = yield* Hooks.HookApprovalRegistry;
+        const credential = yield* hooks.issue({
+          threadId,
+          providerInstanceId: modelSelection.instanceId,
+        });
+        const snapshot = yield* hooks.subscribe().pipe(
+          Stream.filter((requests) => requests.length > 0),
+          Stream.runHead,
+          Effect.forkScoped,
+        );
+        const response = yield* hooks
+          .request(credential.token, { command, cwd: "/hook-workspace", reason: "Restore file" })
+          .pipe(Effect.forkScoped);
+        const request = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
+        yield* Deferred.await(started);
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(completed);
+        const service = yield* ApprovalExplanations.ApprovalExplanationService;
+        expect(
+          yield* service.explain({ source: "hook", requestId: request.requestId, threadId }),
+        ).toEqual({ status: "ready", ...content });
+        expect(requests).toBe(1);
+        yield* hooks.respond({ requestId: request.requestId, decision: "deny" });
+        expect(yield* Fiber.join(response)).toEqual({ decision: "deny" });
+      }),
+      () =>
+        Effect.gen(function* () {
+          requests += 1;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          yield* Deferred.succeed(completed, undefined);
+          return content;
+        }),
+    );
+  }),
+);
+
 it.effect.each([
   ["resolved", "command", "request_not_pending", true],
   ["pending", "file-change", "not_command", true],
@@ -243,6 +404,68 @@ it.effect.each([
     }),
     () => Effect.die("Generation must not run for this approval"),
   ),
+);
+
+it.effect(
+  "does not retry a failed background hook on another request and allows explicit retry",
+  () =>
+    Effect.gen(function* () {
+      const failed = yield* Deferred.make<void>();
+      const otherStarted = yield* Deferred.make<void>();
+      let attempts = 0;
+      yield* runWith(
+        Effect.gen(function* () {
+          yield* seed;
+          const hooks = yield* Hooks.HookApprovalRegistry;
+          const credential = yield* hooks.issue({
+            threadId,
+            providerInstanceId: modelSelection.instanceId,
+          });
+          const snapshot = yield* hooks.subscribe().pipe(
+            Stream.filter((requests) => requests.length > 0),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+          const response = yield* hooks
+            .request(credential.token, { command, cwd: "/hook-workspace", reason: "Restore file" })
+            .pipe(Effect.forkScoped);
+          const request = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
+          yield* Deferred.await(failed);
+          yield* hooks
+            .request(credential.token, {
+              command: "git status",
+              cwd: "/hook-workspace",
+              reason: "Read status",
+            })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(otherStarted);
+          expect(attempts).toBe(1);
+          const service = yield* ApprovalExplanations.ApprovalExplanationService;
+          expect(
+            yield* service.explain({ source: "hook", threadId, requestId: request.requestId }),
+          ).toEqual({ status: "ready", ...content });
+          expect(attempts).toBe(2);
+          yield* hooks.respond({ requestId: request.requestId, decision: "deny" });
+          expect(yield* Fiber.join(response)).toEqual({ decision: "deny" });
+        }),
+        (request) =>
+          Effect.gen(function* () {
+            if (request.command !== command) {
+              yield* Deferred.succeed(otherStarted, undefined);
+              return content;
+            }
+            attempts += 1;
+            if (attempts === 1) {
+              yield* Deferred.succeed(failed, undefined);
+              return yield* new TextGenerationError({
+                operation: "generateApprovalExplanation",
+                detail: "Unavailable",
+              });
+            }
+            return content;
+          }),
+      );
+    }),
 );
 
 it.effect("deduplicates simultaneous clients and caches only this pending request", () =>
@@ -284,8 +507,8 @@ it.effect("discards a late result after the approval was answered", () =>
         yield* seed;
         yield* writeRequest();
         const service = yield* ApprovalExplanations.ApprovalExplanationService;
-        const explanation = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
         yield* Deferred.await(started);
+        const explanation = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
         yield* writeRequest("resolved");
         yield* Deferred.succeed(release, undefined);
         expect(yield* Fiber.join(explanation)).toEqual({
@@ -492,24 +715,11 @@ it.effect.each(["resolved", "cancelled", "deleted"] as const)(
           yield* seed;
           yield* writeRequest();
           const service = yield* ApprovalExplanations.ApprovalExplanationService;
-          const explanation = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
           yield* Deferred.await(started);
+          const explanation = yield* service.explain(nativeInput).pipe(Effect.forkScoped);
 
           if (outcome === "deleted") {
-            const projections = yield* ProjectionStore.ProjectionStoreV2;
-            const events = yield* EventSink.EventSinkV2;
-            const thread = yield* projections.getThread(threadId);
-            yield* events.write({
-              events: [
-                {
-                  id: EventId.make("thread-deleted"),
-                  type: "thread.deleted",
-                  threadId,
-                  occurredAt: now,
-                  payload: { ...thread, deletedAt: now },
-                },
-              ],
-            });
+            yield* deleteThread;
           } else {
             yield* writeRequest(outcome);
           }
@@ -529,7 +739,7 @@ it.effect.each(["resolved", "cancelled", "deleted"] as const)(
     }),
 );
 
-it.effect.each(["allow", "deny"] as const)(
+it.effect.each(["allow", "deny", "deleted"] as const)(
   "stops generation when a pending hook approval receives %s",
   (decision) =>
     Effect.gen(function* () {
@@ -557,19 +767,26 @@ it.effect.each(["allow", "deny"] as const)(
             .pipe(Effect.forkScoped);
           const request = Option.getOrThrow(yield* Fiber.join(snapshot))[0]!;
           const service = yield* ApprovalExplanations.ApprovalExplanationService;
+          yield* Deferred.await(started);
           const explanation = yield* service
             .explain({ source: "hook", requestId: request.requestId, threadId })
             .pipe(Effect.forkScoped);
-          yield* Deferred.await(started);
 
-          expect(yield* hooks.respond({ requestId: request.requestId, decision })).toBe(true);
+          if (decision === "deleted") {
+            yield* deleteThread;
+          } else {
+            expect(yield* hooks.respond({ requestId: request.requestId, decision })).toBe(true);
+          }
 
           yield* Deferred.await(interrupted);
-          expect(yield* Fiber.join(response)).toEqual({ decision });
+          if (decision !== "deleted") expect(yield* Fiber.join(response)).toEqual({ decision });
           expect(yield* Fiber.join(explanation)).toEqual({
             status: "unavailable",
             reason: "request_not_pending",
           });
+          expect(
+            yield* service.explain({ source: "hook", requestId: request.requestId, threadId }),
+          ).toEqual({ status: "unavailable", reason: "request_not_pending" });
         }),
         () =>
           Deferred.succeed(started, undefined).pipe(

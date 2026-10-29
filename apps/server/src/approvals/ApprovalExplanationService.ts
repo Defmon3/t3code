@@ -79,7 +79,9 @@ const make = Effect.gen(function* () {
   ) {
     if (input.source === "hook") {
       const request = yield* hooks.getPending(input.requestId);
-      return request?.threadId === input.threadId
+      if (request?.threadId !== input.threadId) return undefined;
+      const thread = yield* projections.getThread(input.threadId);
+      return thread.deletedAt === null
         ? { command: request.command, cwd: request.cwd, reason: request.reason }
         : undefined;
     }
@@ -97,7 +99,7 @@ const make = Effect.gen(function* () {
   });
 
   const explain = Effect.fn("ApprovalExplanationService.explain")(
-    function* (input: ApprovalExplanationInput) {
+    function* (input: ApprovalExplanationInput, background = false) {
       const key = explanationKey(input);
       const command = yield* readCommand(input);
       if (command === undefined || command === "not_command") {
@@ -111,7 +113,10 @@ const make = Effect.gen(function* () {
         const result = yield* Deferred.make<ApprovalExplanationResult>();
         const jobScope = yield* Scope.fork(scope);
         const existing = pending.get(key);
-        if (existing?.snapshot === snapshot) {
+        const completed =
+          existing && !background ? yield* Deferred.poll(existing.result) : Option.none();
+        const retry = Option.isSome(completed) && (yield* completed.value).status === "error";
+        if (existing?.snapshot === snapshot && !retry) {
           yield* Scope.close(jobScope, Exit.void);
           return existing.result;
         }
@@ -169,13 +174,7 @@ const make = Effect.gen(function* () {
                 cause,
               }).pipe(Effect.as(generationFailure)),
           ),
-          Effect.flatMap((value) =>
-            Effect.sync(() => {
-              if (value.status === "error" && pending.get(key)?.result === result) {
-                pending.delete(key);
-              }
-            }).pipe(Effect.andThen(Deferred.succeed(result, value))),
-          ),
+          Effect.flatMap((value) => Deferred.succeed(result, value)),
           Effect.onExit((exit) =>
             (Exit.isFailure(exit)
               ? Deferred.succeed(
@@ -191,9 +190,9 @@ const make = Effect.gen(function* () {
         if (existing) yield* invalidate(key, existing);
         return result;
       }).pipe(Effect.uninterruptible);
-      return yield* Deferred.await(response);
+      return background ? unavailable : yield* Deferred.await(response);
     },
-    (effect, input) =>
+    (effect, input, _background = false) =>
       effect.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Approval explanation request failed", {
@@ -217,6 +216,12 @@ const make = Effect.gen(function* () {
           if (entry.input.source === "hook" && !ids.has(entry.input.requestId))
             yield* invalidate(key);
         }
+        for (const request of requests) {
+          yield* explain(
+            { source: "hook", threadId: request.threadId, requestId: request.requestId },
+            true,
+          );
+        }
       }),
     ),
     Effect.forkScoped,
@@ -224,7 +229,10 @@ const make = Effect.gen(function* () {
   const afterSequence = yield* events.latestSequence();
   yield* Stream.merge(
     events.stream({ afterSequence, eventType: "runtime-request.updated" }),
-    events.stream({ afterSequence, eventType: "thread.deleted" }),
+    Stream.merge(
+      events.stream({ afterSequence, eventType: "thread.deleted" }),
+      events.stream({ afterSequence, eventType: "turn-item.updated" }),
+    ),
   ).pipe(
     Stream.runForEach(({ event }) =>
       Effect.gen(function* () {
@@ -234,14 +242,14 @@ const make = Effect.gen(function* () {
           }
           return;
         }
-        if (event.type !== "runtime-request.updated" || event.payload.status === "pending") return;
-        yield* invalidate(
-          explanationKey({
-            threadId: event.threadId,
-            source: "native",
-            requestId: event.payload.id,
-          }),
-        );
+        const requestId =
+          event.type === "runtime-request.updated"
+            ? event.payload.id
+            : event.type === "turn-item.updated" && event.payload.type === "approval_request"
+              ? event.payload.requestId
+              : undefined;
+        if (!requestId || requestId.startsWith("custom-hook:")) return;
+        yield* explain({ threadId: event.threadId, source: "native", requestId }, true);
       }),
     ),
     Effect.tapError((cause) =>
@@ -250,6 +258,21 @@ const make = Effect.gen(function* () {
     Effect.orDie,
     Effect.forkScoped,
   );
+
+  const snapshot = yield* projections.getShellSnapshot();
+  for (const thread of snapshot.threads) {
+    if (!thread.pendingRuntimeRequest || thread.deletedAt !== null) continue;
+    const { runtimeRequests } = yield* projections.getThreadRecords(thread.id, ["runtimeRequests"]);
+    for (const request of runtimeRequests) {
+      if (
+        request.status === "pending" &&
+        request.kind === "command" &&
+        !request.id.startsWith("custom-hook:")
+      ) {
+        yield* explain({ source: "native", threadId: thread.id, requestId: request.id }, true);
+      }
+    }
+  }
 
   return ApprovalExplanationService.of({ explain });
 });
