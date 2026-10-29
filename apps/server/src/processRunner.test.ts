@@ -1,15 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import * as ProcessRunner from "./processRunner.ts";
+import * as WindowsGitWorker from "./WindowsGitWorker.ts";
 
 type ChildProcessCommand = {
   readonly command: string;
@@ -76,6 +79,178 @@ const runWith =
     );
 
 describe("runProcess", () => {
+  it.effect("extends the injected host environment with command overrides in the worker", () =>
+    Effect.gen(function* () {
+      const worker = WindowsGitWorker.WindowsGitWorker.of({
+        run: (input) =>
+          Effect.succeed({
+            code: 0,
+            stdout: new TextEncoder().encode(
+              `${input.env.T3_TEST_HOST}:${input.env.T3_TEST_OVERRIDE}`,
+            ),
+            stderr: new Uint8Array(),
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          }),
+      });
+      const runner = yield* ProcessRunner.make().pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          makeSpawner(() => Effect.succeed(makeHandle({}))),
+        ),
+        Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+      );
+      const output = yield* runner.run({
+        command: "git",
+        args: [],
+        env: { T3_TEST_OVERRIDE: "command" },
+      });
+      expect(output.stdout).toBe("host:command");
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, {
+        T3_TEST_HOST: "host",
+        T3_TEST_OVERRIDE: "inherited",
+      }),
+      Effect.provideService(SpawnExecutableResolution, (command) => command),
+    ),
+  );
+
+  it.effect.each(["error", "timedOutResult"] as const)(
+    "preserves worker timeout behavior %s",
+    (timeoutBehavior) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        const worker = WindowsGitWorker.WindowsGitWorker.of({
+          run: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+            ),
+        });
+        const runner = yield* ProcessRunner.make().pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            makeSpawner(() => Effect.succeed(makeHandle({}))),
+          ),
+          Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+        );
+        const running = yield* runner
+          .run({ command: "git", args: [], timeout: "1 second", timeoutBehavior })
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("1 second");
+        yield* Deferred.await(cancelled);
+        const result = yield* Fiber.join(running);
+        if (timeoutBehavior === "error") {
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { _tag: "ProcessTimeoutError", timeoutMs: 1000 },
+          });
+        } else {
+          expect(result).toMatchObject({
+            _tag: "Success",
+            success: { timedOut: true, code: null, stdout: "", stderr: "" },
+          });
+        }
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provideService(SpawnExecutableResolution, (command) => command),
+      ),
+  );
+
+  it.effect.each([
+    { platform: "win32" as const, command: "git", streaming: false, expected: "worker" },
+    {
+      platform: "win32" as const,
+      command: "C:\\tools\\GIT.EXE",
+      streaming: false,
+      expected: "worker",
+    },
+    { platform: "win32" as const, command: "git", streaming: true, expected: "native" },
+    { platform: "linux" as const, command: "git", streaming: false, expected: "native" },
+  ])(
+    "routes $platform $command streaming=$streaming to $expected",
+    ({ platform, command, streaming, expected }) =>
+      Effect.gen(function* () {
+        const worker = WindowsGitWorker.WindowsGitWorker.of({
+          run: () =>
+            Effect.succeed({
+              code: 0,
+              stdout: new TextEncoder().encode("worker"),
+              stderr: new Uint8Array(),
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }),
+        });
+        const runner = yield* ProcessRunner.make().pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            makeSpawner(() => Effect.succeed(makeHandle({ stdout: "native" }))),
+          ),
+          Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+        );
+        const chunks: string[] = [];
+        const output = yield* runner.run({
+          command,
+          args: [],
+          ...(streaming
+            ? { onStdoutChunk: (chunk: Uint8Array) => chunks.push(new TextDecoder().decode(chunk)) }
+            : {}),
+        });
+        expect(output.stdout).toBe(expected);
+        expect(chunks.join("")).toBe(streaming ? "native" : "");
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, platform),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provideService(SpawnExecutableResolution, (command) => command),
+      ),
+  );
+
+  it.effect("serves another command while Windows Git runs in the worker", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const nativeCommands: string[] = [];
+      const worker = WindowsGitWorker.WindowsGitWorker.of({
+        run: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as({
+              code: 0,
+              stdout: new TextEncoder().encode("checkpoint"),
+              stderr: new Uint8Array(),
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }),
+          ),
+      });
+      const native = makeSpawner((command) =>
+        Effect.sync(() => {
+          nativeCommands.push(command.command);
+          return makeHandle({ stdout: "interactive" });
+        }),
+      );
+      const runner = yield* ProcessRunner.make().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, native),
+        Effect.provideService(WindowsGitWorker.WindowsGitWorker, worker),
+      );
+      const git = yield* runner.run({ command: "git", args: ["status"] }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+
+      expect((yield* runner.run({ command: "node", args: [] })).stdout).toBe("interactive");
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Fiber.join(git)).stdout).toBe("checkpoint");
+      expect(nativeCommands).toEqual(["C:\\tools\\node.exe"]);
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.provideService(SpawnExecutableResolution, (command) => `C:\\tools\\${command}.exe`),
+    ),
+  );
+
   it.effect("resolves and escapes Windows command shims before spawning", () => {
     const spawner = makeSpawner((command) =>
       Effect.sync(() => {

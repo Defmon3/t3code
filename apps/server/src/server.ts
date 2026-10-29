@@ -377,7 +377,7 @@ const layerRepositoryIdentityResolver = Layer.effect(
 const IssueServiceLive = IssueService.layer.pipe(
   Layer.provide(IssueProviderRegistry.layer),
   Layer.provide(layerSourceControlProviderRegistry),
-  Layer.provide(VcsProcess.layer),
+  Layer.provide(VcsProcess.layerWithWindowsGitWorker),
   Layer.provide(SourceControlRateLimit.layer),
 );
 
@@ -1141,7 +1141,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(VcsProcess.layer),
+      Layer.provide(VcsProcess.layerWithWindowsGitWorker),
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(layerPlatformServices),
     );

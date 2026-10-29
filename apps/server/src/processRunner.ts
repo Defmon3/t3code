@@ -10,6 +10,8 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as WindowsGitWorker from "./WindowsGitWorker.ts";
 import {
   collectUint8StreamText,
   decodeUtf8,
@@ -388,12 +390,100 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
   } satisfies ProcessRunOutput;
 });
 
+const runGitInWorker = Effect.fn("processRunner.runProcessCore")(function* (
+  worker: WindowsGitWorker.WindowsGitWorker["Service"],
+  input: ProcessRunInput,
+) {
+  yield* Effect.annotateCurrentSpan({
+    "process.command": commandName(input.command),
+    "process.execution": "worker",
+  });
+  const hostEnvironment = yield* HostProcess.Environment;
+  const resolved = yield* resolveSpawnCommand(
+    input.command,
+    input.args,
+    input.env === undefined ? {} : { env: input.env, extendEnv: true },
+  );
+  const invocation = {
+    command: input.command,
+    argumentCount: input.args.length,
+    cwd: input.cwd,
+    spawnCwd: input.spawnCwd,
+  };
+  const output = yield* worker
+    .run({
+      command: resolved.command,
+      args: resolved.args,
+      shell: resolved.shell,
+      cwd: input.spawnCwd ?? input.cwd,
+      env: { ...hostEnvironment, ...input.env },
+      stdin: input.stdin,
+      maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+      outputMode: input.outputMode ?? "error",
+    })
+    .pipe(
+      Effect.mapError((error): ProcessRunError => {
+        if (error._tag === "GitWorkerOutputLimitError") {
+          return new ProcessOutputLimitError({
+            ...invocation,
+            stream: error.stream,
+            maxBytes: error.maxBytes,
+            observedBytes: error.observedBytes,
+          });
+        }
+        const cause = Object.assign(new Error(error.message), { code: error.code });
+        if (error.phase === "stdin") {
+          return new ProcessStdinError({
+            ...invocation,
+            stdinBytes: Buffer.byteLength(input.stdin ?? ""),
+            cause,
+          });
+        }
+        if (error.phase === "stdout" || error.phase === "stderr") {
+          return new ProcessReadError({ ...invocation, stream: error.phase, cause });
+        }
+        return new ProcessSpawnError({
+          ...invocation,
+          resolvedCommand: resolved.command,
+          resolvedArgumentCount: resolved.args.length,
+          shell: resolved.shell,
+          cause,
+        });
+      }),
+    );
+  const stdout = decodeUtf8(output.stdout);
+  const stderr = decodeUtf8(output.stderr);
+  const marker = input.truncatedMarker ?? "";
+  return {
+    stdout: stdout.text + (output.stdoutTruncated ? marker : ""),
+    stderr: stderr.text + (output.stderrTruncated ? marker : ""),
+    code: output.code === null ? null : ChildProcessSpawner.ExitCode(output.code),
+    timedOut: false,
+    stdoutTruncated: output.stdoutTruncated,
+    stderrTruncated: output.stderrTruncated,
+    stdoutInvalidUtf8: stdout.invalidUtf8,
+    stderrInvalidUtf8: stderr.invalidUtf8,
+  } satisfies ProcessRunOutput;
+});
+
 /** @public */
 export const make = Effect.fn("ProcessRunner.make")(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const platform = yield* HostProcess.Platform;
+  const gitWorker = Option.getOrUndefined(
+    yield* Effect.serviceOption(WindowsGitWorker.WindowsGitWorker),
+  );
 
   const run: ProcessRunner["Service"]["run"] = (input) =>
-    finalizeRunProcess(runProcessCore(spawner, input), input);
+    finalizeRunProcess(
+      platform === "win32" &&
+        gitWorker !== undefined &&
+        input.onStdoutChunk === undefined &&
+        /^(?:git|git\.exe)$/i.test(commandName(input.command))
+        ? runGitInWorker(gitWorker, input)
+        : runProcessCore(spawner, input),
+      input,
+    );
 
   return ProcessRunner.of({
     run,
@@ -401,3 +491,13 @@ export const make = Effect.fn("ProcessRunner.make")(function* () {
 });
 
 export const layer = Layer.effect(ProcessRunner, make());
+
+export const layerWithWindowsGitWorker = Layer.effect(ProcessRunner, make()).pipe(
+  Layer.provide(
+    Layer.unwrap(
+      Effect.map(HostProcess.Platform, (platform) =>
+        platform === "win32" ? WindowsGitWorker.layer : Layer.empty,
+      ),
+    ),
+  ),
+);

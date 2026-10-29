@@ -379,3 +379,7 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(VcsProcess, make).pipe(Layer.provide(ProcessRunner.layer));
+
+export const layerWithWindowsGitWorker = Layer.effect(VcsProcess, make).pipe(
+  Layer.provide(ProcessRunner.layerWithWindowsGitWorker),
+);
