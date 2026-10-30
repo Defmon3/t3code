@@ -39,8 +39,8 @@ With `origin` on git.cafe, work through GitCafe and leave GitHub's API alone:
 - Push to `origin`, open PRs with `cafe pr create` (`--head owner/repo:branch` from a fork) or
   `cafe stack submit`, and use `cafe` for everything after that. Link the git.cafe PR URL, not the
   github.com one, wherever a tool tracks the PR, so polling stays on GitCafe.
-- Read checks with `cafe pr status <n>`, and GitHub Actions logs with `cafe ci logs <run>` (run ids
-  from `cafe ci list --pr <n>`). `cafe ci rerun <run>` reruns one. These need `cafe` 0.11 or newer.
+- Read checks with `cafe pr status <n>`, and existing GitHub Actions logs with `cafe ci logs <run>`
+  (run ids from `cafe ci list --pr <n>`). Never rerun hosted builds.
 - Write closing references as `Fixes pingdotgg/t3code#<n>`. GitCafe turns a bare `#<n>` in text it
   syncs to GitHub into a git.cafe link, and GitHub does not close issues from those.
 - Merge with `gh pr merge <n> --match-head-commit <sha>`, because `cafe pr merge` cannot pin the
@@ -176,10 +176,8 @@ TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
 `@tsc-rs/typescript`, the tsc-rs drop-in, with Effect diagnostics, quick fixes, and
 refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
 
-Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
-[ci.yml](../../.github/workflows/ci.yml) for its current jobs.
-The [manual Windows lane](../../.github/workflows/windows-tests.yml) is available for focused
-Windows investigation while that suite is not a required gate.
+Use `vp run lint:mobile` for native mobile changes. Build locally only.
+Run focused Windows tests locally with the repository-local Vite+ runner.
 
 ### Unused code
 

@@ -14,7 +14,7 @@ $env:T3CODE_DESKTOP_UPDATE_REPOSITORY = "Defmon3/t3code"
 ```
 
 `T3CODE_DESKTOP_UPDATE_REPOSITORY` takes an `owner/repository` slug. If it is absent, the build
-script falls back to `GITHUB_REPOSITORY`, which is normally the repository running GitHub Actions.
+script falls back to `GITHUB_REPOSITORY`. Set the custom repository explicitly for local builds.
 The build command always passes `--publish never`, so the build creates the installer and updater
 metadata but does not upload anything. Publishing is a separate release step.
 
@@ -33,8 +33,8 @@ The `$build-custom-desktop` skill derives a valid, increasing custom version fro
 `X.Y.Z-nightly.YYYYMMDD.N` use the nightly feed.
 
 The project skill `$build-custom-desktop` reads the latest `custom-main` checkout, derives the next
-custom version from its package version, pushes the release-trigger branch, and publishes one
-GitHub Release. Invoke it without a version:
+custom version from its package version, and builds the full application on this machine.
+It never triggers GitHub Actions. Invoke it without a version:
 
 ```text
 $build-custom-desktop
@@ -42,11 +42,9 @@ $build-custom-desktop
 
 It embeds the custom updater repository and does not install the result on a host.
 
-From the repository root, authenticate `gh` to the custom repository and build the target platform:
+From the repository root, build the target platform locally:
 
 ```powershell
-gh auth status
-
 $env:T3CODE_DESKTOP_UPDATE_REPOSITORY = "Defmon3/t3code"
 $env:T3CODE_DESKTOP_VERSION = "0.1.4-custom.20261026.1"
 
@@ -57,8 +55,8 @@ vp run dist:desktop:dmg
 ```
 
 The artifacts are written to `release/`. Build each architecture separately when the release must
-serve more than one architecture. The upstream workflow merges per-architecture manifests; a
-manual release should either publish one architecture per release or perform the same merge before
+serve more than one architecture. A local release should either publish one architecture per
+release or merge per-architecture manifests before
 uploading a shared manifest.
 
 Before publishing, inspect the output and keep only release payloads:

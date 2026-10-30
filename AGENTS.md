@@ -75,6 +75,12 @@ The most common defect in this repo is a change that works on the path you teste
 - **Connection modes.** Local, remote/relay, and tunnel behave differently. Multi-device and multi-environment cases are real.
 - **Docs.** Check whether the change makes existing guidance inaccurate. Apply the [documentation rules](#documentation) before adding anything.
 
+## Local builds only
+
+Build this repository on this machine only. Never trigger, enable, dispatch, rerun, or restore
+GitHub Actions build workflows. Never push a branch or tag to trigger a hosted build.
+Use the local `build-custom-desktop` skill. GitHub may host release assets, but must not build them.
+
 ## Dev servers
 
 - `vp i` installs. Worktrees get this from the t3.json setup script; if module resolution looks broken, it probably did not run.
