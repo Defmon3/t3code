@@ -52,5 +52,7 @@ published release assets, but it must not execute the build.
 - For Linux artifacts, verify the `.AppImage`, `.deb`, and matching updater manifest.
 - Confirm builds include the public configuration and approval explanations.
 - Report the local installer path. Never claim a failed or unrun build succeeded.
-- Do not install, restart the app, push, or publish unless the user requested that action.
+- Publish the finished installers and updater manifests as one GitHub Release after both local
+  builds pass. Upload existing files only; never trigger a hosted build. Exclude `builder-debug.yml`.
+- Do not install, restart the app, or push source unless the user requested that action.
 - Preserve previous installers and releases for rollback.
