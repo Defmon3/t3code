@@ -49,6 +49,36 @@ export type ApprovalExplanationView =
   | Extract<ApprovalExplanationResult, { readonly status: "ready" }>
   | { readonly status: "loading" | "unavailable" | "error"; readonly message: string };
 
+export type ApprovalRejectionDraft =
+  | { readonly status: "untouched" | "manual" | "dismissed" }
+  | { readonly status: "edited"; readonly reason: string };
+
+export function approvalRejectionDraftKey(
+  threadRef: ScopedThreadRef,
+  approval: ThreadPendingApproval,
+): string {
+  const target = approvalExplanationTarget(threadRef, approval);
+  return JSON.stringify([
+    threadRef.environmentId,
+    threadRef.threadId,
+    target.input,
+    approval.requestId,
+  ]);
+}
+
+export function approvalRejectionReason(
+  draft: ApprovalRejectionDraft,
+  explanation: ApprovalExplanationView | undefined,
+  supportsFeedback: boolean,
+): string | null {
+  if (!supportsFeedback || draft.status === "dismissed") return null;
+  if (draft.status === "edited") return draft.reason;
+  if (explanation?.status === "ready" && explanation.judgement.verdict === "unsafe") {
+    return explanation.judgement.reason;
+  }
+  return draft.status === "manual" ? "" : null;
+}
+
 export const approvalJudgementLabels = {
   safe: "Safe",
   unsafe: "Unsafe",

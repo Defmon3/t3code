@@ -38,6 +38,7 @@ import {
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
+import { approvalRejectionDraftKey } from "@t3tools/client-runtime/state/approval-explanations";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
@@ -3461,7 +3462,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </ComposerBanner.Content>
                     <ComposerBanner.Actions>
                       <ComposerPendingApprovalActions
-                        key={activePendingApproval.requestId}
+                        key={approvalRejectionDraftKey(routeThreadRef, activePendingApproval)}
                         requestId={activePendingApproval.requestId}
                         disabled={!canOperateThread}
                         isResponding={respondingRequestIds.includes(

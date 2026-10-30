@@ -20,6 +20,10 @@ import {
   approvalExplanationTarget,
   approvalExplanationView,
   approvalJudgementLabels,
+  approvalRejectionDraftKey,
+  approvalRejectionReason,
+  type ApprovalExplanationView,
+  type ApprovalRejectionDraft,
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
@@ -45,6 +49,41 @@ const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
 ];
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
+  const key = approvalRejectionDraftKey(props.threadRef, props.approval);
+  return props.approval.requestKind === "command" ? (
+    <CommandPendingApprovalCard key={key} {...props} />
+  ) : (
+    <PendingApprovalCardContent key={key} {...props} />
+  );
+}
+
+function CommandPendingApprovalCard(props: PendingApprovalCardProps) {
+  const explanationAtom = approvalExplanationAtom(
+    approvalExplanationTarget(props.threadRef, props.approval),
+  );
+  const result = useAtomValue(explanationAtom);
+  const refreshExplanation = useAtomRefresh(explanationAtom);
+  return (
+    <PendingApprovalCardContent
+      {...props}
+      explanation={{
+        view: approvalExplanationView(result),
+        waiting: result.waiting,
+        refresh: refreshExplanation,
+      }}
+    />
+  );
+}
+
+function PendingApprovalCardContent(
+  props: PendingApprovalCardProps & {
+    readonly explanation?: {
+      readonly view: ApprovalExplanationView;
+      readonly waiting: boolean;
+      readonly refresh: () => void;
+    };
+  },
+) {
   const preferences = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferencesReady = AsyncResult.isSuccess(preferences) && !preferences.waiting;
@@ -61,17 +100,23 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
     props.disabled || !canRespond || props.respondingApprovalId === props.approval.requestId;
   const [explanationOpen, setExplanationOpen] = useState(false);
   const [commandExpanded, setCommandExpanded] = useState(false);
-  const [reason, setReason] = useState<string | null>(null);
+  const [draft, setDraft] = useState<ApprovalRejectionDraft>({ status: "untouched" });
   const [feedbackFailed, setFeedbackFailed] = useState(false);
   const isCommand = props.approval.requestKind === "command";
   const responseDisabled = disabled || !props.canOperateThread;
   const canRejectWithReason =
     props.approval.supportsFeedback && options.some((option) => option.decision === "decline");
+  const reason = approvalRejectionReason(
+    draft,
+    props.explanation?.view,
+    canRejectWithReason === true,
+  );
 
   async function rejectWithReason() {
-    if (responseDisabled || reason === null) return;
+    if (responseDisabled || !canRejectWithReason || reason === null) return;
+    setDraft({ status: "edited", reason });
     if (await sendApprovalFeedback(props.approval, reason, props.onRespond)) {
-      setReason(null);
+      setDraft({ status: "dismissed" });
       setFeedbackFailed(false);
     } else {
       setFeedbackFailed(true);
@@ -223,14 +268,18 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
       {warning ? (
         <Text className="font-sans text-xs leading-normal text-warning-foreground">{warning}</Text>
       ) : null}
-      {isCommand ? (
-        <CommandApprovalExplanation approval={props.approval} threadRef={props.threadRef} />
+      {props.explanation ? (
+        <CommandApprovalExplanation
+          explanation={props.explanation.view}
+          waiting={props.explanation.waiting}
+          onRefresh={props.explanation.refresh}
+        />
       ) : null}
       {canRejectWithReason && reason !== null ? (
         <View className="gap-2">
           <Text className="font-t3-bold text-sm text-foreground">Reason for rejection</Text>
           <AppTextInput
-            autoFocus
+            autoFocus={draft.status === "manual"}
             multiline
             accessibilityLabel="Reason for rejection"
             placeholder="Tell the agent what to change"
@@ -238,7 +287,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
             value={reason}
             editable={!responseDisabled}
             onChangeText={(text) => {
-              setReason(text);
+              setDraft({ status: "edited", reason: text });
               setFeedbackFailed(false);
             }}
           />
@@ -253,12 +302,12 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
               tone="secondary"
               disabled={props.respondingApprovalId === props.approval.requestId}
               onPress={() => {
-                setReason(null);
+                setDraft({ status: "dismissed" });
                 setFeedbackFailed(false);
               }}
             />
             <Button
-              label="Reject and send reason"
+              label="Reject with reason"
               tone="danger"
               loading={props.respondingApprovalId === props.approval.requestId}
               disabled={responseDisabled || !reason.trim()}
@@ -339,14 +388,14 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
             />
           ),
         )}
-        {canRejectWithReason ? (
+        {canRejectWithReason && reason === null ? (
           <Button
             label="Reject with reason"
             tone="secondary"
             expanded={reason !== null}
             disabled={responseDisabled}
             onPress={() => {
-              setReason((value) => (value === null ? "" : null));
+              setDraft({ status: "manual" });
               setFeedbackFailed(false);
             }}
           />
@@ -362,16 +411,14 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
 }
 
 function CommandApprovalExplanation({
-  approval,
-  threadRef,
+  explanation,
+  waiting,
+  onRefresh,
 }: {
-  readonly approval: PendingApproval;
-  readonly threadRef: ScopedThreadRef;
+  readonly explanation: ApprovalExplanationView;
+  readonly waiting: boolean;
+  readonly onRefresh: () => void;
 }) {
-  const explanationAtom = approvalExplanationAtom(approvalExplanationTarget(threadRef, approval));
-  const result = useAtomValue(explanationAtom);
-  const refreshExplanation = useAtomRefresh(explanationAtom);
-  const explanation = approvalExplanationView(result);
   return (
     <View className="gap-2 border-t border-border pt-3" accessibilityLiveRegion="polite">
       <Text className="font-t3-bold text-sm text-foreground">AI explanation</Text>
@@ -427,9 +474,9 @@ function CommandApprovalExplanation({
         <Button
           label="Retry explanation"
           tone="secondary"
-          disabled={result.waiting}
-          loading={result.waiting}
-          onPress={refreshExplanation}
+          disabled={waiting}
+          loading={waiting}
+          onPress={onRefresh}
         />
       ) : null}
     </View>

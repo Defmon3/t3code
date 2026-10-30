@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   EnvironmentId,
   RuntimeRequestId,
+  ThreadId,
   WS_METHODS,
   type ApprovalExplanationInput,
   type ApprovalExplanationResult,
@@ -20,7 +21,10 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   approvalExplanationTarget,
   approvalExplanationView,
+  approvalRejectionDraftKey,
+  approvalRejectionReason,
   createApprovalExplanationAtoms,
+  type ApprovalExplanationView,
 } from "./approvalExplanations.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
@@ -135,6 +139,108 @@ const makeHarness = Effect.fn("TestApprovalExplanations.makeHarness")(function* 
 });
 
 describe("approval explanations", () => {
+  it("offers the unsafe judgement as an editable rejection reason", () => {
+    expect(approvalRejectionReason({ status: "untouched" }, unsafeReady, true)).toBe(
+      unsafeReady.judgement.reason,
+    );
+  });
+
+  it.each<ApprovalExplanationView>([
+    ready,
+    uncertainReady,
+    { status: "loading", message: "Preparing explanation" },
+    { status: "error", message: "Provider unavailable" },
+    { status: "unavailable", message: "Unsupported provider" },
+  ])("does not suggest a rejection for $status without an unsafe verdict", (explanation) => {
+    expect(approvalRejectionReason({ status: "untouched" }, explanation, true)).toBeNull();
+  });
+
+  it("does not offer feedback for unsupported responses", () => {
+    expect(approvalRejectionReason({ status: "untouched" }, unsafeReady, false)).toBeNull();
+    expect(
+      approvalRejectionReason(
+        { status: "edited", reason: "Use a safer command" },
+        unsafeReady,
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  it.each(["Use a safer command", ""])(
+    "preserves the user's edit %j through explanation refreshes and failures",
+    (reason) => {
+      const draft = { status: "edited", reason } as const;
+      for (const explanation of [
+        undefined,
+        unsafeReady,
+        ready,
+        { status: "error", message: "Refresh failed" } as const,
+      ]) {
+        expect(approvalRejectionReason(draft, explanation, true)).toBe(reason);
+      }
+    },
+  );
+
+  it("keeps a dismissed suggestion closed until the user opens the editor", () => {
+    expect(approvalRejectionReason({ status: "dismissed" }, unsafeReady, true)).toBeNull();
+    expect(approvalRejectionReason({ status: "manual" }, undefined, true)).toBe("");
+    expect(approvalRejectionReason({ status: "manual" }, unsafeReady, true)).toBe(
+      unsafeReady.judgement.reason,
+    );
+  });
+
+  it.effect("offers an asynchronous unsafe result to an untouched or manually opened editor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const reply = yield* Deferred.make<ApprovalExplanationResult>();
+        const h = yield* makeHarness(true, () => Deferred.await(reply));
+        const atom = h.atom();
+        yield* AtomRegistry.mount(h.registry, atom);
+        yield* Queue.take(h.requests);
+        const pending = approvalExplanationView(h.registry.get(atom));
+        expect(approvalRejectionReason({ status: "untouched" }, pending, true)).toBeNull();
+        expect(approvalRejectionReason({ status: "manual" }, pending, true)).toBe("");
+
+        yield* Deferred.succeed(reply, unsafeReady);
+        yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+        const completed = approvalExplanationView(h.registry.get(atom));
+        expect(approvalRejectionReason({ status: "untouched" }, completed, true)).toBe(
+          unsafeReady.judgement.reason,
+        );
+        expect(approvalRejectionReason({ status: "manual" }, completed, true)).toBe(
+          unsafeReady.judgement.reason,
+        );
+      }),
+    ),
+  );
+
+  it("scopes draft identity to the request, thread, environment and approval source", () => {
+    const original = approvalRejectionDraftKey(threadRef, approval);
+    const keys = [
+      approvalRejectionDraftKey(threadRef, {
+        ...approval,
+        requestId: RuntimeRequestId.make("next"),
+      }),
+      approvalRejectionDraftKey(
+        { ...threadRef, environmentId: EnvironmentId.make("other") },
+        approval,
+      ),
+      approvalRejectionDraftKey(
+        { ...threadRef, threadId: ThreadId.make("other-thread") },
+        approval,
+      ),
+      approvalRejectionDraftKey(threadRef, {
+        ...approval,
+        originThreadId: ThreadId.make("child-thread"),
+      }),
+      approvalRejectionDraftKey(threadRef, { ...approval, hookRequestId: approval.requestId }),
+    ];
+    expect(new Set([original, ...keys]).size).toBe(keys.length + 1);
+    expect(approvalRejectionDraftKey(threadRef, { ...approval, command: "updated command" })).toBe(
+      original,
+    );
+  });
+
   it.effect("generates automatically when the approval atom is mounted", () =>
     Effect.scoped(
       Effect.gen(function* () {

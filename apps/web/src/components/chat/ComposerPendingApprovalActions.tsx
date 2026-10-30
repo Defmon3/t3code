@@ -1,7 +1,12 @@
 import { type ProviderApprovalOption, type RuntimeRequestId } from "@t3tools/contracts";
 import { hookApprovalDurations } from "@t3tools/client-runtime/state/hook-approvals";
 import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
-import { memo, useId, useRef, useState } from "react";
+import {
+  approvalRejectionReason,
+  type ApprovalExplanationView,
+  type ApprovalRejectionDraft,
+} from "@t3tools/client-runtime/state/approval-explanations";
+import { memo, useId, useState } from "react";
 import { ChevronDownIcon, EllipsisIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -19,6 +24,7 @@ interface ComposerPendingApprovalActionsProps {
   isResponding: boolean;
   canRespond: boolean;
   supportsFeedback?: boolean | undefined;
+  explanation?: ApprovalExplanationView | undefined;
   supportsTimedApproval?: boolean | undefined;
   disabled?: boolean;
   options?: ReadonlyArray<ProviderApprovalOption> | undefined;
@@ -42,6 +48,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   isResponding,
   canRespond,
   supportsFeedback = false,
+  explanation,
   supportsTimedApproval = false,
   disabled = false,
   options = DEFAULT_APPROVAL_OPTIONS,
@@ -52,10 +59,9 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
     (settings) => settings.rememberedHookApprovalDuration,
   );
   const preferencesReady = useClientSettingsHydrated();
-  const [reason, setReason] = useState<string | null>(null);
+  const [draft, setDraft] = useState<ApprovalRejectionDraft>({ status: "untouched" });
   const [feedbackFailed, setFeedbackFailed] = useState(false);
   const reasonId = useId();
-  const reasonTrigger = useRef<HTMLButtonElement>(null);
   const primaryOptions = options.filter(
     (option) =>
       option.decision === "decline" ||
@@ -66,15 +72,16 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   const responseDisabled = disabled || isResponding || !canRespond;
   const canRejectWithReason =
     supportsFeedback && options.some((option) => option.decision === "decline");
+  const reason = approvalRejectionReason(draft, explanation, canRejectWithReason);
 
   function closeReason() {
-    setReason(null);
+    setDraft({ status: "dismissed" });
     setFeedbackFailed(false);
-    reasonTrigger.current?.focus();
   }
 
   async function rejectWithReason() {
     if (responseDisabled || !canRejectWithReason || !reason?.trim()) return;
+    setDraft({ status: "edited", reason });
     const result = await onRespondToApproval(requestId, "decline", reason.trim());
     if (result?._tag === "Success") closeReason();
     else setFeedbackFailed(true);
@@ -86,13 +93,13 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         <span className="flex w-full min-w-0 flex-col gap-2" id={reasonId}>
           <Textarea
             size="sm"
-            autoFocus
+            autoFocus={draft.status === "manual"}
             aria-label="Reason for rejection"
             placeholder="Tell the agent what to change"
             value={reason}
             disabled={responseDisabled}
             onChange={(event) => {
-              setReason(event.target.value);
+              setDraft({ status: "edited", reason: event.target.value });
               setFeedbackFailed(false);
             }}
             onKeyDown={(event) => {
@@ -122,7 +129,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
               disabled={responseDisabled || !reason.trim()}
               onClick={() => void rejectWithReason()}
             >
-              {isResponding ? "Rejecting…" : "Reject and send reason"}
+              {isResponding ? "Rejecting…" : "Reject with reason"}
             </Button>
           </span>
         </span>
@@ -221,15 +228,15 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
           button
         );
       })}
-      {canRejectWithReason ? (
+      {canRejectWithReason && reason === null ? (
         <Button
-          ref={reasonTrigger}
+          autoFocus={draft.status === "dismissed"}
           size="sm-multiline"
           variant="outline"
           disabled={responseDisabled}
           aria-expanded={reason !== null}
           aria-controls={reasonId}
-          onClick={() => (reason === null ? setReason("") : closeReason())}
+          onClick={() => setDraft({ status: "manual" })}
         >
           Reject with reason
         </Button>

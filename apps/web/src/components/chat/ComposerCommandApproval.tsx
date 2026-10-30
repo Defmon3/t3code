@@ -3,6 +3,7 @@ import {
   approvalExplanationTarget,
   approvalExplanationView,
   approvalJudgementLabels,
+  approvalRejectionDraftKey,
 } from "@t3tools/client-runtime/state/approval-explanations";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
@@ -108,12 +109,14 @@ export function ComposerCommandApproval({
       </ComposerBanner.Content>
       <ComposerBanner.Actions>
         <ComposerPendingApprovalActions
+          key={approvalRejectionDraftKey(threadRef, approval)}
           requestId={approval.requestId}
           disabled={disabled}
           isResponding={isResponding}
           options={approval.options}
           canRespond={approval.responseCapability === "live"}
           supportsFeedback={approval.supportsFeedback}
+          explanation={explanation}
           supportsTimedApproval={approval.supportsTimedApproval}
           onRespondToApproval={onRespondToApproval}
           commandExpansion={{ expanded, detailId, onToggle: () => setExpanded((value) => !value) }}
