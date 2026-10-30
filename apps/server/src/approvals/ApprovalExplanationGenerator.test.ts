@@ -6,12 +6,33 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 import * as Settings from "../serverSettings.ts";
 import * as Generator from "./ApprovalExplanationGenerator.ts";
 
 const input = { cwd: "/workspace", command: "git status" };
+const encodePrompt = Schema.encodeSync(Schema.StringFromBase64);
+const isHttpError = Schema.is(Generator.ApprovalExplanationHttpError);
+const decodeDocumentRequest = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      contents: Schema.NonEmptyArray(
+        Schema.Struct({
+          parts: Schema.NonEmptyArray(
+            Schema.Struct({
+              inlineData: Schema.Struct({
+                mimeType: Schema.Literal("text/plain"),
+                data: Schema.StringFromBase64,
+              }),
+            }),
+          ),
+        }),
+      ),
+    }),
+  ),
+);
 const content = {
   judgement: { verdict: "safe", reason: "Reads repository status." },
   operations: [{ action: "Read", detail: "Git status", note: null }],
@@ -36,6 +57,7 @@ it.effect("reports an unconfigured key without making a request", () =>
 );
 
 it.effect("requests native structured Gemini output with thinking disabled", () => {
+  const encodedPrompt = encodePrompt(buildApprovalExplanationPrompt(input).prompt);
   const requests: Array<Request> = [];
   const fetch: typeof globalThis.fetch = async (url, init) => {
     requests.push(new Request(url, init));
@@ -69,7 +91,19 @@ it.effect("requests native structured Gemini output with thinking disabled", () 
     assert.strictEqual(request.method, "POST");
     assert.strictEqual(request.headers.get("x-goog-api-key"), "test-key");
     assert.deepStrictEqual(yield* Effect.promise(() => request.json()), {
-      contents: [{ role: "user", parts: [{ text: buildApprovalExplanationPrompt(input).prompt }] }],
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                mimeType: "text/plain",
+                data: encodedPrompt,
+              },
+            },
+          ],
+        },
+      ],
       generationConfig: {
         thinkingConfig: { thinkingBudget: 0 },
         responseMimeType: "application/json",
@@ -78,6 +112,76 @@ it.effect("requests native structured Gemini output with thinking disabled", () 
     });
   }).pipe(Effect.provide(layer(fetch, "test-key")));
 });
+
+it.effect("explains shell commands intact when the gateway rejects inline command text", () => {
+  const commandInput = {
+    ...input,
+    command: `ssh build-host "printf '%s\\n' 'räksmörgås'; curl -sS -o /dev/null http://localhost/health"`,
+  };
+  const fetch: typeof globalThis.fetch = async (url, init) => {
+    const body = await new Request(url, init).text();
+    if (body.includes("curl -sS -o /dev/null")) {
+      return new Response("<html>Sorry, you have been blocked</html>", {
+        status: 403,
+        headers: { server: "cloudflare", "content-type": "text/html", "cf-ray": "test-ray" },
+      });
+    }
+    const request = decodeDocumentRequest(body);
+    assert.strictEqual(
+      request.contents[0].parts[0].inlineData.data,
+      buildApprovalExplanationPrompt(commandInput).prompt,
+    );
+    return Response.json(responseBody(JSON.stringify(content)));
+  };
+  return Effect.gen(function* () {
+    const generator = yield* Generator.ApprovalExplanationGenerator;
+    assert.deepStrictEqual(yield* generator.generate(commandInput), content);
+  }).pipe(Effect.provide(layer(fetch, "test-key")));
+});
+
+it.effect.each([
+  {
+    status: 403,
+    headers: { server: "cloudflare", "content-type": "text/html", "cf-ray": "test-ray" },
+    cloudflareBlocked: true,
+    message: "The explanation gateway blocked this command (HTTP 403).",
+  },
+  {
+    status: 403,
+    headers: { server: "cloudflare", "content-type": "application/json", "cf-ray": "test-ray" },
+    cloudflareBlocked: false,
+    message: "The explanation provider returned HTTP 403.",
+  },
+  {
+    status: 503,
+    headers: { "content-type": "text/html" },
+    cloudflareBlocked: false,
+    message: "The explanation provider returned HTTP 503.",
+  },
+])("reports a safe typed HTTP $status error", ({ status, headers, cloudflareBlocked, message }) =>
+  Effect.gen(function* () {
+    const generator = yield* Generator.ApprovalExplanationGenerator;
+    const error = yield* Effect.flip(generator.generate(input));
+    assert.instanceOf(error.cause, Generator.ApprovalExplanationHttpError);
+    if (!isHttpError(error.cause)) {
+      assert.fail("Expected a typed explanation HTTP error");
+    }
+    assert.strictEqual(error.cause.status, status);
+    assert.strictEqual(error.cause.cloudflareBlocked, cloudflareBlocked);
+    assert.strictEqual(error.cause.message, message);
+    assert.notInclude(error.cause.message, "test-key");
+  }).pipe(
+    Effect.provide(
+      layer(
+        () =>
+          Promise.resolve(
+            new Response("test-key and private provider details", { status, headers }),
+          ),
+        "test-key",
+      ),
+    ),
+  ),
+);
 
 it.effect.each([
   { name: "unauthorized", status: 401, body: "credentials rejected" },

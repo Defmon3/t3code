@@ -836,7 +836,11 @@ it.effect.each(["failed", "missing-api-key", "defect"] as const)(
         expect(yield* service.explain(nativeInput)).toMatchObject(
           outcome === "missing-api-key"
             ? { status: "error", message: "Approval explanation API key is not configured." }
-            : { status: "error" },
+            : {
+                status: "error",
+                message:
+                  "The AI explanation could not be generated. Review the command before deciding.",
+              },
         );
         const projections = yield* ProjectionStore.ProjectionStoreV2;
         expect((yield* projections.getRuntimeRequest(threadId, requestId))?.status).toBe("pending");
@@ -851,10 +855,41 @@ it.effect.each(["failed", "missing-api-key", "defect"] as const)(
                   outcome === "missing-api-key"
                     ? "Approval explanation API key is not configured."
                     : "Secret provider failure details",
+                cause: new Error("Secret provider response body and API key"),
               }),
             ),
     ),
 );
+
+it.effect.each([
+  { status: 403, cloudflareBlocked: true },
+  { status: 403, cloudflareBlocked: false },
+  { status: 429, cloudflareBlocked: false },
+  { status: 500, cloudflareBlocked: false },
+])("reports safe HTTP failure details for %j without resolving the approval", (attributes) => {
+  const cause = new ApprovalExplanationGenerator.ApprovalExplanationHttpError(attributes);
+  return runWith(
+    Effect.gen(function* () {
+      yield* seed;
+      yield* writeRequest();
+      const service = yield* ApprovalExplanations.ApprovalExplanationService;
+      expect(yield* service.explain(nativeInput)).toEqual({
+        status: "error",
+        message: cause.message,
+      });
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      expect((yield* projections.getRuntimeRequest(threadId, requestId))?.status).toBe("pending");
+    }),
+    () =>
+      Effect.fail(
+        new TextGenerationError({
+          operation: "generateApprovalExplanation",
+          detail: "Secret provider failure details",
+          cause,
+        }),
+      ),
+  );
+});
 
 it.effect("reports a missing thread honestly without generating", () =>
   runWith(

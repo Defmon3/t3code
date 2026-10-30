@@ -27,7 +27,19 @@ const decodeResponse = Schema.decodeUnknownSync(
 );
 const decodeContent = Schema.decodeUnknownSync(Schema.fromJsonString(ApprovalExplanationContent));
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodePrompt = Schema.encodeSync(Schema.StringFromBase64);
 const responseJsonSchema = toJsonSchemaObject(ApprovalExplanationContent);
+
+export class ApprovalExplanationHttpError extends Schema.TaggedError<ApprovalExplanationHttpError>()(
+  "ApprovalExplanationHttpError",
+  { status: Schema.Number, cloudflareBlocked: Schema.Boolean },
+) {
+  override get message(): string {
+    return this.cloudflareBlocked
+      ? "The explanation gateway blocked this command (HTTP 403)."
+      : `The explanation provider returned HTTP ${this.status}.`;
+  }
+}
 
 export class ApprovalExplanationGenerator extends Context.Service<
   ApprovalExplanationGenerator,
@@ -76,7 +88,12 @@ const make = Effect.gen(function* () {
             method: "POST",
             headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
             body: encodeRequest({
-              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              contents: [
+                {
+                  role: "user",
+                  parts: [{ inlineData: { mimeType: "text/plain", data: encodePrompt(prompt) } }],
+                },
+              ],
               generationConfig: {
                 thinkingConfig: { thinkingBudget: 0 },
                 responseMimeType: "application/json",
@@ -88,7 +105,14 @@ const make = Effect.gen(function* () {
           },
         );
         if (!response.ok) {
-          throw new Error(`Approval explanation request failed with HTTP ${response.status}`);
+          throw new ApprovalExplanationHttpError({
+            status: response.status,
+            cloudflareBlocked:
+              response.status === 403 &&
+              response.headers.get("server")?.toLowerCase() === "cloudflare" &&
+              response.headers.has("cf-ray") &&
+              response.headers.get("content-type")?.toLowerCase().includes("text/html") === true,
+          });
         }
         const { candidates } = decodeResponse(await response.text());
         return decodeContent(

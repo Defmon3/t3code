@@ -36,6 +36,7 @@ const generationFailure = {
   status: "error",
   message: "The AI explanation could not be generated. Review the command before deciding.",
 } as const;
+const isHttpError = Schema.is(ApprovalExplanationGenerator.ApprovalExplanationHttpError);
 const explanationKey = (input: ApprovalExplanationInput) =>
   JSON.stringify([input.threadId, input.source, input.requestId]);
 const encodeBypass = Schema.encodeSync(Schema.fromJsonString(HookApprovalBypass));
@@ -156,10 +157,12 @@ const make = Effect.gen(function* () {
               cause,
             }).pipe(
               Effect.as(
-                cause._tag === "TextGenerationError" &&
-                  cause.detail === "Approval explanation API key is not configured."
-                  ? ({ status: "error", message: cause.detail } as const)
-                  : generationFailure,
+                cause._tag === "TextGenerationError" && isHttpError(cause.cause)
+                  ? ({ status: "error", message: cause.cause.message } as const)
+                  : cause._tag === "TextGenerationError" &&
+                      cause.detail === "Approval explanation API key is not configured."
+                    ? ({ status: "error", message: cause.detail } as const)
+                    : generationFailure,
               ),
             ),
           ),
