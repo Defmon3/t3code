@@ -17,19 +17,17 @@
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly. release-desktop.yml bundles the
-      // Windows verify script with esbuild through a path knip does not trace,
-      // electron-builder loads the macOS signer by path, and mobile-e2e.ts runs
-      // agent-device's CLI by path. release-desktop.yml runs the desktop launch
-      // check through xvfb-run, which knip does not trace.
+      // why: Local release tools and filename-loaded helpers run without static imports.
       "entry": [
         // These fixture scripts are injected into a browser page by path.
         "fixtures/*/*.js",
+        "build-cli-archive.ts",
         "knip-schemas.ts",
         "mobile-native-client.ts",
+        "resolve-nightly-release.ts",
         "setup-worktree.ts",
         "sign-macos.ts",
+        "smoke-cli-archive.ts",
         "smoke-desktop-app.ts",
         "verify-windows-desktop-artifact.ts",
       ],
@@ -85,7 +83,11 @@
     "apps/web": {
       // Worktree setup (scripts/setup-worktree.ts) runs this directly, and evidence
       // fixtures run under node.
-      "entry": ["scripts/warm-dep-cache.ts", "test/fixtures/**/*.mjs"],
+      "entry": [
+        "scripts/warm-dep-cache.ts",
+        "scripts/verify-built-boot.ts",
+        "test/fixtures/**/*.mjs",
+      ],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
