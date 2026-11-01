@@ -32,10 +32,10 @@ function entry(
     profile: Option.none(),
   };
 }
-function config(pullRequests = false, cwd = "/workspace"): ServerConfig {
+function config(cwd = "/workspace"): ServerConfig {
   return {
     cwd,
-    environment: { capabilities: { pullRequests }, platform: { machine: "desktop" } },
+    environment: { capabilities: {}, platform: { machine: "desktop" } },
   } as ServerConfig;
 }
 function harness() {
@@ -61,14 +61,16 @@ function harness() {
 }
 
 describe("environment summary subscriptions", () => {
-  it("tracks capabilities across environments, config loss and removal", () => {
+  it("tracks loaded configs across environments, config loss and removal", () => {
     const h = harness();
     const stop = h.registry.subscribe(h.pullRequestsSupportedAtom, () => {});
     try {
+      h.registry.set(h.configs(FIRST), null);
+      h.registry.set(h.configs(SECOND), null);
       expect(h.registry.get(h.pullRequestsSupportedAtom)).toBe(false);
-      h.registry.set(h.configs(FIRST), config(true));
+      h.registry.set(h.configs(FIRST), config());
       expect(h.registry.get(h.pullRequestsSupportedAtom)).toBe(true);
-      h.registry.set(h.configs(SECOND), config(true));
+      h.registry.set(h.configs(SECOND), config());
       h.registry.set(h.configs(FIRST), null);
       expect(h.registry.get(h.pullRequestsSupportedAtom)).toBe(true);
       h.registry.set(h.catalog, { isReady: true, entries: new Map([[FIRST, entry(FIRST)]]) });
@@ -84,7 +86,7 @@ describe("environment summary subscriptions", () => {
       });
       expect(h.registry.get(h.environmentIdsAtom)).toEqual([SECOND, FIRST]);
       expect(h.registry.get(h.pullRequestsSupportedAtom)).toBe(true);
-      h.registry.set(h.configs(SECOND), config(false));
+      h.registry.set(h.configs(SECOND), null);
       expect(h.registry.get(h.pullRequestsSupportedAtom)).toBe(false);
       h.registry.set(h.catalog, { isReady: true, entries: new Map() });
       expect(h.registry.get(h.environmentIdsAtom)).toEqual([]);
@@ -155,7 +157,7 @@ describe("presentations with providers", () => {
     });
     const stop = h.registry.subscribe(atom, () => {});
     try {
-      h.registry.set(h.configs(SECOND), config(false, "/second"));
+      h.registry.set(h.configs(SECOND), config("/second"));
       h.registry.set(h.catalog, withSecond(false));
       expect([...h.registry.get(atom).keys()]).toEqual([FIRST]);
       expect(h.registry.get(h.full.presentationsAtom).has(SECOND)).toBe(true);

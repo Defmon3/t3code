@@ -658,7 +658,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               line={line}
               threadRef={threadRef}
               projectId={
-                capabilities?.pullRequests === true
+                capabilities !== undefined
                   ? (findProjectForChangeRequest(environmentProjects, line.link)?.id ??
                     thread?.projectId ??
                     null)

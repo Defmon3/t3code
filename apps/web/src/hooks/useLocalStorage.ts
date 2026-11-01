@@ -123,6 +123,35 @@ function decodeOrInitial<T, E>(
   }
 }
 
+export function readLocalStorageValue<T, E>(
+  key: string,
+  initialValue: T,
+  schema: Schema.Codec<T, E>,
+): T {
+  return decodeOrInitial(key, schema, readSerializedValue(key), initialValue);
+}
+
+/** Fires on writes from this tab and from other tabs. */
+export function subscribeLocalStorageKey(key: string, onChange: () => void): () => void {
+  const handleStorageChange = (event: StorageEvent) => {
+    if (event.key === key) {
+      onChange();
+    }
+  };
+  const handleLocalChange = (event: CustomEvent<LocalStorageChangeDetail>) => {
+    if (event.detail.key === key) {
+      onChange();
+    }
+  };
+
+  window.addEventListener("storage", handleStorageChange);
+  window.addEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalChange as EventListener);
+  return () => {
+    window.removeEventListener("storage", handleStorageChange);
+    window.removeEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalChange as EventListener);
+  };
+}
+
 export function writeLocalStorageValue<T, E>(
   key: string,
   value: T | ((val: T) => T),
@@ -169,26 +198,8 @@ export function useLocalStorage<T, E>(
 ): [T, (value: T | ((val: T) => T)) => void] {
   const getSnapshot = () => (key === null ? null : readSerializedValue(key));
 
-  const subscribe = (onStoreChange: () => void) => {
-    if (key === null) return () => undefined;
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === key) {
-        onStoreChange();
-      }
-    };
-    const handleLocalChange = (event: CustomEvent<LocalStorageChangeDetail>) => {
-      if (event.detail.key === key) {
-        onStoreChange();
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalChange as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalChange as EventListener);
-    };
-  };
+  const subscribe = (onStoreChange: () => void) =>
+    key === null ? () => undefined : subscribeLocalStorageKey(key, onStoreChange);
 
   const serializedValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const storedValue =

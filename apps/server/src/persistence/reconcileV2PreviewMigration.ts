@@ -4,6 +4,62 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import AutoSettleDisabledAt from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
+import ProjectSkillShortcuts from "./Migrations/061_ProjectSkillShortcuts.ts";
+import ProjectionThreadIssues from "./Migrations/062_ProjectionThreadIssues.ts";
+import WorkItemLinks from "./Migrations/063_WorkItemLinks.ts";
+
+const NIGHTLY_MIGRATION_REBASE: ReadonlyArray<readonly [number, number, string]> = [
+  [61, 64, "PullRequestReviewGuides"],
+  [62, 65, "ThreadFailureLookupIndex"],
+  [63, 66, "DropUnusedV1Projections"],
+  [64, 67, "CanonicalizeThreadPullRequestLinks"],
+  [65, 68, "CodexUsageNativeTurnIndex"],
+  [66, 69, "RepairClientSettlementTimestamps"],
+  [67, 70, "WebhookDedupe"],
+  [68, 71, "ShellStopRequestIndex"],
+  [69, 72, "ThreadMessageSearch"],
+  [70, 73, "PeerLinks"],
+  [71, 74, "PeerLinkFence"],
+  [72, 75, "WaitingLinkRequestIndex"],
+  [73, 76, "ActiveTurnItemIndexes"],
+  [74, 77, "ExcludeAttachmentPlaceholdersFromSearch"],
+  [75, 78, "SubagentDeliveryState"],
+  [76, 79, "ProjectionProjectsPinArchive"],
+];
+
+const rebaseNightlyMigrationSequence = Effect.fn("rebaseNightlyMigrationSequence")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 61 ORDER BY migration_id
+  `;
+  if (history.length === 1 && history[0]?.migration_id === 61 && history[0].name === "PullRequestReviewGuides") {
+    yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 61 AND name = 'PullRequestReviewGuides'`;
+    return [] as const;
+  }
+  const expected = NIGHTLY_MIGRATION_REBASE.map(([id, , name]) => `${id}:${name}`);
+  const actual = history.map((row) => `${row.migration_id}:${row.name}`);
+  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+    return [] as const;
+  }
+  yield* sql`UPDATE effect_sql_migrations SET migration_id = migration_id + 100 WHERE migration_id BETWEEN 61 AND 76`;
+  yield* ProjectSkillShortcuts;
+  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (61, 'ProjectSkillShortcuts')`;
+  yield* ProjectionThreadIssues;
+  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (62, 'ProjectionThreadIssues')`;
+  yield* WorkItemLinks;
+  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (63, 'WorkItemLinks')`;
+  for (const [fromId, toId, name] of NIGHTLY_MIGRATION_REBASE) {
+    yield* sql`
+      UPDATE effect_sql_migrations SET migration_id = ${toId}, name = ${name}
+      WHERE migration_id = ${fromId + 100} AND name = ${name}
+    `;
+  }
+  return [
+    [61, "ProjectSkillShortcuts"],
+    [62, "ProjectionThreadIssues"],
+    [63, "WorkItemLinks"],
+  ] as const;
+});
 
 // Previews used V2 ids 53/54; preserve their schema and import progress while reserving main's ids.
 export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigration")(function* () {
@@ -20,17 +76,13 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
       const nightlyReviewGuides = history.some(
         (row) => row.migration_id === 61 && row.name === "PullRequestReviewGuides",
       );
-      if (nightlyReviewGuides) {
-        if (history.some((row) => row.migration_id > 61)) {
-          return yield* new Migrator.MigrationError({
-            kind: "BadState",
-            message: "Cannot upgrade review guide migration with unexpected later migrations.",
-          });
-        }
+      if (nightlyReviewGuides && history.length === 1) {
         yield* sql`DELETE FROM effect_sql_migrations
           WHERE migration_id = 61 AND name = 'PullRequestReviewGuides'`;
         return [];
       }
+      const rebasedNightly = yield* rebaseNightlyMigrationSequence();
+      if (rebasedNightly.length > 0) return rebasedNightly;
       const rebasedIssuePreview = history.find(
         (row) =>
           (row.migration_id === 57 ||

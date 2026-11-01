@@ -18,7 +18,7 @@ layer("063_DropUnusedV1Projections", (it) => {
         VALUES ('message-1', 'thread-1', 'user', 'hello', 0, '2026-01-01', '2026-01-01')
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 63 });
+      yield* runMigrations({ toMigrationInclusive: 66 });
 
       const rows = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table'

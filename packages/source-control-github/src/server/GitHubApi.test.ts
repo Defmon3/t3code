@@ -7,6 +7,7 @@ import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/h
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as GitHubApi from "./GitHubApi.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import * as GitHubRest from "./GitHubRest.ts";
@@ -27,9 +28,16 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
           source: "gh" as const,
           fingerprint: `${host}:first`,
         }),
+      saved: () => Effect.succeedNone,
+      fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
       invalidate: () => Effect.void,
     }),
   );
+  const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+    enabled: false,
+    token: () => Effect.succeedNone,
+    invalidate: () => Effect.void,
+  });
   const http = Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) => {
@@ -39,7 +47,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   );
   const layer = GitHubApi.layer.pipe(
     Layer.provideMerge(GitHubRest.layer),
-    Layer.provideMerge(Layer.mergeAll(credentials, http)),
+    Layer.provideMerge(Layer.mergeAll(credentials, http, appSignedOut)),
     Layer.provideMerge(GitHubQuota.layer),
     Layer.provideMerge(SourceControlRateLimit.layer),
   );

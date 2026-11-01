@@ -8,7 +8,7 @@ import {
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { memo, useId, useState } from "react";
 import { ChevronDownIcon, EllipsisIcon, TriangleAlertIcon } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -20,6 +20,7 @@ import {
 } from "../../hooks/useSettings";
 
 interface ComposerPendingApprovalActionsProps {
+  presentation?: "composer" | "inline";
   requestId: RuntimeRequestId;
   isResponding: boolean;
   canRespond: boolean;
@@ -44,6 +45,7 @@ const DEFAULT_APPROVAL_OPTIONS = [
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
+  presentation = "composer",
   requestId,
   isResponding,
   canRespond,
@@ -201,24 +203,42 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
             </span>
           );
         }
-        const button = (
-          <Button
-            key={option.decision}
-            size="sm-multiline"
-            className="max-w-full"
-            variant={option.decision === "accept" ? "default" : "outline"}
-            disabled={responseDisabled}
-            aria-description={option.warning}
-            onClick={() => {
-              if (!responseDisabled) {
-                void onRespondToApproval(requestId, option.decision);
-              }
-            }}
-          >
+        const content = (
+          <>
             {option.warning ? <TriangleAlertIcon className="size-3 shrink-0" /> : null}
-            <span className="min-w-0 max-w-40 wrap-anywhere">{option.label}</span>
-          </Button>
+            <span className={presentation === "inline" ? "whitespace-normal" : "min-w-0 max-w-40 wrap-anywhere"}>
+              {option.label}
+            </span>
+          </>
         );
+        const button =
+          presentation === "inline" ? (
+            <InlineButton
+              key={option.decision}
+              tone={option.decision === "accept" ? "default" : "muted"}
+              disabled={responseDisabled}
+              aria-description={option.warning}
+              onClick={() => {
+                if (!responseDisabled) void onRespondToApproval(requestId, option.decision);
+              }}
+            >
+              {content}
+            </InlineButton>
+          ) : (
+            <Button
+              key={option.decision}
+              size="sm-multiline"
+              className="max-w-full"
+              variant={option.decision === "accept" ? "default" : "outline"}
+              disabled={responseDisabled}
+              aria-description={option.warning}
+              onClick={() => {
+                if (!responseDisabled) void onRespondToApproval(requestId, option.decision);
+              }}
+            >
+              {content}
+            </Button>
+          );
         return option.warning ? (
           <Tooltip key={option.decision}>
             <TooltipTrigger render={button} />
@@ -245,9 +265,15 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         <Menu>
           <MenuTrigger
             disabled={responseDisabled}
-            render={<Button size="icon-xs" variant="outline" aria-label="More approval options" />}
+            render={
+              presentation === "inline" ? (
+                <InlineButton tone="muted" aria-label="More approval options" />
+              ) : (
+                <Button size="icon-xs" variant="outline" aria-label="More approval options" />
+              )
+            }
           >
-            <EllipsisIcon />
+            {presentation === "inline" ? "More" : <EllipsisIcon />}
           </MenuTrigger>
           <MenuPopup {...composerFloatingLayerProps} side="top" align="end" width="content">
             {moreOptions.map((option) => {

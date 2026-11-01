@@ -43,6 +43,8 @@ export const ProjectRow = Schema.Struct({
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
+  pinnedAt: Schema.NullOr(IsoDateTime),
+  archivedAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -73,6 +75,8 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     skillShortcuts: row.skillShortcuts ?? [],
     skillShortcutColors: row.skillShortcutColors ?? {},
     scripts: row.scripts,
+    pinnedAt: row.pinnedAt,
+    archivedAt: row.archivedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -130,6 +134,8 @@ export const make = Effect.gen(function* () {
         skill_shortcuts_json AS "skillShortcuts",
         skill_shortcut_colors_json AS "skillShortcutColors",
         scripts_json AS "scripts",
+        pinned_at AS "pinnedAt",
+        archived_at AS "archivedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt",
         deleted_at AS "deletedAt"
@@ -166,6 +172,8 @@ export const make = Effect.gen(function* () {
             skill_shortcuts_json,
             skill_shortcut_colors_json,
             scripts_json,
+            pinned_at,
+            archived_at,
             created_at,
             updated_at,
             deleted_at
@@ -182,6 +190,8 @@ export const make = Effect.gen(function* () {
             ${encoded.skillShortcuts},
             ${encoded.skillShortcutColors},
             ${encoded.scripts},
+            ${encoded.pinnedAt},
+            ${encoded.archivedAt},
             ${encoded.createdAt},
             ${encoded.updatedAt},
             ${encoded.deletedAt}
@@ -198,6 +208,8 @@ export const make = Effect.gen(function* () {
             skill_shortcuts_json = excluded.skill_shortcuts_json,
             skill_shortcut_colors_json = excluded.skill_shortcut_colors_json,
             scripts_json = excluded.scripts_json,
+            pinned_at = excluded.pinned_at,
+            archived_at = excluded.archived_at,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
             deleted_at = excluded.deleted_at
@@ -248,6 +260,8 @@ export const make = Effect.gen(function* () {
           skillShortcuts: payload.skillShortcuts ?? [],
           skillShortcutColors: payload.skillShortcutColors ?? {},
           scripts: payload.scripts,
+          pinnedAt: null,
+          archivedAt: null,
           createdAt: payload.createdAt,
           updatedAt: payload.updatedAt,
           deletedAt: null,
@@ -282,6 +296,8 @@ export const make = Effect.gen(function* () {
           ? {}
           : { skillShortcutColors: payload.skillShortcutColors }),
         ...(payload.scripts === undefined ? {} : { scripts: payload.scripts }),
+        ...(payload.pinnedAt === undefined ? {} : { pinnedAt: payload.pinnedAt }),
+        ...(payload.archivedAt === undefined ? {} : { archivedAt: payload.archivedAt }),
         updatedAt: payload.updatedAt,
       }).pipe(mapError("apply"));
     },

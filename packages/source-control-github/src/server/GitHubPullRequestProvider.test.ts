@@ -16,6 +16,8 @@ import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullReque
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
 const coreFields = {
+  maintainerCanModify: true,
+  canEditMaintainerEdits: false,
   reviewRequestTeams: [],
   checksTruncated: false,
   comparison: { behindBy: 0, viewerCanUpdate: true },
@@ -205,6 +207,7 @@ describe("gitHubViewerPermissions", () => {
       });
 
       expect(detail.viewerPermissions).toEqual({
+        maintainerEdits: false,
         actions: ["ready", "draft", "close", "reopen"],
         comment: true,
         resolve: false,
@@ -246,7 +249,6 @@ describe("gitHubViewerPermissions", () => {
               ...coreFields,
               comparison: null,
               viewerAccess: { ...coreFields.viewerAccess, canWrite: false, canTriage: false },
-              authorId: null,
               number: 7,
               title: "Pull request 7",
               url: "https://github.com/acme/web/pull/7",
@@ -339,7 +341,6 @@ describe("gitHubViewerPermissions", () => {
           getPullRequestDetail: () =>
             Effect.succeed({
               ...coreFields,
-              authorId: null,
               number: 7,
               title: "Pull request 7",
               url: "https://github.com/acme/web/pull/7",
@@ -402,7 +403,6 @@ describe("gitHubViewerPermissions", () => {
 
 const openDetail = {
   ...coreFields,
-  authorId: null,
   number: 7,
   title: "Pull request 7",
   url: "https://github.com/acme/web/pull/7",
@@ -445,13 +445,6 @@ it.effect.each([
     partial: { linkedIssuesTruncated: true },
   },
   {
-    operation: "listActorAvatars",
-    read: "listChangeRequests",
-    partial: {
-      items: [{ number: 7, author: { avatarUrl: "https://github.com/octocat.png?size=80" } }],
-    },
-  },
-  {
     operation: "listReviewThreadComments",
     read: "getChangeRequestActivity",
     partial: { commentsTruncated: true, reviewThreadsTruncated: true },
@@ -486,7 +479,6 @@ it.effect.each([
                 items: [
                   {
                     ...openDetail,
-                    authorId: "actor-id",
                     author: { login: "octocat", name: null, avatarUrl: null },
                   },
                 ],
@@ -499,7 +491,6 @@ it.effect.each([
               test.operation === "listLinkedIssues"
                 ? Effect.fail(error)
                 : Effect.succeed({ links: [], truncated: false }),
-            listActorAvatars: () => Effect.fail(error),
             listReviewThreadComments: () => Effect.fail(error),
           }),
         ),
@@ -515,11 +506,9 @@ it.effect.each([
         limit: 20,
       } as const;
       const result =
-        test.read === "listChangeRequests"
-          ? yield* provider.listChangeRequests(input).pipe(Effect.result)
-          : test.read === "getChangeRequestActivity"
-            ? yield* provider.getChangeRequestActivity(input).pipe(Effect.result)
-            : yield* provider.getChangeRequest(input).pipe(Effect.result);
+        test.read === "getChangeRequestActivity"
+          ? yield* provider.getChangeRequestActivity(input).pipe(Effect.result)
+          : yield* provider.getChangeRequest(input).pipe(Effect.result);
       if (error._tag === "GitHubPullRequestReadError") {
         expect(result).toMatchObject({ _tag: "Success", success: test.partial });
       } else {
@@ -717,7 +706,6 @@ describe("getViewerPermissions", () => {
 
 describe("getChangeRequest commits", () => {
   const baseDetail = {
-    authorId: null,
     number: 7,
     title: "Pull request 7",
     url: "https://github.com/acme/web/pull/7",
@@ -1126,7 +1114,6 @@ describe("listChangeRequestsAcross", () => {
     title: "Change",
     url: `https://github.com/${repository}/pull/1`,
     author: null,
-    authorId: null,
     headBranch: "feature",
     baseBranch: "main",
     state: "open" as const,

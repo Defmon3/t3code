@@ -104,6 +104,8 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         (surface.environmentId === undefined || typeof surface.environmentId === "string") &&
         (surface.provider === undefined || typeof surface.provider === "string")
       );
+    case "side-chat":
+      return typeof surface.threadId === "string" && surface.id === `side-chat:${surface.threadId}`;
     case "pull-request":
       return (
         typeof surface.projectId === "string" &&

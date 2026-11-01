@@ -17,7 +17,7 @@ it.effect("upgrades custom migration 61 without changing saved project shortcuts
     const projects = yield* sql`SELECT * FROM projection_projects`;
     const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
 
-    assert.deepEqual(yield* runMigrations(), [
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 64 }), [
       [62, "ProjectionThreadIssues"],
       [63, "WorkItemLinks"],
       [64, "PullRequestReviewGuides"],
@@ -28,7 +28,7 @@ it.effect("upgrades custom migration 61 without changing saved project shortcuts
       yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 61 ORDER BY migration_id`,
       history,
     );
-    assert.deepEqual(yield* runMigrations(), []);
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 64 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
@@ -60,7 +60,8 @@ it.effect("upgrades the issue preview ledger without losing saved links", () =>
            'github', 'pr-url', 'team/repo', 2, 'Pull request')`;
     yield* runMigrations();
     const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
-          SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 54 ORDER BY migration_id`;
+          SELECT migration_id, name FROM effect_sql_migrations
+          WHERE migration_id >= 54 AND migration_id <= 64 ORDER BY migration_id`;
     assert.deepEqual(history, [
       { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
       { migration_id: 55, name: "OrchestrationV2" },
