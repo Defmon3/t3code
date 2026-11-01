@@ -773,7 +773,7 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
   }
-  const nowMinute = useNowMinute();
+  const draftNowMinute = useNowMinute();
   const draftDefaultModelSelection = draftThread
     ? resolveProjectSettings(
         settings,
@@ -794,7 +794,7 @@ export default function ChatView(props: ChatViewProps) {
         providers: providersByEnvironment.get(draftThread.environmentId) ?? [],
         settings,
         projectId: draftThread.projectId,
-        now: Date.parse(`${nowMinute}:00Z`),
+        now: Date.parse(`${draftNowMinute}:00Z`),
       })
     : null;
   const draftFallback = draftModelResolution?.fallback ? draftModelResolution : null;
