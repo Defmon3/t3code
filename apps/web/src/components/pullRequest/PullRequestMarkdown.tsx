@@ -1,6 +1,9 @@
 import { ExternalLinkIcon, PaperclipIcon } from "lucide-react";
 import { markdownImageSourceFragment } from "@t3tools/client-runtime/markdown-images";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import {
+  sourceControlClients,
+  type ReferenceAutolink,
+} from "@t3tools/client-runtime/source-control-clients";
 import {
   SOURCE_CONTROL_MEDIA_ASSET,
   type AssetResource,
@@ -8,6 +11,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { createContext, useContext } from "react";
+import type { Options as ReactMarkdownOptions } from "react-markdown";
 import type { PluggableList } from "unified";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -16,12 +20,13 @@ import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
-import { splitPullRequestBody } from "./pullRequestMarkdown.logic";
+import { remarkPullRequestAutolinks, splitPullRequestBody } from "./pullRequestMarkdown.logic";
 
 export const PullRequestMarkdownContext = createContext<{
   /** Stable per repository, so comments share one renderer and its parse cache. */
-  remarkPlugins: PluggableList;
-  lineBreaks: boolean;
+  remarkPlugins?: PluggableList;
+  lineBreaks?: boolean;
+  autolinks?: ((text: string) => ReadonlyArray<ReferenceAutolink>) | null;
   threadRef: ScopedThreadRef | null;
   panelRef?: ScopedThreadRef | null;
   /** Claims a link to open in the app; returning false leaves it to the default handling. */
@@ -74,6 +79,9 @@ export function PullRequestMarkdown({
   const segments = splitPullRequestBody(text);
   const context = useContext(PullRequestMarkdownContext);
   const resolvedThreadRef = threadRef ?? context?.threadRef ?? undefined;
+  const extraRemarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]> =
+    context?.remarkPlugins ??
+    (context?.autolinks ? [[remarkPullRequestAutolinks, { autolinks: context.autolinks }]] : []);
   const onOpenUrl = context?.onOpenUrl;
   return (
     <div
@@ -115,7 +123,7 @@ export function PullRequestMarkdown({
                 context?.panelRef ?? resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF
               }
               environmentId={environmentId}
-              {...(context ? { extraRemarkPlugins: context.remarkPlugins } : {})}
+              extraRemarkPlugins={extraRemarkPlugins}
               lineBreaks={lineBreaks ?? context?.lineBreaks ?? false}
               sourceControlMedia
             />
