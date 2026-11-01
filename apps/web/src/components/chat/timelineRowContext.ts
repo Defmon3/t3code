@@ -1,9 +1,5 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
-import type {
-  ProviderApprovalDecision,
-  RuntimeRequestId,
-  WorktreeSetupSnapshot,
-} from "@t3tools/contracts";
+import type { RuntimeRequestId, WorktreeSetupSnapshot } from "@t3tools/contracts";
 import {
   type EnvironmentId,
   type MessageId,
@@ -17,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import type { AsyncResult, Atom } from "effect/reactivity";
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
+import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { createContext, type MouseEvent, type ReactNode } from "react";
 import { type LegendListRef } from "@legendapp/list/react";
@@ -46,9 +43,7 @@ export interface TimelineRowSharedState {
   pendingApprovals: ReadonlyMap<RuntimeRequestId, PendingApproval>;
   respondingRequestIds: ReadonlyArray<RuntimeRequestId>;
   canOperateThread: boolean;
-  onRespondToApproval:
-    | ((requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => Promise<unknown>)
-    | undefined;
+  onRespondToApproval: ApprovalResponder | undefined;
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;

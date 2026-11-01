@@ -52,6 +52,7 @@ import {
   decodeComposerContextFragment,
 } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -1330,7 +1331,7 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
       optimisticMessages: [],
     });
   const props = baseProps();
-  const onRespondToApproval = vi.fn(async () => {});
+  const onRespondToApproval = vi.fn<ApprovalResponder>(async () => undefined);
   const ui = (overrides: Partial<TimelineProps> = {}) => (
     <MessagesTimeline
       {...props}
@@ -1348,6 +1349,8 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
   await expect
     .element(screen.getByRole("group", { name: "App permission approval" }))
     .toBeVisible();
+  await expect.element(screen.getByText("AI explanation", { exact: true })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Expand", exact: true })).toBeVisible();
   await expect.element(screen.getByText(approvals[0]!.detail!, { exact: true })).toBeVisible();
   await expect.element(screen.getByText("Needs permission to run the command")).toBeVisible();
   await vi.waitFor(() => {
