@@ -29,7 +29,59 @@ const seedPreview = Effect.gen(function* () {
   `;
 });
 
+const nightlyHistory = [
+  "PullRequestReviewGuides",
+  "ThreadFailureLookupIndex",
+  "DropUnusedV1Projections",
+  "CanonicalizeThreadPullRequestLinks",
+  "CodexUsageNativeTurnIndex",
+  "RepairClientSettlementTimestamps",
+  "WebhookDedupe",
+  "ShellStopRequestIndex",
+  "ThreadMessageSearch",
+  "PeerLinks",
+  "PeerLinkFence",
+  "WaitingLinkRequestIndex",
+  "ActiveTurnItemIndexes",
+  "ExcludeAttachmentPlaceholdersFromSearch",
+  "SubagentDeliveryState",
+  "ProjectionProjectsPinArchive",
+] as const;
+
 describe("V2 preview upgrade", () => {
+  it.effect.each([2, 15])("rebases a valid nightly migration prefix of length %s", (prefixLength) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 60 });
+      yield* PullRequestReviewGuides;
+      const prefix = nightlyHistory.slice(0, prefixLength);
+      for (const [index, name] of prefix.entries()) {
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES (${61 + index}, ${name})`;
+      }
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed.slice(0, 3), [
+        [61, "ProjectSkillShortcuts"],
+        [62, "ProjectionThreadIssues"],
+        [63, "WorkItemLinks"],
+      ]);
+      assert.deepStrictEqual(
+        yield* sql`SELECT migration_id, name FROM effect_sql_migrations
+          WHERE migration_id BETWEEN 61 AND ${63 + prefixLength} ORDER BY migration_id`,
+        [
+          { migration_id: 61, name: "ProjectSkillShortcuts" },
+          { migration_id: 62, name: "ProjectionThreadIssues" },
+          { migration_id: 63, name: "WorkItemLinks" },
+          ...prefix.map((name, index) => ({
+            migration_id: 64 + index,
+            name,
+          })),
+        ],
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("rebases the complete upstream nightly migration ledger", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

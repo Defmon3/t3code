@@ -32,23 +32,33 @@ const rebaseNightlyMigrationSequence = Effect.fn("rebaseNightlyMigrationSequence
   const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 61 ORDER BY migration_id
   `;
-  if (history.length === 1 && history[0]?.migration_id === 61 && history[0].name === "PullRequestReviewGuides") {
+  if (
+    history.length === 1 &&
+    history[0]?.migration_id === 61 &&
+    history[0].name === "PullRequestReviewGuides"
+  ) {
     yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 61 AND name = 'PullRequestReviewGuides'`;
     return [] as const;
   }
   const expected = NIGHTLY_MIGRATION_REBASE.map(([id, , name]) => `${id}:${name}`);
   const actual = history.map((row) => `${row.migration_id}:${row.name}`);
-  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+  const isValidPrefix =
+    actual.length > 1 &&
+    actual.length <= expected.length &&
+    actual.every((value, index) => value === expected[index]);
+  if (!isValidPrefix) {
     return [] as const;
   }
-  yield* sql`UPDATE effect_sql_migrations SET migration_id = migration_id + 100 WHERE migration_id BETWEEN 61 AND 76`;
+  const prefixEnd = 60 + actual.length;
+  yield* sql`UPDATE effect_sql_migrations SET migration_id = migration_id + 100
+    WHERE migration_id BETWEEN 61 AND ${prefixEnd}`;
   yield* ProjectSkillShortcuts;
   yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (61, 'ProjectSkillShortcuts')`;
   yield* ProjectionThreadIssues;
   yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (62, 'ProjectionThreadIssues')`;
   yield* WorkItemLinks;
   yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (63, 'WorkItemLinks')`;
-  for (const [fromId, toId, name] of NIGHTLY_MIGRATION_REBASE) {
+  for (const [fromId, toId, name] of NIGHTLY_MIGRATION_REBASE.slice(0, actual.length)) {
     yield* sql`
       UPDATE effect_sql_migrations SET migration_id = ${toId}, name = ${name}
       WHERE migration_id = ${fromId + 100} AND name = ${name}
