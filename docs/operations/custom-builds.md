@@ -76,7 +76,8 @@ Do not upload `builder-debug.yml`. For a non-preview build, the updater assets a
 
 Create a release whose tag identifies the exact package version, then upload the files from
 `release/`. The token used by `gh` needs permission to create releases and upload assets to the
-custom repository.
+custom repository. Include the self-contained Linux CLI archive and `SHA256SUMS` in every release;
+background-service hosts use those assets for remote server updates.
 
 ```powershell
 $repo = "Defmon3/t3code"
