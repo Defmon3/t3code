@@ -33,7 +33,9 @@ import {
   nestedToolCallFromEnvelope,
 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
-import { ConfigurationError } from "./sdk.ts";
+import { loadCursorSdk } from "./sdk.ts";
+
+const { ConfigurationError } = loadCursorSdk();
 
 describe("CursorAdapterV2", () => {
   it.effect.each([
@@ -217,7 +219,7 @@ describe("CursorAdapterV2", () => {
           Stream.takeUntil((event) => event.type === "turn.terminal"),
           Stream.runCollect,
         );
-        assert.isFalse(sentWithMcpOverride);
+        assert.isTrue(sentWithMcpOverride);
         const rows = events.filter((event) => event.type === "subagent.updated");
         assert.equal(rows[0]?.subagent.status, "running");
         assert.equal(rows[0]?.subagent.model, model ?? null);
@@ -512,6 +514,7 @@ describe("CursorAdapterV2", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-errors-" });
+      const summarizeRequests: Array<boolean> = [];
       const sentMessages: Array<string> = [];
       let sendCalls = 0;
       const instanceId = ProviderInstanceId.make("cursor");
@@ -548,6 +551,7 @@ describe("CursorAdapterV2", () => {
               send: (input) =>
                 Effect.sync(() => {
                   sendCalls += 1;
+                  summarizeRequests.push(input.summarize === true);
                   sentMessages.push(
                     typeof input.message === "string" ? input.message : input.message.text,
                   );
@@ -561,9 +565,10 @@ describe("CursorAdapterV2", () => {
                       status: "finished" as const,
                       model: { id: "composer-2.5" },
                       durationMs: 1,
-                      ...(sendCalls === 1
-                        ? { result: "Error: RetriableError: WritableIterable is closed" }
-                        : {}),
+                      result:
+                        sendCalls === 1
+                          ? "Error: RetriableError: WritableIterable is closed"
+                          : "Summary of the conversation so far",
                     }),
                     cancel: Effect.void,
                   };
@@ -656,12 +661,13 @@ describe("CursorAdapterV2", () => {
           attachments: [],
         },
       });
-      yield* runtime.events.pipe(
-        Stream.filter((event) => event.type === "turn.terminal"),
-        Stream.runHead,
+      const compactionEvents = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
       );
       assert.equal(sentMessages[0]?.includes("<issue_linking>"), issueToolsAvailable);
-      assert.equal(sentMessages[1], "/compress");
+      assert.deepEqual(summarizeRequests, [false, true]);
+      assert.notInclude(JSON.stringify(compactionEvents), "Summary of the conversation so far");
     }).pipe(
       Effect.scoped,
       Effect.provide(

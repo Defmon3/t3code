@@ -32,7 +32,12 @@ import {
   scopeHookApprovalRequests,
   sortHookApprovalRequests,
 } from "./hookApprovals.ts";
-import { derivePendingThreadRequests, sendApprovalFeedback } from "./threadRequests.ts";
+import {
+  childApprovalRequestKey,
+  derivePendingThreadRequests,
+  sendApprovalFeedback,
+  unhandledChildThreadApprovals,
+} from "./threadRequests.ts";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -80,7 +85,8 @@ describe("hook approvals", () => {
     const firstId = ThreadId.make("native-child-first");
     const secondId = ThreadId.make("native-child-second");
     const initialRevision = DateTime.formatIso(v2Now);
-    const nextTime = DateTime.add(v2Now, { seconds: 1 });
+    const emptyTime = DateTime.add(v2Now, { seconds: 1 });
+    const nextTime = DateTime.add(emptyTime, { seconds: 1 });
     const refreshingTime = DateTime.add(nextTime, { seconds: 1 });
     const failedTime = DateTime.add(refreshingTime, { seconds: 1 });
     const child = (id: ThreadId): OrchestrationV2ThreadShell => ({
@@ -137,12 +143,13 @@ describe("hook approvals", () => {
     ]);
     const connected = Atom.make(true);
     const capabilities = Atom.make({ repositoryIdentity: false, pendingApprovalDetails: true });
+    const hooks = Atom.make(scopeHookApprovalRequests(environmentA, []));
     const runtime = Atom.runtime(
       Layer.effect(EnvironmentRegistry, Effect.die("Unexpected approval transport")),
     );
     const approvals = createChildApprovalAtoms(runtime, {
       threadsAtom: () => threads,
-      hookRequestsAtom: Atom.make([]),
+      hookRequestsAtom: hooks,
       capabilitiesAtom: () => capabilities,
       connectedAtom: () => connected,
     });
@@ -153,7 +160,11 @@ describe("hook approvals", () => {
     });
     const registry = AtomRegistry.make({
       initialValues: [
-        [approvals.details(target(firstId, initialRevision)), AsyncResult.success(null)],
+        [approvals.details(target(firstId, initialRevision)), AsyncResult.initial()],
+        [
+          approvals.details(target(firstId, DateTime.formatIso(emptyTime))),
+          AsyncResult.success(null),
+        ],
         [
           approvals.details(target(secondId, initialRevision)),
           AsyncResult.success(details(secondId)),
@@ -178,6 +189,22 @@ describe("hook approvals", () => {
       expect(registry.get(pending).entries.map((entry) => entry.threadRef.threadId)).toEqual([
         secondId,
       ]);
+      const incoming = [firstId, secondId].map((threadId) => ({
+        thread: { environmentId: environmentA, threadId },
+        title: threadId,
+        approval: registry.get(pending).entries[0]!.approval,
+      }));
+      expect(registry.get(pending).handledRequestKeys).toEqual(
+        new Set(incoming.map((entry) => childApprovalRequestKey(entry.thread, requestId))),
+      );
+      expect(
+        unhandledChildThreadApprovals(incoming, registry.get(pending).handledRequestKeys),
+      ).toEqual([]);
+
+      registry.set(threads, [{ ...child(firstId), updatedAt: emptyTime }, child(secondId)]);
+      expect(registry.get(pending).entries.map((entry) => entry.threadRef.threadId)).toEqual([
+        secondId,
+      ]);
 
       registry.set(threads, [{ ...child(firstId), updatedAt: nextTime }, child(secondId)]);
       const visible = registry.get(pending).entries;
@@ -194,6 +221,9 @@ describe("hook approvals", () => {
       ]);
       registry.set(threads, [{ ...child(firstId), updatedAt: refreshingTime }, child(secondId)]);
       expect(registry.get(pending).entries[0]).toBe(visible[0]);
+      expect(
+        unhandledChildThreadApprovals(incoming, registry.get(pending).handledRequestKeys),
+      ).toEqual([]);
       registry.set(threads, [{ ...child(firstId), updatedAt: failedTime }, child(secondId)]);
       const unavailable = registry.get(pending).entries[0]!;
       expect(unavailable.detailsUnavailable).toBe(true);
@@ -201,10 +231,26 @@ describe("hook approvals", () => {
       expect(() => childApprovalResponseTarget(unavailable, "accept")).toThrow(
         "Approval details are unavailable.",
       );
+      const hookRequests = scopeHookApprovalRequests(environmentA, [
+        { ...request("mirrored-child", initialRevision), threadId: firstId },
+      ]);
+      registry.set(hooks, hookRequests);
+      const hookApproval = createPendingHookApprovals(hookRequests, [], true)[0]!.approval;
+      expect(
+        unhandledChildThreadApprovals(
+          [{ ...incoming[0]!, approval: hookApproval }],
+          registry.get(pending).handledRequestKeys,
+        ),
+      ).toEqual([]);
+      registry.set(hooks, []);
       registry.set(capabilities, { repositoryIdentity: false, pendingApprovalDetails: false });
       expect(registry.get(pending).entries).toEqual([]);
+      expect(
+        unhandledChildThreadApprovals(incoming, registry.get(pending).handledRequestKeys),
+      ).toEqual(incoming);
       registry.set(threads, [{ ...child(secondId), pendingRuntimeRequest: null }]);
       expect(registry.get(pending).entries).toEqual([]);
+      expect(registry.get(pending).handledRequestKeys.size).toBe(0);
       registry.set(connected, false);
       registry.set(threads, [child(firstId)]);
       expect(registry.get(pending).entries).toEqual([]);

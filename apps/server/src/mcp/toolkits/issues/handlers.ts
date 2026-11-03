@@ -10,7 +10,7 @@ import {
   type ThreadIssueLink,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
 import * as IssueService from "../../../issue/IssueService.ts";
@@ -81,7 +81,7 @@ const make = Effect.gen(function* () {
   const issues = yield* IssueService.IssueService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const workItemLinks = yield* WorkItemLinks.WorkItemLinks;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   const requireThread = Effect.fn("IssuesToolkit.requireThread")(function* () {
     const invocation = yield* McpInvocationContext.requireMcpCapability("issues");
@@ -96,7 +96,7 @@ const make = Effect.gen(function* () {
   });
 
   const commandId = (threadId: string) =>
-    crypto.randomUUIDv4().pipe(
+    crypto.uuidV4().pipe(
       Effect.orDie,
       Effect.map((uuid) => CommandId.make(`server:mcp-issue:${threadId}:${uuid}`)),
     );

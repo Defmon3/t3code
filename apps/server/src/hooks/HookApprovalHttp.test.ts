@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   HookApprovalRespondInput,
@@ -151,7 +152,7 @@ it.effect.each([1, 2] as const)(
     Effect.gen(function* () {
       const registry = yield* HookApprovalRegistryModule.__testing
         .make()
-        .pipe(Effect.provide(NodeServices.layer));
+        .pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
       const threadId = ThreadId.make("hook-bypass-authenticated-thread");
       const credential = yield* registry.issue({
         threadId,
@@ -202,7 +203,7 @@ it.effect.each([undefined, { key: "remote:notrory", label: "Remote access to not
       Effect.gen(function* () {
         const registry = yield* HookApprovalRegistryModule.__testing
           .make()
-          .pipe(Effect.provide(NodeServices.layer));
+          .pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
         yield* HttpRouter.serve(
           hookApprovalHttpRouteLayer.pipe(
             Layer.provide(Layer.succeed(HookApprovalRegistry, registry)),
@@ -275,7 +276,7 @@ it.effect.each(["deny", "allow", "allow-session"] as const)(
       Effect.gen(function* () {
         const registry = yield* HookApprovalRegistryModule.__testing
           .make()
-          .pipe(Effect.provide(NodeServices.layer));
+          .pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
         const credential = yield* registry.issue({
           threadId: ThreadId.make("hook-feedback-thread"),
           providerInstanceId: ProviderInstanceId.make("codex"),

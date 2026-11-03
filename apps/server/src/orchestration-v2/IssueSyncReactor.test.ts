@@ -15,7 +15,7 @@ import {
   ThreadIssueLink,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -225,11 +225,8 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
           }),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, bytes) => Effect.succeed(bytes),
-            }),
+            SecureRandom.SecureRandom,
+            SecureRandom.make((size) => new Uint8Array(size).fill(1)),
           ),
         ),
       ),

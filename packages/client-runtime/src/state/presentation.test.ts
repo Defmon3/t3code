@@ -102,7 +102,7 @@ describe("environment summary subscriptions", () => {
     const h = harness();
     const issues = (supported: boolean, cwd = "/workspace") =>
       ({
-        ...config(false, cwd),
+        ...config(cwd),
         environment: { capabilities: { issues: supported }, platform: { machine: "desktop" } },
       }) as ServerConfig;
     h.registry.set(h.catalog, {

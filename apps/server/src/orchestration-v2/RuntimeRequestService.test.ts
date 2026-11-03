@@ -1,5 +1,6 @@
 import { assert, it, vi } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   NodeId,
@@ -44,7 +45,7 @@ it.effect("delivers mirrored hook denial feedback to the waiting hook", () =>
       const providerSessionId = ProviderSessionId.make("session-hook-feedback");
       const hooks = yield* HookApprovalRegistry.__testing
         .make()
-        .pipe(Effect.provide(NodeServices.layer));
+        .pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
       const credential = yield* hooks.issue({
         threadId,
         providerInstanceId: ProviderInstanceId.make("codex"),

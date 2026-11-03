@@ -20,7 +20,11 @@ import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { derivePendingThreadRequests, type ThreadPendingApproval } from "./threadRequests.ts";
+import {
+  childApprovalRequestKey,
+  derivePendingThreadRequests,
+  type ThreadPendingApproval,
+} from "./threadRequests.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import type { EnvironmentRpcInput } from "../rpc/client.ts";
 import {
@@ -142,9 +146,10 @@ export function createChildApprovalAtoms<R, E>(
         readonly requestId: RuntimeRequestId;
         readonly revision: string;
       }> = [];
+      const ownedRequestKeys = new Set<string>();
       if (!get(input.connectedAtom(ref.environmentId))) {
         cachedNative.clear();
-        return { entries, failed };
+        return { entries, failed, handledRequestKeys: ownedRequestKeys as ReadonlySet<string> };
       }
       const threads = get(input.threadsAtom(ref.environmentId));
       const capabilities = get(input.capabilitiesAtom(ref.environmentId));
@@ -160,7 +165,6 @@ export function createChildApprovalAtoms<R, E>(
         hasHookApprovalGrantsCapability(capabilities),
       );
       const descendants = subagentThreadIds(ref.threadId, threads);
-      const activeNative = new Set<string>();
       for (const thread of threads) {
         if (thread.id === ref.threadId || !descendants.has(thread.id)) continue;
         const threadRef = { environmentId: ref.environmentId, threadId: thread.id };
@@ -177,8 +181,8 @@ export function createChildApprovalAtoms<R, E>(
           mirrored
         )
           continue;
-        const nativeKey = JSON.stringify([ref.environmentId, thread.id, request.id]);
-        activeNative.add(nativeKey);
+        const nativeKey = childApprovalRequestKey(threadRef, request.id);
+        ownedRequestKeys.add(nativeKey);
         const revision = DateTime.formatIso(thread.updatedAt);
         const result = get(
           details({
@@ -220,8 +224,14 @@ export function createChildApprovalAtoms<R, E>(
         }
       }
       for (const cachedKey of cachedNative.keys())
-        if (!activeNative.has(cachedKey)) cachedNative.delete(cachedKey);
+        if (!ownedRequestKeys.has(cachedKey)) cachedNative.delete(cachedKey);
       for (const { request, approval } of hookApprovals) {
+        ownedRequestKeys.add(
+          childApprovalRequestKey(
+            { environmentId: request.environmentId, threadId: request.threadId },
+            approval.requestId,
+          ),
+        );
         entries.push({
           key: JSON.stringify([request.environmentId, request.threadId, request.requestId, "hook"]),
           threadRef: { environmentId: request.environmentId, threadId: request.threadId },
@@ -235,7 +245,7 @@ export function createChildApprovalAtoms<R, E>(
           left.approval.createdAt.localeCompare(right.approval.createdAt) ||
           left.key.localeCompare(right.key),
       );
-      return { entries, failed };
+      return { entries, failed, handledRequestKeys: ownedRequestKeys as ReadonlySet<string> };
     }).pipe(Atom.setIdleTTL(0));
   });
   return { pending: (ref: ScopedThreadRef) => pending(threadKey(ref)), details };

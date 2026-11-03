@@ -1,3 +1,4 @@
+import { createChildThreadApprovalsAtom } from "@t3tools/client-runtime/state/thread-requests";
 import { useAtomValue } from "@effect/atom-react";
 import { AVAILABLE_CONNECTION_STATE } from "@t3tools/client-runtime/connection";
 import {
@@ -31,8 +32,8 @@ import {
   pendingThreadCreationOutcomesAtom,
   selectThreadCreationDetail,
 } from "./pending-thread-creation";
-import { environmentShell } from "./shell";
 import { serverEnvironment } from "./server";
+import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
 
 export const threadFamilies = createThreadFamilyAtoms(
@@ -54,6 +55,11 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
+  hiddenThreadTagsAtom: serverEnvironment.hiddenThreadTagsAtom,
+});
+export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
+  childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,
+  pendingRequestsAtom: environmentThreadDetails.pendingRequestsAtom,
 });
 
 export const hookApprovalEnvironment = createHookApprovalEnvironmentAtoms(connectionAtomRuntime);
@@ -105,6 +111,7 @@ export function useThreadFamily(
   environmentId: EnvironmentId | null,
   rootThreadId: ThreadId | null,
 ): void {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mounts the server thread-family subscription for the selected screen lifecycle
   useEffect(() => {
     if (environmentId === null || rootThreadId === null) return;
     return threadFamilies.mount(appAtomRegistry, environmentId, rootThreadId);

@@ -16,6 +16,7 @@ import type {
   PullRequestMergeMethod,
   PullRequestReaction,
   PullRequestReactionContent,
+  PullRequestReviewDecision,
   PullRequestReviewThread,
   PullRequestReviewerCandidate,
   PullRequestState,
@@ -599,28 +600,14 @@ interface GitLabIssueLinksPage {
   readonly rawCount: number;
 }
 
-/**
- * The issues merging this merge request closes, which is the whole of what GitLab reports as a
- * link. The ones it only mentions have no endpoint of their own — they would be a walk over every
- * note the merge request carries, a page at a time, for links nobody declared — so the mentions
- * the section shows are read out of the words instead.
- *
- * A row is skipped where it cannot name its own project, which is the one field of the link that
- * cannot be filled in from anywhere else.
- */
+// GitLab exposes closing links separately; mentions must be resolved from the merge request text.
 export function decodeClosesIssuesJson(
   raw: string,
 ): Result.Result<GitLabIssueLinksPage, DecodeFailure> {
   return decodeIssueLinks(raw, true);
 }
 
-/**
- * The issues a merge request's own words name, as GitLab's issues endpoint answered for them.
- * Only what it hands back is kept, which is how a number that names no issue — or names one in a
- * project this account cannot read — drops out silently.
- *
- * These cite rather than close: GitLab alone knows which of them merging will shut.
- */
+// GitLab's issue endpoint omits missing issues and projects the account cannot read.
 export function decodeCitedIssuesJson(
   raw: string,
 ): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
@@ -1073,6 +1060,87 @@ export function decodeRepositoryBlobsJson(
     blobs.set(path, oid);
   }
   return Result.succeed(blobs);
+}
+
+export const REVIEW_DECISIONS_GRAPHQL_QUERY = `query($fullPath: ID!, $iids: [String!]) {
+  metadata { enterprise }
+  project(fullPath: $fullPath) {
+    mergeRequests(iids: $iids, first: 100) {
+      nodes { iid approved approvedBy(first: 1) { nodes { username } } }
+    }
+  }
+}`;
+
+const RawReviewDecisionsSchema = Schema.Struct({
+  data: Schema.Struct({
+    metadata: Schema.optional(
+      Schema.NullOr(Schema.Struct({ enterprise: Schema.optional(Schema.NullOr(Schema.Boolean)) })),
+    ),
+    project: Schema.NullOr(
+      Schema.Struct({
+        mergeRequests: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.NullOr(
+                  Schema.Struct({
+                    iid: Schema.String,
+                    approved: Schema.optional(Schema.NullOr(Schema.Boolean)),
+                    approvedBy: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Struct({
+                          nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+                        }),
+                      ),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  }),
+});
+
+const decodeReviewDecisions = decodeJsonResult(RawReviewDecisionsSchema);
+
+/**
+ * Only Enterprise Edition holds `approved` to the project's approval rules, so an unapproved
+ * merge request there still needs review even when someone, such as a bot, approved it.
+ * Community Edition reports `approved` once anyone approves and requires no review.
+ */
+export function decodeReviewDecisionsJson(
+  raw: string,
+): Result.Result<ReadonlyMap<number, PullRequestReviewDecision | null>, DecodeFailure> {
+  const decoded = decodeReviewDecisions(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const enterprise = decoded.success.data.metadata?.enterprise;
+  const decisions = new Map<number, PullRequestReviewDecision | null>();
+  for (const node of decoded.success.data.project?.mergeRequests?.nodes ?? []) {
+    const number = Number(node?.iid);
+    if (
+      node === null ||
+      !Number.isSafeInteger(number) ||
+      node.approved == null ||
+      node.approvedBy?.nodes == null
+    )
+      continue;
+    const approvals = node.approvedBy.nodes.length;
+    if (node.approved === false && approvals === 0 && enterprise == null) continue;
+    decisions.set(
+      number,
+      node.approved === false && (enterprise || approvals > 0)
+        ? "review-required"
+        : approvals > 0
+          ? "approved"
+          : null,
+    );
+  }
+  return Result.succeed(decisions);
 }
 
 /**

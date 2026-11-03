@@ -1,5 +1,6 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -323,7 +324,7 @@ Logged in to gitlab.com as gitlab-user
     Layer.provide(Layer.mock(VcsProcess.VcsProcess)(processMock)),
     Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
     Layer.provide(FetchHttpClient.layer),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
   return Effect.gen(function* () {
@@ -577,7 +578,7 @@ it.effect(
           Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest()),
           Layer.provideMerge(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
           Layer.provideMerge(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),

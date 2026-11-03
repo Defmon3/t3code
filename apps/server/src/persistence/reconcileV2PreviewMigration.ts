@@ -25,6 +25,8 @@ const NIGHTLY_MIGRATION_REBASE: ReadonlyArray<readonly [number, number, string]>
   [74, 77, "ExcludeAttachmentPlaceholdersFromSearch"],
   [75, 78, "SubagentDeliveryState"],
   [76, 79, "ProjectionProjectsPinArchive"],
+  [77, 80, "RepairBooleanSettledOverride"],
+  [78, 81, "DropOrchestrationEventCorrelationIndex"],
 ];
 
 const rebaseNightlyMigrationSequence = Effect.fn("rebaseNightlyMigrationSequence")(function* () {

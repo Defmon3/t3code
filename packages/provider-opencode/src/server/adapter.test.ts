@@ -8,6 +8,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import {
   CheckpointId,
+  EnvironmentId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -20,6 +21,7 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type ProviderOptionSelection,
 } from "@t3tools/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
@@ -151,22 +153,31 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
   nativeSessionId: string,
   client: object,
   host: Partial<ProviderHost.ProviderHost["Service"]> = {},
+  turnSettings: {
+    readonly options?: ReadonlyArray<ProviderOptionSelection>;
+    readonly interactionMode?: ProviderAdapter.ProviderAdapterV2RuntimePolicy["interactionMode"];
+    readonly external?: boolean;
+  } = {},
 ) {
   const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
   const threadId = ThreadId.make(`thread-opencode-${suffix}`);
   const modelSelection = {
     instanceId,
     model: "anthropic/claude-sonnet",
-    options: [],
+    options: turnSettings.options ?? [],
   };
-  const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+  const policy = runtimePolicy("full-access", {
+    cwd: "/workspace",
+    interactionMode: turnSettings.interactionMode ?? "default",
+  });
   const adapter = yield* makeOpenCodeAdapterV2({
     instanceId,
     settings: OPEN_CODE_TEST_SETTINGS,
     environment: {},
   }).pipe(
     Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
-      connectToOpenCodeServer: () => Effect.succeed({ url: "http://test.invalid", external: true }),
+      connectToOpenCodeServer: () =>
+        Effect.succeed({ url: "http://test.invalid", external: turnSettings.external ?? true }),
       createOpenCodeSdkClient: () => client,
     } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
     Effect.provideService(ProviderHost.ProviderHost, {
@@ -200,7 +211,7 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
         providerInstanceId: modelSelection.instanceId,
         modelSelection,
         runtimeMode: "full-access",
-        interactionMode: "default",
+        interactionMode: policy.interactionMode,
         branch: null,
         worktreePath: null,
         activeProviderThreadId: providerThread.id,
@@ -1586,6 +1597,84 @@ describe("OpenCodeAdapterV2", () => {
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
+  );
+
+  it.effect.each([
+    { issueToolsAvailable: false, external: false },
+    { issueToolsAvailable: true, external: false },
+    { issueToolsAvailable: false, external: true },
+    { issueToolsAvailable: true, external: true },
+  ])(
+    "steers with the turn's agent, reasoning variant and system instructions: %j",
+    ({ issueToolsAvailable, external }) =>
+      Effect.gen(function* () {
+        const nativeEvents = asyncEventStream();
+        const promptInputs: Array<{ agent?: string; variant?: string; system?: string }> = [];
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const threadId = ThreadId.make("thread-opencode-steer-agent");
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment-opencode-steer-agent"),
+          threadId,
+          providerSessionId: "session-opencode-steer-agent",
+          providerInstanceId: ProviderInstanceId.make("opencode-steer-agent"),
+          endpoint: "http://test.invalid/mcp",
+          authorizationHeader: "Bearer test",
+          browserToolsAvailable: false,
+          capabilities: new Set(issueToolsAvailable ? ["issues"] : []),
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
+        const harness = yield* makeOpenCodeRuntimeHarness(
+          "steer-agent",
+          "root",
+          {
+            mcp: { add: async () => ({ data: {} }) },
+            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+            session: {
+              create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+              get: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+              messages: async () => ({ data: [] }),
+              promptAsync: async (input: { agent?: string; variant?: string; system?: string }) => {
+                promptInputs.push(input);
+                return { data: true };
+              },
+              abort: async () => ({ data: true }),
+              children: async () => ({ data: [] }),
+            },
+          },
+          {},
+          { options: [{ id: "variant", value: "high" }], interactionMode: "plan", external },
+        );
+        yield* harness.startTurn();
+        const snapshot = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        yield* harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: harness.runId,
+          providerThread: harness.providerThread,
+          providerTurnId: snapshot.providerTurns.at(-1)!.id,
+          message: {
+            messageId: MessageId.make("message-opencode-steer-agent"),
+            text: "also cover the README",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        });
+
+        const [start, steer] = promptInputs;
+        assert.equal(start?.agent, "plan");
+        assert.equal(start?.variant, "high");
+        assert.include(start?.system ?? "", "OpenCode");
+        assert.equal(start?.system?.includes("<issue_linking>"), issueToolsAvailable && !external);
+        assert.deepEqual(
+          { agent: steer?.agent, variant: steer?.variant, system: steer?.system },
+          { agent: start?.agent, variant: start?.variant, system: start?.system },
+        );
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
   );
 
   it.effect("keeps a newly admitted prompt alive across stale idle and delayed busy evidence", () =>

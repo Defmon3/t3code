@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -79,7 +80,7 @@ const stores = Layer.mergeAll(
 const dependencies = Layer.mergeAll(
   EventSink.layer.pipe(Layer.provideMerge(stores)),
   Hooks.layer.pipe(Layer.provide(Layer.succeed(HttpServer.HttpServer, server))),
-).pipe(Layer.provideMerge(NodeServices.layer));
+).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const seed = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;

@@ -16,13 +16,8 @@ describe("WebSocket RPC contracts", () => {
     const coreMethods = [...WsCoreRpcGroup.requests.keys()];
     const issueMethods = [...WsIssueRpcGroup.requests.keys()];
     const methods = [...WsRpcGroup.requests.keys()];
-    const obsoleteProjectMethods: ReadonlySet<string> = new Set([
-      WS_METHODS.projectsAdd,
-      WS_METHODS.projectsList,
-      WS_METHODS.projectsRemove,
-    ]);
     const expectedMethods = [
-      ...Object.values(WS_METHODS).filter((method) => !obsoleteProjectMethods.has(method)),
+      ...Object.values(WS_METHODS),
       ...Object.values(ORCHESTRATION_V2_WS_METHODS),
     ];
 

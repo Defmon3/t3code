@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -399,7 +399,7 @@ const isAuthError = (error: typeof GraphQlError.Type) =>
   /\b(authentication|unauthenticated|api key|access token)\b/i.test(error.message);
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const config = yield* ApiConfig;
   const http = yield* HttpClient.HttpClient;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
@@ -478,8 +478,8 @@ const make = Effect.gen(function* () {
     variables: Record<string, unknown>,
     schema: S,
   ): Effect.fn.Return<S["Type"], LinearApiError> {
-    const tokenScope = yield* crypto
-      .digest("SHA-256", new TextEncoder().encode(key))
+    const tokenScope = yield* digest
+      .digest(Digest.sha256, new TextEncoder().encode(key))
       .pipe(Effect.map(Hex.encode), Effect.orDie);
     let credentialScope = verifiedTokenScopes.get(tokenScope) ?? tokenScope;
     const queryEndpoints = QUERY_ENDPOINTS.get(document)!;

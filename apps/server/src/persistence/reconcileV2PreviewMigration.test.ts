@@ -12,6 +12,23 @@ import ProjectionThreadIssues from "./Migrations/062_ProjectionThreadIssues.ts";
 import WorkItemLinks from "./Migrations/063_WorkItemLinks.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
 import PullRequestReviewGuides from "./Migrations/064_PullRequestReviewGuides.ts";
+import ThreadFailureLookupIndex from "./Migrations/065_ThreadFailureLookupIndex.ts";
+import DropUnusedV1Projections from "./Migrations/063_DropUnusedV1Projections.ts";
+import CanonicalizeThreadPullRequestLinks from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+import CodexUsageNativeTurnIndex from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import RepairClientSettlementTimestamps from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import WebhookDedupe from "./Migrations/067_WebhookDedupe.ts";
+import ShellStopRequestIndex from "./Migrations/068_ShellStopRequestIndex.ts";
+import ThreadMessageSearch from "./Migrations/069_ThreadMessageSearch.ts";
+import PeerLinks from "./Migrations/070_PeerLinks.ts";
+import PeerLinkFence from "./Migrations/071_PeerLinkFence.ts";
+import WaitingLinkRequestIndex from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import ActiveTurnItemIndexes from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import ExcludeAttachmentPlaceholdersFromSearch from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import SubagentDeliveryState from "./Migrations/075_SubagentDeliveryState.ts";
+import ProjectionProjectsPinArchive from "./Migrations/076_ProjectionProjectsPinArchive.ts";
+import RepairBooleanSettledOverride from "./Migrations/077_RepairBooleanSettledOverride.ts";
+import DropOrchestrationEventCorrelationIndex from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -29,147 +46,107 @@ const seedPreview = Effect.gen(function* () {
   `;
 });
 
-const nightlyHistory = [
-  "PullRequestReviewGuides",
-  "ThreadFailureLookupIndex",
-  "DropUnusedV1Projections",
-  "CanonicalizeThreadPullRequestLinks",
-  "CodexUsageNativeTurnIndex",
-  "RepairClientSettlementTimestamps",
-  "WebhookDedupe",
-  "ShellStopRequestIndex",
-  "ThreadMessageSearch",
-  "PeerLinks",
-  "PeerLinkFence",
-  "WaitingLinkRequestIndex",
-  "ActiveTurnItemIndexes",
-  "ExcludeAttachmentPlaceholdersFromSearch",
-  "SubagentDeliveryState",
-  "ProjectionProjectsPinArchive",
+const nightlyMigrations = [
+  ["PullRequestReviewGuides", PullRequestReviewGuides],
+  ["ThreadFailureLookupIndex", ThreadFailureLookupIndex],
+  ["DropUnusedV1Projections", DropUnusedV1Projections],
+  ["CanonicalizeThreadPullRequestLinks", CanonicalizeThreadPullRequestLinks],
+  ["CodexUsageNativeTurnIndex", CodexUsageNativeTurnIndex],
+  ["RepairClientSettlementTimestamps", RepairClientSettlementTimestamps],
+  ["WebhookDedupe", WebhookDedupe],
+  ["ShellStopRequestIndex", ShellStopRequestIndex],
+  ["ThreadMessageSearch", ThreadMessageSearch],
+  ["PeerLinks", PeerLinks],
+  ["PeerLinkFence", PeerLinkFence],
+  ["WaitingLinkRequestIndex", WaitingLinkRequestIndex],
+  ["ActiveTurnItemIndexes", ActiveTurnItemIndexes],
+  ["ExcludeAttachmentPlaceholdersFromSearch", ExcludeAttachmentPlaceholdersFromSearch],
+  ["SubagentDeliveryState", SubagentDeliveryState],
+  ["ProjectionProjectsPinArchive", ProjectionProjectsPinArchive],
+  ["RepairBooleanSettledOverride", RepairBooleanSettledOverride],
+  ["DropOrchestrationEventCorrelationIndex", DropOrchestrationEventCorrelationIndex],
 ] as const;
 
 describe("V2 preview upgrade", () => {
-  it.effect.each([2, 15])("rebases a valid nightly migration prefix of length %s", (prefixLength) =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 60 });
-      yield* PullRequestReviewGuides;
-      const prefix = nightlyHistory.slice(0, prefixLength);
-      for (const [index, name] of prefix.entries()) {
-        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (${61 + index}, ${name})`;
-      }
+  it.effect.each([2, 15, 16, 17, 18])(
+    "rebases a valid nightly migration prefix of length %s",
+    (prefixLength) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 60 });
+        const prefix = nightlyMigrations.slice(0, prefixLength);
+        yield* Migrator.make({})({
+          loader: Migrator.fromRecord(
+            Object.fromEntries(
+              prefix.map(([name, migration], index) => [`${61 + index}_${name}`, migration]),
+            ),
+          ),
+        });
+        yield* sql`INSERT INTO pull_request_review_guides VALUES ('github.com', 'team/repo', 1, '{}')`;
+        const guides = yield* sql`SELECT * FROM pull_request_review_guides`;
+        const installedHistory = yield* sql`
+          SELECT * FROM effect_sql_migrations WHERE migration_id <= 60 ORDER BY migration_id`;
 
-      const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed.slice(0, 3), [
-        [61, "ProjectSkillShortcuts"],
-        [62, "ProjectionThreadIssues"],
-        [63, "WorkItemLinks"],
-      ]);
-      assert.deepStrictEqual(
-        yield* sql`SELECT migration_id, name FROM effect_sql_migrations
-          WHERE migration_id BETWEEN 61 AND ${63 + prefixLength} ORDER BY migration_id`,
-        [
-          { migration_id: 61, name: "ProjectSkillShortcuts" },
-          { migration_id: 62, name: "ProjectionThreadIssues" },
-          { migration_id: 63, name: "WorkItemLinks" },
-          ...prefix.map((name, index) => ({
-            migration_id: 64 + index,
-            name,
-          })),
-        ],
-      );
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("rebases the complete upstream nightly migration ledger", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 60 });
-      yield* sql`
-        INSERT INTO effect_sql_migrations (migration_id, name) VALUES
-          (61, 'PullRequestReviewGuides'),
-          (62, 'ThreadFailureLookupIndex'),
-          (63, 'DropUnusedV1Projections'),
-          (64, 'CanonicalizeThreadPullRequestLinks'),
-          (65, 'CodexUsageNativeTurnIndex'),
-          (66, 'RepairClientSettlementTimestamps'),
-          (67, 'WebhookDedupe'),
-          (68, 'ShellStopRequestIndex'),
-          (69, 'ThreadMessageSearch'),
-          (70, 'PeerLinks'),
-          (71, 'PeerLinkFence'),
-          (72, 'WaitingLinkRequestIndex'),
-          (73, 'ActiveTurnItemIndexes'),
-          (74, 'ExcludeAttachmentPlaceholdersFromSearch'),
-          (75, 'SubagentDeliveryState'),
-          (76, 'ProjectionProjectsPinArchive')
-      `;
-      const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed.slice(0, 3), [
-        [61, "ProjectSkillShortcuts"],
-        [62, "ProjectionThreadIssues"],
-        [63, "WorkItemLinks"],
-      ]);
-      assert.deepStrictEqual(
-        yield* sql`SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 61 ORDER BY migration_id`,
-        [
+        const executed = yield* runMigrations();
+        assert.deepStrictEqual(executed.slice(0, 3), [
           [61, "ProjectSkillShortcuts"],
           [62, "ProjectionThreadIssues"],
           [63, "WorkItemLinks"],
-          [64, "PullRequestReviewGuides"],
-          [65, "ThreadFailureLookupIndex"],
-          [66, "DropUnusedV1Projections"],
-          [67, "CanonicalizeThreadPullRequestLinks"],
-          [68, "CodexUsageNativeTurnIndex"],
-          [69, "RepairClientSettlementTimestamps"],
-          [70, "WebhookDedupe"],
-          [71, "ShellStopRequestIndex"],
-          [72, "ThreadMessageSearch"],
-          [73, "PeerLinks"],
-          [74, "PeerLinkFence"],
-          [75, "WaitingLinkRequestIndex"],
-          [76, "ActiveTurnItemIndexes"],
-          [77, "ExcludeAttachmentPlaceholdersFromSearch"],
-          [78, "SubagentDeliveryState"],
-          [79, "ProjectionProjectsPinArchive"],
-        ].map(([migration_id, name]) => ({ migration_id, name })),
-      );
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+        ]);
+        assert.deepStrictEqual(
+          yield* sql`SELECT migration_id, name FROM effect_sql_migrations
+            WHERE migration_id BETWEEN 61 AND ${63 + prefixLength} ORDER BY migration_id`,
+          [
+            { migration_id: 61, name: "ProjectSkillShortcuts" },
+            { migration_id: 62, name: "ProjectionThreadIssues" },
+            { migration_id: 63, name: "WorkItemLinks" },
+            ...prefix.map(([name], index) => ({
+              migration_id: 64 + index,
+              name,
+            })),
+          ],
+        );
+        assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 60 ORDER BY migration_id`,
+          installedHistory,
+        );
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("appends the shell stop index without rewriting installed fork migrations", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 70 });
-      const installedHistory =
-        yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
-      const links = yield* sql`SELECT * FROM work_item_links`;
+  it.effect.each([70, 79, 80])(
+    "appends nightly migrations without rewriting fork history through %s",
+    (installedId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: installedId });
+        const installedHistory =
+          yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
+        const links = yield* sql`SELECT * FROM work_item_links`;
 
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [71, "ShellStopRequestIndex"],
-        [72, "ThreadMessageSearch"],
-        [73, "PeerLinks"],
-        [74, "PeerLinkFence"],
-        [75, "WaitingLinkRequestIndex"],
-        [76, "ActiveTurnItemIndexes"],
-        [77, "ExcludeAttachmentPlaceholdersFromSearch"],
-        [78, "SubagentDeliveryState"],
-        [79, "ProjectionProjectsPinArchive"],
-      ]);
-      assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 70 ORDER BY migration_id`,
-        installedHistory,
-      );
-      assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
-      assert.deepStrictEqual(
-        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
-          AND name = 'orchestration_v2_projection_turn_items_stop_request_idx'`,
-        [{ name: "orchestration_v2_projection_turn_items_stop_request_idx" }],
-      );
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+        assert.deepStrictEqual(
+          yield* runMigrations(),
+          migrationManifest.filter(([id]) => id > installedId),
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${installedId} ORDER BY migration_id`,
+          installedHistory,
+        );
+        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+            AND name = 'orchestration_v2_projection_turn_items_stop_request_idx'`,
+          [{ name: "orchestration_v2_projection_turn_items_stop_request_idx" }],
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+            AND name = 'idx_orch_events_correlation_id'`,
+          [],
+        );
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("upgrades official nightly migration 61 without losing review guides", () =>
@@ -202,6 +179,8 @@ describe("V2 preview upgrade", () => {
         [77, "ExcludeAttachmentPlaceholdersFromSearch"],
         [78, "SubagentDeliveryState"],
         [79, "ProjectionProjectsPinArchive"],
+        [80, "RepairBooleanSettledOverride"],
+        [81, "DropOrchestrationEventCorrelationIndex"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -264,6 +243,8 @@ describe("V2 preview upgrade", () => {
         [77, "ExcludeAttachmentPlaceholdersFromSearch"],
         [78, "SubagentDeliveryState"],
         [79, "ProjectionProjectsPinArchive"],
+        [80, "RepairBooleanSettledOverride"],
+        [81, "DropOrchestrationEventCorrelationIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -366,6 +347,8 @@ describe("V2 preview upgrade", () => {
         [77, "ExcludeAttachmentPlaceholdersFromSearch"],
         [78, "SubagentDeliveryState"],
         [79, "ProjectionProjectsPinArchive"],
+        [80, "RepairBooleanSettledOverride"],
+        [81, "DropOrchestrationEventCorrelationIndex"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

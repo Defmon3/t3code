@@ -12,7 +12,8 @@ import {
   type HookApprovalScope,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -126,7 +127,8 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
   options: HookApprovalRegistryOptions = {},
 ) {
   const scope = yield* Effect.scope;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const server = yield* HttpServer.HttpServer;
   if (server.address._tag !== "InetAddressV4" && server.address._tag !== "InetAddressV6")
     return yield* Effect.die(new Error("Hook approval endpoint requires a TCP HTTP server"));
@@ -138,8 +140,8 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
     sessionAllowances: new Map(),
   });
   const hash = (token: string) =>
-    crypto
-      .digest("SHA-256", new TextEncoder().encode(token))
+    digest
+      .digest(Digest.sha256, new TextEncoder().encode(token))
       .pipe(Effect.map(bytesToHex), Effect.orDie);
   const finish = (
     pending: Pending | undefined,
@@ -344,7 +346,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
     }) {
       const token = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hash(token);
-      const providerSessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const providerSessionId = yield* crypto.uuidV4().pipe(Effect.orDie);
       const removed = yield* SubscriptionRef.modify(state, (current) => {
         const suspendedSessions = new Map(
           Array.from(current.suspendedSessions).filter(
@@ -425,7 +427,7 @@ const makeWithOptions = Effect.fn("HookApprovalRegistry.make")(function* (
     request: Effect.fn("HookApprovalRegistry.request")(function* (token, input) {
       if (token.length === 0) return { decision: "deny" } as const;
       const tokenHash = yield* hash(token);
-      const requestId = HookApprovalRequestId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+      const requestId = HookApprovalRequestId.make(yield* crypto.uuidV4().pipe(Effect.orDie));
       const completion = yield* Deferred.make<HookApprovalHttpResponse>();
       const createdAt = yield* DateTime.now;
       const result: RequestState = yield* SubscriptionRef.modify(

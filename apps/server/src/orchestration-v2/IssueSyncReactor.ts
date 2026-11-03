@@ -8,7 +8,7 @@ import {
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -63,7 +63,7 @@ const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const issues = yield* IssueService.IssueService;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const lastSyncedAt = new Map<string, number>();
   const retryAt = new Map<string, number>();
   const sourceRetryAt = new Map<string, number>();
@@ -168,8 +168,8 @@ const make = Effect.gen(function* () {
       for (const key of sourceRetryAt.keys())
         if (!activeSources.has(key)) sourceRetryAt.delete(key);
     }
-    const syncGroup = (sourceKey: string, [key, entries]: [string, LinkEntry[]]) =>
-      Effect.gen(function* () {
+    const syncGroup = Effect.fn("IssueSyncReactor.syncGroup")(
+      function* (sourceKey: string, [key, entries]: [string, LinkEntry[]]) {
         const first = entries[0]!;
         const url = new URL(first.link.url);
         const ref = {
@@ -195,7 +195,7 @@ const make = Effect.gen(function* () {
         lastSyncedAt.set(key, now);
         for (const { thread, link } of entries) {
           if (link.title === detail.title && link.state === detail.state) continue;
-          const uuid = yield* crypto.randomUUIDv4();
+          const uuid = yield* crypto.uuidV4();
           yield* engine
             .dispatch({
               type: "thread.issue-link.sync",
@@ -207,28 +207,31 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.catchCause(logSkipped({ threadId: thread.id, key })));
         }
-      }).pipe(
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            if (isIssueProviderError(error.cause) && error.cause.reason === "rate-limited") {
-              retryAt.set(key, error.cause.retryAt ?? now + OPEN_SYNC_INTERVAL_MS);
-            } else if (
-              error._tag === "IssueUnavailableError" &&
-              (error.reason === "cli-missing" || error.reason === "cli-unauthenticated")
-            ) {
-              sourceRetryAt.set(sourceKey, now + OPEN_SYNC_INTERVAL_MS);
-            } else {
-              retryAt.set(key, now + SLOW_SYNC_INTERVAL_MS);
-            }
+      },
+      (effect, sourceKey, [key]) =>
+        effect.pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              if (isIssueProviderError(error.cause) && error.cause.reason === "rate-limited") {
+                retryAt.set(key, error.cause.retryAt ?? now + OPEN_SYNC_INTERVAL_MS);
+              } else if (
+                error._tag === "IssueUnavailableError" &&
+                (error.reason === "cli-missing" || error.reason === "cli-unauthenticated")
+              ) {
+                sourceRetryAt.set(sourceKey, now + OPEN_SYNC_INTERVAL_MS);
+              } else {
+                retryAt.set(key, now + SLOW_SYNC_INTERVAL_MS);
+              }
+            }),
+          ),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+            if (now >= (retryAt.get(key) ?? 0) && now >= (sourceRetryAt.get(sourceKey) ?? 0))
+              retryAt.set(key, now + OPEN_SYNC_INTERVAL_MS);
+            return logSkipped({ key })(cause);
           }),
         ),
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
-          if (now >= (retryAt.get(key) ?? 0) && now >= (sourceRetryAt.get(sourceKey) ?? 0))
-            retryAt.set(key, now + OPEN_SYNC_INTERVAL_MS);
-          return logSkipped({ key })(cause);
-        }),
-      );
+    );
     yield* Effect.forEach(
       dueBySource,
       ([sourceKey, due]) =>
