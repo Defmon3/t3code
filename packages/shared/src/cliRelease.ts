@@ -99,7 +99,6 @@ export function acceptsTrackSwitchRelease(
   );
 }
 
-/** Page until the channel matches; nightlies can push preview/stable releases past the first page. */
 export function cliReleaseIndexPageUrl(page: number, baseUrl?: string): string {
   const repository =
     /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/releases\/download\/*$/.exec(
@@ -119,13 +118,19 @@ export function newestCliReleaseVersion(
   }>,
   channel: CliReleaseChannel,
 ): string | undefined {
+  let newestVersion: string | undefined;
   for (const release of releases) {
     if (release.draft) continue;
     const version = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(release.tag_name)?.[1];
     if (version === undefined) continue;
-    if (cliReleaseChannelOf(version) === channel) return version;
+    if (
+      cliReleaseChannelOf(version) === channel &&
+      (newestVersion === undefined || compareSemverVersions(version, newestVersion) > 0)
+    ) {
+      newestVersion = version;
+    }
   }
-  return undefined;
+  return newestVersion;
 }
 
 const NpmReleaseMigrationManifest = Schema.Struct({

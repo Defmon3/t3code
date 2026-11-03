@@ -7,6 +7,7 @@ import {
   newestCliReleaseVersion,
   type CliReleaseChannel,
 } from "@t3tools/shared/cliRelease";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -65,6 +66,7 @@ export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(funct
   const httpClient = yield* HttpClient.HttpClient;
   const environment = yield* HostProcess.Environment;
   const githubToken = environment.GH_TOKEN?.trim() || environment.GITHUB_TOKEN?.trim() || undefined;
+  let newestVersion: string | undefined;
   for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
     const url = yield* Effect.try({
       try: () => cliReleaseIndexPageUrl(page, environment[CLI_RELEASE_BASE_URL_ENV]),
@@ -95,9 +97,15 @@ export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(funct
       ),
     );
     const version = newestCliReleaseVersion(releases, channel);
-    if (version !== undefined) return version;
+    if (
+      version !== undefined &&
+      (newestVersion === undefined || compareSemverVersions(version, newestVersion) > 0)
+    ) {
+      newestVersion = version;
+    }
     if (releases.length === 0) break;
   }
+  if (newestVersion !== undefined) return newestVersion;
   return yield* new CliUpdateError({ reason: `No published ${channel} release was found.` });
 });
 

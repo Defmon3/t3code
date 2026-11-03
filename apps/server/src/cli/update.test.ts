@@ -38,16 +38,27 @@ const unrelatedLsof = ProcessRunner.ProcessRunner.of({
 afterEach(() => vi.restoreAllMocks());
 
 it.effect.each([
-  { baseUrl: undefined, repository: "pingdotgg/t3code", release: "v1.2.3" },
+  {
+    baseUrl: undefined,
+    repository: "pingdotgg/t3code",
+    release: "v1.2.3",
+    olderRelease: "v1.2.2",
+  },
   {
     baseUrl: " https://github.com/Defmon3/t3code/releases/download/ ",
     repository: "Defmon3/t3code",
     release: "v0.1.7-custom.20261103170544",
+    olderRelease: "v0.1.7-custom.20261103144943",
   },
-  { baseUrl: " ", repository: "pingdotgg/t3code", release: "v1.2.3" },
+  {
+    baseUrl: " ",
+    repository: "pingdotgg/t3code",
+    release: "v1.2.3",
+    olderRelease: "v1.2.2",
+  },
 ])(
-  "authenticates release pages from $repository until the channel is found",
-  ({ baseUrl, repository, release }) =>
+  "finds the highest channel version across authenticated pages from $repository",
+  ({ baseUrl, repository, release, olderRelease }) =>
     Effect.gen(function* () {
       const pages: string[] = [];
       const httpClient = HttpClient.make((request) => {
@@ -58,8 +69,13 @@ it.effect.each([
         assert.equal(request.headers.authorization, "Bearer gh-token");
         const page = url.searchParams.get("page") ?? "";
         pages.push(page);
-        const tag_name = page === "1" ? "v1.2.4-preview.20260101.1" : release;
-        return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json([{ tag_name }])));
+        const releases =
+          page === "1"
+            ? [{ tag_name: "v1.2.4-preview.20260101.1" }, { tag_name: olderRelease }]
+            : page === "2"
+              ? [{ tag_name: olderRelease }, { tag_name: release }]
+              : [];
+        return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(releases)));
       });
       const version = yield* resolveNewestVersion("stable").pipe(
         Effect.provideService(HostProcess.Environment, {
@@ -69,7 +85,7 @@ it.effect.each([
         Effect.provideService(HttpClient.HttpClient, httpClient),
       );
       assert.equal(version, release.slice(1));
-      assert.deepStrictEqual(pages, ["1", "2"]);
+      assert.deepStrictEqual(pages, ["1", "2", "3"]);
     }),
 );
 
