@@ -72,16 +72,34 @@ describe("versionSkew", () => {
     expect(resolveVersionMismatch("0.0.34")).toBeNull();
   });
 
-  it.each(["0.0.34-nightly.20260823.1124", "0.0.34-nightly.20260824.1124"])(
-    "warns when nightly server %s is behind a nightly client on the same release",
-    (serverVersion) => {
-      branding.APP_VERSION = "0.0.34-nightly.20260824.1125";
-
-      expect(resolveVersionMismatch(serverVersion)).toEqual({
-        clientVersion: "0.0.34-nightly.20260824.1125",
+  it.each([
+    ["0.0.34-nightly.20260823.1124", "0.0.34-nightly.20260824.1125"],
+    ["0.0.34-nightly.20260824.1124", "0.0.34-nightly.20260824.1125"],
+    ["0.1.7-custom.20261103104112", "0.1.7-custom.20261103115128"],
+  ])(
+    "warns when server %s is behind client %s on the same build track",
+    (serverVersion, clientVersion) => {
+      expect(resolveVersionMismatch(serverVersion, clientVersion)).toEqual({
+        clientVersion,
         serverVersion,
         hint: MISMATCH_HINT,
       });
+    },
+  );
+
+  it.each([
+    ["0.1.7-custom.20261103115128", "0.1.7-custom.20261103115128"],
+    ["0.1.7-custom.20261103115129", "0.1.7-custom.20261103115128"],
+    ["0.0.34-nightly.20260824.1125", "0.0.34-nightly.20260824.1125"],
+    ["0.0.34-nightly.20260824.1126", "0.0.34-nightly.20260824.1125"],
+    ["0.1.7-custom.20261103115128", "0.1.7"],
+    ["0.1.7", "0.1.7-custom.20261103115128"],
+    ["0.1.7-custom.20261103115128", "0.1.7-nightly.20261103.1151"],
+    ["0.1.7-nightly.20261103.1151", "0.1.7-custom.20261103115128"],
+  ])(
+    "does not warn when server %s is compatible with client %s",
+    (serverVersion, clientVersion) => {
+      expect(resolveVersionMismatch(serverVersion, clientVersion)).toBeNull();
     },
   );
 
