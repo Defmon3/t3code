@@ -22,6 +22,7 @@ export interface ProcessDiscoveryTopology {
 
 export interface ProcessDiscoveryWorktreeTopology {
   readonly worktrees: ReadonlyArray<ProcessDiscoveryWorktree>;
+  readonly warnings?: ReadonlyArray<string>;
 }
 
 export const makeProcessDiscoveryCollector = Effect.fn("makeProcessDiscoveryCollector")(function* <
@@ -54,7 +55,11 @@ export const makeProcessDiscoveryCollector = Effect.fn("makeProcessDiscoveryColl
         input.maxRoots,
       );
       const diagnostics = yield* input.processDiagnostics.read(roots.length === 0 ? {} : { roots });
-      return { ...diagnostics, registeredProjectWorktrees: worktreeTopology.worktrees };
+      return {
+        ...diagnostics,
+        registeredProjectWorktrees: worktreeTopology.worktrees,
+        warnings: [...(diagnostics.warnings ?? []), ...(worktreeTopology.warnings ?? [])],
+      };
     }),
     PROCESS_COLLECTION_CACHE_TTL,
   );
@@ -86,7 +91,7 @@ export const makeRegisteredProjectProcessDiscovery = Effect.fn(
     }),
     loadWorktrees: Effect.fn("ProcessDiscoveryCollector.loadWorktrees")(function* () {
       const projectShells = yield* projects.listShells();
-      const worktrees = yield* Effect.forEach(
+      const results = yield* Effect.forEach(
         projectShells,
         (project) =>
           Effect.gen(function* () {
@@ -97,10 +102,23 @@ export const makeRegisteredProjectProcessDiscovery = Effect.fn(
             if (repository === null) return [];
             const paths = yield* git.listWorktreePaths(project.workspaceRoot);
             return paths.map((path) => ({ projectId: project.id, path }));
-          }),
+          }).pipe(
+            Effect.match({
+              onSuccess: (worktrees) => ({ worktrees, warnings: [] }),
+              onFailure: (error) => ({
+                worktrees: [],
+                warnings: [
+                  `Git worktree discovery failed for ${project.workspaceRoot}: ${error.message}`,
+                ],
+              }),
+            }),
+          ),
         { concurrency: 4 },
       );
-      return { worktrees: worktrees.flat() };
+      return {
+        worktrees: results.flatMap((result) => result.worktrees),
+        warnings: results.flatMap((result) => result.warnings),
+      };
     }),
     maxRoots: RESOURCE_MONITOR_DISCOVERY_MAX_ROOTS,
     processDiagnostics,

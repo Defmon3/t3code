@@ -90,6 +90,7 @@ export function processPanelStatus(input: {
 export function processPanelNotice(input: {
   readonly queryError: string | null;
   readonly diagnosticsError: string | null;
+  readonly diagnosticsWarnings?: readonly string[] | undefined;
   readonly hasStaleData: boolean;
 }): { readonly message: string; readonly tone: "warning" | "error" } | null {
   if (input.hasStaleData && input.diagnosticsError) {
@@ -99,7 +100,10 @@ export function processPanelNotice(input: {
     };
   }
   const message = input.queryError ?? input.diagnosticsError;
-  return message ? { tone: "error", message } : null;
+  if (message) return { tone: "error", message };
+  return input.diagnosticsWarnings?.length
+    ? { tone: "warning", message: input.diagnosticsWarnings.join("\n") }
+    : null;
 }
 
 function isWindowsPath(path: string): boolean {

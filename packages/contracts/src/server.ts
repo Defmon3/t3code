@@ -464,6 +464,7 @@ export const ServerProcessDiagnosticsResult = Schema.Struct({
   hostMemoryTotalBytes: NonNegativeInt,
   processes: Schema.Array(ServerProcessDiagnosticsEntry),
   registeredProjectWorktrees: Schema.optionalKey(Schema.Array(ServerProcessDiagnosticsWorktree)),
+  warnings: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   stale: Schema.optionalKey(Schema.Boolean),
   error: Schema.Option(
     Schema.Struct({

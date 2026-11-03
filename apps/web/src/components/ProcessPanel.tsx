@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Option from "effect/Option";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { ProjectFavicon } from "./ProjectFavicon";
 import {
@@ -85,16 +85,12 @@ export function ProcessPanel(input: {
   const signalingProcessKeysRef = useRef<ReadonlySet<string>>(signalingProcessKeys);
   const environmentId = input.environmentId;
   const refreshProcesses = query.refresh;
-  const groups = useMemo(
-    () =>
-      deriveProcessPanelGroups({
-        processes: query.data?.processes ?? [],
-        projects: input.projects,
-        threads: input.threads,
-        worktrees: query.data?.registeredProjectWorktrees ?? [],
-      }),
-    [input.projects, input.threads, query.data?.processes, query.data?.registeredProjectWorktrees],
-  );
+  const groups = deriveProcessPanelGroups({
+    processes: query.data?.processes ?? [],
+    projects: input.projects,
+    threads: input.threads,
+    worktrees: query.data?.registeredProjectWorktrees ?? [],
+  });
   const status = processPanelStatus({
     environmentConnectionPhase: input.environmentConnectionPhase,
     hasData: query.data !== null && query.data !== undefined,
@@ -106,70 +102,67 @@ export function ProcessPanel(input: {
   const notice = processPanelNotice({
     queryError: query.error,
     diagnosticsError: diagnosticsError?.message ?? null,
+    diagnosticsWarnings: query.data?.warnings,
     hasStaleData: query.data?.stale === true,
   });
-  const killProcess = useCallback(
-    async (process: ProcessPanelEntry) => {
-      const processKey = `${process.pid}:${process.startTimeMs}`;
-      if (signalingProcessKeysRef.current.has(processKey)) return;
+  async function killProcess(process: ProcessPanelEntry) {
+    const processKey = `${process.pid}:${process.startTimeMs}`;
+    if (signalingProcessKeysRef.current.has(processKey)) return;
 
-      const nextSignalingKeys = new Set(signalingProcessKeysRef.current).add(processKey);
-      signalingProcessKeysRef.current = nextSignalingKeys;
-      setSignalingProcessKeys(nextSignalingKeys);
-      const clearSignaling = () => {
-        const next = new Set(signalingProcessKeysRef.current);
-        next.delete(processKey);
-        signalingProcessKeysRef.current = next;
-        setSignalingProcessKeys(next);
-      };
+    const nextSignalingKeys = new Set(signalingProcessKeysRef.current).add(processKey);
+    signalingProcessKeysRef.current = nextSignalingKeys;
+    setSignalingProcessKeys(nextSignalingKeys);
+    const clearSignaling = () => {
+      const next = new Set(signalingProcessKeysRef.current);
+      next.delete(processKey);
+      signalingProcessKeysRef.current = next;
+      setSignalingProcessKeys(next);
+    };
 
-      try {
-        const confirmed = await ensureLocalApi().dialogs.confirm(
-          `Kill test process ${process.pid}? This cannot be handled by the process.`,
-          { variant: "destructive" },
-        );
-        if (!confirmed) return;
+    try {
+      const confirmed = await ensureLocalApi().dialogs.confirm(
+        `Kill test process ${process.pid}? This cannot be handled by the process.`,
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
 
-        const result = await signalServerProcess({
-          environmentId,
-          input: { pid: process.pid, startTimeMs: process.startTimeMs, signal: "SIGKILL" },
-        });
-        if (result._tag === "Failure") {
-          if (isAtomCommandInterrupted(result)) return;
-          const error = squashAtomCommandFailure(result);
-          toastManager.add({
-            type: "error",
-            title: "Could not kill test process",
-            description:
-              error instanceof Error ? error.message : "Failed to kill the test process.",
-          });
-          return;
-        }
-        if (!result.value.signaled) {
-          toastManager.add({
-            type: "error",
-            title: "Could not kill test process",
-            description: Option.getOrElse(
-              result.value.message,
-              () => "The test process may have already exited.",
-            ),
-          });
-          refreshProcesses();
-          return;
-        }
-        refreshProcesses();
-      } catch (error) {
+      const result = await signalServerProcess({
+        environmentId,
+        input: { pid: process.pid, startTimeMs: process.startTimeMs, signal: "SIGKILL" },
+      });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
           title: "Could not kill test process",
           description: error instanceof Error ? error.message : "Failed to kill the test process.",
         });
-      } finally {
-        clearSignaling();
+        return;
       }
-    },
-    [environmentId, refreshProcesses, signalServerProcess],
-  );
+      if (!result.value.signaled) {
+        toastManager.add({
+          type: "error",
+          title: "Could not kill test process",
+          description: Option.getOrElse(
+            result.value.message,
+            () => "The test process may have already exited.",
+          ),
+        });
+        refreshProcesses();
+        return;
+      }
+      refreshProcesses();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not kill test process",
+        description: error instanceof Error ? error.message : "Failed to kill the test process.",
+      });
+    } finally {
+      clearSignaling();
+    }
+  }
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto" aria-label="Running tests">
@@ -214,7 +207,7 @@ export function ProcessPanel(input: {
         <p
           className={
             notice.tone === "warning"
-              ? "px-3 py-2 text-warning-foreground text-xs"
+              ? "whitespace-pre-line break-all px-3 py-2 text-warning-foreground text-xs"
               : "px-3 py-2 text-destructive text-xs"
           }
           role={notice.tone === "warning" ? "status" : undefined}

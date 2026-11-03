@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   GitCommandError,
   ProjectId,
+  VcsProcessTimeoutError,
   type ServerProcessDiagnosticsResult,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -10,7 +11,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
@@ -151,31 +151,72 @@ describe("ProcessDiscoveryCollector", () => {
     }),
   );
 
-  it.effect("propagates a Git worktree failure instead of reporting incomplete discovery", () =>
-    Effect.gen(function* () {
-      const error = new GitCommandError({
-        operation: "listWorktreePaths",
-        command: "git",
-        cwd: "/git-repo",
-        detail: "worktree discovery failed",
-      });
-      const collector = yield* makeRegisteredProjectProcessDiscovery().pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            registeredProjectsLayer,
-            Layer.mock(GitVcsDriver.GitVcsDriver)({
-              listWorktreePaths: () => Effect.fail(error),
-            }),
-            Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({}),
+  it.effect.each(["detection", "worktree lookup"] as const)(
+    "retains process discovery and successful worktrees when Git %s fails",
+    (stage) =>
+      Effect.gen(function* () {
+        const detectionError = new VcsProcessTimeoutError({
+          operation: "detectRepository",
+          command: "git",
+          cwd: "/broken-repo",
+          timeoutMs: 5_000,
+        });
+        const worktreeError = new GitCommandError({
+          operation: "listWorktreePaths",
+          command: "git",
+          cwd: "/broken-repo",
+          detail: "worktree discovery failed",
+        });
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        const scannedRoots: string[] = [];
+        const nativeError = Option.some({ message: "Native process discovery is unavailable." });
+        const collector = yield* makeRegisteredProjectProcessDiscovery().pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ProjectStore.ProjectStoreV2)({
+                listShells: () =>
+                  Effect.succeed([
+                    { ...v2Project, workspaceRoot: "/broken-repo" },
+                    { ...v2Project, id: ProjectId.make("project-git"), workspaceRoot: "/git-repo" },
+                  ]),
+              }),
+              Layer.succeed(VcsDriverRegistry.VcsDriverRegistry, {
+                ...registry,
+                detect: (input) =>
+                  input.cwd === "/broken-repo" && stage === "detection"
+                    ? Effect.fail(detectionError)
+                    : registry.detect(input),
+              }),
+              Layer.mock(GitVcsDriver.GitVcsDriver)({
+                listWorktreePaths: (cwd) =>
+                  cwd === "/broken-repo"
+                    ? Effect.fail(worktreeError)
+                    : Effect.succeed(["/git-repo", "/git-worktree"]),
+              }),
+              Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({
+                read: (input) =>
+                  Effect.sync(() => {
+                    scannedRoots.push(...(input.roots ?? []));
+                    return { ...diagnosticsSnapshot(4242), error: nativeError };
+                  }),
+              }),
+            ),
           ),
-        ),
-      );
+        );
 
-      const result = yield* Effect.result(collector.read());
+        const snapshot = yield* collector.read();
 
-      expect(Result.isFailure(result)).toBe(true);
-      if (Result.isFailure(result)) expect(result.failure).toBe(error);
-    }),
+        expect(snapshot.processes[0]?.pid).toBe(4242);
+        expect(scannedRoots).toEqual(["/broken-repo", "/git-repo", "/git-worktree"]);
+        expect(snapshot.registeredProjectWorktrees).toEqual([
+          { projectId: ProjectId.make("project-git"), path: "/git-repo" },
+          { projectId: ProjectId.make("project-git"), path: "/git-worktree" },
+        ]);
+        expect(snapshot.warnings).toEqual([
+          `Git worktree discovery failed for /broken-repo: ${stage === "detection" ? detectionError.message : worktreeError.message}`,
+        ]);
+        expect(snapshot.error).toEqual(nativeError);
+      }).pipe(Effect.provide(registeredProjectsLayer)),
   );
 
   it("deduplicates and bounds known plus Git-discovered roots", () => {

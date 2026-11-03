@@ -377,4 +377,39 @@ describe("processPanelStatus", () => {
         "Showing the last successful test discovery. Resource monitor 'discoverProcesses' request timed out after 10000ms.",
     });
   });
+
+  it.each([
+    {
+      diagnosticsWarnings: ["Git lookup timed out.", "Another worktree could not be resolved."],
+      queryError: null,
+      diagnosticsError: null,
+      expected: {
+        tone: "warning",
+        message: "Git lookup timed out.\nAnother worktree could not be resolved.",
+      },
+    },
+    {
+      diagnosticsWarnings: [],
+      queryError: null,
+      diagnosticsError: null,
+      expected: null,
+    },
+    {
+      diagnosticsWarnings: ["Git lookup timed out."],
+      queryError: "Connection lost.",
+      diagnosticsError: null,
+      expected: { tone: "error", message: "Connection lost." },
+    },
+    {
+      diagnosticsWarnings: ["Git lookup timed out."],
+      queryError: null,
+      diagnosticsError: "Process discovery failed.",
+      expected: { tone: "error", message: "Process discovery failed." },
+    },
+  ])(
+    "shows partial discovery warnings while preserving error priority",
+    ({ expected, ...input }) => {
+      expect(processPanelNotice({ ...input, hasStaleData: false })).toEqual(expected);
+    },
+  );
 });
