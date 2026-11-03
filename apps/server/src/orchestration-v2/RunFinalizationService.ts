@@ -1,4 +1,5 @@
 import { CheckpointScopeId, ProjectId, RunId, ThreadId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
@@ -53,6 +54,7 @@ const make = Effect.gen(function* () {
   const checkpointCapture = yield* CheckpointCapture.CheckpointCaptureServiceV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const observer = yield* RunFinalizationObserver;
+  const workspaceRefreshes = yield* FiberMap.make<ThreadId>();
 
   const finalize: RunFinalizationService["Service"]["finalize"] = Effect.fn(
     "RunFinalizationService.finalize",
@@ -64,26 +66,30 @@ const make = Effect.gen(function* () {
           (cause) => new RunFinalizationError({ ...input, operation: "capture-checkpoint", cause }),
         ),
       );
-    const projection = yield* projections
-      .getCheckpointContext(input.threadId)
-      .pipe(
-        Effect.mapError(
-          (cause) => new RunFinalizationError({ ...input, operation: "refresh-workspace", cause }),
-        ),
-      );
-    const cwd = projection.checkpointScopes.find((scope) => scope.id === input.scopeId)?.cwd;
-    if (cwd !== undefined) {
-      // Retrying a display refresh after the checkpoint is durable blocks the next turn.
-      yield* observer.refresh({ cwd, threadId: input.threadId, runId: input.runId }).pipe(
-        Effect.catchTags({
-          RunFinalizationRefreshError: (cause) =>
-            Effect.logWarning("Failed to refresh workspace after checkpoint capture", {
-              ...input,
-              cause,
-            }),
-        }),
-      );
-    }
+    yield* Effect.gen(function* () {
+      const projection = yield* projections
+        .getCheckpointContext(input.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new RunFinalizationError({ ...input, operation: "refresh-workspace", cause }),
+          ),
+        );
+      const cwd = projection.checkpointScopes.find((scope) => scope.id === input.scopeId)?.cwd;
+      if (cwd !== undefined) {
+        yield* observer.refresh({ cwd, threadId: input.threadId, runId: input.runId });
+      }
+    }).pipe(
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("Failed to refresh workspace after checkpoint capture", {
+            ...input,
+            cause,
+          }),
+      ),
+      FiberMap.run(workspaceRefreshes, input.threadId),
+    );
   });
   return RunFinalizationService.of({ finalize });
 });
