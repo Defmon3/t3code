@@ -37,26 +37,66 @@ const unrelatedLsof = ProcessRunner.ProcessRunner.of({
 
 afterEach(() => vi.restoreAllMocks());
 
-it.effect("authenticates each release page until the requested channel is found", () =>
+it.effect.each([
+  { baseUrl: undefined, repository: "pingdotgg/t3code", release: "v1.2.3" },
+  {
+    baseUrl: " https://github.com/Defmon3/t3code/releases/download/ ",
+    repository: "Defmon3/t3code",
+    release: "v0.1.7-custom.20261103170544",
+  },
+  { baseUrl: " ", repository: "pingdotgg/t3code", release: "v1.2.3" },
+])(
+  "authenticates release pages from $repository until the channel is found",
+  ({ baseUrl, repository, release }) =>
+    Effect.gen(function* () {
+      const pages: string[] = [];
+      const httpClient = HttpClient.make((request) => {
+        const url = new URL(request.url);
+        assert.equal(url.origin, "https://api.github.com");
+        assert.equal(url.pathname, `/repos/${repository}/releases`);
+        assert.equal(request.headers.accept, "application/vnd.github+json");
+        assert.equal(request.headers.authorization, "Bearer gh-token");
+        const page = url.searchParams.get("page") ?? "";
+        pages.push(page);
+        const tag_name = page === "1" ? "v1.2.4-preview.20260101.1" : release;
+        return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json([{ tag_name }])));
+      });
+      const version = yield* resolveNewestVersion("stable").pipe(
+        Effect.provideService(HostProcess.Environment, {
+          GH_TOKEN: "gh-token",
+          T3CODE_RELEASE_BASE_URL: baseUrl,
+        }),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      );
+      assert.equal(version, release.slice(1));
+      assert.deepStrictEqual(pages, ["1", "2"]);
+    }),
+);
+
+it.effect.each([
+  "not a URL",
+  "https://mirror.example/releases/download",
+  "https://github.com/Defmon3/t3code/releases",
+  "https://github.com/Defmon3/t3code/releases/download?mirror=true",
+])("refuses automatic discovery for unsupported feed %s", (baseUrl) =>
   Effect.gen(function* () {
-    const pages: string[] = [];
-    const httpClient = HttpClient.make((request) => {
-      const url = new URL(request.url);
-      assert.equal(url.origin, "https://api.github.com");
-      assert.equal(url.pathname, "/repos/pingdotgg/t3code/releases");
-      assert.equal(request.headers.accept, "application/vnd.github+json");
-      assert.equal(request.headers.authorization, "Bearer gh-token");
-      const page = url.searchParams.get("page") ?? "";
-      pages.push(page);
-      const tag_name = page === "1" ? "v1.2.4-preview.20260101.1" : "v1.2.3";
-      return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json([{ tag_name }])));
-    });
-    const version = yield* resolveNewestVersion("stable").pipe(
-      Effect.provideService(HostProcess.Environment, { GH_TOKEN: "gh-token" }),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
+    const result = yield* resolveNewestVersion("stable").pipe(
+      Effect.provideService(HostProcess.Environment, { T3CODE_RELEASE_BASE_URL: baseUrl }),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(request, Response.json([{ tag_name: "v1.2.3" }])),
+          ),
+        ),
+      ),
+      Effect.flip,
     );
-    assert.equal(version, "1.2.3");
-    assert.deepStrictEqual(pages, ["1", "2"]);
+    assert.equal(result._tag, "CliUpdateError");
+    assert.equal(
+      result.message,
+      "T3CODE_RELEASE_BASE_URL must be a GitHub releases/download URL for automatic updates. Use t3 update <version> for other mirrors.",
+    );
   }),
 );
 
@@ -335,6 +375,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const platform = yield* HostProcess.Platform;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
       const launcher = path.join(root, "bin/t3");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
@@ -343,7 +384,9 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const bare = yield* resolveLauncherPath.pipe(
         Effect.provideService(HostProcess.InvokedAs, "t3"),
         Effect.provideService(HostProcess.Environment, {
-          PATH: `${path.join(root, "missing")}:${path.join(root, "bin")}`,
+          PATH: [path.join(root, "missing"), path.join(root, "bin")].join(
+            platform === "win32" ? ";" : ":",
+          ),
         }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
@@ -361,6 +404,6 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       assert.equal(bare, launcher);
       assert.equal(relative, launcher);
       assert.equal(absent, undefined);
-    }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
+    }).pipe(Effect.scoped),
   );
 });

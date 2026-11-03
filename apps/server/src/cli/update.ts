@@ -66,7 +66,14 @@ export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(funct
   const environment = yield* HostProcess.Environment;
   const githubToken = environment.GH_TOKEN?.trim() || environment.GITHUB_TOKEN?.trim() || undefined;
   for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
-    const request = HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
+    const url = yield* Effect.try({
+      try: () => cliReleaseIndexPageUrl(page, environment[CLI_RELEASE_BASE_URL_ENV]),
+      catch: () =>
+        new CliUpdateError({
+          reason: `${CLI_RELEASE_BASE_URL_ENV} must be a GitHub releases/download URL for automatic updates. Use t3 update <version> for other mirrors.`,
+        }),
+    });
+    const request = HttpClientRequest.get(url).pipe(
       HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
     );
     const authenticatedRequest =
