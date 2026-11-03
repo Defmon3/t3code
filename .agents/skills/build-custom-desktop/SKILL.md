@@ -36,14 +36,29 @@ published release assets, but it must not execute the build.
    node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version <version> --output-dir tmp/tmp_local_desktop_<version>/release --verbose
    ```
 
-   The release must also contain the self-contained Linux CLI archive used by background-service
-   hosts. Build it from the same source and version after the desktop artifact succeeds:
+   The release must also contain self-contained Windows and Linux CLI archives for `t3 update`
+   and background-service hosts. Build both from the same source and version after the desktop
+   artifact succeeds. Use the Node version required by `package.json` in each build environment.
+   Run the Windows commands on Windows x64:
 
    ```powershell
    vp run --filter t3 build:exe
+   node scripts/build-cli-archive.ts --platform win --arch x64 --version <version> --output-dir tmp/tmp_local_desktop_<version>/release
+   ```
+
+   Run the Linux commands in the isolated local Linux build environment from step 7, using its
+   repository-local Vite+ and writing the archive into the shared release directory:
+
+   ```bash
+   vp run --filter t3 build:exe
    node scripts/build-cli-archive.ts --platform linux --arch x64 --version <version> --output-dir tmp/tmp_local_desktop_<version>/release
-   $archive = Get-ChildItem tmp/tmp_local_desktop_<version>/release -Filter "t3-<version>-linux-x64.tar.gz"
-   "$((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant())  $($archive.Name)" | Set-Content tmp/tmp_local_desktop_<version>/release/SHA256SUMS
+   ```
+
+   After both archives succeed, write both checksum entries from Windows PowerShell:
+
+   ```powershell
+   $archives = Get-Item -LiteralPath "tmp/tmp_local_desktop_<version>/release/t3-<version>-win32-x64.zip", "tmp/tmp_local_desktop_<version>/release/t3-<version>-linux-x64.tar.gz" -ErrorAction Stop
+   $archives | ForEach-Object { "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } | Set-Content tmp/tmp_local_desktop_<version>/release/SHA256SUMS
    ```
 
 6. Resolve missing local prerequisites on this machine. Do not bypass validation or move the build
@@ -59,12 +74,16 @@ published release assets, but it must not execute the build.
 - Require the native artifact command to succeed, including packaged-payload validation.
 - Verify the Windows `.exe`, `.blockmap`, and updater manifest contain the new version, and that
   the manifest references the emitted installer.
-- Require `t3-<version>-linux-x64.tar.gz` and `SHA256SUMS`; background-service hosts use these
-  assets for custom server updates.
+- Require `t3-<version>-win32-x64.zip`, `t3-<version>-linux-x64.tar.gz`, and `SHA256SUMS` with
+  one SHA-256 entry for each archive; `t3 update` and background-service hosts use these assets.
+- Require both CLI build and archive commands to succeed. Extract each archive into an isolated
+  temporary directory and run its CLI with `--version` on the matching local operating system.
+  Require the release version before reporting that platform's CLI archive as verified.
 - For Linux artifacts, verify the `.AppImage`, `.deb`, and matching updater manifest.
 - Confirm builds include the public configuration and approval explanations.
 - Report the local installer path. Never claim a failed or unrun build succeeded.
-- Publish the finished installers and updater manifests as one GitHub Release after both local
-  builds pass. Upload existing files only; never trigger a hosted build. Exclude `builder-debug.yml`.
+- Publish the finished installers, updater manifests, both CLI archives, and `SHA256SUMS` as one
+  GitHub Release after all local builds and archive checks pass. Upload existing files only;
+  never trigger a hosted build. Exclude `builder-debug.yml`.
 - Do not install, restart the app, or push source unless the user requested that action.
 - Preserve previous installers and releases for rollback.
