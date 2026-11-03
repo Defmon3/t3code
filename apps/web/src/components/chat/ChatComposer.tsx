@@ -1191,6 +1191,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isChoiceOnlyPendingQuestion =
     activePendingProgress?.activeQuestion?.allowCustomAnswer === false;
   const showComposerTopDrawer =
+    isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
     (!isComposerCollapsedMobile && showPlanFollowUpPrompt && activeProposedPlan !== null);
   const showCollapsedMobilePromptRow = isComposerCollapsedMobile;

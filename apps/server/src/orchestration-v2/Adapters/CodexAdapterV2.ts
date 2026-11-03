@@ -495,7 +495,7 @@ function codexMcpAppResourceUri(item: CodexDynamicToolItem): string | undefined 
 
 const CODEX_IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i;
 
-export function codexDynamicToolOutput(
+function codexDynamicToolOutput(
   item: Extract<CodexDynamicToolItem, { readonly type: "dynamicToolCall" }>,
 ): unknown | undefined {
   if (item.contentItems !== null && item.contentItems !== undefined) {
