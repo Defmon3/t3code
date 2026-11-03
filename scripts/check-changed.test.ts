@@ -181,23 +181,26 @@ describe("check:changed", () => {
 
 // Hooks export GIT_DIR and GIT_INDEX_FILE, and user config or the default
 // ~/.config/git/ignore can ignore or sign fixture files.
-const fixtureConfig = {
-  "core.excludesFile": NodeOS.devNull,
-  "user.name": "Fixture",
-  "user.email": "fixture@example.invalid",
-};
-const env = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
-  GIT_CONFIG_GLOBAL: NodeOS.devNull,
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_COUNT: String(Object.keys(fixtureConfig).length),
-  ...Object.fromEntries(
-    Object.entries(fixtureConfig).flatMap(([key, value], index) => [
-      [`GIT_CONFIG_KEY_${index}`, key],
-      [`GIT_CONFIG_VALUE_${index}`, value],
-    ]),
-  ),
-};
+function fixtureEnvironment(root: string) {
+  const emptyConfig = NodePath.join(root, ".git", "fixture-empty-config");
+  const fixtureConfig = {
+    "core.excludesFile": emptyConfig,
+    "user.name": "Fixture",
+    "user.email": "fixture@example.invalid",
+  };
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+    GIT_CONFIG_GLOBAL: emptyConfig,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_COUNT: String(Object.keys(fixtureConfig).length),
+    ...Object.fromEntries(
+      Object.entries(fixtureConfig).flatMap(([key, value], index) => [
+        [`GIT_CONFIG_KEY_${index}`, key],
+        [`GIT_CONFIG_VALUE_${index}`, value],
+      ]),
+    ),
+  };
+}
 
 // History A -> B -> C, with HEAD at C. Each remote's main points at A or B.
 function fixture(remotes: Record<string, "A" | "B">) {
@@ -211,6 +214,8 @@ function fixture(remotes: Record<string, "A" | "B">) {
       NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
       NodeFS.writeFileSync(path, content);
     };
+    write(".git/fixture-empty-config", "");
+    const env = fixtureEnvironment(root);
     const git = (...args: Array<string>) =>
       NodeChildProcess.execFileSync("git", args, { cwd: root, encoding: "utf8", env }).trim();
     git("init");
@@ -243,7 +248,9 @@ const compare = (root: string, ref: Option.Option<string>) =>
     return yield* comparisonBase(root, ref).pipe(
       Effect.provideService(
         ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make((command) => spawner.spawn(ChildProcess.setEnv(command, env))),
+        ChildProcessSpawner.make((command) =>
+          spawner.spawn(ChildProcess.setEnv(command, fixtureEnvironment(root))),
+        ),
       ),
     );
   }).pipe(Effect.provide(NodeServices.layer), Effect.runPromise);

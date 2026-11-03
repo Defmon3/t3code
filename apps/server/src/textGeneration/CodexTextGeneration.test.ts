@@ -533,6 +533,8 @@ it.effect.each([false, true])("text generation preflight: exhausted=%s", (exhaus
         snapshot: { getSnapshot: Effect.succeed(snapshot) } as ProviderInstance["snapshot"],
         orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
         textGeneration: TextGeneration.TextGeneration.of({
+          generateApprovalExplanation: () => Effect.die("unused"),
+          findWorkItemMatches: () => Effect.die("unused"),
           generateCommitMessage: () => Effect.die("unused"),
           generatePrContent: () => Effect.die("unused"),
           generateBranchName: () => Effect.die("unused"),

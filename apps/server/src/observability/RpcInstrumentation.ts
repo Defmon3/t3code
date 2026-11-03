@@ -249,7 +249,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerConfig]: "server",
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
-  [WS_METHODS.subscribeBackgroundPolicy]: "server",
   [WS_METHODS.hookApprovalsSubscribe]: "server",
   [WS_METHODS.hookApprovalsSubscribeGrants]: "server",
   [WS_METHODS.hookApprovalsRevokeGrant]: "server",

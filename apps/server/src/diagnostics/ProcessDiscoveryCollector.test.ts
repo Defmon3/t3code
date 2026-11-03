@@ -63,13 +63,13 @@ const registeredProjectsLayer = Layer.mergeAll(
       }).pipe(
         Effect.provide(
           Layer.mock(VcsDriver.VcsDriver)({
-            capabilities: {
-              kind: "git",
-              supportsWorktrees: true,
-              supportsBookmarks: false,
-              supportsAtomicSnapshot: false,
-              supportsPushDefaultRemote: true,
-              ignoreClassifier: "native",
+            checkpoints: {
+              captureCheckpoint: () => Effect.die("unused"),
+              hasCheckpointRef: () => Effect.die("unused"),
+              restoreCheckpoint: () => Effect.die("unused"),
+              diffCheckpoints: () => Effect.die("unused"),
+              listAuthoredPaths: () => Effect.die("unused"),
+              deleteCheckpointRefs: () => Effect.die("unused"),
             },
           }),
         ),
