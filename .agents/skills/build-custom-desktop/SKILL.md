@@ -39,11 +39,17 @@ published release assets, but it must not execute the build.
    The release must also contain self-contained Windows and Linux CLI archives for `t3 update`
    and background-service hosts. Build both from the same source and version after the desktop
    artifact succeeds. Use the Node version required by `package.json` in each build environment.
+   Before each CLI executable build, save the original release manifest contents and align versions
+   with `node scripts/update-release-package-versions.ts <version>`. Restore the saved contents
+   after the build, including on failure; the executable embeds the server manifest's version.
    Run the Windows commands on Windows x64:
 
    ```powershell
    vp run --filter t3 build:exe
-   node scripts/build-cli-archive.ts --platform win --arch x64 --version <version> --output-dir tmp/tmp_local_desktop_<version>/release
+   $resourceMonitorDir = "tmp/tmp_local_desktop_<version>/tmp_windows_resource_monitor"
+   New-Item -ItemType Directory -Path $resourceMonitorDir -Force | Out-Null
+   Copy-Item -LiteralPath native/resource-monitor/target/x86_64-pc-windows-msvc/release/t3-resource-monitor.exe -Destination $resourceMonitorDir
+   node scripts/build-cli-archive.ts --platform win --arch x64 --version <version> --output-dir tmp/tmp_local_desktop_<version>/release --resource-monitor-dir $resourceMonitorDir
    ```
 
    Run the Linux commands in the isolated local Linux build environment from step 7, using its
@@ -51,7 +57,10 @@ published release assets, but it must not execute the build.
 
    ```bash
    vp run --filter t3 build:exe
-   node scripts/build-cli-archive.ts --platform linux --arch x64 --version <version> --output-dir tmp/tmp_local_desktop_<version>/release
+   resource_monitor_dir="tmp/tmp_local_desktop_<version>/tmp_linux_resource_monitor"
+   mkdir -p "$resource_monitor_dir"
+   cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$resource_monitor_dir/"
+   node scripts/build-cli-archive.ts --platform linux --arch x64 --version <version> --output-dir tmp/tmp_local_desktop_<version>/release --resource-monitor-dir "$resource_monitor_dir"
    ```
 
    After both archives succeed, write both checksum entries from Windows PowerShell:
