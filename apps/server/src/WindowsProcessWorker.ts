@@ -181,10 +181,9 @@ const cancel = (id) => {
   const child = job?.child;
   if (!child || job.cancelling) return;
   job.cancelling = true;
-  if (job.streaming) {
-    child.stdout.resume();
-    child.stdin.destroy();
-  }
+  child.stdin.destroy();
+  child.stdout.destroy();
+  child.stderr.destroy();
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   if (job.forceKillAfterMs !== undefined) {
     job.forceKill = setTimeout(() => child.kill("SIGKILL"), job.forceKillAfterMs);

@@ -209,6 +209,121 @@ describe("WindowsProcessWorker", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live.each(["buffered", "streaming"] as const)(
+    "cancels %s output retained by a descendant after its parent exits",
+    (mode) => {
+      const abort = new AbortController();
+      return Effect.gen(function* () {
+        const parentExited = Promise.withResolvers<void>();
+        const descendant = Promise.withResolvers<NodeNet.Socket>();
+        const disconnected = Promise.withResolvers<void>();
+        const sockets = new Set<NodeNet.Socket>();
+        const server = NodeNet.createServer((socket) => {
+          sockets.add(socket);
+          socket.on("error", (error: NodeJS.ErrnoException) => {
+            if (error.code !== "ECONNRESET") {
+              parentExited.reject(error);
+              descendant.reject(error);
+              disconnected.reject(error);
+            }
+          });
+          socket.once("data", (data) => {
+            if (data.toString() === "parent") {
+              socket.once("close", () => parentExited.resolve());
+            } else {
+              socket.once("close", () => disconnected.resolve());
+              descendant.resolve(socket);
+            }
+          });
+          socket.once("close", () => sockets.delete(socket));
+        });
+        yield* Effect.acquireRelease(
+          Effect.promise(
+            () =>
+              new Promise<void>((resolve, reject) => {
+                server.once("error", reject);
+                server.listen(0, "127.0.0.1", resolve);
+              }),
+          ),
+          () =>
+            Effect.promise(async () => {
+              for (const socket of sockets) socket.end("release");
+              await new Promise<void>((resolve) => server.close(() => resolve()));
+            }),
+        );
+        const address = server.address();
+        if (address === null || typeof address === "string")
+          throw new Error("Expected TCP address");
+        const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
+        const command = yield* HostProcess.ExecutablePath;
+        const client = `const socket=require('node:net').connect(${address.port},'127.0.0.1');`;
+        const descendantCode = `${client}socket.on('connect',()=>socket.write('descendant'));socket.once('data',()=>socket.end());`;
+        const parentCode = `${client}socket.on('connect',()=>{socket.write('parent',()=>{const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendantCode)}],{detached:true,windowsHide:true,stdio:['ignore','inherit','inherit']});child.once('spawn',()=>{child.unref();process.exit(0)});});});`;
+        const input = {
+          command,
+          args: ["-e", parentCode],
+          env: process.env,
+          shell: false,
+          maxOutputBytes: 100,
+          outputMode: "error" as const,
+        };
+        let completed = false;
+        const child =
+          mode === "streaming" ? worker.spawn({ ...input, signal: abort.signal }) : undefined;
+        const running =
+          mode === "buffered"
+            ? yield* worker.run(input).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    completed = true;
+                  }),
+                ),
+                Effect.forkChild,
+              )
+            : undefined;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            for (const socket of sockets) socket.end("release");
+          }),
+        );
+        const exited = new Promise<void>((resolve, reject) => {
+          child?.once("exit", () => {
+            completed = true;
+            resolve();
+          });
+          child?.once("error", reject);
+        });
+        yield* Effect.promise(() => parentExited.promise);
+        const socket = yield* Effect.promise(() => descendant.promise);
+        yield* worker.run({ ...input, args: ["-e", ""] });
+        expect(completed).toBe(false);
+        const interrupt =
+          running === undefined
+            ? undefined
+            : yield* Fiber.interrupt(running).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    completed = true;
+                  }),
+                ),
+                Effect.forkChild,
+              );
+        if (child !== undefined) abort.abort();
+        const output = yield* worker.run({
+          ...input,
+          args: ["-e", "process.stdout.write('ready')"],
+        });
+        const completedBeforeRelease = completed;
+        socket.end("release");
+        yield* Effect.promise(() => disconnected.promise);
+        if (interrupt !== undefined) yield* Fiber.join(interrupt);
+        else yield* Effect.promise(() => exited);
+        expect(new TextDecoder().decode(output.stdout)).toBe("ready");
+        expect(completedBeforeRelease).toBe(true);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    },
+  );
+
   it.live("preserves stdin, both output streams, and nonzero exit codes", () =>
     Effect.gen(function* () {
       const worker = yield* WindowsProcessWorker.WindowsProcessWorker;
