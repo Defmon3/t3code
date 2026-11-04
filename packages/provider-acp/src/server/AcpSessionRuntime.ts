@@ -1454,6 +1454,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
         ...(spawnEnvironment ? { env: spawnEnvironment } : {}),
         extendEnv: options.spawn.extendEnv ?? true,
+        windowsHide: true,
         ...(options.ownDetachedProcessGroup === undefined
           ? {}
           : {

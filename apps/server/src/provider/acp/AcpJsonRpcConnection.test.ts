@@ -35,6 +35,47 @@ const mockRuntimeOptions = {
 } satisfies AcpSessionRuntime.AcpSessionRuntimeOptions;
 
 describe("AcpSessionRuntime", () => {
+  it.live("keeps owned detached ACP processes hidden while starting a session", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const hostPlatform = yield* HostProcess.Platform;
+      let startupSpawnObserved = false;
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        spawn: { command: process.execPath, args: mockAgentArgs, shell: false },
+        ownDetachedProcessGroup: true,
+        processGroupPlatform: hostPlatform,
+      }).pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) =>
+            Effect.gen(function* () {
+              if (!startupSpawnObserved) {
+                if (command._tag !== "StandardCommand") {
+                  return yield* Effect.die(new Error("Expected a standard ACP startup command"));
+                }
+                expect(command.options).toMatchObject({
+                  detached: true,
+                  windowsHide: true,
+                  shell: false,
+                });
+                startupSpawnObserved = true;
+              }
+              return yield* spawner.spawn(command);
+            }),
+          ),
+        ),
+      );
+
+      expect(yield* runtime.start()).toMatchObject({ sessionId: "mock-session-1" });
+      expect(startupSpawnObserved).toBe(true);
+      expect(yield* runtime.request("_test/environment", {})).toEqual({
+        inherited: false,
+        explicit: false,
+      });
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
   it.effect.each(["session/new", "session/resume"] as const)(
     "buffers root metadata while %s startup is still pending",
     (setupMethod) =>
