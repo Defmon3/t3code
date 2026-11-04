@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
@@ -122,10 +123,11 @@ describe("DesktopClientSettings", () => {
         const environment = yield* DesktopEnvironment.DesktopEnvironment;
         const fileSystem = yield* FileSystem.FileSystem;
         const settings = yield* DesktopClientSettings.DesktopClientSettings;
+        const path = yield* Path.Path;
         const dotfiles = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-desktop-client-settings-dotfiles-",
         });
-        const linkedSettingsPath = `${dotfiles}/client-settings.json`;
+        const linkedSettingsPath = path.join(dotfiles, "client-settings.json");
         yield* fileSystem.writeFileString(linkedSettingsPath, "{}\n");
         yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
         yield* fileSystem.symlink(linkedSettingsPath, environment.clientSettingsPath);
@@ -139,6 +141,29 @@ describe("DesktopClientSettings", () => {
         assert.deepEqual(
           yield* decodeClientSettingsJson(yield* fileSystem.readFileString(linkedSettingsPath)),
           clientSettings,
+        );
+      }),
+    ),
+  );
+
+  it.effect("removes its temporary file when replacing the settings file fails", () =>
+    withClientSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopClientSettings.DesktopClientSettings;
+        yield* fileSystem.makeDirectory(`${environment.clientSettingsPath}/occupied`, {
+          recursive: true,
+        });
+
+        const error = yield* settings.set(clientSettings).pipe(Effect.flip);
+
+        assert.equal(error.operation, "replace-settings-file");
+        assert.deepEqual(
+          (yield* fileSystem.readDirectory(environment.stateDir)).filter((name) =>
+            name.endsWith(".tmp"),
+          ),
+          [],
         );
       }),
     ),

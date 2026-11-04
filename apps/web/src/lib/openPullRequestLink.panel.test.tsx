@@ -13,6 +13,7 @@ const { navigate, openPullRequest } = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigate }));
 vi.mock("../state/environments", () => ({ usePrimaryEnvironmentId: () => "local" }));
 vi.mock("../state/entities", () => ({
+  readThreadShell: () => null,
   readProjects: () => [
     {
       id: "project",
@@ -88,12 +89,15 @@ it.each(["issues", "pull-requests", "thread"])(
       );
     });
     await act(() => renderer.root.findByType("button").props.onClick());
-    expect(openPullRequest).toHaveBeenCalledWith(
-      panelRef,
-      expect.objectContaining({ projectId: "project", repository: "acme/app", number: 7 }),
-    );
-    if (surface === "pull-requests")
+    if (surface === "pull-requests") {
+      expect(openPullRequest).not.toHaveBeenCalled();
       expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/pull-requests" }));
-    else expect(navigate).not.toHaveBeenCalled();
+    } else {
+      expect(openPullRequest).toHaveBeenCalledWith(
+        panelRef,
+        expect.objectContaining({ projectId: "project", repository: "acme/app", number: 7 }),
+      );
+      expect(navigate).not.toHaveBeenCalled();
+    }
   },
 );

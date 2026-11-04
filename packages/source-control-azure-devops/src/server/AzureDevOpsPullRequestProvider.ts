@@ -314,9 +314,12 @@ export const make = Effect.gen(function* () {
         const iterations =
           location === null
             ? []
-            : yield* cli
-                .listIterations({ cwd: input.cwd, location, number: input.number })
-                .pipe(Effect.orElseSucceed(() => []));
+            : yield* cli.listIterations({ cwd: input.cwd, location, number: input.number }).pipe(
+                Effect.catchIf(
+                  (error) => error._tag !== "AzureDevOpsCliRateLimitError",
+                  () => Effect.succeed([]),
+                ),
+              );
         // The trial merge's lastMergeSourceCommit can lag behind a new source push.
         const headSha = iterations.at(-1)?.headCommit;
         const changedFiles =

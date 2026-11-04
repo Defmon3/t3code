@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 
@@ -245,7 +246,8 @@ describe("DesktopSettings", () => {
         const dotfiles = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-desktop-settings-dotfiles-",
         });
-        const linkedSettingsPath = `${dotfiles}/desktop-settings.json`;
+        const path = yield* Path.Path;
+        const linkedSettingsPath = path.join(dotfiles, "desktop-settings.json");
         yield* fileSystem.writeFileString(linkedSettingsPath, "{}\n");
         yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
         yield* fileSystem.symlink(linkedSettingsPath, environment.desktopSettingsPath);
@@ -260,6 +262,29 @@ describe("DesktopSettings", () => {
           yield* fileSystem.readFileString(linkedSettingsPath),
         );
         assert.equal(persisted.serverExposureMode, "network-accessible");
+      }),
+    ),
+  );
+
+  it.effect("removes its temporary file when replacing the settings file fails", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* fileSystem.makeDirectory(`${environment.desktopSettingsPath}/occupied`, {
+          recursive: true,
+        });
+
+        const error = yield* settings.setServerExposureMode("network-accessible").pipe(Effect.flip);
+
+        assert.equal(error.operation, "replace-settings-file");
+        assert.deepEqual(
+          (yield* fileSystem.readDirectory(environment.stateDir)).filter((name) =>
+            name.endsWith(".tmp"),
+          ),
+          [],
+        );
       }),
     ),
   );

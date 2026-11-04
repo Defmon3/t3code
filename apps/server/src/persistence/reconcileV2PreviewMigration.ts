@@ -27,6 +27,7 @@ const NIGHTLY_MIGRATION_REBASE: ReadonlyArray<readonly [number, number, string]>
   [76, 79, "ProjectionProjectsPinArchive"],
   [77, 80, "RepairBooleanSettledOverride"],
   [78, 81, "DropOrchestrationEventCorrelationIndex"],
+  [79, 82, "DelegatedRecoveryIndexes"],
 ];
 
 const rebaseNightlyMigrationSequence = Effect.fn("rebaseNightlyMigrationSequence")(function* () {

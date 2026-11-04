@@ -198,8 +198,9 @@ describe("buildGrokModelCapabilities", () => {
   });
 });
 
-it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProviderStatus", (it) => {
-  it.effect("reports an installed CLI as unhealthy when --version exits non-zero", () =>
+describe("checkGrokProviderStatus", () => {
+  const layer = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer);
+  it.live("reports an installed CLI as unhealthy when --version exits non-zero", () =>
     Effect.gen(function* () {
       const secretStderr = "broken grok install: secret-token-value";
       const snapshot = yield* Effect.scoped(
@@ -227,7 +228,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
       expect(snapshot.status).toBe("error");
       expect(snapshot.message).toBe("Grok CLI is installed but failed to run.");
       expect(snapshot.message).not.toContain(secretStderr);
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each([
@@ -289,7 +290,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
       expect(snapshot.version).toBe(row.version);
       expect(snapshot.message).toBe(row.message);
       expect(spawned.length > 1).toBe(row.probesAfterVersion);
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 
   // A stand-in for the Grok CLI: `--version` and `models` print canned text,
@@ -336,7 +337,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
       });
     });
 
-  it.effect("reports ready with ACP-discovered models without running startup updates", () =>
+  it.live("reports ready with ACP-discovered models without running startup updates", () =>
     Effect.gen(function* () {
       const environment = { ...process.env, XAI_API_KEY: "", GROK_DISABLE_AUTOUPDATER: "0" };
       const { snapshot, updateRan } = yield* Effect.scoped(
@@ -371,12 +372,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
       expect(
         snapshot.models[0]?.capabilities?.optionDescriptors?.map((option) => option.id) ?? [],
       ).toEqual(["reasoningEffort"]);
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 
   // An expired access token prints the logged-out banner, then the CLI refreshes it in the
   // same run, so the next `grok models` reports the login.
-  it.effect("reports authenticated when `grok models` logs in after refreshing a token", () =>
+  it.live("reports authenticated when `grok models` logs in after refreshing a token", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -393,10 +394,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
 
       expect(snapshot.status).toBe("ready");
       expect(snapshot.auth.status).toBe("authenticated");
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("falls back to CLI-listed models with a warning when ACP initialize fails", () =>
+  it.live("falls back to CLI-listed models with a warning when ACP initialize fails", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -420,10 +421,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
       ]);
       expect(snapshot.message).toContain("ACP initialize failed");
       expect(snapshot.slashCommands.map((command) => command.name)).toEqual(["compact"]);
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("warns instead of reporting ready when no models are discovered", () =>
+  it.live("warns instead of reporting ready when no models are discovered", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -441,10 +442,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
       expect(snapshot.status).toBe("warning");
       expect(snapshot.message).toContain("did not list any models");
       expect(snapshot.models.map((model) => model.slug)).toEqual(["grok-build"]);
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("treats XAI_API_KEY as authenticated regardless of CLI login state", () =>
+  it.live("treats XAI_API_KEY as authenticated regardless of CLI login state", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -465,7 +466,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("checkGrokProvide
         label: "xAI API key",
       });
       expect(snapshot.status).toBe("warning");
-    }),
+    }).pipe(Effect.provide(layer)),
   );
 });
 
@@ -720,6 +721,36 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("readGrokAccount"
           message: "Grok could not read usage limits.",
         });
       }
+    }),
+  );
+
+  it.effect("tells accounts in Legacy (no storage) to switch to Privacy Mode", () =>
+    Effect.gen(function* () {
+      const { usageLimits: limits } = yield* readGrokAccount({
+        HOME: "/definitely/not/a/grok-home",
+        GROK_AUTH: '{"https://accounts.x.ai/sign-in":{"key":"private-token"}}',
+      }).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                Response.json(
+                  {
+                    error:
+                      "Grok Build is not supported in Legacy (no storage). Switch to Privacy Mode to use Grok Build. [WKE=privacy-mode:legacy]",
+                  },
+                  { status: 403 },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(limits.unavailable?.reason).toBe("probeFailed");
+      expect(limits.unavailable?.message).toMatch(/Privacy Mode/);
+      expect(limits.unavailable?.message).not.toMatch(/WKE=|Grok Build is not supported/);
     }),
   );
 });

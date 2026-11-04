@@ -26,6 +26,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -965,18 +966,96 @@ it.effect("serves the shared thread's files to its guest, never another thread's
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
+it.effect("gives a fork's guest the files on messages the fork shows from its source", () =>
+  Effect.gen(function* () {
+    const { orchestrator } = yield* shareThread;
+    const guestShares = yield* GuestShareService.GuestShareService;
+    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const ownerImage = Effect.fn(function* (name: string) {
+      const image = {
+        type: "image" as const,
+        id: ChatAttachmentId.make(createAttachmentId(threadId)!),
+        name,
+        mimeType: "image/png",
+        sizeBytes: PNG.length,
+      };
+      yield* fileSystem.writeFile(
+        resolveAttachmentPath({ attachmentsDir, attachment: image })!,
+        PNG,
+      );
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`owner:${name}`),
+        threadId,
+        messageId: MessageId.make(`message:${name}`),
+        text: name,
+        attachments: [image],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      return image;
+    });
+    const inherited = yield* ownerImage("before.png");
+    const run = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs[0]!;
+    const now = yield* DateTime.now;
+    yield* (yield* EventSink.EventSinkV2).write({
+      events: [
+        {
+          id: EventId.make("event:run-done"),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    const forkId = ThreadId.make("thread:guest-share-fork");
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make("fork"),
+      sourceThreadId: threadId,
+      targetThreadId: forkId,
+      sourcePoint: { type: "run", runId: run.id },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const later = yield* ownerImage("after.png");
+    const { url } = yield* guestShares.create({ threadId: forkId });
+    const { token: session } = yield* guestShares.redeem({
+      credential: url.slice(url.indexOf("#") + 1),
+      name: "Sam",
+    });
+
+    assert.equal(
+      (yield* guestShares.attachment(session, inherited.id)).attachment.id,
+      inherited.id,
+    );
+    // The source's messages after the fork point are not part of the fork.
+    assert.equal(
+      (yield* Effect.flip(guestShares.attachment(session, later.id))).reason,
+      "unavailable",
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("serves an image on the host only when an agent reply the guest sees shows it", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares } = yield* shareThread;
     const runId = yield* ownerRun;
     const fileSystem = yield* FileSystem.FileSystem;
-    const directory = yield* fileSystem.makeTempDirectoryScoped();
+    const hostPath = yield* Path.Path;
+    const directory = (yield* fileSystem.makeTempDirectoryScoped()).replaceAll("\\", "/");
     const shot = `${directory}/my shot.png`;
     const fileUrl = `${directory}/file-url.png`;
     const page = `${directory}/page.png`;
     const fromUser = `${directory}/from-user.png`;
     const unnamed = `${directory}/unnamed.png`;
     const later = `${directory}/later.png`;
+    const imageUrl = yield* hostPath.toFileUrl(fileUrl);
     for (const path of [shot, fileUrl, fromUser, unnamed, later]) {
       yield* fileSystem.writeFile(path, PNG);
     }
@@ -1029,7 +1108,7 @@ it.effect("serves an image on the host only when an agent reply the guest sees s
       events: [
         item("item:agent-images", 1, {
           type: "assistant_message",
-          text: `Done: ![Shot](<${shot}>) ![Other](file://${encodeURI(fileUrl)}) ![Page](${page})`,
+          text: `Done: ![Shot](<${shot}>) ![Other](${imageUrl.href}) ![Page](${page})`,
         }),
         // A guest's sent message is a user message; it must not open files on the host.
         item("item:guest-image", 2, { type: "user_message", text: `![Mine](${fromUser})` }),
@@ -1143,7 +1222,7 @@ it.effect("serves an image on the host only when an agent reply the guest sees s
 it.effect("keeps a connected guest's images while other shares come and go", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    const directory = yield* fileSystem.makeTempDirectoryScoped();
+    const directory = (yield* fileSystem.makeTempDirectoryScoped()).replaceAll("\\", "/");
     const shot = `${directory}/shot.png`;
     yield* fileSystem.writeFile(shot, PNG);
     const eventSink = yield* EventSink.EventSinkV2;

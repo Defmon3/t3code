@@ -1447,6 +1447,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           ELECTRON_RUN_AS_NODE: "1",
           T3_ACP_CGROUP_WRAPPER: "1",
         };
+  const hostPlatform = yield* HostProcess.Platform;
   const child = yield* spawner
     .spawn(
       ChildProcess.make(containedSpawnCommand.command, containedSpawnCommand.args, {
@@ -1455,7 +1456,12 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         extendEnv: options.spawn.extendEnv ?? true,
         ...(options.ownDetachedProcessGroup === undefined
           ? {}
-          : { detached: options.ownDetachedProcessGroup }),
+          : {
+              // why: Detached Windows shells lose the ACP child's redirected stdio.
+              detached:
+                options.ownDetachedProcessGroup &&
+                !(hostPlatform === "win32" && containedSpawnCommand.shell),
+            }),
         shell: containedSpawnCommand.shell,
       }),
     )
@@ -1617,7 +1623,6 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     Effect.uninterruptible(terminateOwnedProcessGroupImpl),
   );
   if (options.ownDetachedProcessGroup === true) {
-    const hostPlatform = yield* HostProcess.Platform;
     const forceTerminateOwnedProcessGroup =
       hostPlatform === "win32"
         ? terminateWindowsProcessTreeWithTaskkill(Number(child.pid)).pipe(

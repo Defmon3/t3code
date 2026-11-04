@@ -17,7 +17,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
+import * as ProjectionReplay from "./testkit/ProjectionReplay.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -37,10 +37,7 @@ const stores = Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
 );
 const testLayer = Layer.mergeAll(
   stores,
-  ProjectionMaintenance.layer.pipe(
-    Layer.provide(stores),
-    Layer.provide(SqlitePersistence.layerMemory),
-  ),
+  ProjectionReplay.layer.pipe(Layer.provide(stores), Layer.provide(SqlitePersistence.layerMemory)),
   layerWithRegistry(
     { name: "thread-issues" },
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
@@ -162,7 +159,7 @@ it.layer(testLayer)("V2 thread issue links", (it) => {
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const projections = yield* ProjectionStore.ProjectionStoreV2;
-      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
       const threadId = ThreadId.make("thread:issues:sync");
       yield* createThread(threadId);
       yield* orchestrator.dispatch({
@@ -373,7 +370,7 @@ it.layer(testLayer)("V2 thread issue links", (it) => {
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const projections = yield* ProjectionStore.ProjectionStoreV2;
-        const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+        const maintenance = yield* ProjectionReplay.ProjectionReplay;
         const threadId = ThreadId.make("thread:issues:replay");
         yield* createThread(threadId);
         for (const number of [10, 11]) {

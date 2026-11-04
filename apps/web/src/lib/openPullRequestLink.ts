@@ -141,30 +141,6 @@ export function useOpenChangeRequestLink(
           url: targetUrl,
           number,
         });
-        if (!resolvedThreadRef) {
-          void navigate({
-            to: "/pull-requests",
-            search: (previous) => {
-              const { involvement: _involvement, state: _state, sort, ...rest } = previous;
-              return {
-                ...rest,
-                ...(isPullRequestListSort(sort) ? { sort } : {}),
-                involvement:
-                  previous.involvement === "authored" || previous.involvement === "reviewing"
-                    ? previous.involvement
-                    : "all",
-                state:
-                  previous.state === "closed" ||
-                  previous.state === "merged" ||
-                  previous.state === "all"
-                    ? previous.state
-                    : "open",
-                ...pullRequestsSearch,
-              };
-            },
-            replace: true,
-          });
-        }
         return true;
       }
       void navigate({

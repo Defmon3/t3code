@@ -36,6 +36,9 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadPullRequestService from "./ThreadPullRequestService.ts";
 
@@ -171,15 +174,11 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                   event === marker ? Queue.offer(eventsConsumed, undefined) : Effect.void,
                 ),
               ),
-              getShellSnapshot: () =>
+              getPullRequestSnapshot: () =>
                 Effect.succeed({
-                  schemaVersion: 2,
                   snapshotSequence: 1,
                   threads: [thread],
-                  archivedThreads: [],
                 }),
-              getThreadEventSequence: () => Effect.succeed(1),
-              getThreadShell: () => Effect.succeed(thread),
             }),
             Layer.mock(ProjectStore.ProjectStoreV2)({
               listShells: () => Effect.succeed([project]),
@@ -264,33 +263,29 @@ describe("ThreadPullRequestServiceV2 reads", () => {
       ),
   );
 
-  it.effect("an event for one thread reads that thread's shell, not every thread's", () =>
+  it.effect("an event for one thread reads only that thread's pull request snapshot", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const thread = threadShell("updated-thread");
         const other = threadShell("other-thread");
         const activation = yield* Deferred.make<void>();
         const events = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
-        // Each read: the thread id for a one-thread read, or the full read's options.
-        const reads = yield* Queue.unbounded<
-          ThreadId | { readonly location?: string; readonly unsettledOnly?: boolean }
-        >();
+        const reads =
+          yield* Queue.unbounded<
+            Parameters<Orchestrator.OrchestratorV2["Service"]["getPullRequestSnapshot"]>[0]
+          >();
         const layerDependencies = Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromPubSub(events),
-            getShellSnapshot: (options) =>
-              Queue.offer(reads, options ?? {}).pipe(
+            getPullRequestSnapshot: (options) =>
+              Queue.offer(reads, options).pipe(
                 Effect.as({
-                  schemaVersion: 2,
                   snapshotSequence: 1,
-                  threads: [thread, other],
-                  archivedThreads: [],
+                  threads:
+                    options.threadId === undefined
+                      ? [thread, other]
+                      : [thread, other].filter((candidate) => candidate.id === options.threadId),
                 }),
-              ),
-            getThreadEventSequence: () => Effect.succeed(1),
-            getThreadShell: (threadId) =>
-              Queue.offer(reads, threadId).pipe(
-                Effect.as([thread, other].find((candidate) => candidate.id === threadId) ?? null),
               ),
           }),
           Layer.mock(ProjectStore.ProjectStoreV2)({
@@ -316,7 +311,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           yield* service.start();
           yield* Deferred.succeed(activation, undefined);
           // Startup backfill reads every active thread.
-          expect(yield* Queue.take(reads)).toEqual({ location: "active", unsettledOnly: false });
+          expect(yield* Queue.take(reads)).toEqual({ unsettledOnly: false });
           yield* service.drain;
           const event: OrchestrationV2DomainEvent & { readonly type: "thread.metadata-updated" } = {
             type: "thread.metadata-updated",
@@ -369,7 +364,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             ...event,
             payload: { ...event.payload, worktreePath: "/workspace/changed" },
           });
-          expect(yield* Queue.take(reads)).toBe(thread.id);
+          expect(yield* Queue.take(reads)).toEqual({ threadId: thread.id });
           yield* service.drain;
           expect(yield* Queue.size(reads)).toBe(0);
           for (const changes of [
@@ -377,7 +372,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             { projectId: ProjectId.make("new-project") },
           ]) {
             yield* PubSub.publish(events, { ...event, payload: { ...event.payload, ...changes } });
-            expect(yield* Queue.take(reads)).toBe(thread.id);
+            expect(yield* Queue.take(reads)).toEqual({ threadId: thread.id });
             yield* service.drain;
             expect(yield* Queue.size(reads)).toBe(0);
           }
@@ -407,15 +402,13 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         const dependencies = Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(domainEvents),
-            getShellSnapshot: () =>
+            getPullRequestSnapshot: () =>
               Effect.succeed({
                 schemaVersion: 2,
                 snapshotSequence: 1,
                 threads: [thread],
                 archivedThreads: [],
               }),
-            getThreadEventSequence: () => Effect.succeed(1),
-            getThreadShell: () => Effect.succeed(thread),
           }),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             listShells: () => Effect.succeed([project]),
@@ -514,6 +507,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         Effect.gen(function* () {
           const thread = {
             ...threadShell("worktree-thread"),
+            settledOverride: "settled" as const,
+            settledAt: NOW,
             branch: "feature/worktree",
             worktreePath: "/workspace/worktree",
           };
@@ -532,7 +527,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           const dependencies = Layer.mergeAll(
             Layer.mock(Orchestrator.OrchestratorV2)({
               streamDomainEvents: Stream.never,
-              getShellSnapshot: () =>
+              getPullRequestSnapshot: () =>
                 Deferred.succeed(sweepStarted, undefined).pipe(
                   Effect.as({
                     schemaVersion: 2,
@@ -637,18 +632,17 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         const dependencies = Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(domainEvents),
-            getShellSnapshot: () =>
-              Queue.offer(sweeps, undefined).pipe(
-                Effect.as({
-                  schemaVersion: 2,
-                  snapshotSequence: 1,
-                  threads: [parent, child],
-                  archivedThreads: [],
-                }),
-              ),
-            getThreadEventSequence: () => Effect.succeed(1),
-            getThreadShell: (threadId) =>
-              Effect.succeed([parent, child].find((thread) => thread.id === threadId) ?? null),
+            getPullRequestSnapshot: ({ threadId }) =>
+              threadId !== undefined
+                ? Effect.succeed({ snapshotSequence: 1, threads: [child] })
+                : Queue.offer(sweeps, undefined).pipe(
+                    Effect.as({
+                      schemaVersion: 2,
+                      snapshotSequence: 1,
+                      threads: [parent, child],
+                      archivedThreads: [],
+                    }),
+                  ),
           }),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             listShells: () => Effect.succeed([project]),
@@ -759,14 +753,37 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           const dependencies = Layer.mergeAll(
             Layer.mock(Orchestrator.OrchestratorV2)({
               streamDomainEvents: Stream.never,
-              getShellSnapshot: () =>
-                Deferred.succeed(sweepStarted, undefined).pipe(
-                  Effect.as({
-                    schemaVersion: 2,
-                    snapshotSequence: 1,
-                    threads: [thread],
-                    archivedThreads: [],
-                  }),
+              getPullRequestSnapshot: (options) =>
+                Effect.gen(function* () {
+                  const store = yield* ProjectionStore.ProjectionStoreV2;
+                  yield* store.apply({
+                    id: EventId.make(`event:${thread.id}:created`),
+                    type: "thread.created",
+                    threadId: thread.id,
+                    occurredAt: NOW,
+                    payload: { ...thread, lastVisitedAt: thread.lastVisitedAt ?? null },
+                  });
+                  const sql = yield* SqlClient.SqlClient;
+                  yield* sql`INSERT INTO orchestration_events (
+                    sequence, event_id, aggregate_kind, stream_id, stream_version, event_type,
+                    occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+                  ) VALUES (7, 'pr-discovery', 'thread', ${thread.id}, 1, 'thread.created',
+                    '2026-09-20T00:00:00.000Z', 'system', '{}', '{}', 2)`;
+                  for (const table of [
+                    "orchestration_v2_projection_turn_items",
+                    "orchestration_v2_projection_messages",
+                    "orchestration_v2_projection_provider_threads",
+                    "orchestration_v2_projection_runs",
+                  ])
+                    yield* sql.unsafe(`DROP TABLE ${table}`);
+                  const snapshot = yield* store.getPullRequestSnapshot(options);
+                  yield* Deferred.succeed(sweepStarted, undefined);
+                  return snapshot;
+                }).pipe(
+                  Effect.provide(
+                    ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+                  ),
+                  Effect.orDie,
                 ),
               dispatch: (command) =>
                 Effect.sync(() => {
@@ -831,6 +848,14 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             expect(commands[0]).toMatchObject({
               type: "thread.pull-request.sync",
               threadId: thread.id,
+              snapshotSequence: 7,
+              expected: {
+                workspaceRoot: project.workspaceRoot,
+                branch: thread.branch,
+                worktreePath: thread.worktreePath,
+                linkedPullRequest: savedReference,
+                branchPullRequest: savedReference,
+              },
               branchPullRequest: null,
             });
             expect(commands[0]).not.toHaveProperty("linkedPullRequest");

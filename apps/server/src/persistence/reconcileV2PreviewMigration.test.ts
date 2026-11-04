@@ -29,6 +29,7 @@ import SubagentDeliveryState from "./Migrations/075_SubagentDeliveryState.ts";
 import ProjectionProjectsPinArchive from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 import RepairBooleanSettledOverride from "./Migrations/077_RepairBooleanSettledOverride.ts";
 import DropOrchestrationEventCorrelationIndex from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
+import DelegatedRecoveryIndexes from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -65,10 +66,11 @@ const nightlyMigrations = [
   ["ProjectionProjectsPinArchive", ProjectionProjectsPinArchive],
   ["RepairBooleanSettledOverride", RepairBooleanSettledOverride],
   ["DropOrchestrationEventCorrelationIndex", DropOrchestrationEventCorrelationIndex],
+  ["DelegatedRecoveryIndexes", DelegatedRecoveryIndexes],
 ] as const;
 
 describe("V2 preview upgrade", () => {
-  it.effect.each([2, 15, 16, 17, 18])(
+  it.effect.each([2, 15, 16, 17, 18, 19])(
     "rebases a valid nightly migration prefix of length %s",
     (prefixLength) =>
       Effect.gen(function* () {
@@ -115,7 +117,7 @@ describe("V2 preview upgrade", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([70, 79, 80])(
+  it.effect.each([70, 79, 80, 81])(
     "appends nightly migrations without rewriting fork history through %s",
     (installedId) =>
       Effect.gen(function* () {
@@ -144,6 +146,17 @@ describe("V2 preview upgrade", () => {
           yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
             AND name = 'idx_orch_events_correlation_id'`,
           [],
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+            AND name IN (
+              'orchestration_v2_projection_threads_subagent_result_idx',
+              'orchestration_v2_projection_runs_delegated_delivery_idx'
+            ) ORDER BY name`,
+          [
+            { name: "orchestration_v2_projection_runs_delegated_delivery_idx" },
+            { name: "orchestration_v2_projection_threads_subagent_result_idx" },
+          ],
         );
         assert.deepStrictEqual(yield* runMigrations(), []);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -181,6 +194,7 @@ describe("V2 preview upgrade", () => {
         [79, "ProjectionProjectsPinArchive"],
         [80, "RepairBooleanSettledOverride"],
         [81, "DropOrchestrationEventCorrelationIndex"],
+        [82, "DelegatedRecoveryIndexes"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -245,6 +259,7 @@ describe("V2 preview upgrade", () => {
         [79, "ProjectionProjectsPinArchive"],
         [80, "RepairBooleanSettledOverride"],
         [81, "DropOrchestrationEventCorrelationIndex"],
+        [82, "DelegatedRecoveryIndexes"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -349,6 +364,7 @@ describe("V2 preview upgrade", () => {
         [79, "ProjectionProjectsPinArchive"],
         [80, "RepairBooleanSettledOverride"],
         [81, "DropOrchestrationEventCorrelationIndex"],
+        [82, "DelegatedRecoveryIndexes"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

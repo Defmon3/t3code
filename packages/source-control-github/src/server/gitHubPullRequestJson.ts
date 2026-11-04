@@ -1602,13 +1602,8 @@ const LINKED_ISSUE_FRAGMENT = `fragment LinkedIssue on Issue {
 }`;
 
 /**
- * The issues a pull request points at. GitHub keeps the two kinds of link apart and only reports
- * the closing ones as a field of their own; a mention that closes nothing is a cross-reference on
- * the timeline, which is the only place it is recorded at all.
- *
- * Both ends of a cross-reference are read because the pull request may be either of them — the
- * event is filed against whichever side was referenced — and a fragment on `Issue` spread over
- * the pull request end simply decodes as nothing.
+ * GitHub reports closing links separately; mentions exist only as timeline cross-references.
+ * Either endpoint may contain the issue, so read both sides.
  */
 export const LINKED_ISSUES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
   repository(owner: $owner, name: $name) {
@@ -1710,14 +1705,6 @@ export interface GitHubLinkedIssues {
   readonly truncated: boolean;
 }
 
-/**
- * Every issue this pull request points at, closing links first: GitHub reports the same issue in
- * both halves whenever a closing keyword also left a cross-reference behind, and de-duplication
- * keeps the stronger claim because "merging closes this" is what a reader acts on.
- *
- * A row that cannot name the four things a link is opened by is skipped rather than failing the
- * read, the same way a malformed listing row is.
- */
 export function decodeLinkedIssuesJson(
   raw: string,
 ): Result.Result<GitHubLinkedIssues, DecodeFailure> {
@@ -1752,20 +1739,8 @@ export function decodeLinkedIssuesJson(
 }
 
 /**
- * The issues a pull request's own words name, as one aliased lookup each, so a body citing ten of
- * them costs one request rather than ten.
- *
- * `issueOrPullRequest` because a bare number names either on GitHub and only one of the two
- * belongs in this section: the fragment is on `Issue`, so a number that turns out to be a change
- * request decodes as nothing and drops out silently.
- *
- * Owner, name and number are written into the document, so each is checked against what GitHub
- * can name first. A reference that fails is left out rather than failing the batch, because these
- * are read out of prose and a body may hold anything shaped like a path.
- *
- * A number that names neither an issue nor a pull request makes GitHub answer NOT_FOUND for the
- * whole document, which `gh` reports as a failed command — so the whole batch is lost together and
- * the caller falls back to the links the host reported itself.
+ * Batch validated prose references through Issue fragments so PR numbers are excluded.
+ * Any missing reference makes GitHub fail the entire query; callers retain host-reported links.
  */
 export function buildCitedIssuesGraphQlQuery(
   references: ReadonlyArray<IssueReference>,
@@ -1873,6 +1848,8 @@ function toFilesPatch(entries: ReadonlyArray<unknown>): GitHubPullRequestFilesPa
       ...(status === "removed" ? ["deleted file mode 100644"] : []),
       ...(status === "renamed"
         ? [
+            // The files API has no similarity score; Pierre needs this header to keep the rename.
+            `similarity index ${hunks.length > 0 || (value.additions ?? 0) + (value.deletions ?? 0) > 0 ? 0 : 100}%`,
             `rename from ${quoteGitPatchPath(oldPath)}`,
             `rename to ${quoteGitPatchPath(value.filename)}`,
           ]

@@ -1,9 +1,12 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
 import type * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - the free-space probe is a plain Promise callback.
+import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -28,11 +31,16 @@ import {
 } from "./cloud/serviceProtocol.ts";
 
 const spawnedChildren = vi.hoisted((): Array<NodeChildProcess.ChildProcess> => []);
+const runtimeSources = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeChildProcess>();
   const spawn = (...args: Parameters<typeof actual.spawn>) => {
-    const child = actual.spawn(...args);
+    const source = runtimeSources.get(args[0]);
+    const child =
+      source === undefined
+        ? actual.spawn(...args)
+        : actual.spawn(args[0], [source, ...(args[1] ?? [])], args[2]);
     spawnedChildren.push(child);
     return child;
   };
@@ -115,10 +123,18 @@ const writeFakeRuntime = (
   childSource: string,
 ) =>
   Effect.gen(function* () {
-    const entryPath = path.join(versionDir, "t3");
+    const windows = HostProcess.Platform.defaultValue() === "win32";
+    const entryPath = path.join(versionDir, windows ? "t3.exe" : "t3");
     yield* fs.makeDirectory(versionDir, { recursive: true });
-    yield* fs.writeFileString(entryPath, `#!${process.execPath}\n${childSource}`);
-    yield* fs.chmod(entryPath, 0o755);
+    if (windows) {
+      const sourcePath = path.join(versionDir, "runtime.mjs");
+      yield* fs.copyFile(process.execPath, entryPath);
+      yield* fs.writeFileString(sourcePath, childSource);
+      runtimeSources.set(entryPath, sourcePath);
+    } else {
+      yield* fs.writeFileString(entryPath, `#!${process.execPath}\n${childSource}`);
+      yield* fs.chmod(entryPath, 0o755);
+    }
     yield* fs.writeFileString(
       path.join(versionDir, ".install-complete"),
       `${path.basename(versionDir)}\n`,
@@ -393,7 +409,8 @@ if (context.update?.status === "pending") {
         const databasePath = path.join(root, "userdata", "state.sqlite");
         const databaseFile =
           kind === "file" ? databasePath : path.join(root, "data", "original.sqlite");
-        const linkTarget = kind === "dangling symlink" ? "../original.sqlite" : databaseFile;
+        const linkTarget =
+          kind === "dangling symlink" ? path.join("..", "original.sqlite") : databaseFile;
         const original = "database before migration";
         yield* fs.makeDirectory(path.dirname(databaseFile), { recursive: true });
         if (kind === "dangling symlink") {
@@ -615,6 +632,35 @@ setInterval(() => {}, 1_000);
       const state = yield* Effect.promise(() => readServiceState(statePath));
       assert.equal(state.activeVersion, "1.0.0");
       assert.isUndefined(state.update);
+    }),
+  );
+
+  it.effect("reclaims partial backups left by killed updates before checking space", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-orphan-" });
+      const databasePath = path.join(root, "state.sqlite");
+      yield* writeSparseFile(databasePath, 10 * 1024 ** 3);
+      const backupRoot = path.join(root, "runtime", "db-backup");
+      const orphan = path.join(backupRoot, "earlier-update.staging");
+      const completed = path.join(backupRoot, "completed-update");
+      yield* fs.makeDirectory(orphan, { recursive: true });
+      yield* fs.writeFileString(path.join(orphan, "database"), "partial copy");
+      yield* fs.makeDirectory(completed);
+      yield* fs.writeFileString(path.join(completed, "database"), "complete copy");
+
+      // The orphan is what keeps this disk too full for a full copy.
+      const blocker = yield* Effect.promise(() =>
+        databaseBackupBlocker(root, databasePath, {
+          readFreeBytes: () => Promise.resolve((NodeFS.existsSync(orphan) ? 8 : 11) * 1024 ** 3),
+          canClone: () => Promise.resolve(false),
+        }),
+      );
+
+      assert.isUndefined(blocker);
+      assert.isFalse(yield* fs.exists(orphan));
+      assert.isTrue(yield* fs.exists(path.join(completed, "database")));
     }),
   );
 
