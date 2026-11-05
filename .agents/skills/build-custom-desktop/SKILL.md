@@ -10,6 +10,28 @@ Never trigger, enable, dispatch, rerun, or push to a branch that
 triggers a GitHub Actions build. Never use hosted runners as a fallback. GitHub may store
 published release assets, but it must not execute the build.
 
+## Definition of done
+
+This skill is not complete when local files exist. It is complete only when all of these
+steps have succeeded:
+
+1. Windows and Linux desktop artifacts build locally.
+2. Windows and Linux CLI archives build locally and report the requested version.
+3. Both updater manifests and `SHA256SUMS` are verified.
+4. One stable GitHub release on `Defmon3/t3code` contains the nine required assets.
+5. `gh release view` shows that release as published and non-draft.
+
+If the release does not exist, the updater has nothing to see. Do not report success after
+the local build alone.
+
+## Prerequisite failure rule
+
+When a command reports that a tool is missing, stop and inspect the machine before declaring
+the prerequisite absent. Check the repository-local binaries, `C:\Users\defmon3\.cargo\bin`,
+Visual Studio and `vswhere`, WSL, and the cached Linux Node runtime. A tool installed outside
+the inherited build `PATH` is available once its real path is prepended. Fix the build `PATH`
+and retry before changing dependencies, installing software, or reporting a blocker.
+
 ## Include the full application
 
 - Include all completed, requested changes on `custom-main`. Preserve unrelated work.
@@ -94,5 +116,8 @@ published release assets, but it must not execute the build.
 - Publish the finished installers, updater manifests, both CLI archives, and `SHA256SUMS` as one
   GitHub Release after all local builds and archive checks pass. Upload existing files only;
   never trigger a hosted build. Exclude `builder-debug.yml`.
+- Push only the version tag needed for that release. Then create the stable release and verify it
+  with `gh release view --repo Defmon3/t3code <tag>`. Require `isDraft: false`, `isPrerelease: false`,
+  and all nine expected assets before reporting completion.
 - Do not install, restart the app, or push source unless the user requested that action.
 - Preserve previous installers and releases for rollback.
