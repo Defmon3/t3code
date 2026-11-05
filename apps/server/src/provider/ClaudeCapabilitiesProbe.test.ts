@@ -126,7 +126,7 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
     );
     const capabilities = yield* probeClaudeCapabilities(
       yield* decodeClaudeSettings({ binaryPath: "claude" }),
-      { PATH: process.env.PATH, CLAUDE_CONFIG_DIR: configDir },
+      { PATH: (yield* HostProcess.Environment).PATH, CLAUDE_CONFIG_DIR: configDir },
     );
     assert.deepEqual(
       capabilities.models?.map((model) => model.value),
