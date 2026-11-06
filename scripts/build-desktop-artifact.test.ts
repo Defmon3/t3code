@@ -56,7 +56,7 @@ import {
   WindowsDesktopBuildPrerequisitesMissingError,
   WindowsPackagedPayloadValidationError,
   stageCursorSdkPlatformPackages,
-  WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
+  WINDOWS_PACKAGED_NON_NATIVE_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_ASAR_RESOURCE,
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
@@ -134,6 +134,7 @@ const WINDOWS_PAYLOAD_FIXTURE_VERSION = "1.2.3";
 
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
   readonly copyUnpackedNatives: boolean;
+  readonly extraNativeFiles?: ReadonlyArray<string>;
   readonly serverEntrySource?: string;
   readonly wslRuntime?: "valid" | "loose-server-tree" | "missing-pty" | "bad-digest";
   readonly targetArch?: "x64" | "arm64";
@@ -151,6 +152,9 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
   yield* fs.writeFileString(nativePath, "MZ native-binary");
+  for (const name of input.extraNativeFiles ?? []) {
+    yield* fs.writeFileString(path.join(path.dirname(nativePath), name), "MZ native-binary");
+  }
 
   const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
   yield* packWindowsServerAsar({ sourceDir, asarPath: generatedAsarPath, arch: "x64" });
@@ -912,7 +916,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.equal(result.packagedAppDir, fixture.packagedAppDir);
         assert.deepStrictEqual(result.unpackedFiles, ["node_modules/native/addon.node"]);
-        assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
+        assert.isBelow(
+          result.fileCount - result.unpackedFiles.length,
+          WINDOWS_PACKAGED_NON_NATIVE_FILE_LIMIT,
+        );
         assert.deepStrictEqual(secondAsar, firstAsar);
       }),
     ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
@@ -1296,23 +1303,39 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("rejects a Windows payload that regresses above the file-count budget", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-          fileLimit: 2,
-        }).pipe(Effect.flip);
+  it.effect.each(["resources/extra.js", "resources/server.asar.unpacked/extra.dll"])(
+    "rejects excess undeclared files at %s while allowing declared native dependencies",
+    (extraFile) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const fixture = yield* makeWindowsPayloadFixture({
+            copyUnpackedNatives: true,
+            extraNativeFiles: Array.from(
+              { length: WINDOWS_PACKAGED_NON_NATIVE_FILE_LIMIT },
+              (_, index) => `addon-${index}.dll`,
+            ),
+          });
+          const input = {
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch: "x64" as const,
+            appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+            nonNativeFileLimit: 4,
+          };
+          const result = yield* validateWindowsPackagedPayload(input);
+          assert.isAbove(result.fileCount, WINDOWS_PACKAGED_NON_NATIVE_FILE_LIMIT);
+          yield* fs.writeFileString(path.join(fixture.packagedAppDir, extraFile), "extra");
 
-        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
-        assert.equal(error.reason, "file-limit-exceeded");
-        assert.isAbove(error.fileCount ?? 0, 2);
-      }),
-    ),
+          const error = yield* validateWindowsPackagedPayload(input).pipe(Effect.flip);
+
+          assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+          assert.equal(error.reason, "file-limit-exceeded");
+          assert.equal(error.fileCount, result.fileCount + 1);
+          assert.equal(error.fileLimit, result.fileCount);
+        }),
+      ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("rejects a sidecar whose extracted server bundle cannot resolve", () =>
