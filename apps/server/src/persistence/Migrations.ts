@@ -85,6 +85,7 @@ import MigrationProjectionProjectsPinArchive from "./Migrations/076_ProjectionPr
 import Migration0080 from "./Migrations/077_RepairBooleanSettledOverride.ts";
 import Migration0081 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
 import Migration0082 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+import Migration0083 from "./Migrations/080_ScheduledTaskThreadMode.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -170,6 +171,7 @@ const migrationEntries = [
   [80, "RepairBooleanSettledOverride", Migration0080],
   [81, "DropOrchestrationEventCorrelationIndex", Migration0081],
   [82, "DelegatedRecoveryIndexes", Migration0082],
+  [83, "ScheduledTaskThreadMode", Migration0083],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

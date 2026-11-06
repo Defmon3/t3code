@@ -826,7 +826,6 @@ const make = Effect.gen(function* () {
     };
   };
   const inspectEnvironmentAccount = Option.match(config.envToken, {
-    // @effect-diagnostics-next-line effectSucceedWithVoid:off -- The optional account requires undefined, not void.
     onNone: () => Effect.succeed<IssueTrackerConnection["environmentAccount"]>(undefined),
     onSome: (token) =>
       inspectToken(token).pipe(

@@ -1,6 +1,6 @@
 import type { EnvironmentId, VcsHistoryRef } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { buildGitRefTree, filterGitRefTree } from "../../lib/gitRefTree";
@@ -29,35 +29,39 @@ export function toggleGitHistoryFavorite(
     : [...favorites, branch];
 }
 
-export function useGitHistoryRefs(
+function useGitHistoryFavorites(
+  environmentId: EnvironmentId,
+  repositoryKey: string | null,
+  localRefs: ReadonlyArray<VcsHistoryRef>,
+  normalizedRefFilter: string,
+) {
+  const favoriteStorageKey =
+    repositoryKey === null ? null : gitHistoryFavoriteStorageKey(environmentId, repositoryKey);
+  const [persistedFavoriteBranches, setFavoriteBranches] = useLocalStorage(
+    favoriteStorageKey,
+    EMPTY_FAVORITE_BRANCHES,
+    FavoriteBranchesSchema,
+  );
+  const favoriteBranchSet = new Set(persistedFavoriteBranches);
+  const favoriteRefs = localRefs.filter(
+    (ref) =>
+      favoriteBranchSet.has(ref.name) &&
+      (normalizedRefFilter.length === 0 ||
+        ref.name.toLocaleLowerCase().includes(normalizedRefFilter)),
+  );
+  return { favoriteBranchSet, favoriteRefs, setFavoriteBranches };
+}
+
+function useGitHistoryRefCatalog(
   environmentId: EnvironmentId,
   cwd: string,
   revision: number,
-  scopeKey = `${environmentId}:${cwd}`,
-  state?: {
-    readonly selectedRevision: GitHistoryRevision | null | undefined;
-    readonly onSelectedRevisionChange: (
-      selectedRevision: GitHistoryRevision | null | undefined,
-    ) => void;
-  },
+  refFilter: string,
+  expandedRefKeys: ReadonlySet<string>,
+  selectedRevisionValue: GitHistoryRevision | null | undefined,
 ) {
-  const [refFilter, setRefFilter] = useState("");
-  const [selectedRevisionState, setSelectedRevision] = useState(() => ({
-    scopeKey,
-    selectedRevision: state?.selectedRevision,
-  }));
-  const selectedRevisionValue =
-    selectedRevisionState.scopeKey === scopeKey
-      ? selectedRevisionState.selectedRevision
-      : undefined;
-  if (selectedRevisionState.scopeKey !== scopeKey) {
-    setSelectedRevision({ scopeKey, selectedRevision: state?.selectedRevision });
-  }
-  const [expandedRefKeys, setExpandedRefKeys] = useState<ReadonlySet<string>>(
-    () => new Set(["section:local"]),
-  );
-  const deferredRefFilter = useDebouncedValue(refFilter.trim(), REF_FILTER_DEBOUNCE_MS);
-  const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
+  const trimmedRefFilter = refFilter.trim();
+  const deferredRefFilter = useDebouncedValue(trimmedRefFilter, REF_FILTER_DEBOUNCE_MS);
   const shouldLoadRemote =
     deferredRefFilter.length > 0 ||
     expandedRefKeys.has("section:remote") ||
@@ -82,59 +86,112 @@ export function useGitHistoryRefs(
       : { environmentId: null, cwd: null },
     { limit: 200, namespace: "tag", revision },
   );
+
+  const normalizedRefFilter = trimmedRefFilter.toLocaleLowerCase();
   const localRefs = refs.refs;
+  const localRefTree = filterGitRefTree(buildGitRefTree(localRefs), normalizedRefFilter);
   const remoteRefs = remote.refs;
+  const remoteRefTree = filterGitRefTree(buildGitRefTree(remoteRefs), normalizedRefFilter);
   const tagRefs = tags.refs;
-  const repositoryKey = refs.data?.repositoryKey ?? null;
-  const favoriteStorageKey =
-    repositoryKey === null ? null : gitHistoryFavoriteStorageKey(environmentId, repositoryKey);
-  const [persistedFavoriteBranches, setFavoriteBranches] = useLocalStorage(
-    favoriteStorageKey,
-    EMPTY_FAVORITE_BRANCHES,
-    FavoriteBranchesSchema,
+  const tagRefTree = filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter);
+  return {
+    deferredRefFilter,
+    normalizedRefFilter,
+    shouldLoadRemote,
+    shouldLoadTags,
+    refs,
+    remote,
+    tags,
+    localRefs,
+    remoteRefs,
+    tagRefs,
+    localRefTree,
+    remoteRefTree,
+    tagRefTree,
+  };
+}
+
+export function useGitHistoryRefs(
+  environmentId: EnvironmentId,
+  cwd: string,
+  revision: number,
+  requestedScopeKey?: string,
+  state?: {
+    readonly selectedRevision: GitHistoryRevision | null | undefined;
+    readonly onSelectedRevisionChange: (
+      selectedRevision: GitHistoryRevision | null | undefined,
+    ) => void;
+  },
+) {
+  const scopeKey = requestedScopeKey ?? `${environmentId}:${cwd}`;
+  const [refFilter, setRefFilter] = useState("");
+  const [selectedRevisionState, setSelectedRevision] = useState(() => ({
+    scopeKey,
+    selectedRevision: state?.selectedRevision,
+  }));
+  const selectedRevisionValue =
+    state !== undefined
+      ? state.selectedRevision
+      : selectedRevisionState.scopeKey === scopeKey
+        ? selectedRevisionState.selectedRevision
+        : undefined;
+  if (selectedRevisionState.scopeKey !== scopeKey) {
+    setSelectedRevision({ scopeKey, selectedRevision: state?.selectedRevision });
+  }
+  const [expandedRefKeys, setExpandedRefKeys] = useState<ReadonlySet<string>>(
+    () => new Set(["section:local"]),
   );
-  const localRefTree = useMemo(
-    () => filterGitRefTree(buildGitRefTree(localRefs), normalizedRefFilter),
-    [localRefs, normalizedRefFilter],
+  const {
+    deferredRefFilter,
+    normalizedRefFilter,
+    shouldLoadRemote,
+    shouldLoadTags,
+    refs,
+    remote,
+    tags,
+    localRefs,
+    remoteRefs,
+    tagRefs,
+    localRefTree,
+    remoteRefTree,
+    tagRefTree,
+  } = useGitHistoryRefCatalog(
+    environmentId,
+    cwd,
+    revision,
+    refFilter,
+    expandedRefKeys,
+    selectedRevisionValue,
   );
-  const favoriteBranchSet = useMemo(
-    () => new Set(persistedFavoriteBranches),
-    [persistedFavoriteBranches],
-  );
-  const favoriteRefs = useMemo(
-    () =>
-      localRefs.filter(
-        (ref) =>
-          favoriteBranchSet.has(ref.name) &&
-          (normalizedRefFilter.length === 0 ||
-            ref.name.toLocaleLowerCase().includes(normalizedRefFilter)),
-      ),
-    [favoriteBranchSet, localRefs, normalizedRefFilter],
-  );
-  const remoteRefTree = useMemo(
-    () => filterGitRefTree(buildGitRefTree(remoteRefs), normalizedRefFilter),
-    [normalizedRefFilter, remoteRefs],
-  );
-  const tagRefTree = useMemo(
-    () => filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter),
-    [normalizedRefFilter, tagRefs],
+  const { favoriteBranchSet, favoriteRefs, setFavoriteBranches } = useGitHistoryFavorites(
+    environmentId,
+    refs.data?.repositoryKey ?? null,
+    localRefs,
+    normalizedRefFilter,
   );
   const currentRefResult = refs.data?.currentRef;
-  const lastResolvedCurrentRef = useRef<{
+  const [lastResolvedCurrentRef, setLastResolvedCurrentRef] = useState<{
     scopeKey: string;
     value: VcsHistoryRef | null | undefined;
   }>({ scopeKey, value: undefined });
-  if (lastResolvedCurrentRef.current.scopeKey !== scopeKey)
-    lastResolvedCurrentRef.current = { scopeKey, value: undefined };
-  if (currentRefResult !== undefined) lastResolvedCurrentRef.current.value = currentRefResult;
+  if (
+    lastResolvedCurrentRef.scopeKey !== scopeKey ||
+    (currentRefResult !== undefined && lastResolvedCurrentRef.value !== currentRefResult)
+  ) {
+    setLastResolvedCurrentRef({ scopeKey, value: currentRefResult });
+  }
   const currentRef =
-    currentRefResult === undefined ? lastResolvedCurrentRef.current.value : currentRefResult;
-  const defaultSelectedRevision = useMemo(() => {
+    currentRefResult !== undefined
+      ? currentRefResult
+      : lastResolvedCurrentRef.scopeKey === scopeKey
+        ? lastResolvedCurrentRef.value
+        : undefined;
+  const defaultSelectedRevision = (() => {
     if (currentRef === undefined) return refs.error === null ? undefined : null;
     if (currentRef === null) return null;
     return { label: currentRef.name, revision: `refs/heads/${currentRef.name}` };
-  }, [currentRef, refs.error]);
-  const selectedRefWasRemoved = useMemo(() => {
+  })();
+  const resolveSelectedRefRemoval = () => {
     if (selectedRevisionValue === undefined || selectedRevisionValue === null) return false;
     if (deferredRefFilter.length > 0) return false;
     const selectedRef = selectedRevisionValue.revision;
@@ -160,59 +217,43 @@ export function useGitHistoryRefs(
       );
     }
     return false;
-  }, [
-    localRefs,
-    deferredRefFilter,
-    refs.data?.isComplete,
-    refs.data?.nextCursor,
-    remote.data?.isComplete,
-    remote.data?.nextCursor,
-    remoteRefs,
-    selectedRevisionValue,
-    tagRefs,
-    tags.data?.isComplete,
-    tags.data?.nextCursor,
-  ]);
-  const selectedRevision =
-    selectedRevisionValue === undefined || selectedRefWasRemoved
-      ? defaultSelectedRevision
-      : selectedRevisionValue;
-  const initialLocalRefError =
-    currentRef === undefined && selectedRevisionValue === undefined ? refs.error : null;
-  const toggleRefKey = useCallback((key: string) => {
+  };
+  const toggleRefKey = (key: string) => {
     setExpandedRefKeys((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  }, []);
-  const selectRef = useCallback(
-    (label: string, revision: string) => {
-      const next = { label, revision };
-      setSelectedRevision({ scopeKey, selectedRevision: next });
-      state?.onSelectedRevisionChange(next);
-    },
-    [scopeKey, state],
-  );
-  const selectAllRefs = useCallback(() => {
+  };
+  const selectRef = (label: string, revision: string) => {
+    const next = { label, revision };
+    setSelectedRevision({ scopeKey, selectedRevision: next });
+    state?.onSelectedRevisionChange(next);
+  };
+  const selectAllRefs = () => {
     setSelectedRevision({ scopeKey, selectedRevision: null });
     state?.onSelectedRevisionChange(null);
-  }, [scopeKey, state]);
-  const toggleFavorite = useCallback(
-    (branch: string) => {
-      const toggle = (current: ReadonlyArray<string>) => toggleGitHistoryFavorite(current, branch);
-      setFavoriteBranches(toggle);
-    },
-    [setFavoriteBranches],
-  );
+  };
+  const toggleFavorite = (branch: string) => {
+    const toggle = (current: ReadonlyArray<string>) => toggleGitHistoryFavorite(current, branch);
+    setFavoriteBranches(toggle);
+  };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears a deleted ref from the owning panel external state store
   useEffect(() => {
-    if (!selectedRefWasRemoved) return;
+    if (resolveSelectedRefRemoval()) state?.onSelectedRevisionChange(undefined);
+  }, [resolveSelectedRefRemoval, state]);
+  const selectedRefWasRemoved = resolveSelectedRefRemoval();
+  if (state === undefined && selectedRefWasRemoved) {
     setSelectedRevision({ scopeKey, selectedRevision: undefined });
-    state?.onSelectedRevisionChange(undefined);
-  }, [scopeKey, selectedRefWasRemoved, state]);
-
+  }
+  const selectedRevision =
+    selectedRevisionValue === undefined || selectedRefWasRemoved
+      ? defaultSelectedRevision
+      : selectedRevisionValue;
+  const initialLocalRefError =
+    currentRef === undefined && selectedRevisionValue === undefined ? refs.error : null;
   const refNamespaces = [
     { namespace: "local", query: refs, enabled: true },
     { namespace: "remote", query: remote, enabled: shouldLoadRemote },

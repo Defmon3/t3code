@@ -33,7 +33,7 @@ import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useFilesystemReadAccess } from "./filesystem";
@@ -480,6 +480,8 @@ export function useTurnItemDetail(
   );
 }
 
+const isVcsSnapshotExpiredError = Schema.is(VcsSnapshotExpiredError);
+
 const EMPTY_HISTORY_REFS: ReadonlyArray<VcsHistoryRef> = [];
 export function usePaginatedHistoryRefs(
   target: VcsRefTarget,
@@ -509,53 +511,32 @@ export function usePaginatedHistoryRefs(
     cursors: INITIAL_BRANCH_CURSORS,
   });
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_BRANCH_CURSORS;
-  const pageAtoms = useMemo(
-    () =>
-      target.environmentId !== null && target.cwd !== null
-        ? cursors.map((cursor) =>
-            vcsEnvironment.listHistoryRefs({
-              environmentId: target.environmentId!,
-              input: {
-                cwd: target.cwd!,
-                ...(query.length > 0 ? { query } : {}),
-                ...(cursor === undefined ? {} : { cursor }),
-                limit,
-                queryGeneration: queryGeneration + revision,
-                namespace,
-                ...(refreshGeneration > 0 ? { refresh: true } : {}),
-              },
-            }),
-          )
-        : [],
-    [
-      cursors,
-      limit,
-      query,
-      queryGeneration,
-      namespace,
-      revision,
-      refreshGeneration,
-      target.cwd,
-      target.environmentId,
-    ],
-  );
-  const pagesAtom = useMemo(
-    () =>
-      Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
-        Atom.withLabel(`web:vcs-ref-pages:${targetKey ?? "empty"}`),
-      ),
-    [pageAtoms, targetKey],
+  const pageAtoms =
+    target.environmentId !== null && target.cwd !== null
+      ? cursors.map((cursor) =>
+          vcsEnvironment.listHistoryRefs({
+            environmentId: target.environmentId!,
+            input: {
+              cwd: target.cwd!,
+              ...(query.length > 0 ? { query } : {}),
+              ...(cursor === undefined ? {} : { cursor }),
+              limit,
+              queryGeneration: queryGeneration + revision,
+              namespace,
+              ...(refreshGeneration > 0 ? { refresh: true } : {}),
+            },
+          }),
+        )
+      : [];
+  const pagesAtom = Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
+    Atom.withLabel(`web:vcs-ref-pages:${targetKey ?? "empty"}`),
   );
   const results = useAtomValue(pagesAtom);
-  const values = useMemo(
-    () =>
-      results.flatMap((result) => {
-        const value = Option.getOrNull(AsyncResult.value(result));
-        return value === null ? [] : [value];
-      }),
-    [results],
-  );
-  const liveData = useMemo<VcsListHistoryRefsResult | null>(() => {
+  const values = results.flatMap((result) => {
+    const value = Option.getOrNull(AsyncResult.value(result));
+    return value === null ? [] : [value];
+  });
+  const liveData: VcsListHistoryRefsResult | null = (() => {
     const first = values[0] ?? null;
     const last = values.at(-1) ?? null;
     if (first === null || last === null) return null;
@@ -572,26 +553,31 @@ export function usePaginatedHistoryRefs(
       nextCursor: last.nextCursor,
       isComplete: last.isComplete,
     };
-  }, [values]);
+  })();
   const [retainedData, setRetainedData] = useState<{
     readonly scopeKey: string;
     readonly data: VcsListHistoryRefsResult;
   } | null>(null);
-  useEffect(() => {
-    if (scopeKey !== null && liveData !== null) setRetainedData({ scopeKey, data: liveData });
-  }, [liveData, scopeKey]);
+  if (
+    scopeKey !== null &&
+    liveData !== null &&
+    (retainedData?.scopeKey !== scopeKey || retainedData.data !== liveData)
+  ) {
+    setRetainedData({ scopeKey, data: liveData });
+  }
   const data = liveData ?? (retainedData?.scopeKey === scopeKey ? retainedData.data : null);
   const failed = results.find((result) => result._tag === "Failure");
   const expiredPage =
-    failed?._tag === "Failure" && Schema.is(VcsSnapshotExpiredError)(Cause.squash(failed.cause));
-  const recoveredSnapshotGeneration = useRef<number | null>(null);
-  useEffect(() => {
-    if (!expiredPage || recoveredSnapshotGeneration.current === queryGeneration) return;
-    recoveredSnapshotGeneration.current = queryGeneration;
+    failed?._tag === "Failure" && isVcsSnapshotExpiredError(Cause.squash(failed.cause));
+  const [recoveredSnapshotGeneration, setRecoveredSnapshotGeneration] = useState<number | null>(
+    null,
+  );
+  if (expiredPage && recoveredSnapshotGeneration !== queryGeneration) {
+    setRecoveredSnapshotGeneration(queryGeneration);
     setQueryGeneration((generation) => generation + 1);
     setRefreshGeneration((generation) => generation + 1);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [expiredPage, queryGeneration, targetKey]);
+  }
   const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
   const error =
     failed?._tag === "Failure"
@@ -602,19 +588,19 @@ export function usePaginatedHistoryRefs(
             : "Failed to load refs.";
         })()
       : null;
-  const refresh = useCallback(() => {
+  const refresh = () => {
     setQueryGeneration((generation) => generation + 1);
     setRefreshGeneration((generation) => generation + 1);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [targetKey]);
-  const retry = useCallback(() => {
+  };
+  const retry = () => {
     const failedIndex = results.findIndex((result) => result._tag === "Failure");
     const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
     if (failedPageAtom !== undefined) {
       appAtomRegistry.refresh(failedPageAtom);
     }
-  }, [pageAtoms, results]);
-  const loadNext = useCallback(() => {
+  };
+  const loadNext = () => {
     if (
       liveData === null ||
       targetKey === null ||
@@ -630,7 +616,7 @@ export function usePaginatedHistoryRefs(
         ? { targetKey, cursors: currentCursors }
         : { targetKey, cursors: [...currentCursors, data.nextCursor!] };
     });
-  }, [data?.nextCursor, liveData, targetKey]);
+  };
 
   return {
     data,
@@ -646,5 +632,5 @@ export function usePaginatedHistoryRefs(
 }
 
 export function isVcsSnapshotExpiredCause(cause: Cause.Cause<unknown>): boolean {
-  return Schema.is(VcsSnapshotExpiredError)(Cause.squash(cause));
+  return isVcsSnapshotExpiredError(Cause.squash(cause));
 }

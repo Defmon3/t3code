@@ -31,6 +31,7 @@ const effectQueue = vi.hoisted(() => ({
   cursor: 0,
   dependencies: [] as Array<ReadonlyArray<unknown> | undefined>,
   effects: [] as Array<() => void>,
+  cleanups: [] as Array<(() => void) | undefined>,
   stateUpdates: 0,
 }));
 
@@ -109,7 +110,7 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useCallback: reactHookHarness.useCallback,
     useDeferredValue: <Value,>(value: Value) => value,
-    useEffect: (effect: () => void, dependencies?: ReadonlyArray<unknown>) => {
+    useEffect: (effect: () => void | (() => void), dependencies?: ReadonlyArray<unknown>) => {
       const index = effectQueue.cursor++;
       const previous = effectQueue.dependencies[index];
       if (
@@ -121,9 +122,16 @@ vi.mock("react", async (importOriginal) => {
         return;
       }
       effectQueue.dependencies[index] = dependencies;
-      effectQueue.effects.push(effect);
+      effectQueue.effects.push(() => {
+        effectQueue.cleanups[index]?.();
+        const cleanup = effect();
+        effectQueue.cleanups[index] = typeof cleanup === "function" ? cleanup : undefined;
+      });
     },
     useMemo: reactHookHarness.useMemo,
+    useInsertionEffect: (effect: () => void) => {
+      effect();
+    },
     useLayoutEffect: (effect: () => void) => {
       effect();
     },
@@ -437,16 +445,24 @@ function flushEffects(): void {
 
 function stubResizeObserver(initialWidth: number): (width: number) => void {
   let notify: ((width: number) => void) | undefined;
+  let target: Element | undefined;
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      constructor(callback: (entries: ReadonlyArray<{ contentRect: { width: number } }>) => void) {
-        notify = (width) => callback([{ contentRect: { width } }]);
+      constructor(
+        callback: (
+          entries: ReadonlyArray<{ target: Element; contentRect: { width: number } }>,
+        ) => void,
+      ) {
+        notify = (width) => {
+          if (target !== undefined) callback([{ target, contentRect: { width } }]);
+        };
       }
 
       disconnect() {}
 
-      observe() {
+      observe(element: Element) {
+        target = element;
         notify?.(initialWidth);
       }
     },
@@ -528,6 +544,7 @@ function componentElement(
 }
 
 afterEach(() => {
+  for (const cleanup of effectQueue.cleanups) cleanup?.();
   vi.unstubAllGlobals();
 });
 
@@ -537,6 +554,7 @@ beforeEach(() => {
   effectQueue.cursor = 0;
   effectQueue.dependencies.length = 0;
   effectQueue.effects.length = 0;
+  effectQueue.cleanups.length = 0;
   effectQueue.stateUpdates = 0;
   historyState.commitDetails = null;
   historyState.diff = { diff: "", isRepo: true, truncated: false };

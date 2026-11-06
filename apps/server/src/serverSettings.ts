@@ -66,6 +66,7 @@ import {
 import {
   mapSettingsSecrets,
   mapSettingsSecretValues,
+  withoutRemovedSecretProviderReferences,
   SECRET_REDACTED,
   type SettingsSecret,
 } from "./settingsSecrets.ts";
@@ -1211,10 +1212,11 @@ const make = Effect.gen(function* () {
         if (patch === undefined) {
           return yield* materializeSettingsSecrets(current).pipe(Effect.map(toEffective));
         }
-        const updated = yield* update(current, patch);
-        if (updated === current) {
+        const patched = yield* update(current, patch);
+        if (patched === current) {
           return yield* materializeSettingsSecrets(current).pipe(Effect.map(toEffective));
         }
+        const updated = withEchoedSecretReferences(current, patched);
         // Vet before secrets: a variable the policy hides from clients is not one they removed.
         const vetted = managed.vetWrite(current, yield* normalizeServerSettings(updated), patch);
         if (vetted._tag === "Locked") {
@@ -1243,7 +1245,11 @@ const make = Effect.gen(function* () {
             managedBy: managedPolicy?.organization,
           });
         }
-        const persisted = yield* persistSettingsSecrets(current, vettedProviders.settings);
+        // After vetting, which can keep stored variables a policy hides from clients.
+        const persisted = yield* persistSettingsSecrets(
+          current,
+          withoutRemovedSecretProviderReferences(current, vettedProviders.settings),
+        );
         const next = yield* normalizeServerSettings(persisted.settings);
         const materializedNext = yield* Effect.uninterruptibleMask(() =>
           Effect.gen(function* () {

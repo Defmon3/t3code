@@ -30,6 +30,7 @@ import ProjectionProjectsPinArchive from "./Migrations/076_ProjectionProjectsPin
 import RepairBooleanSettledOverride from "./Migrations/077_RepairBooleanSettledOverride.ts";
 import DropOrchestrationEventCorrelationIndex from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
 import DelegatedRecoveryIndexes from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+import ScheduledTaskThreadMode from "./Migrations/080_ScheduledTaskThreadMode.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -67,10 +68,11 @@ const nightlyMigrations = [
   ["RepairBooleanSettledOverride", RepairBooleanSettledOverride],
   ["DropOrchestrationEventCorrelationIndex", DropOrchestrationEventCorrelationIndex],
   ["DelegatedRecoveryIndexes", DelegatedRecoveryIndexes],
+  ["ScheduledTaskThreadMode", ScheduledTaskThreadMode],
 ] as const;
 
 describe("V2 preview upgrade", () => {
-  it.effect.each([2, 15, 16, 17, 18, 19])(
+  it.effect.each([2, 15, 16, 17, 18, 19, 20])(
     "rebases a valid nightly migration prefix of length %s",
     (prefixLength) =>
       Effect.gen(function* () {
@@ -117,7 +119,7 @@ describe("V2 preview upgrade", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([70, 79, 80, 81])(
+  it.effect.each([70, 79, 80, 81, 82])(
     "appends nightly migrations without rewriting fork history through %s",
     (installedId) =>
       Effect.gen(function* () {
@@ -195,6 +197,7 @@ describe("V2 preview upgrade", () => {
         [80, "RepairBooleanSettledOverride"],
         [81, "DropOrchestrationEventCorrelationIndex"],
         [82, "DelegatedRecoveryIndexes"],
+        [83, "ScheduledTaskThreadMode"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -260,6 +263,7 @@ describe("V2 preview upgrade", () => {
         [80, "RepairBooleanSettledOverride"],
         [81, "DropOrchestrationEventCorrelationIndex"],
         [82, "DelegatedRecoveryIndexes"],
+        [83, "ScheduledTaskThreadMode"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -365,6 +369,7 @@ describe("V2 preview upgrade", () => {
         [80, "RepairBooleanSettledOverride"],
         [81, "DropOrchestrationEventCorrelationIndex"],
         [82, "DelegatedRecoveryIndexes"],
+        [83, "ScheduledTaskThreadMode"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

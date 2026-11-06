@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off - Native browser authorization uses a private pipe or Unix socket.
-// @effect-diagnostics preferSchemaOverJson:off - The native signature protocol requires the original JSON parameter order.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
@@ -35,6 +34,8 @@ const AccessRequest = Schema.Struct({
   method: Schema.Literal("browser/access"),
   params: AccessParams,
 });
+const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeRequest = Schema.decodeUnknownOption(AccessRequest, { onExcessProperty: "error" });
 const isRequest = (input: unknown): input is typeof AccessRequest.Type =>
   Option.isSome(decodeRequest(input));
@@ -105,9 +106,7 @@ export const make = Effect.fn("CodexBrowserAccess.make")(function* (options: {
           Effect.gen(function* () {
             const request = yield* Effect.try({
               try: () => {
-                const parsed: unknown = JSON.parse(
-                  new TextDecoder("utf-8", { fatal: true }).decode(frame),
-                );
+                const parsed = decodeJson(new TextDecoder("utf-8", { fatal: true }).decode(frame));
                 if (!isRequest(parsed))
                   throw new Error("Invalid Codex browser authorization request.");
                 // why: The native host verifies the original parameter property order.
@@ -118,16 +117,24 @@ export const make = Effect.fn("CodexBrowserAccess.make")(function* (options: {
             const allowed =
               request.params.executorId === executorId &&
               (yield* options.authorize(request.params));
-            const payload = JSON.stringify({
+            const payload = yield* encodeJson({
               domain: "codex.browserAccess.v1",
               request: request.params,
               allowed,
-            });
+            }).pipe(
+              Effect.mapError((cause) => new BrowserAccessError({ operation: "request", cause })),
+            );
             const signature = NodeCrypto.sign(null, Buffer.from(payload), privateKey).toString(
               "base64",
             );
             const response = Buffer.from(
-              JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { payload, signature } }),
+              yield* encodeJson({
+                jsonrpc: "2.0",
+                id: request.id,
+                result: { payload, signature },
+              }).pipe(
+                Effect.mapError((cause) => new BrowserAccessError({ operation: "request", cause })),
+              ),
             );
             const header = Buffer.alloc(4);
             if (littleEndian) header.writeUInt32LE(response.length);

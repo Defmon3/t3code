@@ -15,6 +15,7 @@ import type {
   GitCommitChangedFile,
   GitHistoryCommit,
   VcsHistorySyncInput,
+  VcsGetHistoryResult,
 } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react";
 import {
@@ -27,11 +28,9 @@ import {
 } from "lucide-react";
 import { useStore } from "zustand";
 import {
-  useCallback,
   useDeferredValue,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -41,7 +40,9 @@ import {
 
 import { layoutGitHistoryGraph } from "../lib/gitHistoryGraph";
 import { cn } from "../lib/utils";
+import { observeResize } from "../lib/observeResize";
 import { useClientSettings } from "../hooks/useSettings";
+import { useStableCallback } from "../hooks/useStableCallback";
 import { vcsEnvironment } from "../state/vcs";
 import { environmentCatalog } from "../connection/catalog";
 import { useEnvironmentQuery } from "../state/query";
@@ -140,25 +141,78 @@ function useHistoryPanelLayout(
   readonly widthRef: RefObject<number>;
 } {
   const widthRef = useRef(Number.POSITIVE_INFINITY);
-  const onResizeRef = useRef(onResize);
+  const onPanelResize = useStableCallback(onResize);
   const [isWide, setIsWide] = useState(true);
-  onResizeRef.current = onResize;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the panel DOM width to keep pane sizing in step with layout
   useEffect(() => {
     const panel = panelRef.current;
     if (!panel || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) => {
+    return observeResize(panel, ([entry]) => {
       const width = entry?.contentRect.width ?? 0;
       const nextIsWide = isWideHistoryLayout(width);
       if (nextIsWide !== isWideHistoryLayout(widthRef.current)) setIsWide(nextIsWide);
       widthRef.current = width;
-      onResizeRef.current(width);
+      onPanelResize(width);
     });
-    observer.observe(panel);
-    return () => observer.disconnect();
-  }, [panelRef]);
+  }, [onPanelResize, panelRef]);
 
   return { isWide, widthRef };
+}
+
+function useGitHistoryModel(
+  input: Parameters<typeof usePaginatedSnapshotPages<VcsGetHistoryResult, unknown, string>>[0],
+  targetKey: string,
+  activeFilter: string,
+) {
+  const pagination = usePaginatedSnapshotPages(input);
+  const { results, values: queriedValues } = pagination;
+  const [retainedHistory, setRetainedHistory] = useState<{
+    targetKey: string;
+    values: typeof queriedValues;
+  } | null>(null);
+  const waitingForHistory = results.some((result) => result.waiting);
+  if (
+    queriedValues.length > 0 &&
+    (retainedHistory?.targetKey !== targetKey || retainedHistory.values !== queriedValues)
+  ) {
+    setRetainedHistory({ targetKey, values: queriedValues });
+  }
+  const values =
+    queriedValues.length === 0 && waitingForHistory && retainedHistory?.targetKey === targetKey
+      ? retainedHistory.values
+      : queriedValues;
+  const history = (() => {
+    const commitsByHash = new Map<string, GitHistoryCommit>();
+    for (const value of values) {
+      for (const commit of value.commits) {
+        if (!commitsByHash.has(commit.hash)) commitsByHash.set(commit.hash, commit);
+      }
+    }
+    return [...commitsByHash.values()];
+  })();
+  const headHash = currentHeadHash(history);
+  const primaryHashes = firstParentHashes(history, headHash);
+  const filteredHistory = (() => {
+    const query = activeFilter;
+    return history.filter(
+      (commit) =>
+        query.length === 0 ||
+        `${commit.hash} ${commit.subject} ${commit.authorName} ${commit.refs.join(" ")}`
+          .toLocaleLowerCase()
+          .includes(query),
+    );
+  })();
+  const { laneCount, rows: graphRows } = layoutGitHistoryGraph(filteredHistory, {
+    includeMissingParents: activeFilter.length === 0,
+    ...(headHash ? { primaryHash: headHash } : {}),
+    primaryHashes,
+  });
+  const filteredRows = (() => {
+    return filteredHistory.map((commit, index) => ({ commit, graph: graphRows[index]! }));
+  })();
+
+  return { pagination, results, values, history, laneCount, filteredRows };
 }
 
 function GitHistoryPanelContent(props: GitHistoryPanelProps) {
@@ -192,6 +246,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const stateScopeKey = `${props.stateScopeKey ?? ""}:${baseTargetKey}:${connectionGeneration}`;
   const historyState = useStore(stateStore);
   const stateMatchesScope = historyState.scopeKey === stateScopeKey;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- binds the mounted panel external state store to its repository scope
   useLayoutEffect(() => {
     stateStore.getState().setScope(stateScopeKey);
   }, [stateScopeKey, stateStore]);
@@ -218,94 +273,82 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const [defaultBranchPushConfirmation, setDefaultBranchPushConfirmation] =
     useState<DefaultBranchPushConfirmation | null>(null);
   const [solvePrompt, setSolvePrompt] = useState<string | null>(null);
-  const selectedRef = useMemo(
-    () =>
-      selectedHistoryRef(selectedRevision, [
-        ...historyRefs.localRefs,
-        ...historyRefs.remoteRefs,
-        ...historyRefs.tagRefs,
-      ]),
-    [historyRefs.localRefs, historyRefs.remoteRefs, historyRefs.tagRefs, selectedRevision],
-  );
+  const selectedRef = selectedHistoryRef(selectedRevision, [
+    ...historyRefs.localRefs,
+    ...historyRefs.remoteRefs,
+    ...historyRefs.tagRefs,
+  ]);
   const isDefaultBranchPushConfirmationCurrent =
     defaultBranchPushConfirmation !== null &&
     defaultBranchPushConfirmation.targetKey === targetKey &&
     defaultBranchPushConfirmation.upstreamName === selectedRef?.upstreamName;
-  useEffect(() => {
-    if (defaultBranchPushConfirmation !== null && !isDefaultBranchPushConfirmationCurrent) {
-      setDefaultBranchPushConfirmation(null);
+  if (defaultBranchPushConfirmation !== null && !isDefaultBranchPushConfirmationCurrent) {
+    setDefaultBranchPushConfirmation(null);
+  }
+  const runSync = async (request: GitHistorySyncRequest) => {
+    setSyncPendingAction(request.input.action);
+    const result = await syncHistory({
+      environmentId: request.environmentId,
+      input: request.input,
+    });
+    setSyncPendingAction(null);
+    if (AsyncResult.isSuccess(result)) {
+      toastManager.add({ type: "success", title: `Git ${request.input.action} completed` });
+      return;
     }
-  }, [defaultBranchPushConfirmation, isDefaultBranchPushConfirmationCurrent]);
-  const runSync = useCallback(
-    async (request: GitHistorySyncRequest) => {
-      setSyncPendingAction(request.input.action);
-      const result = await syncHistory({
-        environmentId: request.environmentId,
-        input: request.input,
+    const error = String(Cause.squash(result.cause));
+    if (
+      (request.input.action === "pull" || request.input.action === "push") &&
+      isGitHistorySolveOffer(error)
+    ) {
+      setSolvePrompt(
+        gitHistorySolvePrompt({
+          cwd: request.input.cwd,
+          action: request.input.action,
+          refName: request.input.refName,
+          upstreamName: selectedRef?.upstreamName ?? "unknown",
+          error,
+        }),
+      );
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: `Git ${request.input.action} failed`,
+      description: error,
+    });
+  };
+  const onSync = (action: "fetch" | "pull" | "push") => {
+    if (!canSync || selectedRef === null || selectedRef.isTag || syncPendingAction !== null) return;
+    const request = {
+      environmentId: props.environmentId,
+      input: {
+        cwd: props.cwd,
+        action,
+        namespace: selectedRef.isRemote ? "remote" : "local",
+        refName: selectedRef.name,
+      },
+    } satisfies GitHistorySyncRequest;
+    if (
+      action === "push" &&
+      requiresDefaultBranchConfirmation(action, selectedRef.isDefault) &&
+      selectedRef.upstreamName !== undefined
+    ) {
+      setDefaultBranchPushConfirmation({
+        ...request,
+        upstreamName: selectedRef.upstreamName,
+        targetKey,
       });
-      setSyncPendingAction(null);
-      if (AsyncResult.isSuccess(result)) {
-        toastManager.add({ type: "success", title: `Git ${request.input.action} completed` });
-        return;
-      }
-      const error = String(Cause.squash(result.cause));
-      if (
-        (request.input.action === "pull" || request.input.action === "push") &&
-        isGitHistorySolveOffer(error)
-      ) {
-        setSolvePrompt(
-          gitHistorySolvePrompt({
-            cwd: request.input.cwd,
-            action: request.input.action,
-            refName: request.input.refName,
-            upstreamName: selectedRef?.upstreamName ?? "unknown",
-            error,
-          }),
-        );
-        return;
-      }
-      toastManager.add({
-        type: "error",
-        title: `Git ${request.input.action} failed`,
-        description: error,
-      });
-    },
-    [selectedRef?.upstreamName, syncHistory],
-  );
-  const onSync = useCallback(
-    (action: "fetch" | "pull" | "push") => {
-      if (!canSync || selectedRef === null || selectedRef.isTag || syncPendingAction !== null)
-        return;
-      const request = {
-        environmentId: props.environmentId,
-        input: {
-          cwd: props.cwd,
-          action,
-          namespace: selectedRef.isRemote ? "remote" : "local",
-          refName: selectedRef.name,
-        },
-      } satisfies GitHistorySyncRequest;
-      if (
-        action === "push" &&
-        requiresDefaultBranchConfirmation(action, selectedRef.isDefault) &&
-        selectedRef.upstreamName !== undefined
-      ) {
-        setDefaultBranchPushConfirmation({
-          ...request,
-          upstreamName: selectedRef.upstreamName,
-          targetKey,
-        });
-        return;
-      }
-      void runSync(request);
-    },
-    [canSync, props.cwd, props.environmentId, runSync, selectedRef, syncPendingAction, targetKey],
-  );
+      return;
+    }
+    void runSync(request);
+  };
   const stateMatchesTarget = stateMatchesScope && historyState.targetKey === targetKey;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- binds the mounted panel external state store to the selected history target
   useLayoutEffect(() => {
     stateStore.getState().setTarget(targetKey);
-  }, [stateScopeKey, stateStore, targetKey]);
-  const makeHistoryPageAtom = useMemo(() => {
+  }, [stateStore, targetKey]);
+  const makeHistoryPageAtom = (() => {
     if (selectedRevision === undefined || refSelectionError !== null) return null;
     return (cursor: string | undefined, generation: number) =>
       vcsEnvironment.getHistory({
@@ -318,29 +361,35 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           limit: HISTORY_PAGE_SIZE,
         },
       });
-  }, [props.cwd, props.environmentId, refSelectionError, selectedRevision, vcsHistoryRevision]);
-  const pagination = usePaginatedSnapshotPages({
-    targetKey:
-      selectedRevision === undefined || refSelectionError !== null
-        ? null
-        : `${targetKey}:${vcsHistoryRevision}`,
-    label: "web:vcs-history-pages",
-    makePageAtom: makeHistoryPageAtom,
-    getNextCursor: (page) => (page.hasMore ? page.nextCursor : null),
-    isExpiredError: isVcsSnapshotExpiredCause,
-    ...(stateMatchesTarget ? { initialPagination: historyState.historyPagination } : {}),
-    onPaginationChange: stateStore.getState().setHistoryPagination,
-  });
-  const { results, values: queriedValues } = pagination;
-  const retainedHistory = useRef<{ targetKey: string; values: typeof queriedValues } | null>(null);
-  const waitingForHistory = results.some((result) => result.waiting);
-  if (queriedValues.length > 0) retainedHistory.current = { targetKey, values: queriedValues };
-  const values =
-    queriedValues.length === 0 &&
-    waitingForHistory &&
-    retainedHistory.current?.targetKey === targetKey
-      ? retainedHistory.current.values
-      : queriedValues;
+  })();
+  const filter = stateMatchesTarget ? historyState.filter : "";
+  const setFilter = stateStore.getState().setFilter;
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const deferredFilter = useDeferredValue(normalizedFilter);
+  const activeFilter = normalizedFilter.length === 0 ? "" : deferredFilter;
+  const { pagination, results, values, history, laneCount, filteredRows } = useGitHistoryModel(
+    {
+      targetKey:
+        selectedRevision === undefined || refSelectionError !== null
+          ? null
+          : `${targetKey}:${vcsHistoryRevision}`,
+      label: "web:vcs-history-pages",
+      makePageAtom: makeHistoryPageAtom,
+      getNextCursor: (page) => (page.hasMore ? page.nextCursor : null),
+      isExpiredError: isVcsSnapshotExpiredCause,
+      ...(stateMatchesTarget ? { initialPagination: historyState.historyPagination } : {}),
+      onPaginationChange: stateStore.getState().setHistoryPagination,
+    },
+    targetKey,
+    activeFilter,
+  );
+  const isRepo = values[0]?.isRepo ?? true;
+  const lastPage = values.at(-1) ?? null;
+  const nextCursor = lastPage?.nextCursor ?? null;
+  const hasMoreFromServer = lastPage?.hasMore === true && nextCursor !== null;
+  const hasMore = hasMoreFromServer;
+  const isFetchingNextPage = pagination.isFetchingNextPage;
+
   const failed = pagination.failed;
   const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
   const isPending =
@@ -349,26 +398,6 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const isInitialLoad =
     refSelectionError === null &&
     (selectedRevision === undefined || (values.length === 0 && isPending));
-  const history = useMemo(() => {
-    const commitsByHash = new Map<string, GitHistoryCommit>();
-    for (const value of values) {
-      for (const commit of value.commits) {
-        if (!commitsByHash.has(commit.hash)) commitsByHash.set(commit.hash, commit);
-      }
-    }
-    return [...commitsByHash.values()];
-  }, [values]);
-  const isRepo = values[0]?.isRepo ?? true;
-  const lastPage = values.at(-1) ?? null;
-  const nextCursor = lastPage?.nextCursor ?? null;
-  const hasMoreFromServer = lastPage?.hasMore === true && nextCursor !== null;
-  const hasMore = hasMoreFromServer;
-  const isFetchingNextPage = pagination.isFetchingNextPage;
-  const filter = stateMatchesTarget ? historyState.filter : "";
-  const setFilter = stateStore.getState().setFilter;
-  const normalizedFilter = filter.trim().toLocaleLowerCase();
-  const deferredFilter = useDeferredValue(normalizedFilter);
-  const activeFilter = normalizedFilter.length === 0 ? "" : deferredFilter;
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectedHash = stateMatchesTarget ? historyState.selectedHash : null;
   const setSelectedHash = (next: SetStateAction<string | null>) => {
@@ -420,7 +449,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
-  const makeCommitFilesPageAtom = useMemo(() => {
+  const makeCommitFilesPageAtom = (() => {
     if (selectedHash === null) return null;
     return (cursor: string | undefined, generation: number) =>
       vcsEnvironment.listCommitFiles({
@@ -433,11 +462,12 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           ...(cursor === undefined ? {} : { cursor }),
         },
       });
-  }, [props.cwd, props.environmentId, selectedHash, vcsHistoryRevision]);
+  })();
   const commitFilesTargetKey =
     selectedHash === null ? null : `${stateScopeKey}:${vcsHistoryRevision}:${selectedHash}`;
   const stateMatchesCommitFiles =
     stateMatchesTarget && historyState.commitFilesTargetKey === commitFilesTargetKey;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- binds commit file pagination in the external panel store to the selected commit
   useLayoutEffect(() => {
     stateStore.getState().setCommitFilesTarget(commitFilesTargetKey);
   }, [commitFilesTargetKey, stateStore]);
@@ -451,13 +481,13 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     ...(stateMatchesCommitFiles ? { initialPagination: historyState.commitFilesPagination } : {}),
     onPaginationChange: stateStore.getState().setCommitFilesPagination,
   });
-  const selectedCommitFiles = useMemo(() => {
+  const selectedCommitFiles = (() => {
     const files = new Map<string, GitCommitChangedFile>();
     for (const page of commitFilesPagination.values) {
       for (const file of page.files) files.set(file.path, file);
     }
     return [...files.values()].slice(0, 2_000);
-  }, [commitFilesPagination.values]);
+  })();
   const lastCommitFilesPage = commitFilesPagination.values.at(-1);
   const commitFilesHasMore =
     lastCommitFilesPage?.hasMore === true && selectedCommitFiles.length < 2_000;
@@ -502,24 +532,21 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     toggleFavorite,
     toggleRefKey,
   } = historyRefs;
-  const commitRefKinds = useMemo(() => {
+  const commitRefKinds = (() => {
     const kinds = new Map<string, CommitRefKind>();
     for (const ref of localRefs) kinds.set(ref.name, "local");
     for (const ref of remoteRefs) kinds.set(ref.name, "remote");
     for (const ref of tagRefs) kinds.set(ref.name, "tag");
     return kinds;
-  }, [localRefs, remoteRefs, tagRefs]);
-  const selectRef = useCallback(
-    (label: string, revision: string) => {
-      selectHistoryRef(label, revision);
-      setMobilePane(null);
-    },
-    [selectHistoryRef],
-  );
-  const selectAllRefs = useCallback(() => {
+  })();
+  const selectRef = (label: string, revision: string) => {
+    selectHistoryRef(label, revision);
+    setMobilePane(null);
+  };
+  const selectAllRefs = () => {
     selectAllHistoryRefs();
     setMobilePane(null);
-  }, [selectAllHistoryRefs]);
+  };
   const sharedRefTreeProps = {
     filterActive: normalizedRefFilter.length > 0,
     expanded: expandedRefKeys,
@@ -556,49 +583,22 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     syncPendingAction,
   } satisfies Omit<ComponentProps<typeof GitRefsPane>, "className" | "id" | "onClose">;
 
-  useEffect(() => {
-    if (isWideLayout) setMobilePane(null);
-  }, [isWideLayout]);
+  if (mobilePane !== null && (isWideLayout || props.active === false)) {
+    setMobilePane(null);
+  }
 
-  const headHash = useMemo(() => currentHeadHash(history), [history]);
-  const primaryHashes = useMemo(() => firstParentHashes(history, headHash), [headHash, history]);
-  const filteredHistory = useMemo(() => {
-    const query = activeFilter;
-    return history.filter(
-      (commit) =>
-        query.length === 0 ||
-        `${commit.hash} ${commit.subject} ${commit.authorName} ${commit.refs.join(" ")}`
-          .toLocaleLowerCase()
-          .includes(query),
-    );
-  }, [activeFilter, history]);
-  const { laneCount, rows: graphRows } = useMemo(
-    () =>
-      layoutGitHistoryGraph(filteredHistory, {
-        includeMissingParents: activeFilter.length === 0,
-        ...(headHash ? { primaryHash: headHash } : {}),
-        primaryHashes,
-      }),
-    [activeFilter, filteredHistory, headHash, primaryHashes],
-  );
-  const filteredRows = useMemo(() => {
-    return filteredHistory.map((commit, index) => ({ commit, graph: graphRows[index]! }));
-  }, [filteredHistory, graphRows]);
-
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears a vanished commit from the mounted panel external selection store
   useEffect(() => {
     if (
       !isPending &&
       selectedHash !== null &&
-      !history.some((commit) => commit.hash === selectedHash)
+      !values.some((page) => page.commits.some((commit) => commit.hash === selectedHash))
     ) {
       setSelectedHash(null);
     }
-  }, [history, isPending, selectedHash]);
+  }, [values, isPending, selectedHash, setSelectedHash]);
 
-  useEffect(() => {
-    if (props.active === false) setMobilePane(null);
-  }, [props.active]);
-
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restores DOM focus to the button that opened the closed mobile pane
   useEffect(() => {
     const previous = previousMobilePane.current;
     previousMobilePane.current = mobilePane;
@@ -606,10 +606,10 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     (previous === "refs" ? branchesButtonRef.current : detailsButtonRef.current)?.focus();
   }, [mobilePane]);
 
-  const refresh = useCallback(() => {
+  const refresh = () => {
     pagination.refresh();
     refreshRefs();
-  }, [pagination.refresh, refreshRefs]);
+  };
   const loadNext = pagination.loadNext;
   const retryFailedPage = pagination.retry;
 
@@ -801,7 +801,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   ref={searchInputRef}
-                  className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-2xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+                  className="h-7 w-full rounded border border-input bg-background/30 pr-7 pl-7 text-2xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/25"
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
                   onKeyDown={(event) => {

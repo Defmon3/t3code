@@ -1,5 +1,6 @@
 import { GripVerticalIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { useStableCallback } from "../../hooks/useStableCallback";
 
 export function PaneResizeHandle(props: {
   label: string;
@@ -9,15 +10,15 @@ export function PaneResizeHandle(props: {
   onMove: (delta: number) => void;
   onReset: () => void;
 }) {
-  const onMoveRef = useRef(props.onMove);
+  const onMove = useStableCallback(props.onMove);
   const dragStateRef = useRef<{
     pointerId: number;
     lastClientX: number;
     pendingDelta: number;
     rafId: number | null;
   } | null>(null);
-  onMoveRef.current = props.onMove;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the pending drag animation frame when the handle unmounts
   useEffect(() => {
     return () => {
       const state = dragStateRef.current;
@@ -56,7 +57,7 @@ export function PaneResizeHandle(props: {
           active.rafId = null;
           const delta = active.pendingDelta;
           active.pendingDelta = 0;
-          if (delta !== 0) onMoveRef.current(delta);
+          if (delta !== 0) onMove(delta);
         });
       }}
       onPointerUp={(event) => {
@@ -67,7 +68,7 @@ export function PaneResizeHandle(props: {
         const delta = state.pendingDelta;
         dragStateRef.current = null;
         event.currentTarget.releasePointerCapture(event.pointerId);
-        if (delta !== 0) onMoveRef.current(delta);
+        if (delta !== 0) onMove(delta);
       }}
       onLostPointerCapture={(event) => {
         const state = dragStateRef.current;
@@ -75,7 +76,7 @@ export function PaneResizeHandle(props: {
         if (state.rafId !== null) cancelAnimationFrame(state.rafId);
         const delta = state.pendingDelta;
         dragStateRef.current = null;
-        if (delta !== 0) onMoveRef.current(delta);
+        if (delta !== 0) onMove(delta);
       }}
       onDoubleClick={props.onReset}
       onKeyDown={(event) => {

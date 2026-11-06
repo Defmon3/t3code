@@ -5,6 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeZlib from "node:zlib";
 
 import react from "@vitejs/plugin-react";
+import { transform as compileReact } from "oxc-transform-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
 import { playwright } from "vite-plus/test/browser-playwright";
@@ -107,6 +108,33 @@ const buildSourcemap: boolean | "hidden" =
 
 const unitTestProject = {
   extends: true,
+  // why: Vite's React plugin disables client compiler memoization for the unit runner's server consumer.
+  plugins: [
+    {
+      name: "git-history-production-compiler-tests",
+      enforce: "pre",
+      transform: {
+        order: "pre",
+        async handler(code, id) {
+          const file = id.split("?")[0]!.replaceAll("\\", "/");
+          if (
+            !/\/src\/(?:components\/(?:GitHistoryPanel\.tsx|git-history\/useGitHistoryRefs\.ts)|state\/snapshotPages\.ts)$/.test(
+              file,
+            )
+          )
+            return;
+          const result = await compileReact(file, code, {
+            jsx: { runtime: "automatic", development: false, refresh: false },
+            reactCompiler: { reportDiagnostics: true },
+            sourcemap: true,
+          });
+          if (result.errors.length > 0)
+            this.error(result.errors.map((error) => error.codeframe ?? error.message).join("\n"));
+          return { code: result.code, map: result.map ?? null };
+        },
+      },
+    },
+  ],
   test: {
     name: "unit",
     include: ["src/**/*.test.{ts,tsx}"],

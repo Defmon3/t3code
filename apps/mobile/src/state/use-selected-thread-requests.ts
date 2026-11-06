@@ -42,7 +42,7 @@ import {
   hookApprovalEnvironment,
   pendingHookApprovalRequestsAtom,
   threadEnvironment,
-} from "../state/threads";
+} from "./threads";
 import {
   buildPendingUserInputAnswers,
   setPendingUserInputCustomAnswer,

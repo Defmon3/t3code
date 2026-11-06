@@ -136,6 +136,7 @@ export function IssueTimelineTab({
                       value={comment.body}
                       cwd={detail.workspaceRoot}
                       environmentId={environmentId}
+                      completionScope={null}
                       label="Edit comment"
                       saving={saving}
                       onSave={(body) => void saveComment(comment, body)}

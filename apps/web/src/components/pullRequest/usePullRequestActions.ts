@@ -12,6 +12,7 @@ import type {
   PullRequestDetail,
   PullRequestMergeMethod,
   PullRequestRef,
+  PullRequestSummary,
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -124,8 +125,7 @@ export function usePullRequestActionRunner({
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef | null;
-  onSuccess?: (action: PullRequestAction) => void;
-  /** Small surfaces resolve repository settings on the click, not for every visible row. */
+  onSuccess?: (action: PullRequestAction, reply: PullRequestSummary | undefined) => void;
   resolveMergeMethod?: (detail: PullRequestDetail) => PullRequestMergeMethod;
 }) {
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, {
@@ -170,13 +170,15 @@ export function usePullRequestActionRunner({
       return;
     }
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
-    onSuccess?.(action);
+    onSuccess?.(action, result.value);
   };
 
   return { actionPending, perform };
 }
 
-export function usePullRequestCloseBatch(onClosed: (entry: EnvironmentPullRequestEntry) => void) {
+export function usePullRequestCloseBatch(
+  onClosed: (entry: EnvironmentPullRequestEntry, reply: PullRequestSummary | undefined) => void,
+) {
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const pending = useRef(new Set<string>());
   const [closingKeys, setClosingKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -210,7 +212,7 @@ export function usePullRequestCloseBatch(onClosed: (entry: EnvironmentPullReques
           );
           return;
         }
-        onClosed(entry);
+        onClosed(entry, result.value);
         return true;
       }),
     );

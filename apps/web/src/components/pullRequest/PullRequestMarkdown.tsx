@@ -31,6 +31,8 @@ export const PullRequestMarkdownContext = createContext<{
   panelRef?: ScopedThreadRef | null;
   /** Claims a link to open in the app; returning false leaves it to the default handling. */
   onOpenUrl?: (url: string) => boolean;
+  /** The change request's `owner/name`, which can differ from the checkout the body renders in. */
+  repository?: string | null;
 } | null>(null);
 
 function PullRequestHostVideo({
@@ -38,13 +40,20 @@ function PullRequestHostVideo({
   cwd,
   url,
   fetchUrl,
+  repository,
 }: {
   environmentId: EnvironmentId;
   cwd: string;
   url: string;
   fetchUrl: string;
+  repository: string | undefined;
 }) {
-  const resource: AssetResource = { _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd, url: fetchUrl };
+  const resource: AssetResource = {
+    _tag: SOURCE_CONTROL_MEDIA_ASSET,
+    cwd,
+    url: fetchUrl,
+    ...(repository ? { repository } : {}),
+  };
   const assetUrl = useAssetUrlState(environmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(environmentId, resource);
   const src =
@@ -81,6 +90,7 @@ export function PullRequestMarkdown({
 }) {
   const segments = splitPullRequestBody(text);
   const context = useContext(PullRequestMarkdownContext);
+  const repository = context?.repository ?? undefined;
   const resolvedThreadRef = threadRef ?? context?.threadRef ?? undefined;
   const extraRemarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]> =
     context?.remarkPlugins ??
@@ -129,6 +139,7 @@ export function PullRequestMarkdown({
               extraRemarkPlugins={extraRemarkPlugins}
               lineBreaks={lineBreaks ?? context?.lineBreaks ?? false}
               sourceControlMedia
+              sourceControlMediaRepository={repository}
               onTaskListChange={
                 onTaskListChange && segment.kind === "markdown"
                   ? ({ markerOffset, checked }) =>
@@ -150,6 +161,7 @@ export function PullRequestMarkdown({
               cwd={cwd}
               url={segment.url}
               fetchUrl={hostMedia.fetchUrl}
+              repository={repository}
             />
           );
         }

@@ -1,11 +1,38 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { SettingsSecretUnresolvedError } from "@t3tools/contracts";
 
 import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
 import * as BitbucketIssueProvider from "./BitbucketIssueProvider.ts";
 import type { BitbucketIssueDetail } from "./bitbucketIssueJson.ts";
+
+it.effect("preserves the unresolved credential error and its recovery guidance", () =>
+  Effect.gen(function* () {
+    const source = new SettingsSecretUnresolvedError({ provider: "Work vault" });
+    const provider = yield* BitbucketIssueProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(BitbucketIssueApi.BitbucketIssueApi)({
+          listIssues: () => Effect.fail(source),
+        }),
+      ),
+    );
+    const error = yield* Effect.flip(
+      provider.listIssues({
+        cwd: "/repo",
+        repository: "acme/web",
+        host: "bitbucket.org",
+        state: "open",
+        involvement: "all",
+        viewer: "ada",
+        limit: 20,
+      }),
+    );
+    assert.strictEqual(error.detail, source.message);
+    assert.strictEqual(error.cause, source);
+  }),
+);
 
 it.effect.each([
   [false, undefined],

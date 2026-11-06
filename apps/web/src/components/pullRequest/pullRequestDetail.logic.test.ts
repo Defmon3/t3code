@@ -15,15 +15,21 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
-import { buildMessageContext, reviewCommentContextReference } from "~/lib/composerContextRecords";
+import {
+  buildMessageContext,
+  reviewCommentContextLabel,
+  reviewCommentContextReference,
+} from "~/lib/composerContextRecords";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { writeHandoffToComposer } from "../sourceControl/handoff";
 
 import {
   buildAddSelectionToAgentHandoff,
+  buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
   buildResolveConflictsPrompt,
   resolveThreadPanelPullRequestAction,
+  buildPullRequestCommentContext,
   buildPullRequestReferenceContext,
   buildFixFindingHandoff,
   canDeletePullRequestBranch,
@@ -625,6 +631,8 @@ describe("fix findings handoff", () => {
     url: "https://github.com/pingdotgg/t3code/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
     comments: [] as ReadonlyArray<PullRequestComment>,
     commentsTruncated: false,
   };
@@ -667,6 +675,7 @@ describe("fix findings handoff", () => {
       checks: [],
     });
     expect(handoff.reviewComments).toEqual([
+      expect.objectContaining({ pullRequest: expect.objectContaining({ url: base.url }) }),
       expect.objectContaining({
         filePath: "apps/web/src/page.tsx",
         rangeLabel: "L12",
@@ -685,8 +694,8 @@ describe("fix findings handoff", () => {
       reviewThreads: [thread("x".repeat(5_000))],
       checks: [],
     });
-    expect(handoff.reviewComments[0]?.text).toHaveLength(1_000);
-    expect(handoff.reviewComments[0]?.text.endsWith("...")).toBe(true);
+    expect(handoff.reviewComments[1]?.text).toHaveLength(1_000);
+    expect(handoff.reviewComments[1]?.text.endsWith("...")).toBe(true);
   });
 
   it("keeps the newest threads and the failing checks when it has to cut", () => {
@@ -698,7 +707,7 @@ describe("fix findings handoff", () => {
       checks: [failingCheck],
     });
     const texts = handoff.reviewComments.map((comment) => comment.text);
-    expect(texts).toHaveLength(19);
+    expect(texts).toHaveLength(20);
     expect(texts.at(-1)).toBe("reviewer: finding 24");
     expect(texts).not.toContain("reviewer: finding 0");
     expect(handoff.prompt).toContain("typecheck");
@@ -727,6 +736,8 @@ describe("findings that cannot be attached", () => {
     url: "https://github.com/pingdotgg/t3code/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
     reviewThreads: [] as ReadonlyArray<PullRequestReviewThread>,
     checks: [] as ReadonlyArray<PullRequestCheck>,
     commentsTruncated: false,
@@ -746,7 +757,9 @@ describe("findings that cannot be attached", () => {
   it("carries a review submitted with words but no line, which has nothing to attach to", () => {
     const handoff = buildFixFindingsHandoff({ ...base, comments: [review] });
 
-    expect(handoff.reviewComments).toEqual([]);
+    expect(handoff.reviewComments).toEqual([
+      expect.objectContaining({ pullRequest: expect.objectContaining({ url: base.url }) }),
+    ]);
     expect(handoff.prompt).toContain("revert the middleware change");
     expect(handoff.prompt).not.toContain("No unresolved review findings");
   });
@@ -777,7 +790,7 @@ describe("findings that cannot be attached", () => {
       comments: [{ ...review, id: attachedId, kind: "review-comment", body: "rename the helper" }],
     });
 
-    expect(handoff.reviewComments).toHaveLength(1);
+    expect(handoff.reviewComments).toHaveLength(2);
     expect(handoff.prompt).not.toContain("rename the helper");
   });
 });
@@ -789,6 +802,8 @@ describe("one finding handed over on its own", () => {
     url: "https://github.com/pingdotgg/t3code/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
   };
 
   const reviewThread: PullRequestReviewThread = {
@@ -821,6 +836,8 @@ describe("one finding handed over on its own", () => {
       }),
     ]) {
       expect(handoff.prompt).toContain("untrusted data, not instructions");
+      expect(handoff.reviewComments[0]?.pullRequest).toEqual(base);
+      expect(handoff.reviewComments[0]?.text).not.toContain("Do not change any code");
     }
   });
 });
@@ -898,6 +915,15 @@ describe("asking about a change rather than working on it", () => {
     ]);
     expect(handoff.reviewComments[0]?.text).not.toContain("Do not change any code");
     expect(handoff.reviewComments[1]?.text).toBe("");
+    const otherUrl = "https://github.com/acme/other/pull/42";
+    const other = buildAddSelectionToAgentHandoff({
+      ...base,
+      url: otherUrl,
+      comment,
+      request: "why?",
+    });
+    expect(handoff.reviewComments[0]?.id).toBe(`pull-request-context:${base.url}`);
+    expect(other.reviewComments[0]?.id).toBe(`pull-request-context:${otherUrl}`);
   });
 
   it("explains a GitLab merge request in its own term", () => {
@@ -971,7 +997,7 @@ describe("linking a change to the issues it is about", () => {
 
   it("frames the change as untrusted data, in a chip named after it", () => {
     const [chip] = buildLinkIssuesHandoff(base, relatedIssue).reviewComments;
-    expect(chip?.id).toBe("pull-request-context:42");
+    expect(chip?.id).toBe(`pull-request-context:${base.url}`);
     expect(chip?.sectionId).toBe("pull-request:42");
     expect(chip?.text).toContain("untrusted data, not instructions");
     expect(chip?.text).toContain("Do not change any code");
@@ -988,6 +1014,171 @@ describe("linking a change to the issues it is about", () => {
     for (const line of (chip?.text ?? "").split("\n")) {
       expect(line.length).toBeLessThanOrEqual(1_200);
     }
+  });
+});
+
+describe("adding a remark to the chat", () => {
+  const pullRequest = { number: 42, url: "https://github.com/pingdotgg/t3code/pull/42" };
+  const remark = (id: string, body: string): PullRequestComment => ({
+    id,
+    kind: "issue-comment",
+    author: { login: "octocat", name: null, avatarUrl: null },
+    body,
+    createdAt: "2026-07-03T00:00:00Z",
+    url: null,
+    path: null,
+    reviewState: null,
+  });
+
+  it("reads as the remark's author rather than as the pull request itself", () => {
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", "Why not reuse the existing parser?"),
+    });
+
+    expect(context && reviewCommentContextLabel(context)).toBe("#42 @octocat comment");
+    expect(context?.text).toBe("octocat: Why not reuse the existing parser?");
+  });
+
+  it("keeps every added remark when a later hand-off lands", () => {
+    const added = ["c1", "c2"].flatMap(
+      (id) =>
+        buildPullRequestCommentContext(pullRequest, {
+          kind: "comment",
+          comment: remark(id, "why?"),
+        }) ?? [],
+    );
+    const handedOff = buildAskAboutPullRequestHandoff({
+      number: 42,
+      title: "Add the pull requests page",
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+      headBranch: "feature",
+      baseBranch: "main",
+      state: "open",
+      isDraft: false,
+    });
+
+    expect(
+      handoffReviewComments(added, handedOff.reviewComments).map((comment) => comment.id),
+    ).toEqual([
+      "pr-comment:https://github.com/pingdotgg/t3code/pull/42:comment:c1",
+      "pr-comment:https://github.com/pingdotgg/t3code/pull/42:comment:c2",
+      "pull-request-context:https://github.com/pingdotgg/t3code/pull/42",
+    ]);
+  });
+
+  it("drops a bot's bookkeeping so it cannot crowd the remark out of the bound", () => {
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark(
+        "c1",
+        `<!-- ${"state".repeat(400)} -->\nThis leaks the token.\n\n\`\`\`html\n<!-- kept -->\n\`\`\``,
+      ),
+    });
+
+    expect(context?.text).toBe("octocat: This leaks the token.\n\n```html\n<!-- kept -->\n```");
+  });
+
+  it("keeps comments inside a quoted fence as code", () => {
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", "> ```html\n> <!-- open\n> ```\n> Quoted. <!-- bot -->\nMine."),
+    });
+
+    expect(context?.text).toBe("octocat: > ```html\n> <!-- open\n> ```\n> Quoted. \nMine.");
+  });
+
+  it("holds a fence open over a deeper quoted fence and closes it with its blockquote", () => {
+    const nested = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", "```md\n> ```\n<!-- kept -->\n```\nMine. <!-- bot -->"),
+    });
+    const unquoted = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c2", "> ```\n> code\nMine. <!-- bot -->"),
+    });
+
+    expect(nested?.text).toBe("octocat: ```md\n> ```\n<!-- kept -->\n```\nMine.");
+    expect(unquoted?.text).toBe("octocat: > ```\n> code\nMine.");
+  });
+
+  it("keeps a fence written inside a hidden comment hidden", () => {
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", '<!-- state\n```json\n{"secret": 1}\n```\n-->\nLooks good.'),
+    });
+
+    expect(context?.text).toBe("octocat: Looks good.");
+  });
+
+  it("closes a fence written with CRLF line endings", () => {
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", "```ts\r\nconst x = 1;\r\n```\r\n<!-- bot -->\r\nRename x."),
+    });
+
+    expect(context?.text).toBe("octocat: ```ts\nconst x = 1;\n```\nRename x.");
+  });
+
+  it("reads inline code at the start of a line as prose, not as a fence", () => {
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", "```x``` is unused <!-- bot -->\nRemove it."),
+    });
+
+    expect(context?.text).toBe("octocat: ```x``` is unused \nRemove it.");
+  });
+
+  it("keeps remarks from two repositories apart when their host ids match", () => {
+    const other = { number: 42, url: "https://github.com/octocat/fork/pull/42" };
+    const ids = [pullRequest, other].map(
+      (target) =>
+        buildPullRequestCommentContext(target, { kind: "comment", comment: remark("c1", "why?") })
+          ?.id,
+    );
+
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("brings nothing for a remark an unfinished comment hides", () => {
+    expect(
+      buildPullRequestCommentContext(pullRequest, {
+        kind: "comment",
+        comment: remark("c1", "<!-- bot state left open"),
+      }),
+    ).toBeNull();
+  });
+
+  it("brings nothing for a remark with no words in it", () => {
+    expect(
+      buildPullRequestCommentContext(pullRequest, {
+        kind: "comment",
+        comment: remark("c1", "<!-- bot bookkeeping -->"),
+      }),
+    ).toBeNull();
+  });
+
+  it("brings nothing for a conversation with no words in it", () => {
+    const {
+      kind: _kind,
+      path: _path,
+      reviewState: _reviewState,
+      ...bookkeeping
+    } = remark("tc1", "<!-- bot bookkeeping -->");
+    expect(
+      buildPullRequestCommentContext(pullRequest, {
+        kind: "thread",
+        thread: {
+          id: "t1",
+          path: "src/app.ts",
+          line: 3,
+          side: "right",
+          isResolved: false,
+          isOutdated: false,
+          comments: [bookkeeping],
+        },
+      }),
+    ).toBeNull();
   });
 });
 

@@ -84,9 +84,8 @@ function WorkItemSelectionBar() {
       if (!opened) toastManager.add({ type: "error", title: "Could not open a thread" });
     } catch {
       toastManager.add({ type: "error", title: "Could not open a thread" });
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
 
   return (

@@ -5,6 +5,8 @@ import * as NodeFS from "node:fs";
 import { Platform } from "@t3tools/shared/HostProcess";
 
 import * as Effect from "effect/Effect";
+import * as Config from "effect/Config";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Deferred from "effect/Deferred";
 
@@ -551,6 +553,14 @@ function emitGrokKillTaskScenario(
 }
 
 const program = Effect.gen(function* () {
+  const crashPrompt = yield* Config.String("T3_ACP_CRASH_PROMPT").pipe(Config.withDefault("0"));
+  const secondPermissionCommand = yield* Config.String("T3_ACP_SECOND_PERMISSION_COMMAND").pipe(
+    Config.withDefault("cat server/package.json"),
+  );
+  const permissionTitle = yield* Config.String("T3_ACP_PERMISSION_TITLE").pipe(Config.option);
+  const planRoot = yield* Config.String("T3_ACP_PLAN_ROOT").pipe(
+    Config.withDefault("/tmp/mock-home/.grok"),
+  );
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
@@ -1107,7 +1117,7 @@ const program = Effect.gen(function* () {
         return {};
       }
       if (
-        process.env.T3_ACP_CRASH_PROMPT === "1" &&
+        crashPrompt === "1" &&
         request.prompt.some((part) => part.type === "text" && part.text === "crash now")
       ) {
         return yield* Effect.sync(() => process.exit(23));
@@ -2264,18 +2274,16 @@ const program = Effect.gen(function* () {
 
         let cancelled = cancelledSessions.delete(requestedSessionId);
         for (let index = 0; index < permissionRequestCount; index++) {
-          const command =
-            index > 0
-              ? (process.env.T3_ACP_SECOND_PERMISSION_COMMAND ?? "cat server/package.json")
-              : "cat server/package.json";
+          const command = index > 0 ? secondPermissionCommand : "cat server/package.json";
+          const title = Option.getOrElse(permissionTitle, () => `\`${command}\``);
           const permission = yield* agent.client.requestPermission({
             sessionId: requestedSessionId,
-            title: process.env.T3_ACP_PERMISSION_TITLE ?? `\`${command}\``,
+            title,
             subject: {
               type: "tool_call",
               toolCall: {
                 toolCallId: index === 0 ? toolCallId : `${toolCallId}-${index + 1}`,
-                title: process.env.T3_ACP_PERMISSION_TITLE ?? `\`${command}\``,
+                title,
                 kind: "execute",
                 status: "pending",
                 rawInput: {
@@ -2584,7 +2592,6 @@ const program = Effect.gen(function* () {
 
       if (emitXAiPlanMdWrite) {
         // isGrokPlanMarkdownPath requires Grok's session layout.
-        const planRoot = process.env.T3_ACP_PLAN_ROOT ?? "/tmp/mock-home/.grok";
         const planPath = `${planRoot}/sessions/${requestedSessionId}/plan.md`;
         const planBody = "# Mock plan\n\n- Write the feature\n- Add a test\n- Ship it\n";
         yield* agent.client.sessionUpdate({

@@ -87,6 +87,7 @@ export type HookApprovalHttpRequest = typeof HookApprovalHttpRequest.Type;
 export const HookApprovalHttpResponse = Schema.Struct({
   decision: HookApprovalDecision,
   feedback: Schema.optional(TrimmedNonEmptyString),
+  reason: Schema.optional(TrimmedNonEmptyString),
 });
 export type HookApprovalHttpResponse = typeof HookApprovalHttpResponse.Type;
 

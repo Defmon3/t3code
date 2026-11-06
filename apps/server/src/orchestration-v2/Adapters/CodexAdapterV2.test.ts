@@ -1652,8 +1652,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         if (completed) yield* harness.firstTerminal;
         const environment = harness.browserEnvironment();
         const requestPermission = (sessionId: string, turnId: string) =>
-          Effect.tryPromise(
-            () =>
+          Effect.tryPromise({
+            try: () =>
               new Promise<boolean>((resolve, reject) => {
                 const endpoint = environment.BROWSER_USE_ACCESS_PIPE_PATH;
                 if (endpoint === undefined) {
@@ -1697,7 +1697,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   resolve(decoded.result.payload.allowed);
                 });
               }),
-          );
+            catch: (cause) =>
+              PlatformError.systemError({
+                _tag: "Unknown",
+                module: "Socket",
+                method: "requestPermission",
+                cause,
+              }),
+          });
         assert.isFalse(yield* requestPermission(nativeThreadId, nativeTurnId));
         const sessions = yield* McpProviderSessions.McpProviderSessions;
         for (const enabled of [true, false]) {

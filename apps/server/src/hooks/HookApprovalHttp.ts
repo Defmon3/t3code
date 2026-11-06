@@ -52,9 +52,19 @@ export const handleHookApprovalRequest = Effect.fn("HookApprovalHttp.handleHookA
       ...(input.scope ? { scope: input.scope } : {}),
       ...(input.bypass ? { bypass: input.bypass } : {}),
     });
-    return HttpServerResponse.jsonUnsafe(response, {
-      headers: { "cache-control": "no-store" },
-    });
+    if (response.decision !== "deny")
+      return HttpServerResponse.jsonUnsafe(response, {
+        headers: { "cache-control": "no-store" },
+      });
+    const reason = response.reason ?? input.reason;
+    return HttpServerResponse.jsonUnsafe(
+      {
+        ...response,
+        reason,
+        feedback: [response.feedback, `Reason: ${reason}`].filter(Boolean).join("\n"),
+      },
+      { headers: { "cache-control": "no-store" } },
+    );
   },
 );
 

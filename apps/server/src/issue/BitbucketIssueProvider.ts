@@ -110,9 +110,7 @@ export const make = Effect.gen(function* () {
       error.retryAt !== undefined
         ? { retryAt: error.retryAt }
         : {}),
-      // Every Bitbucket failure states its own fact; this names the operation around it, so the
-      // two do not stack into "failed in x: failed in y: ...".
-      detail: error.detail,
+      detail: error._tag === "SettingsSecretUnresolvedError" ? error.message : error.detail,
       cause: error,
     });
 

@@ -93,16 +93,13 @@ function ChildApproval({
       entry.approval.responseCapability !== "live"
     )
       return;
+    const response = childApprovalResponseTarget(entry, decision, feedback, duration);
     setResponding(true);
-    try {
-      const response = childApprovalResponseTarget(entry, decision, feedback, duration);
-      const result =
-        response.source === "hook" ? await hook(response.target) : await native(response.target);
-      setFailed(result._tag === "Failure");
-      return result;
-    } finally {
-      setResponding(false);
-    }
+    const result =
+      response.source === "hook" ? await hook(response.target) : await native(response.target);
+    setFailed(result._tag === "Failure");
+    setResponding(false);
+    return result;
   };
   return (
     <>

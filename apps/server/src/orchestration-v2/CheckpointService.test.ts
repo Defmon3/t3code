@@ -89,7 +89,12 @@ it.effect.each(["baseline", "capture", "materialize"] as const)(
           operation === "baseline"
             ? checkpoints.captureBaseline({ scope, ordinalWithinScope: 0 })
             : operation === "materialize"
-              ? checkpoints.materializeBaselineCheckpoint({ scope, ordinalWithinScope: 0 })
+              ? checkpoints.materializeBaselineCheckpoint({
+                  scope,
+                  ordinalWithinScope: 0,
+                  nodeId: scope.nodeId,
+                  capturedAt: scope.createdAt,
+                })
               : checkpoints.capture({
                   scope,
                   runId: scope.runId,
@@ -218,11 +223,17 @@ it.effect(
           if (baseline._tag === "Failure") {
             assert.strictEqual(baseline.failure.cause, captureError);
           } else {
+            const nodeId = NodeId.make("node:capture-failure:materializing-run");
+            const capturedAt = DateTime.add(scope.createdAt, { hours: 1 });
             const materialized = yield* checkpoints.materializeBaselineCheckpoint({
               scope,
               ordinalWithinScope: 0,
+              nodeId,
+              capturedAt,
             });
             assert.strictEqual(materialized.status, "missing");
+            assert.strictEqual(materialized.nodeId, nodeId);
+            assert.deepEqual(materialized.capturedAt, capturedAt);
           }
         }).pipe(Effect.provide(layerTest));
       }

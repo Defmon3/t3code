@@ -124,44 +124,43 @@ export function ProcessPanel(input: {
         `Kill test process ${process.pid}? This cannot be handled by the process.`,
         { variant: "destructive" },
       );
-      if (!confirmed) return;
-
-      const result = await signalServerProcess({
-        environmentId,
-        input: { pid: process.pid, startTimeMs: process.startTimeMs, signal: "SIGKILL" },
-      });
-      if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) return;
-        const error = squashAtomCommandFailure(result);
-        toastManager.add({
-          type: "error",
-          title: "Could not kill test process",
-          description: error instanceof Error ? error.message : "Failed to kill the test process.",
+      if (confirmed) {
+        const result = await signalServerProcess({
+          environmentId,
+          input: { pid: process.pid, startTimeMs: process.startTimeMs, signal: "SIGKILL" },
         });
-        return;
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add({
+              type: "error",
+              title: "Could not kill test process",
+              description:
+                error instanceof Error ? error.message : "Failed to kill the test process.",
+            });
+          }
+        } else {
+          if (!result.value.signaled) {
+            toastManager.add({
+              type: "error",
+              title: "Could not kill test process",
+              description: Option.getOrElse(
+                result.value.message,
+                () => "The test process may have already exited.",
+              ),
+            });
+          }
+          refreshProcesses();
+        }
       }
-      if (!result.value.signaled) {
-        toastManager.add({
-          type: "error",
-          title: "Could not kill test process",
-          description: Option.getOrElse(
-            result.value.message,
-            () => "The test process may have already exited.",
-          ),
-        });
-        refreshProcesses();
-        return;
-      }
-      refreshProcesses();
     } catch (error) {
       toastManager.add({
         type: "error",
         title: "Could not kill test process",
         description: error instanceof Error ? error.message : "Failed to kill the test process.",
       });
-    } finally {
-      clearSignaling();
     }
+    clearSignaling();
   }
 
   return (

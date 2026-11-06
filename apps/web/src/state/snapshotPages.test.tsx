@@ -35,6 +35,11 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
+vi.mock("react/compiler-runtime", async () => {
+  const { reactHookHarness } = await import("../test/reactHookHarness");
+  return { c: reactHookHarness.useMemoCache };
+});
+
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: { readonly value: ReadonlyArray<Result> }) => atom.value,
 }));

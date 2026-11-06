@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as CodexBrowserAccess from "./CodexBrowserAccess.ts";
@@ -37,8 +38,8 @@ function frame(body: string) {
 }
 
 const exchange = (endpoint: string, bytes: Buffer, split = false) =>
-  Effect.tryPromise(
-    () =>
+  Effect.tryPromise({
+    try: () =>
       new Promise<string | undefined>((resolve, reject) => {
         const socket = NodeNet.createConnection(endpoint);
         let buffered = Buffer.alloc(0);
@@ -60,7 +61,14 @@ const exchange = (endpoint: string, bytes: Buffer, split = false) =>
           socket.destroy();
         });
       }),
-  );
+    catch: (cause) =>
+      PlatformError.systemError({
+        _tag: "Unknown",
+        module: "Socket",
+        method: "exchange",
+        cause,
+      }),
+  });
 
 describe("CodexBrowserAccess", () => {
   it.live.each([

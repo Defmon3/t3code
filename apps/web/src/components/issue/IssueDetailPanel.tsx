@@ -30,7 +30,7 @@ import {
   MoreHorizontalIcon,
   PaperclipIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -129,11 +129,6 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "timeline", label: "Timeline" },
 ];
 
-/**
- * Where a hand-off from this panel lands. Beside a thread it is that thread's own composer, so
- * reading an issue and asking about it stay one conversation; on a page there is no conversation
- * to join, and the issue's own project gets a new thread.
- */
 export type IssueHandoffTarget =
   | { readonly kind: "new-thread" }
   | {
@@ -161,11 +156,7 @@ export function IssueDetailPanel({
   reference: IssueRef;
   /** Where "Solve", "Ask" and the rest put what they write. */
   handoffTarget: IssueHandoffTarget;
-  /**
-   * Bumped by whatever holds the panel when a reader asks for everything on screen to be read
-   * again. The panel owns its own reads, so the page cannot refresh them for it — it says when,
-   * and this says it.
-   */
+
   refreshToken?: number;
   /**
    * An action changed this issue on the host, so a list showing it is now out of date. Told
@@ -180,11 +171,7 @@ export function IssueDetailPanel({
     state: IssueState;
     stateReason: IssueCloseReason | null;
   }) => void;
-  /**
-   * Opens one of the change requests that reference this issue, as a peer tab beside it. Supplied
-   * by whoever mounted the panel, because only they know which panel the tab belongs in; without
-   * one the row opens it on the host instead, which is never a dead control.
-   */
+
   onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
   /** Opens another issue of this tracker project in place; without it, on the tracker. */
   onOpenRelatedIssue?: (issue: {
@@ -192,11 +179,7 @@ export function IssueDetailPanel({
     readonly number: number;
     readonly url: string;
   }) => void;
-  /**
-   * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
-   * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
-   * top — the chrome spends its height on what is being read.
-   */
+
   chromeVariant?: "full" | "collapse";
 }) {
   const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
@@ -207,27 +190,16 @@ export function IssueDetailPanel({
   const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
     () => new Set<DetailTab>([tab]),
   );
-  useEffect(() => {
-    setMountedTabs((previous) =>
-      previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
-    );
-  }, [tab]);
   const [chromeCondensed, setChromeCondensed] = useState(false);
-  // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
-  // events, so the capture handler always writes the active tab's entry — and a tab switch
-  // reads the destination's memory instead of inheriting the tab being left. A tab too short
-  // to scroll remembers "expanded", which is what keeps it from being stranded under a chrome
-  // it has no scrollbar to reopen.
+
   const chromeStateByTab = useRef<Partial<Record<DetailTab, boolean>>>({});
-  useEffect(() => {
-    setChromeCondensed(chromeStateByTab.current[tab] ?? false);
-  }, [tab]);
+  const selectTab = (next: DetailTab) => {
+    setTab(next);
+    setMountedTabs((previous) => (previous.has(next) ? previous : new Set(previous).add(next)));
+    setChromeCondensed(chromeStateByTab.current[next] ?? false);
+  };
   const condensed = chromeVariant === "collapse" && chromeCondensed;
-  // Collapsing removes the fold's height from the chrome, which would otherwise hand that
-  // height to the scrollport and leap the content up by it mid-scroll. The cure is exact
-  // compensation: collapse only once the reader has scrolled at least the fold's height,
-  // then give that height back to `scrollTop` before the next paint — the content under
-  // their eyes does not move, and the collapse itself is the only thing that changes.
+
   const scrollerRef = useRef<HTMLElement | null>(null);
   const foldRef = useRef<HTMLDivElement | null>(null);
   // The condensed chrome's second row opens as the fold closes, so the height the scrollport
@@ -235,13 +207,14 @@ export function IssueDetailPanel({
   // through a zero track reads its natural height in either state.
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
   const compensationRef = useRef<number | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- compensates DOM scroll position before paint when the issue header folds
   useLayoutEffect(() => {
     if (compensationRef.current === null) return;
     const scroller = scrollerRef.current;
     const delta = compensationRef.current;
     compensationRef.current = null;
     if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
-  }, [condensed]);
+  });
   // The issue the dialog was opened over travels with the question, because the panel shows a
   // different issue every time it is opened and the dialog outlives that swap: without it, a
   // confirmation asked about one issue closes whichever one the panel has moved on to.
@@ -273,55 +246,52 @@ export function IssueDetailPanel({
   const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
   const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
   const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
-  const detail = useMemo(
-    () =>
-      coreDetail === null
-        ? null
-        : {
-            ...coreDetail,
-            ...(canWrite
-              ? {}
-              : {
-                  capabilities: {
-                    ...coreDetail.capabilities,
-                    reactions: false,
-                    editComment: false,
-                  },
-                  viewerPermissions: {
-                    actions: [],
-                    comment: false,
-                    edit: false,
-                    labels: false,
-                    assignees: false,
-                    create: false,
-                  },
-                }),
-            author: activity?.author ?? coreDetail.author,
-            comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
-            // The host's own count, which the core read already carries: the conversation being
-            // unread is not the same as there being nothing in it.
-            commentCount: activity?.commentCount ?? coreDetail.commentCount,
-            commentsTruncated:
-              loadedPage === null
-                ? (activity?.commentsTruncated ?? false)
-                : loadedPage.nextCursor !== null,
-            nextCommentsCursor:
-              loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
-            events: activity?.events ?? [],
-            ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
-          },
-    [activity, canWrite, coreDetail, loadedPage],
-  );
+  const detail =
+    coreDetail === null
+      ? null
+      : {
+          ...coreDetail,
+          ...(canWrite
+            ? {}
+            : {
+                capabilities: {
+                  ...coreDetail.capabilities,
+                  reactions: false,
+                  editComment: false,
+                },
+                viewerPermissions: {
+                  actions: [],
+                  comment: false,
+                  edit: false,
+                  labels: false,
+                  assignees: false,
+                  create: false,
+                },
+              }),
+          author: activity?.author ?? coreDetail.author,
+          comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
+          // The host's own count, which the core read already carries: the conversation being
+          // unread is not the same as there being nothing in it.
+          commentCount: activity?.commentCount ?? coreDetail.commentCount,
+          commentsTruncated:
+            loadedPage === null
+              ? (activity?.commentsTruncated ?? false)
+              : loadedPage.nextCursor !== null,
+          nextCommentsCursor:
+            loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
+          events: activity?.events ?? [],
+          ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
+        };
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
-  const refreshDetail = useCallback(() => {
+  const refreshDetail = () => {
     detailQuery.refresh();
     activityQuery.refresh();
-  }, [activityQuery.refresh, detailQuery.refresh]);
+  };
   const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
     null,
   );
-  const loadMoreComments = useCallback(async () => {
+  const loadMoreComments = async () => {
     const cursor = detail?.nextCommentsCursor;
     if (cursor == null || loadingMoreComments) return;
     setLoadingMoreComments(true);
@@ -342,23 +312,18 @@ export function IssueDetailPanel({
         nextCursor: result.value.nextCursor,
       };
     });
-  }, [
-    detail?.nextCommentsCursor,
-    commentsKey,
-    environmentId,
-    loadingMoreComments,
-    readCommentsPage,
-    reference,
-  ]);
+  };
 
+  const refreshActivity = activityQuery.refresh;
+  const activityUpdatedAt = coreDetail?.updatedAt;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refreshes the external activity query when the host issue revision changes
   useEffect(() => {
-    if (!coreDetail) return;
-    const next = { key: issueKey, updatedAt: coreDetail.updatedAt };
-    if (shouldRefreshIssueActivity(activityRevision.current, next)) {
-      activityQuery.refresh();
-    }
+    if (activityUpdatedAt === undefined) return;
+    const next = { key: issueKey, updatedAt: activityUpdatedAt };
+    if (shouldRefreshIssueActivity(activityRevision.current, next)) refreshActivity();
     activityRevision.current = next;
-  }, [activityQuery.refresh, coreDetail, issueKey]);
+  }, [activityUpdatedAt, issueKey, refreshActivity]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes host issue status to the external panel tab registry
   useEffect(() => {
     if (!detail) return;
     onStateChange?.({
@@ -381,17 +346,15 @@ export function IssueDetailPanel({
   const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
   const [isInvalidating, setIsInvalidating] = useState(false);
   const refreshing = isInvalidating || detailQuery.isPending;
-  const refreshFromHost = useCallback(async () => {
+  const refreshFromHost = async () => {
     setIsInvalidating(true);
-    try {
-      await invalidate({ environmentId, input: { reference } });
-      refreshDetail();
-    } finally {
-      setIsInvalidating(false);
-    }
-  }, [environmentId, invalidate, reference, refreshDetail]);
+    await invalidate({ environmentId, input: { reference } });
+    refreshDetail();
+    setIsInvalidating(false);
+  };
   // A refresh asked for by the page, rather than by the menu item below.
   const appliedForcedToken = useRef(forcedRefreshToken);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- invalidates external host queries when the owning page requests a refresh
   useEffect(() => {
     if (appliedForcedToken.current === forcedRefreshToken) return;
     appliedForcedToken.current = forcedRefreshToken;
@@ -443,14 +406,6 @@ export function IssueDetailPanel({
     return { commentPosted: body !== undefined };
   };
 
-  /**
-   * The composer a hand-off writes into without opening anything, or null where it has to open a
-   * thread first.
-   *
-   * A thread standing in another project is not that composer: writing "solve this issue" into a
-   * conversation whose working tree is a different repository hands the agent a task it cannot do
-   * where it is, so the issue's own project gets a thread instead.
-   */
   const inPlaceDraft =
     handoffTarget.kind === "existing-thread" &&
     handoffTarget.projectRef.environmentId === environmentId &&
@@ -479,8 +434,8 @@ export function IssueDetailPanel({
     // landed.
     const description =
       task.prompt.length > 0
-        ? "The task is in the composer — read it over, then send."
-        : "The issue is in the composer — type your message, then send.";
+        ? "The task is in the composer: read it over, then send."
+        : "The issue is in the composer: type your message, then send.";
     if (kind !== "solve" && inPlaceDraft !== null) {
       writeHandoffToComposer(inPlaceDraft, task);
       toastManager.add({ type: "success", title: "Added to this thread", description });
@@ -518,11 +473,7 @@ export function IssueDetailPanel({
   const statePresentation = detail
     ? resolveIssueState({ state: detail.state, stateReason: detail.stateReason })
     : null;
-  // Every hand-off quotes the conversation, and until the activity read lands there is none to
-  // quote — an agent handed the issue mid-read gets the argument with the argument missing, and
-  // the read that lands afterwards cannot amend a composer already written. So the controls wait
-  // and say what they are waiting for, rather than sending half an issue. A failed read is not
-  // waiting: nothing further is coming, and the issue itself is still worth handing over.
+
   const handoffDisabled = handoff !== null || activityPending;
   const handoffLabel = (kind: string, label: string) =>
     handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
@@ -536,45 +487,31 @@ export function IssueDetailPanel({
       : null;
   const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
   const markdownReferenceAutolinks = sourceControlClients.get(detail?.provider).referenceAutolinks;
-  const openRelatedIssue = useCallback(
-    (issue: {
-      readonly repository?: string | undefined;
-      readonly number: number;
-      readonly url: string;
-    }) =>
-      onOpenRelatedIssue === undefined ? openLinkInBrowser(issue.url) : onOpenRelatedIssue(issue),
-    [onOpenRelatedIssue],
-  );
+  const openRelatedIssue = (issue: {
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  }) =>
+    onOpenRelatedIssue === undefined ? openLinkInBrowser(issue.url) : onOpenRelatedIssue(issue);
   const issueUrl = detail?.url ?? null;
   const issueRepository = detail?.repository ?? null;
-  const markdownContext = useMemo(
-    () => ({
-      autolinks:
-        markdownRepositoryUrl === null || markdownReferenceAutolinks === undefined
-          ? null
-          : (text: string) => markdownReferenceAutolinks(text, markdownRepositoryUrl),
-      threadRef: markdownThreadRef,
-      panelRef,
-      onOpenUrl: (url: string) => {
-        if (onOpenRelatedIssue === undefined || issueUrl === null || issueRepository === null) {
-          return false;
-        }
-        const number = sameProjectIssueNumber(issueUrl, issueRepository, url);
-        if (number === null) return false;
-        onOpenRelatedIssue({ number, url });
-        return true;
-      },
-    }),
-    [
-      markdownRepositoryUrl,
-      markdownReferenceAutolinks,
-      markdownThreadRef,
-      panelRef,
-      onOpenRelatedIssue,
-      issueUrl,
-      issueRepository,
-    ],
-  );
+  const markdownContext = {
+    autolinks:
+      markdownRepositoryUrl === null || markdownReferenceAutolinks === undefined
+        ? null
+        : (text: string) => markdownReferenceAutolinks(text, markdownRepositoryUrl),
+    threadRef: markdownThreadRef,
+    panelRef,
+    onOpenUrl: (url: string) => {
+      if (onOpenRelatedIssue === undefined || issueUrl === null || issueRepository === null) {
+        return false;
+      }
+      const number = sameProjectIssueNumber(issueUrl, issueRepository, url);
+      if (number === null) return false;
+      onOpenRelatedIssue({ number, url });
+      return true;
+    },
+  };
 
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col bg-background">
@@ -582,8 +519,8 @@ export function IssueDetailPanel({
           cell and crossfade, so the actions on the right have one home whatever the chrome
           is doing below. The fold and this fade share one 200ms clock. */}
       <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
-        {/* The fixed height lives on the two top-row cells — not the grid, whose later rows
-            are the fold — so the actions have one immovable home in both states. */}
+        {/* The fixed height lives on the two top-row cells: not the grid, whose later rows
+            are the fold: so the actions have one immovable home in both states. */}
         <div className="ml-4 grid h-7 min-w-0 items-center">
           <div
             aria-hidden={condensed}
@@ -827,7 +764,7 @@ export function IssueDetailPanel({
                 </MenuPopup>
               </Menu>
               {/* Handing the issue to an agent is the reason to open one at all, so it is a
-                  button of its own wherever the panel is — beside a thread as much as on the
+                  button of its own wherever the panel is: beside a thread as much as on the
                   page. */}
               <Tooltip>
                 <TooltipTrigger
@@ -955,7 +892,7 @@ export function IssueDetailPanel({
           </div>
         </div>
         {detail ? (
-          <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={setTab}>
+          <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={selectTab}>
             {tab === "timeline" ? (
               <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                 <span
@@ -973,7 +910,7 @@ export function IssueDetailPanel({
                 >
                   <MessageSquareIcon aria-hidden className="size-3" />
                   {activityError
-                    ? "—"
+                    ? "-"
                     : activityPending
                       ? "…"
                       : detail.commentCount.toLocaleString()}
@@ -1007,11 +944,7 @@ export function IssueDetailPanel({
         onScrollCapture={(event) => {
           const scroller = event.target as HTMLElement;
           if (chromeVariant !== "collapse") return;
-          // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code block
-          // running wide, the description open in an editor — is the reader moving something on
-          // the page rather than the page, and its `scrollTop` is not the one the compensation
-          // belongs to. The tab renders its scroller as the marked wrapper's only child, so that
-          // is what the mark asks about.
+
           if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
           scrollerRef.current = scroller;
           const top = scroller.scrollTop;
@@ -1024,7 +957,7 @@ export function IssueDetailPanel({
             const chromeDelta = foldHeight - (condensedRowRef.current?.scrollHeight ?? 0);
             if (previous) {
               // The hard top reopens the chrome. The refund puts the reader a fold's height
-              // from the top, pinned to the same pixels — the metadata is scrolled up to,
+              // from the top, pinned to the same pixels: the metadata is scrolled up to,
               // not thrown at them.
               if (top < 4 && foldHeight > 0) {
                 compensationRef.current = chromeDelta;

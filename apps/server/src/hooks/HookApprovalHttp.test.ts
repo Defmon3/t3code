@@ -192,7 +192,11 @@ it.effect.each([1, 2] as const)(
       );
       const response = yield* Fiber.join(waiting);
       expect(response.status).toBe(200);
-      expect(responseJson(response)).toEqual({ decision: "deny" });
+      expect(responseJson(response)).toEqual({
+        decision: "deny",
+        reason: body.reason,
+        feedback: `Reason: ${body.reason}`,
+      });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
@@ -270,7 +274,7 @@ it.effect.each([undefined, { key: "remote:notrory", label: "Remote access to not
 );
 
 it.effect.each(["deny", "allow", "allow-session"] as const)(
-  "returns user feedback only when the hook decision is denied (%s)",
+  "returns denial reason and user feedback only when the hook decision is denied (%s)",
   (decision) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -308,7 +312,10 @@ it.effect.each(["deny", "allow", "allow-session"] as const)(
         expect(response.status).toBe(200);
         expect(responseJson(response)).toEqual({
           decision: decision === "allow-session" ? "allow" : decision,
-          ...(decision === "deny" ? { feedback: "Keep this work on the local machine." } : {}),
+          ...(decision === "deny" ? { reason: "Check state" } : {}),
+          ...(decision === "deny"
+            ? { feedback: "Keep this work on the local machine.\nReason: Check state" }
+            : {}),
         });
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
     ),

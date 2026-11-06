@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
@@ -35,7 +35,7 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
   readonly onPaginationChange?: (pagination: PaginationState<Cursor>) => void;
 }) {
   const onPaginationChange = input.onPaginationChange;
-  const expiredRecovery = useRef<string | null>(null);
+  const [expiredRecovery, setExpiredRecovery] = useState<string | null>(null);
   const initialPagination =
     input.initialPagination?.targetKey === input.targetKey
       ? input.initialPagination
@@ -56,13 +56,14 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
           refreshFirstPage: false,
         };
   if (pagination.targetKey !== input.targetKey) {
-    expiredRecovery.current = null;
     setPagination(activePagination);
+    setExpiredRecovery(null);
   }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists the mounted panel pagination in its external state store
   useEffect(() => {
     onPaginationChange?.(activePagination);
   }, [activePagination, onPaginationChange]);
-  const pageAtoms = useMemo(() => {
+  const pageAtoms = (() => {
     const makePageAtom = input.makePageAtom;
     return input.targetKey === null || makePageAtom === null
       ? []
@@ -73,57 +74,40 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
             index === 0 && activePagination.refreshFirstPage,
           ),
         );
-  }, [
-    activePagination.cursors,
-    activePagination.generation,
-    activePagination.refreshFirstPage,
-    input.makePageAtom,
-    input.targetKey,
-  ]);
-  const pagesAtom = useMemo(
-    () =>
-      Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
-        Atom.withLabel(`${input.label}:${input.targetKey ?? "empty"}`),
-      ),
-    [input.label, input.targetKey, pageAtoms],
+  })();
+  const pagesAtom = Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
+    Atom.withLabel(`${input.label}:${input.targetKey ?? "empty"}`),
   );
   const results = useAtomValue(pagesAtom);
-  const values = useMemo(
-    () =>
-      results.flatMap((result) => {
-        const value = Option.getOrNull(AsyncResult.value(result));
-        return value === null ? [] : [value];
-      }),
-    [results],
-  );
+  const values = results.flatMap((result) => {
+    const value = Option.getOrNull(AsyncResult.value(result));
+    return value === null ? [] : [value];
+  });
   const failedIndex = results.findIndex((result) => result._tag === "Failure");
   const failed = failedIndex === -1 ? null : results[failedIndex]!;
 
-  useEffect(() => {
-    if (failed?._tag !== "Failure" || input.isExpiredError?.(failed.cause) !== true) return;
-    if (expiredRecovery.current === input.targetKey) {
-      return;
-    }
-    expiredRecovery.current = input.targetKey;
+  const recoveredForTarget = pagination.targetKey === input.targetKey ? expiredRecovery : null;
+  if (
+    failed?._tag === "Failure" &&
+    input.isExpiredError?.(failed.cause) === true &&
+    recoveredForTarget !== input.targetKey
+  ) {
+    setExpiredRecovery(input.targetKey);
     setPagination({
       targetKey: input.targetKey,
       cursors: INITIAL_CURSORS,
       generation: activePagination.generation + 1,
       refreshFirstPage: true,
     });
-  }, [activePagination.generation, failed, input.isExpiredError, input.targetKey]);
+  } else if (
+    recoveredForTarget === input.targetKey &&
+    results.length > 0 &&
+    results.every((result) => result._tag === "Success" && result.waiting === false)
+  ) {
+    setExpiredRecovery(null);
+  }
 
-  useEffect(() => {
-    if (expiredRecovery.current !== input.targetKey) return;
-    if (
-      results.length > 0 &&
-      results.every((result) => result._tag === "Success" && result.waiting === false)
-    ) {
-      expiredRecovery.current = null;
-    }
-  }, [input.targetKey, results]);
-
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (input.targetKey === null) return;
     const firstPage = pageAtoms[0];
     setPagination({
@@ -132,14 +116,14 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
       generation: activePagination.generation + 1,
       refreshFirstPage: true,
     });
-    expiredRecovery.current = null;
+    setExpiredRecovery(null);
     if (input.refreshPage === true && firstPage !== undefined) appAtomRegistry.refresh(firstPage);
-  }, [activePagination.generation, input.refreshPage, input.targetKey, pageAtoms]);
-  const retry = useCallback(() => {
+  };
+  const retry = () => {
     const failedPage = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
     if (failedPage !== undefined) appAtomRegistry.refresh(failedPage);
-  }, [failedIndex, pageAtoms]);
-  const loadNext = useCallback(() => {
+  };
+  const loadNext = () => {
     const lastPage = values.at(-1);
     const nextCursor = lastPage === undefined ? null : input.getNextCursor(lastPage);
     if (input.targetKey === null || nextCursor === null || nextCursor === undefined) {
@@ -158,7 +142,7 @@ export function usePaginatedSnapshotPages<Value, Error, Cursor>(input: {
             refreshFirstPage: current.refreshFirstPage,
           };
     });
-  }, [input.getNextCursor, input.maxPages, input.targetKey, values]);
+  };
 
   const lastResult = results.at(-1);
 

@@ -19,7 +19,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { issueEnvironment } from "~/state/issues";
@@ -89,6 +89,7 @@ export function IssueEditor({
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Focus the description DOM editor when mounted.
   useEffect(() => {
     if (field === "description") editorRef.current?.focusAtEnd();
   }, [field]);
@@ -279,10 +280,7 @@ export function IssueSummaryTab({
   loadingMoreComments: boolean;
 }) {
   const navigate = useNavigate();
-  const projectRefs = useMemo(
-    () => [scopeProjectRef(environmentId, detail.projectId)],
-    [environmentId, detail.projectId],
-  );
+  const projectRefs = [scopeProjectRef(environmentId, detail.projectId)];
   const threads = useThreadShellsForProjectRefs(projectRefs);
   const detailUrl = normalizeWorkItemLinkKey(detail).url;
   const linkedThreads = threads.filter(
@@ -714,6 +712,7 @@ export function IssueSummaryTab({
                         value={comment.body}
                         cwd={detail.workspaceRoot}
                         environmentId={environmentId}
+                        completionScope={null}
                         label="Edit comment"
                         saving={commentSaving}
                         onSave={(body) => void saveComment(comment.id, body)}

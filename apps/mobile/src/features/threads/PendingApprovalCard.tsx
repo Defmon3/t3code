@@ -316,32 +316,36 @@ function PendingApprovalCardContent(
           </View>
         </View>
       ) : null}
-      <View className="flex-row flex-wrap gap-2.5">
+      <View className="gap-2">
         {isCommand ? (
           <Button
             label={commandExpanded ? "Collapse" : "Expand"}
             tone="secondary"
             expanded={commandExpanded}
             onPress={() => setCommandExpanded((expanded) => !expanded)}
+            fullWidth
           />
         ) : null}
         {options.map((option) =>
           props.approval.supportsTimedApproval && option.decision === "acceptForSession" ? (
-            <View key={option.decision} className="flex-row flex-wrap items-center gap-2.5">
-              <Button
-                label={hookApprovalDurations[rememberedDuration].approvalLabel}
-                tone="secondary"
-                disabled={responseDisabled || !preferencesReady}
-                onPress={() => {
-                  if (!responseDisabled && preferencesReady)
-                    void props.onRespond(
-                      props.approval.requestId,
-                      "acceptForSession",
-                      undefined,
-                      rememberedDuration,
-                    );
-                }}
-              />
+            <View key={option.decision} className="flex-row items-center gap-2.5">
+              <View className="min-w-0 flex-1">
+                <Button
+                  label={hookApprovalDurations[rememberedDuration].approvalLabel}
+                  tone="secondary"
+                  disabled={responseDisabled || !preferencesReady}
+                  onPress={() => {
+                    if (!responseDisabled && preferencesReady)
+                      void props.onRespond(
+                        props.approval.requestId,
+                        "acceptForSession",
+                        undefined,
+                        rememberedDuration,
+                      );
+                  }}
+                  fullWidth
+                />
+              </View>
               <Menu
                 title="Approval duration"
                 actions={Object.values(hookApprovalDurations).map((choice) => ({
@@ -385,6 +389,7 @@ function PendingApprovalCardContent(
               }
               disabled={responseDisabled}
               onPress={() => void props.onRespond(props.approval.requestId, option.decision)}
+              fullWidth
             />
           ),
         )}
@@ -398,6 +403,7 @@ function PendingApprovalCardContent(
               setDraft({ status: "manual" });
               setFeedbackFailed(false);
             }}
+            fullWidth
           />
         ) : null}
       </View>

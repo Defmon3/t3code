@@ -1,3 +1,4 @@
+import { useStableCallback } from "../hooks/useStableCallback";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { Spinner } from "~/components/ui/spinner";
 import { Separator } from "~/components/ui/separator";
@@ -33,10 +34,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  useCallback,
   useEffect,
   useEffectEvent,
-  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -148,11 +147,7 @@ export interface IssuesSearch {
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
   readonly selectedProvider?: string;
-  /**
-   * One label name every row must wear. Narrowed here rather than on the hosts: a label is a
-   * word the rows already carry, and asking four hosts about it would cost a round trip to
-   * answer a question the page can answer itself.
-   */
+
   readonly label?: string;
   readonly q?: string;
   readonly sort?: IssueListSort;
@@ -331,11 +326,6 @@ function issueListSort(value: unknown): IssueListSort | undefined {
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
 
-/**
- * One whole page from the host and no more: every provider asks for one row beyond the page as
- * its "is there more" probe, and GitHub serves a hundred per request — so asking for ninety-nine
- * costs one round trip where a hundred costs two.
- */
 const PAGE_SIZE = 99;
 /** The largest page the listing accepts; past it the request is refused outright. */
 const MAX_PAGE_SIZE = 500;
@@ -417,6 +407,11 @@ export function issueListScopePreferencePatch(
 }
 
 function IssuesRouteView() {
+  const primaryEnvironment = usePrimaryEnvironment();
+  return <IssuesEnvironmentView key={primaryEnvironment?.environmentId ?? "pending"} />;
+}
+
+function IssuesEnvironmentView() {
   useEscapeToGoBack();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
@@ -449,10 +444,7 @@ function IssuesRouteView() {
   const projectsKnown = useAllEnvironmentShellsBootstrapped();
   // The page reads one environment, so a project from another one could neither be listed
   // nor acted on: scoping here keeps the filter and the selection honest.
-  const projects = useMemo(
-    () => allProjects.filter((project) => project.environmentId === environmentId),
-    [allProjects, environmentId],
-  );
+  const projects = allProjects.filter((project) => project.environmentId === environmentId);
   const currentProjectIds = projects.map((project) => project.id);
   const linearManaged = hasLinearManagementState(
     linearConnection.data,
@@ -464,22 +456,15 @@ function IssuesRouteView() {
     linearSettings,
     currentProjectIds,
   );
-  const scopedProjects = useMemo(
-    () =>
-      projects
-        .map((project) => ({
-          id: project.id,
-          title: project.title,
-          workspaceRoot: project.workspaceRoot,
-        }))
-        .toSorted((left, right) => left.title.localeCompare(right.title)),
-    [projects],
-  );
+  const scopedProjects = projects
+    .map((project) => ({
+      id: project.id,
+      title: project.title,
+      workspaceRoot: project.workspaceRoot,
+    }))
+    .toSorted((left, right) => left.title.localeCompare(right.title));
   // The scope the URL asks for, once the environment has had its say about whether it exists.
-  const scopedProjectId = useMemo(
-    () => resolveProjectScope(search.projectId, projects, projectsKnown),
-    [projects, projectsKnown, search.projectId],
-  );
+  const scopedProjectId = resolveProjectScope(search.projectId, projects, projectsKnown);
   const canSavePreferences = environmentId !== null && scopedProjectId !== undefined;
   const preferencesKey = canSavePreferences
     ? issuePanelPreferencesKey(environmentId, scopedProjectId)
@@ -489,10 +474,8 @@ function IssuesRouteView() {
     DEFAULT_ISSUE_PANEL_PREFERENCES,
     IssuePanelPreferencesSchema,
   );
-  const rightPanelRef = useMemo(
-    () => (environmentId === null ? null : scopeThreadRef(environmentId, ISSUES_PANEL_ID)),
-    [environmentId],
-  );
+  const rightPanelRef =
+    environmentId === null ? null : scopeThreadRef(environmentId, ISSUES_PANEL_ID);
   const rightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, rightPanelRef),
   );
@@ -515,10 +498,10 @@ function IssuesRouteView() {
       : null;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
-  const rightPanelPresenceValue = useMemo(
-    () => ({ activeSurface: selectedPanelSurface, surfaces: rightPanelState.surfaces }),
-    [rightPanelState.surfaces, selectedPanelSurface],
-  );
+  const rightPanelPresenceValue = {
+    activeSurface: selectedPanelSurface,
+    surfaces: rightPanelState.surfaces,
+  };
   const rightPanelPresence = usePanelPresence(
     rightPanelState.isOpen && selectedPanelSurface !== null,
     rightPanelPresenceValue,
@@ -546,23 +529,17 @@ function IssuesRouteView() {
   ).data;
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
   const activeIssueSurfaceId = renderedSurface?.kind === "issue" ? renderedSurface.id : undefined;
-  const handleIssueTabStatusChange = useCallback(
-    (status: IssueTabStatus) => {
-      if (activeIssueSurfaceId === undefined) return;
-      setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
-    },
-    [activeIssueSurfaceId],
-  );
-  const updateSearch = useCallback(
-    (patch: {
-      [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
-    }) =>
-      void navigate({
-        search: (previous: IssuesSearch) => patchIssuesSearch(previous, patch),
-        replace: true,
-      }),
-    [navigate],
-  );
+  const handleIssueTabStatusChange = (status: IssueTabStatus) => {
+    if (activeIssueSurfaceId === undefined) return;
+    setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
+  };
+  const updateSearch = (patch: {
+    [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
+  }) =>
+    void navigate({
+      search: (previous: IssuesSearch) => patchIssuesSearch(previous, patch),
+      replace: true,
+    });
 
   // Changing what the list contains must not leave a selection from the previous view open.
   // The project filter is untouched: it is the user's scope, not part of the selection.
@@ -617,9 +594,7 @@ function IssuesRouteView() {
   // Typing a search, or clearing one, starts the list again at its first page. Without this the
   // paging state from before the search is still filed under these filters and comes back with
   // it, so clearing would return to the slice that had been scrolled to rather than to the list.
-  useEffect(() => {
-    setPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
-  }, [filterKey]);
+  if (page.key !== filterKey) setPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
 
   const listQuery = useEnvironmentQuery(
     issueEnvironmentId === null
@@ -643,16 +618,6 @@ function IssuesRouteView() {
         }),
   );
 
-  /**
-   * The same filters with nothing typed, read whether or not anything is. It is the same atom the
-   * list itself uses while no search is on, so it costs nothing then; while one is, it is what the
-   * page knows about the workspace — who is signed in, which hosts there are, which repositories
-   * could not be read — and what it shows the moment the search is cleared.
-   *
-   * Kept as its own read rather than remembered from an earlier answer because an answer cannot
-   * say which question it belongs to: mid-switch the text has already changed and the data has
-   * not, and a search's answer would file itself under the workspace.
-   */
   const baselineQuery = useEnvironmentQuery(
     issueEnvironmentId === null
       ? null
@@ -669,12 +634,7 @@ function IssuesRouteView() {
           },
         }),
   );
-  // The priority groups' own reads. The feed below is paginated by recency, so an older authored
-  // or assigned row can be missing from its first page; partitioned from these server-filtered
-  // reads instead, the priority view is complete up front and a continuation can only ever append
-  // below what is already on screen. A search re-ranks the whole list by match, so no partitions
-  // are read for one. These are the same atoms the Authored and Assigned tabs ask for, so
-  // switching to either is answered from cache.
+
   const partitionsWanted =
     involvement === "all" && searchQuery.length === 0 && sort === "updated" && order === "desc";
   const authoredQuery = useEnvironmentQuery(
@@ -722,13 +682,10 @@ function IssuesRouteView() {
   const [invalidating, setInvalidating] = useState(false);
   const invalidateHost = async () => {
     setInvalidating(true);
-    try {
-      if (issueEnvironmentId !== null) {
-        await invalidate({ environmentId: issueEnvironmentId, input: {} });
-      }
-    } finally {
-      setInvalidating(false);
+    if (issueEnvironmentId !== null) {
+      await invalidate({ environmentId: issueEnvironmentId, input: {} });
     }
+    setInvalidating(false);
   };
   const refreshFromHost = async () => {
     await invalidateHost();
@@ -751,87 +708,68 @@ function IssuesRouteView() {
     data: IssueListResult;
     /** The priority groups' own answers, carried so a cold start has whole groups too. */
     partitions?: IssuePartitionsSnapshot;
-  } | null>(null);
-  // A reload recreates the registry the queries live in, so with nothing held the page would
-  // cold-start into skeletons even though almost every row is unchanged. The last answer for
-  // this environment is kept across reloads and hydrated here as the carried rows: they render
-  // at once — narrowed to the current filters like any carried answer — and the live read
-  // reconciles them in place by key rather than replacing them with ghosts.
-  useEffect(() => {
-    if (environmentId === null) return;
-    setLoaded((current) => {
-      // Another environment's rows could not even be narrowed — nothing on a row says which
-      // environment read it — so its snapshot beats holding them.
-      if (current !== null && current.environmentId === environmentId) return current;
-      const snapshot = readIssueListSnapshot(
-        typeof window === "undefined" ? undefined : window.localStorage,
-        environmentId,
-      );
-      if (snapshot === null) return null;
-      return {
-        environmentId,
-        scope: snapshot.scope,
-        query: "",
-        data: snapshot.data,
-        ...(snapshot.partitions === undefined ? {} : { partitions: snapshot.partitions }),
-      };
-    });
-  }, [environmentId]);
-  useEffect(() => {
-    // Only once this query has settled. While a search is being swapped in or out the text has
-    // already changed and the data has not, so recording them together would file the previous
-    // answer under the new question — which is how a search's answer came to speak for the
-    // workspace after the search was cleared.
-    if (!listQuery.data || listQuery.isPending) return;
-    const data = listQuery.data;
-    setLoaded((current) => {
-      // The partitions arrive on their own clock, so this records whichever have landed by
-      // now and runs again when the rest do. Until then the ones already held for this scope
-      // stay — hydrated or previously answered — rather than being dropped for a feed that
-      // merely settled first.
-      const partitions =
-        partitionsWanted && authoredQuery.data !== null && assignedQuery.data !== null
-          ? { authored: authoredQuery.data.entries, assigned: assignedQuery.data.entries }
-          : current !== null &&
-              current.environmentId === environmentId &&
-              current.scope === scopeKey
-            ? current.partitions
-            : undefined;
-      // A search's answer is the search's, not the workspace's, so only unsearched lists
-      // persist. Written here where the held partitions are in reach, so a feed settling
-      // ahead of them cannot overwrite a stored snapshot that already had both groups.
-      if (environmentId !== null && sentQuery.length === 0) {
-        writeIssueListSnapshot(
-          typeof window === "undefined" ? undefined : window.localStorage,
+  } | null>(() => {
+    if (environmentId === null) return null;
+    const snapshot = readIssueListSnapshot(
+      typeof window === "undefined" ? undefined : window.localStorage,
+      environmentId,
+    );
+    return snapshot === null
+      ? null
+      : {
           environmentId,
-          { scope: scopeKey, data, ...(partitions === undefined ? {} : { partitions }) },
-        );
-      }
-      return {
-        environmentId,
-        scope: scopeKey,
-        query: sentQuery,
-        data,
-        ...(partitions === undefined ? {} : { partitions }),
-      };
+          scope: snapshot.scope,
+          query: "",
+          data: snapshot.data,
+          ...(snapshot.partitions === undefined ? {} : { partitions: snapshot.partitions }),
+        };
+  });
+
+  const settledListData = listQuery.isPending ? null : listQuery.data;
+  const nextPartitions =
+    partitionsWanted && authoredQuery.data !== null && assignedQuery.data !== null
+      ? { authored: authoredQuery.data.entries, assigned: assignedQuery.data.entries }
+      : loaded !== null && loaded.environmentId === environmentId && loaded.scope === scopeKey
+        ? loaded.partitions
+        : undefined;
+  if (
+    settledListData !== null &&
+    (loaded?.environmentId !== environmentId ||
+      loaded.scope !== scopeKey ||
+      loaded.query !== sentQuery ||
+      loaded.data !== settledListData ||
+      loaded.partitions?.authored !== nextPartitions?.authored ||
+      loaded.partitions?.assigned !== nextPartitions?.assigned)
+  ) {
+    setLoaded({
+      environmentId,
+      scope: scopeKey,
+      query: sentQuery,
+      data: settledListData,
+      ...(nextPartitions === undefined ? {} : { partitions: nextPartitions }),
     });
-  }, [
-    environmentId,
-    scopeKey,
-    sentQuery,
-    listQuery.data,
-    listQuery.isPending,
-    partitionsWanted,
-    authoredQuery.data,
-    assignedQuery.data,
-  ]);
-  // Changing a filter asks a question nothing has answered yet, and the page is already holding
-  // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
-  // are narrowed to the new filters and stay until the answer lands — a subset of it, never a
-  // row it excludes. Narrowed to nothing there is nothing to carry, and the skeletons below are
-  // right after all. Another environment's rows are dropped rather than narrowed: nothing on a
-  // row says which environment read it.
-  const narrowed = useMemo(() => {
+  }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists settled unsearched issue rows and partitions to local storage for reloads
+  useEffect(() => {
+    if (
+      environmentId === null ||
+      sentQuery.length > 0 ||
+      settledListData === null ||
+      loaded?.data !== settledListData
+    )
+      return;
+    writeIssueListSnapshot(
+      typeof window === "undefined" ? undefined : window.localStorage,
+      environmentId,
+      {
+        scope: loaded.scope,
+        data: loaded.data,
+        ...(loaded.partitions === undefined ? {} : { partitions: loaded.partitions }),
+      },
+    );
+  }, [environmentId, loaded, sentQuery, settledListData]);
+
+  const narrowed = (() => {
     if (loaded === null || loaded.environmentId !== environmentId || loaded.scope === scopeKey) {
       return null;
     }
@@ -841,14 +779,8 @@ function IssuesRouteView() {
       host: search.host,
     });
     return entries.length === 0 ? null : { ...loaded.data, entries };
-  }, [environmentId, loaded, scopeKey, scopedProjectId, search.host, state]);
-  // With nothing typed and nothing to carry on from, the answer is taken from the read that is
-  // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
-  // text has gone — the data cannot say which question it belongs to, but the read it came from
-  // can, and that is what stops a cleared search from keeping its own rows.
-  // A grown page is read by the list and nothing else: the baseline always asks for one page, so
-  // a host with no cursor to continue from — where "more" means asking for a longer page — would
-  // have its extra rows thrown away for the ninety-nine the baseline keeps answering with.
+  })();
+
   const baselineVisible = sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE;
   const answered =
     (baselineVisible ? baselineQuery.data : listQuery.data) ??
@@ -872,17 +804,18 @@ function IssuesRouteView() {
   // the order again.
   const [ordered, setOrdered] = useState<{
     key: string;
+    answer: IssueListResult;
     entries: ReadonlyArray<IssueListEntry>;
     cursorLimitReached: boolean;
   } | null>(null);
-  useEffect(() => {
-    if (!answered) return;
+  if (answered !== null && (ordered?.answer !== answered || ordered.key !== filterKey)) {
     const hostOrdered =
       sort === "best-match" &&
       answered.providers.some((provider) => !provider.sorts.includes("best-match"))
         ? rankIssueMatches(answered.entries, sentQuery)
         : answered.entries;
-    setOrdered((previous) => {
+    const nextOrder = (() => {
+      const previous = ordered;
       if (previous === null || previous.key !== filterKey) {
         return {
           key: filterKey,
@@ -911,14 +844,10 @@ function IssuesRouteView() {
         entries: hostOrdered,
         cursorLimitReached: answered.cursorLimitReached === true,
       };
-    });
-  }, [answered, filterKey, order, sentCursors, sentQuery, sort]);
+    })();
+    setOrdered({ ...nextOrder, answer: answered });
+  }
 
-  // Carrying on where the last answer stopped, and only raising the page size for the hosts that
-  // could not say where that was.
-  // From this question's own answer, never from the rows being held while it travels: a
-  // continuation is a boundary in one listing, and carrying one across a search would ask the
-  // new question to start where the old one stopped — skipping its newest matches entirely.
   const nextCursors = answered?.nextCursors ?? {};
   const canContinue = !showingCarried && Object.keys(nextCursors).length > 0;
   const cursorLimitReached =
@@ -975,39 +904,28 @@ function IssuesRouteView() {
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
   const pageErrors = answered?.errors;
   const pageFailure = pageErrors?.map((error) => error.message).join(" ") || null;
-  const listErrors = useMemo(
-    () => [
-      ...(pageErrors ?? []),
-      ...(baselineQuery.data?.errors ?? []).filter(
-        (error) => !pageErrors?.some((pageError) => pageError.projectId === error.projectId),
-      ),
-    ],
-    [baselineQuery.data?.errors, pageErrors],
-  );
+  const listErrors = [
+    ...(pageErrors ?? []),
+    ...(baselineQuery.data?.errors ?? []).filter(
+      (error) => !pageErrors?.some((pageError) => pageError.projectId === error.projectId),
+    ),
+  ];
   const retryPage = async () => {
     await invalidateHost();
     (baselineVisible ? baselineQuery : listQuery).refresh();
   };
 
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
-  const searchingHosts = useMemo(
-    () =>
-      new Set(
-        (baselineQuery.data?.providers ?? listData?.providers ?? []).flatMap((provider) =>
-          provider.searchesOnHost ? [provider.host] : [],
-        ),
-      ),
-    [baselineQuery.data?.providers, listData?.providers],
+  const searchingHosts = new Set(
+    (baselineQuery.data?.providers ?? listData?.providers ?? []).flatMap((provider) =>
+      provider.searchesOnHost ? [provider.host] : [],
+    ),
   );
 
-  const entries = useMemo(() => {
+  const entries = (() => {
     const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
     const involvementEntries = filterIssuesByInvolvement(known, viewers, involvement);
-    // The hosts search more than the row shows — a body, a comment — so once their answer is in,
-    // narrowing it again here would throw away matches the reader asked for. The local pass
-    // stands in for the answer that has not arrived yet, and for the hosts that answered without
-    // searching at all: their rows arrive whole and would otherwise sit under a search that
-    // never touched them.
+
     const labelled =
       label === undefined
         ? involvementEntries
@@ -1017,31 +935,20 @@ function IssuesRouteView() {
     if (searchQuery.length === 0) return labelled;
     const answeredLocally = querySettled && !showingCarried;
     return filterIssueQueryResults(labelled, searchQuery, answeredLocally, searchingHosts);
-  }, [
-    filterKey,
-    listData,
-    ordered,
-    querySettled,
-    involvement,
-    label,
-    searchingHosts,
-    showingCarried,
-    searchQuery,
-    viewers,
-  ]);
+  })();
 
   /**
    * The labels the rows on screen actually wear. Offered from what arrived rather than from a
    * read of every repository's label set: a label nothing here carries would filter to nothing.
    */
-  const labelOptions = useMemo(() => {
+  const labelOptions = (() => {
     const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
     const names = new Set(known.flatMap((entry) => entry.labels.map((label) => label.name)));
     if (label !== undefined) names.add(label);
     return [...names].sort((left, right) => left.localeCompare(right));
-  }, [filterKey, listData, ordered, label]);
+  })();
 
-  const groups = useMemo(() => {
+  const groups = (() => {
     if (involvement !== "all" || sort !== "updated" || order !== "desc" || searchQuery.length > 0) {
       return [{ key: "others" as const, label: "", entries }];
     }
@@ -1066,35 +973,16 @@ function IssuesRouteView() {
       (entry) =>
         label === undefined || entry.labels.some((entryLabel) => entryLabel.name === label),
     );
-  }, [
-    assignedQuery.data?.entries,
-    authoredQuery.data?.entries,
-    entries,
-    environmentId,
-    loaded,
-    order,
-    partitionsWanted,
-    scopeKey,
-    involvement,
-    label,
-    sort,
-    searchQuery.length,
-    viewers,
-  ]);
+  })();
 
   const visibleRowCount = groups.reduce((count, group) => count + group.entries.length, 0);
 
+  const loadMoreStable = useStableCallback(loadMore);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the visible list sentinel DOM node to request the next issue page
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
-    // re-arming it after a failure would ask for the next page again, forever.
-    //
-    // Rows on screen are also what makes reaching the sentinel mean anything: with none, it
-    // sits directly below the empty state and is always in view, so a search that matches
-    // nothing would page through the whole host on its own — one listing of every repository
-    // per step — while the reader looks at an empty page. With nothing to scroll past, the
-    // next page is asked for rather than assumed.
+
     if (
       !sentinel ||
       visibleRowCount === 0 ||
@@ -1115,7 +1003,7 @@ function IssuesRouteView() {
     const observer = new IntersectionObserver(
       (observed) => {
         if (observed.some((entry) => entry.isIntersecting)) {
-          loadMore();
+          loadMoreStable();
         }
       },
       // Start the next page slightly before the sentinel is on screen.
@@ -1125,20 +1013,19 @@ function IssuesRouteView() {
     return () => observer.disconnect();
   }, [
     visibleRowCount,
-    filterKey,
+    truncated,
+    listQuery.isPending,
+    listQuery.error,
+    pageFailure,
+    showingCarried,
     canContinue,
     canGrow,
-    truncated,
-    listQuery.error,
-    listQuery.isPending,
-    pageFailure,
-    pageSize,
-    showingCarried,
+    loadMoreStable,
   ]);
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
   // resolved here; an explicit `projectId` in the URL still wins.
-  const projectIdForRepository = useMemo(() => {
+  const projectIdForRepository = (() => {
     const repository = search.repository?.toLowerCase();
     if (repository === undefined) return undefined;
     const identity = projects.find(
@@ -1156,19 +1043,16 @@ function IssuesRouteView() {
           ) === search.host.toLowerCase()),
     );
     return identity?.id;
-  }, [projects, search.host, search.repository]);
+  })();
 
   // The selection is resolved the same way the scope is: an id from another environment can
   // never be read here, and one that arrived before the projects did is not yet wrong.
-  const linkedProjectId = useMemo(
-    () => resolveProjectScope(search.selectedProjectId, projects, projectsKnown),
-    [projects, projectsKnown, search.selectedProjectId],
-  );
+  const linkedProjectId = resolveProjectScope(search.selectedProjectId, projects, projectsKnown);
   // The scope filter stands in as a last resort: a link can carry `projectId` with a repository
   // whose identity the inference above cannot match, and refusing to open it because of the
   // weaker signal would ignore the stronger one the URL spelled out.
   const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
-  const linkedSelection = useMemo(() => {
+  const linkedSelection = (() => {
     if (!search.repository || !search.number || !selectedProjectId) return null;
     const provider =
       search.selectedProvider ??
@@ -1184,7 +1068,8 @@ function IssuesRouteView() {
       projectId: selectedProjectId,
       ...(provider === undefined ? {} : { provider }),
     };
-  }, [entries, search.number, search.repository, search.selectedProvider, selectedProjectId]);
+  })();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the router-selected issue in the external right panel registry
   useEffect(() => {
     if (!issuesSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openIssue(rightPanelRef, linkedSelection);
@@ -1229,16 +1114,19 @@ function IssuesRouteView() {
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
   // cannot make the switcher that got you there disappear.
-  const [hosts, setHosts] = useState<IssueListResult["providers"]>([]);
-  useEffect(() => {
-    // Only from an answer to these filters. Rows carried over from the previous ones bring the
-    // host summaries of the question they answered, and coming back from one host to all of them
-    // would take the switcher's other hosts out of it on the strength of the narrowed answer.
-    if (answered === null) return;
-    // An unfiltered response is the full set. A filtered response replaces only its host, so
-    // connection changes become visible without dropping every other provider from the menu.
-    setHosts((previous) => mergeIssueProviderSummaries(previous, answered.providers, search.host));
-  }, [answered, search.host]);
+  const [hostState, setHostState] = useState<{
+    answer: IssueListResult | null;
+    host: string | undefined;
+    providers: IssueListResult["providers"];
+  }>({ answer: null, host: undefined, providers: [] });
+  if (answered !== null && (hostState.answer !== answered || hostState.host !== search.host)) {
+    setHostState({
+      answer: answered,
+      host: search.host,
+      providers: mergeIssueProviderSummaries(hostState.providers, answered.providers, search.host),
+    });
+  }
+  const hosts = hostState.providers;
   const activeHosts = stabilizeLinearProviderSummary(
     hosts,
     currentProjectIds,
@@ -1248,46 +1136,39 @@ function IssuesRouteView() {
   const showProvider = activeHosts.length > 1;
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
-  const unavailableProjects = useMemo(
-    () => new Map(listErrors.map((error) => [error.projectId, error.message] as const)),
-    [listErrors],
+  const unavailableProjects = new Map(
+    listErrors.map((error) => [error.projectId, error.message] as const),
   );
 
   // Stable so the memoized rows can skip re-rendering when the list around them changes.
-  const selectEntry = useCallback(
-    (entry: IssueListEntry) => {
-      if (rightPanelRef === null) return;
-      useRightPanelStore.getState().openIssue(rightPanelRef, entry);
-      updateSearch({
-        repository: entry.repository,
-        number: entry.number,
-        selectedProjectId: entry.projectId,
-        selectedProvider: entry.provider,
-      });
-    },
-    [rightPanelRef, updateSearch],
-  );
+  const selectEntry = (entry: IssueListEntry) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().openIssue(rightPanelRef, entry);
+    updateSearch({
+      repository: entry.repository,
+      number: entry.number,
+      selectedProjectId: entry.projectId,
+      selectedProvider: entry.provider,
+    });
+  };
 
-  const toggleIssueSelection = useCallback(
-    (entry: IssueListEntry) => {
-      if (issueEnvironmentId === null) return;
-      const error = toggleWorkItem({
-        kind: "issue",
-        provider: entry.provider,
-        environmentId: issueEnvironmentId,
-        projectId: entry.projectId,
-        repository: entry.repository,
-        number: entry.number,
-        title: entry.title,
-        url: entry.url,
-      });
-      if (error === "project")
-        toastManager.add({ type: "warning", title: "Select items from one project" });
-      if (error === "limit")
-        toastManager.add({ type: "warning", title: "You can select up to 20 items" });
-    },
-    [issueEnvironmentId, toggleWorkItem],
-  );
+  const toggleIssueSelection = (entry: IssueListEntry) => {
+    if (issueEnvironmentId === null) return;
+    const error = toggleWorkItem({
+      kind: "issue",
+      provider: entry.provider,
+      environmentId: issueEnvironmentId,
+      projectId: entry.projectId,
+      repository: entry.repository,
+      number: entry.number,
+      title: entry.title,
+      url: entry.url,
+    });
+    if (error === "project")
+      toastManager.add({ type: "warning", title: "Select items from one project" });
+    if (error === "limit")
+      toastManager.add({ type: "warning", title: "You can select up to 20 items" });
+  };
 
   const openLinearSettings = () => void navigate({ to: "/settings/integrations", hash: "linear" });
   const searchInput = (
@@ -1325,11 +1206,7 @@ function IssuesRouteView() {
       {panelToggleControls}
     </div>
   );
-  // The rows carried over from the last filters can also narrow to nothing one step further on,
-  // where involvement is applied against the viewers of the answer they came from. "Nothing under
-  // these filters" is a claim, and it is the wrong one to make about a question still in flight,
-  // so that case waits with the skeletons rather than answering for the hosts. A search says so
-  // in its own words and is left to.
+
   const heldCount = (ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []))
     .length;
   const carriedToNothing =
@@ -1655,6 +1532,7 @@ function IssuesRouteView() {
     event.stopPropagation();
     if (!event.repeat) toggleRightPanel();
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers document keybindings while the issues page is mounted
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || isCommandPaletteOpen()) return;
@@ -1867,13 +1745,6 @@ export function CompactFilterMenu<Value extends string>({
   );
 }
 
-/**
- * The issue list column. The full controls live at the top of the scroll flow; once they scroll
- * away, the title transforms into the scope itself — "Issues / Open ▾ Assigned ▾" — where each
- * segment is the menu for that filter, and a folded search sits on the right. Scrolled back up,
- * the topbar returns to the plain title. The topbar is the window drag region throughout; its
- * interactive children opt out through the `.drag-region` descendant rules.
- */
 export function IssuesColumn({
   refreshing,
   onRefresh,
@@ -1916,6 +1787,7 @@ export function IssuesColumn({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const markerRef = useRef<HTMLDivElement | null>(null);
   const [condensed, setCondensed] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the scroll marker DOM visibility to fold the issues header
   useEffect(() => {
     const marker = markerRef.current;
     if (!marker) return;
@@ -1941,11 +1813,12 @@ export function IssuesColumn({
     setSearchOpen,
     setSearchFocusToken,
   });
+  if (!condensed && searchOpen) setSearchOpen(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- transfers DOM focus to the in-flow search input when the header unfolds
   useEffect(() => {
     if (condensed) return;
     // The fold-out is gone from the chrome; forgetting it open keeps the next condensing
     // from starting with an empty expanded search nobody asked for.
-    setSearchOpen(false);
     if (!topbarSearchFocusedRef.current) return;
     topbarSearchFocusedRef.current = false;
     const input = inFlowSearchRef.current?.querySelector("input");

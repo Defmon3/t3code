@@ -4761,6 +4761,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         // overlaps another fails, and a branch can then be left without its worktree.
         let configWriters = 0;
         let peakConfigWriters = 0;
+        const diagnostics: string[] = [];
         const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
         const countingSpawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
@@ -4770,15 +4771,21 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
               (args[0] === "branch" &&
                 (args[1] === "-m" || args[1]?.startsWith("--set-upstream-to"))) ||
               (args[0] === "config" && !args[1]?.startsWith("-"));
-            if (!writesConfig) return yield* delegate.spawn(command);
-            configWriters += 1;
-            peakConfigWriters = Math.max(peakConfigWriters, configWriters);
+            if (writesConfig) {
+              configWriters += 1;
+              peakConfigWriters = Math.max(peakConfigWriters, configWriters);
+            }
             const handle = yield* delegate.spawn(command);
             return ChildProcessSpawner.makeHandle({
               ...handle,
-              exitCode: handle.exitCode.pipe(
-                Effect.ensuring(Effect.sync(() => (configWriters -= 1))),
+              stderr: handle.stderr.pipe(
+                Stream.tap((chunk) =>
+                  Effect.sync(() => diagnostics.push(new TextDecoder().decode(chunk))),
+                ),
               ),
+              exitCode: writesConfig
+                ? handle.exitCode.pipe(Effect.ensuring(Effect.sync(() => (configWriters -= 1))))
+                : handle.exitCode,
             });
           }),
         );
@@ -4799,6 +4806,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
               baseRefName: `origin/${initialBranch}`,
             }),
           { concurrency: "unbounded" },
+        ).pipe(
+          Effect.tapError(() => Effect.logError("Parallel worktree Git diagnostics", diagnostics)),
         );
         // Launches rename their temporary branch from inside the new worktree.
         yield* Effect.forEach(

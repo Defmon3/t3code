@@ -4,9 +4,11 @@ import {
   type IssueDetailView,
   type IssueRef,
 } from "@t3tools/contracts";
-import { Fragment, act, type ReactNode } from "react";
+import { Fragment, type ComponentProps, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { act } from "../../../test/act";
+import type { PullRequestMarkdownTextarea } from "../pullRequest/PullRequestMarkdownTextarea";
 
 const state = vi.hoisted(() => ({
   allowed: true,
@@ -33,12 +35,25 @@ vi.mock("~/state/session", async () => {
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.updateComment }));
 vi.mock("~/state/issues", () => ({ issueEnvironment: { updateComment: "updateComment" } }));
 vi.mock("~/lib/openIssueLink", () => ({ openLinkInBrowser: vi.fn() }));
-vi.mock("~/lib/utils", () => ({ cn: () => "" }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
-vi.mock("../ui/textarea", () => ({ Textarea: "textarea" }));
 vi.mock("../ui/toggle-group", () => ({ Toggle: "button", ToggleGroup: "div" }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 vi.mock("../pullRequest/PullRequestMarkdown", () => ({ PullRequestMarkdown: () => null }));
+vi.mock("../pullRequest/PullRequestMarkdownTextarea", () => ({
+  PullRequestMarkdownTextarea: ({
+    value,
+    disabled,
+    "aria-label": label,
+    onValueChange,
+  }: ComponentProps<typeof PullRequestMarkdownTextarea>) => (
+    <textarea
+      aria-label={label}
+      disabled={disabled}
+      value={value}
+      onChange={(event) => onValueChange(event.target.value)}
+    />
+  ),
+}));
 vi.mock("./IssueReactions", () => ({ IssueReactionBar: () => null }));
 vi.mock("../sourceControl/TimelineRail", () => ({ ActorName: () => null, IconMarker: () => null }));
 vi.mock("../sourceControl/ConversationGroup", () => ({
@@ -93,13 +108,11 @@ beforeEach(() => {
   state.allowed = true;
   state.listeners.clear();
   state.updateComment.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
 
 afterEach(async () => {
   await act(() => renderer?.unmount());
   renderer = undefined;
-  vi.unstubAllGlobals();
 });
 
 function timeline(detail: IssueDetailView) {
