@@ -32,6 +32,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
@@ -119,6 +120,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           const lookups: boolean[] = [];
           const branches: string[] = [];
           const identityRefreshes: boolean[] = [];
+          const backgroundWork: boolean[] = [];
           const base = {
             id: EventId.make("event:refresh"),
             threadId: thread.id,
@@ -186,6 +188,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             Layer.mock(GitManager.GitManager)({
               branchPullRequest: (input, options) =>
                 Effect.gen(function* () {
+                  backgroundWork.push(yield* GitVcsDriver.BackgroundGitWork);
                   const refresh = options?.refresh ?? false;
                   lookups.push(refresh);
                   branches.push(input.branch);
@@ -252,6 +255,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             yield* service.drain;
             const expected = scenario === "in-flight" ? [false, true, true] : [false, true];
             expect(lookups).toEqual(expected);
+            expect(backgroundWork).toEqual(expected.map(() => true));
             expect(identityRefreshes).toEqual(expected);
             expect(branches).toEqual(
               scenario === "in-flight"

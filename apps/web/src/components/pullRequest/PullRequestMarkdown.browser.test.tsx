@@ -2,7 +2,7 @@ import { sourceControlClients } from "@t3tools/client-runtime/source-control-cli
 import { type AssetResource, EnvironmentId } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { PullRequestMarkdown, PullRequestMarkdownContext } from "./PullRequestMarkdown";
 
 const requested = vi.hoisted(() => [] as Array<AssetResource | null>);
@@ -20,14 +20,20 @@ function setup() {
 
 async function renderBody(
   host: string,
-  options: { lineBreaks?: boolean; repository?: string; text?: string } = {},
+  options: {
+    lineBreaks?: boolean;
+    repository?: string;
+    text?: string;
+    onOpenUrl?: (url: string) => boolean;
+  } = {},
 ) {
-  const { repository = null, text = "first line\nsecond line", ...props } = options;
+  const { repository = null, text = "first line\nsecond line", onOpenUrl, ...props } = options;
   const context = {
     remarkPlugins: [],
     lineBreaks: sourceControlClients.get(host).hardLineBreaks ?? false,
     threadRef: null,
     repository,
+    ...(onOpenUrl ? { onOpenUrl } : {}),
   };
   return render(
     <PullRequestMarkdownContext value={context}>
@@ -60,6 +66,50 @@ it("lets text the host did not write opt out of the host's breaks", async () => 
   await using screen = await renderBody("github", { lineBreaks: false });
   await expect.element(screen.getByText(/first line/)).toBeInTheDocument();
   expect(screen.container.querySelectorAll("p br")).toHaveLength(0);
+});
+
+const issueUrl = "https://github.com/acme/app/issues/2";
+const issueLink = `[Issue](${issueUrl})`;
+
+it.each([
+  { name: "a primary markdown click", text: issueLink, init: {}, claimed: true },
+  {
+    name: "a primary media-table click",
+    text: `<table>\n<tr><td>\n\n${issueLink}\n\n</td><td>\n\nhttps://example.com/shot.png\n\n</td></tr>\n</table>`,
+    init: {},
+    claimed: true,
+  },
+  { name: "a control click", text: issueLink, init: { ctrlKey: true }, claimed: false },
+  { name: "a command click", text: issueLink, init: { metaKey: true }, claimed: false },
+])("routes $name through the appropriate link handler", async ({ text, init, claimed }) => {
+  setup();
+  const openedUrls: string[] = [];
+  await using screen = await renderBody("github", {
+    text,
+    onOpenUrl: (url) => {
+      openedUrls.push(url);
+      return true;
+    },
+  });
+  await expect.element(screen.getByRole("link", { name: "Issue" })).toBeInTheDocument();
+  const defaultPreventedAtLink: boolean[] = [];
+  const anchor = screen.getByRole("link", { name: "Issue" }).element();
+  anchor.addEventListener("click", (event) => {
+    defaultPreventedAtLink.push(event.defaultPrevented);
+    event.preventDefault();
+  });
+  const click = new MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    ...init,
+  });
+
+  await act(() => anchor.dispatchEvent(click));
+
+  expect(openedUrls).toEqual(claimed ? [issueUrl] : []);
+  expect(defaultPreventedAtLink).toEqual(claimed ? [] : [false]);
+  expect(click.defaultPrevented).toBe(true);
 });
 
 it("loads the body's host media in the pull request's repository, not the checkout's", async () => {
