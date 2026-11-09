@@ -239,7 +239,11 @@ describe.skipIf(!symlinksSupported)("worktree checkout cache", () => {
       NodeFS.mkdirSync(NodePath.join(fixture.repo, ".hooks"));
       const hook = NodePath.join(fixture.repo, ".hooks", "post-index-change");
       NodeFS.writeFileSync(hook, `#!/bin/sh\necho ran >> "${marker}"\n`, { mode: 0o755 });
-      sh(fixture.repo, ["add", hook]);
+      sh(fixture.repo, [
+        "add",
+        ...(NodeFS.statSync(hook).mode & 0o111 ? ["--chmod=+x"] : []),
+        hook,
+      ]);
       sh(fixture.repo, ["commit", "-qm", "tracked hooks"]);
       yield* fixture.build(yield* fixture.create("base", "main", false));
       sh(fixture.repo, ["config", "core.hooksPath", ".hooks"]);
@@ -331,7 +335,11 @@ describe.skipIf(!symlinksSupported)("worktree checkout cache", () => {
         const hook = NodePath.join(fixture.repo, ".hooks", "post-index-change");
         NodeFS.mkdirSync(NodePath.dirname(hook));
         NodeFS.writeFileSync(hook, "#!/bin/sh\n", { mode: 0o755 });
-        sh(fixture.repo, ["add", hook]);
+        sh(fixture.repo, [
+          "add",
+          ...(NodeFS.statSync(hook).mode & 0o111 ? ["--chmod=+x"] : []),
+          hook,
+        ]);
         sh(fixture.repo, ["commit", "-qm", "hook"]);
         sh(fixture.repo, ["config", "core.hooksPath", ".hooks"]);
       },

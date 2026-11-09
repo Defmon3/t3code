@@ -30,5 +30,8 @@ const fileSystem = Layer.effect(
   }),
 ).pipe(Layer.provide(NodeServices.layer));
 
-// why: POSIX PATH entries cannot contain Windows drive colons or backslashes.
-export const layer = Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, fileSystem);
+// why: POSIX fixtures need native temp permissions even when the checkout filesystem ignores chmod.
+export const layer =
+  HostProcess.Platform.defaultValue() === "win32"
+    ? Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, fileSystem)
+    : NodeServices.layer;
