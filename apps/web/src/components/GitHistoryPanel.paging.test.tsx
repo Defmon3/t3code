@@ -6,6 +6,7 @@ import {
   componentElement,
   componentTree,
   commit,
+  effectQueue,
   environmentId,
   expiredHistoryPage,
   expiredSnapshotCause,
@@ -26,6 +27,17 @@ import {
 } from "./GitHistoryPanel.test-fixture";
 
 describe("GitHistoryPanel paging", () => {
+  it("renders loaded history repeatedly without scheduling a state update", () => {
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
+
+    renderPanel();
+    const stateUpdatesAfterFirstRender = effectQueue.stateUpdates;
+
+    renderPanel();
+
+    expect(effectQueue.stateUpdates).toBe(stateUpdatesAfterFirstRender);
+  });
+
   it("keeps displayed history while a same-target refresh is pending", () => {
     historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
     const initial = renderPanel();

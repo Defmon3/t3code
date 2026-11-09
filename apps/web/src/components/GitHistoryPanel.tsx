@@ -172,10 +172,11 @@ function useGitHistoryModel(
     values: typeof queriedValues;
   } | null>(null);
   const waitingForHistory = results.some((result) => result.waiting);
-  if (
-    queriedValues.length > 0 &&
-    (retainedHistory?.targetKey !== targetKey || retainedHistory.values !== queriedValues)
-  ) {
+  const historyValuesChanged =
+    retainedHistory?.targetKey !== targetKey ||
+    retainedHistory.values.length !== queriedValues.length ||
+    queriedValues.some((value, index) => retainedHistory.values[index] !== value);
+  if (queriedValues.length > 0 && historyValuesChanged) {
     setRetainedHistory({ targetKey, values: queriedValues });
   }
   const values =
