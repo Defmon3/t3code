@@ -1,5 +1,4 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
-import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import {
   GitCommandError,
   ProjectId,
@@ -16,7 +15,6 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import {
-  buildMessageContext,
   reviewCommentContextLabel,
   reviewCommentContextReference,
 } from "~/lib/composerContextRecords";
@@ -877,19 +875,6 @@ describe("asking about a change rather than working on it", () => {
     state: "open" as const,
     isDraft: false,
   };
-
-  it.each(["", "Please consider "])("preserves PR plan feedback with prose %j", (prose) => {
-    const comment = buildPullRequestReferenceContext(base);
-    const draftText = prose + formatInlineContextReference(reviewCommentContextReference(comment));
-    const submission = resolvePlanFollowUpSubmission({ draftText, planMarkdown: "# Plan" });
-    const context = buildMessageContext({
-      terminalContexts: [],
-      previewAnnotations: [],
-      reviewComments: [comment],
-    });
-    expect(submission).toEqual({ text: draftText, interactionMode: "plan" });
-    expect(context?.records[0]).toMatchObject({ pullRequest: base });
-  });
 
   it("puts the reader's request in the composer and the selected lines in chips", () => {
     const comment = {

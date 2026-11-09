@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeZlib from "node:zlib";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePaths from "@effect/platform-node/NodePath";
 import * as Layer from "effect/Layer";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -75,7 +76,10 @@ const model = "claude-opus-5-5";
 const base = buildBase(capture, { model, keepUserInstructions: false });
 const json = (text: string) => JSON.parse(text);
 
-it.effect("answers device calls with T3's handlers over the case's world", () =>
+it.effect.each([
+  { host: "POSIX", paths: NodePaths.layerPosix },
+  { host: "Windows", paths: NodePaths.layerWin32 },
+])("answers device calls over the case's world on a $host host", ({ paths }) =>
   Effect.gen(function* () {
     const { devices, deviceHosts } = deviceCase({}).setup.world ?? {};
     const tools = yield* makeDeviceTools({ devices: devices ?? [], deviceHosts }, base.environment);
@@ -102,7 +106,11 @@ it.effect("answers device calls with T3's handlers over the case's world", () =>
     const elsewhere = yield* tools.call("device_open", { hostId: "local", deviceId: IPHONE });
     assert.isTrue(elsewhere.isError);
     assert.include(elsewhere.text, IPHONE);
-  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  }).pipe(
+    Effect.provide(paths),
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 
 it.effect("lists the boot state T3 left a device in", () =>

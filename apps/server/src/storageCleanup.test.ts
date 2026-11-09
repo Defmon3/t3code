@@ -34,6 +34,7 @@ import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerActivation } from "./serverActivation.ts";
+import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   EventId,
@@ -351,6 +352,7 @@ const cleanupFixture = (
     let onLiveCheck: Effect.Effect<void> = Effect.void;
     let outboxStatus: string | null = null;
     let fullStatusCalls = 0;
+    let gitInspections = 0;
     let snapshotReads = 0;
     let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | undefined;
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
@@ -360,6 +362,7 @@ const cleanupFixture = (
         ...git,
         execute: (input) =>
           Effect.gen(function* () {
+            gitInspections++;
             // Before Git's own clean check: inside `git worktree remove`, or on
             // Windows the same status check the removal makes before deleting.
             if (
@@ -556,6 +559,7 @@ const cleanupFixture = (
             ...paths,
           },
         }) ?? Effect.void,
+      gitInspections: () => gitInspections,
       fullStatusCalls: () => fullStatusCalls,
       snapshotReads: () => snapshotReads,
       sessionLiveChecks: () => sessionLiveChecks,
@@ -1808,9 +1812,9 @@ describe("orphan worktree reports", () => {
       Effect.gen(function* () {
         const fixture = yield* cleanupFixture();
         fixture.setThreads([]);
-        const replay = `${fixture.config.worktreesDir}/repository/replay`;
-        const deep = `${fixture.config.worktreesDir}/repository/deep`;
-        const worktrees = [`${deep}/a/b`, `${replay}/1376`];
+        const replay = fixture.path.join(fixture.config.worktreesDir, "repository", "replay");
+        const deep = fixture.path.join(fixture.config.worktreesDir, "repository", "deep");
+        const worktrees = [fixture.path.join(deep, "a", "b"), fixture.path.join(replay, "1376")];
         for (const [index, worktree] of worktrees.entries()) {
           yield* fixture.command(fixture.repo, [
             "worktree",
@@ -1820,7 +1824,7 @@ describe("orphan worktree reports", () => {
             worktree,
           ]);
         }
-        for (const folder of [...worktrees, `${deep}/a`, deep, replay]) {
+        for (const folder of [...worktrees, fixture.path.join(deep, "a"), deep, replay]) {
           yield* fixture.fs.utimes(folder, 1, 1);
         }
         const report = yield* fixture.service.runNow;
@@ -1838,11 +1842,11 @@ describe("orphan worktree reports", () => {
       Effect.gen(function* () {
         const fixture = yield* cleanupFixture();
         fixture.setThreads([]);
-        const replay = `${fixture.config.worktreesDir}/repository/replay`;
-        const worktree = `${replay}/1376`;
+        const replay = fixture.path.join(fixture.config.worktreesDir, "repository", "replay");
+        const worktree = fixture.path.join(replay, "1376");
         yield* fixture.command(fixture.repo, ["worktree", "add", "-b", "locked", worktree]);
         yield* fixture.command(fixture.repo, ["worktree", "lock", worktree]);
-        yield* fixture.fs.rename(worktree, `${replay}/moved`);
+        yield* fixture.fs.rename(worktree, fixture.path.join(replay, "moved"));
         yield* fixture.fs.makeDirectory(worktree);
         yield* fixture.fs.utimes(replay, 1, 1);
         expect((yield* fixture.service.runNow).entries.map((entry) => entry.path)).toEqual([
@@ -2253,6 +2257,67 @@ describe("storage cleanup reports and local file policies", () => {
         );
         expect((yield* service.runNow).entries[0]).toMatchObject({ outcome: "removed" });
         expect(statted.filter((target) => target.includes("attacker.test"))).toEqual([]);
+      }),
+    ),
+  );
+  it.live.each([
+    { days: 8, reason: "Inactive for 1 of 8 days" },
+    { days: null, reason: "No rules apply" },
+  ])("keeps an ineligible age/delete-only worktree without Git ($days)", ({ days, reason }) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fixture = yield* cleanupFixture({
+          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          worktreeAfterDays: days,
+          worktreeOnDelete: true,
+        });
+        fixture.setThreads([
+          shell({
+            branch: "feature",
+            worktreePath: fixture.worktree,
+            latestUserMessageAt: DateTime.makeUnsafe(
+              DateTime.toEpochMillis(yield* DateTime.now) - DAY_MS,
+            ),
+          }),
+        ]);
+        yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "local edit\n");
+        const report = yield* fixture.service.runNow;
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason,
+          bytes: null,
+        });
+        expect(fixture.gitInspections()).toBe(0);
+        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+      }),
+    ),
+  );
+  it.live("lets a turn acquire the checkout during accounting and protects its new activity", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fixture = yield* pausedMeasurementFixture();
+        const cleanup = yield* fixture.service.runNow.pipe(Effect.forkChild);
+        yield* Deferred.await(fixture.measuring);
+        yield* withWorkspaceLease(
+          fixture.worktree,
+          Effect.sync(() => {
+            fixture.setThreads([
+              shell({
+                branch: "feature",
+                worktreePath: fixture.worktree,
+                status: "running",
+              }),
+            ]);
+          }),
+        );
+        yield* Deferred.succeed(fixture.resume, undefined);
+        const report = yield* Fiber.join(cleanup);
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Thread activity or shared worktree changed since check",
+          bytes: null,
+        });
+        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
       }),
     ),
   );

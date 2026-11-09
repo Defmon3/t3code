@@ -7,6 +7,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodePaths from "@effect/platform-node/NodePath";
 import {
   DeviceError,
   type DeviceHostId,
@@ -790,6 +791,9 @@ export const makeDeviceTools = Effect.fn("evaluateMcpToolUse.makeDeviceTools")(f
       ),
       Layer.provideMerge(config),
       Layer.provideMerge(files),
+      Layer.provideMerge(
+        environment.platform === "win32" ? NodePaths.layerWin32 : NodePaths.layerPosix,
+      ),
     ),
   );
   type Entry = Parameters<McpServer.McpServer["Service"]["addTool"]>[0];
@@ -830,6 +834,7 @@ export const makeDeviceTools = Effect.fn("evaluateMcpToolUse.makeDeviceTools")(f
       Effect.provideService(McpSchema.McpRequestContext, request),
       Effect.provideService(HostProcess.ExecutablePath, NODE),
       Effect.provideService(HostProcess.Platform, environment.platform as NodeJS.Platform),
+      Effect.provideService(Path.Path, Context.get(context, Path.Path)),
       Effect.provideService(Injected, failure),
       // T3 logs each failed screenshot; the result already says so.
       Effect.provideService(References.MinimumLogLevel, "Error"),

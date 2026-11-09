@@ -3,6 +3,7 @@ import * as NodeUtil from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { ApprovalExplanationContent } from "@t3tools/contracts";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -293,7 +294,10 @@ const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const repoRoot = path.resolve(import.meta.dirname, "../..");
-  if (!process.env.T3CODE_APPROVAL_EXPLANATION_API_KEY?.trim())
+  const apiKey = yield* Config.String("T3CODE_APPROVAL_EXPLANATION_API_KEY").pipe(
+    Config.withDefault(""),
+  );
+  if (!apiKey.trim())
     return yield* Effect.die(new Error("Set T3CODE_APPROVAL_EXPLANATION_API_KEY."));
   const generation = yield* ApprovalExplanationGenerator.ApprovalExplanationGenerator;
   const baseline = values.baseline
