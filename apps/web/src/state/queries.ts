@@ -557,13 +557,16 @@ export function usePaginatedHistoryRefs(
   const [retainedData, setRetainedData] = useState<{
     readonly scopeKey: string;
     readonly data: VcsListHistoryRefsResult;
+    readonly values: typeof values;
   } | null>(null);
   if (
     scopeKey !== null &&
     liveData !== null &&
-    (retainedData?.scopeKey !== scopeKey || retainedData.data !== liveData)
+    (retainedData?.scopeKey !== scopeKey ||
+      retainedData.values.length !== values.length ||
+      values.some((value, index) => retainedData.values[index] !== value))
   ) {
-    setRetainedData({ scopeKey, data: liveData });
+    setRetainedData({ scopeKey, data: liveData, values });
   }
   const data = liveData ?? (retainedData?.scopeKey === scopeKey ? retainedData.data : null);
   const failed = results.find((result) => result._tag === "Failure");

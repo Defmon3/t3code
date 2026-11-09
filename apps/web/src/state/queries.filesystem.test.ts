@@ -1,7 +1,19 @@
-import { AuthFilesystemReadScope, EnvironmentId, type AuthSessionState } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  EnvironmentId,
+  type AuthSessionState,
+  type VcsListHistoryRefsResult,
+} from "@t3tools/contracts";
+import { AsyncResult } from "effect/reactivity";
+import { createElement } from "react";
+import { create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
 
+import { act } from "../../test/act";
+
 const state = vi.hoisted(() => ({
+  realHooks: false,
+  historyResults: [] as ReadonlyArray<AsyncResult.AsyncResult<VcsListHistoryRefsResult, unknown>>,
   session: null as Pick<AuthSessionState, "authenticated" | "scopes"> | null,
   sessionError: null as string | null,
   sessionWaiting: false,
@@ -17,13 +29,17 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("react", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("react")>()),
-  useCallback: <A>(callback: A) => callback,
-  useEffect: () => {},
-  useMemo: <A>(factory: () => A) => factory(),
-  useState: <A>(value: A) => [value, vi.fn()],
-}));
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useCallback: <A>(callback: A) => callback,
+    useEffect: () => {},
+    useMemo: <A>(factory: () => A) => factory(),
+    useState: <A>(value: A) => (state.realHooks ? actual.useState(value) : [value, vi.fn()]),
+  };
+});
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.historyResults }));
 vi.mock("./session", () => ({
   environmentSession: { sessionStateAtom: () => state.sessionAtom },
 }));
@@ -43,7 +59,7 @@ vi.mock("./projects", () => ({
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
 vi.mock("./orchestration", () => ({ orchestrationEnvironment: {} }));
 vi.mock("./threads", () => ({ useEnvironmentThread: vi.fn() }));
-vi.mock("./vcs", () => ({ vcsEnvironment: {} }));
+vi.mock("./vcs", () => ({ vcsEnvironment: { listHistoryRefs: () => ({}) } }));
 vi.mock("./query", () => ({
   useEnvironmentQuery: (atom: unknown) => ({
     data:
@@ -67,7 +83,7 @@ vi.mock("./query", () => ({
   }),
 }));
 
-import { useProjectContentSearch } from "./queries";
+import { usePaginatedHistoryRefs, useProjectContentSearch } from "./queries";
 
 const target = {
   environmentId: EnvironmentId.make("test-environment"),
@@ -76,12 +92,82 @@ const target = {
 };
 
 beforeEach(() => {
+  state.realHooks = false;
+  state.historyResults = [];
   state.session = null;
   state.sessionError = null;
   state.sessionWaiting = false;
   state.phase = "connected";
   state.contentRequests.mockClear();
   state.contentError = null;
+});
+
+it("settles history refs in React and retains refresh data only within its repository scope", async () => {
+  const branch = {
+    name: "main",
+    current: true,
+    isDefault: true,
+    isRemote: false,
+    isTag: false,
+    worktreePath: null,
+  };
+  const firstPage: VcsListHistoryRefsResult = {
+    refs: [branch],
+    currentRef: branch,
+    isRepo: true,
+    repositoryKey: target.cwd,
+    hasPrimaryRemote: true,
+    nextCursor: null,
+    isComplete: true,
+  };
+  state.historyResults = [AsyncResult.success(firstPage)];
+  state.realHooks = true;
+  let renderer: ReactTestRenderer | undefined;
+  function HistoryRefsProbe({ cwd }: { readonly cwd: string }) {
+    const view = usePaginatedHistoryRefs({ ...target, cwd, query: "" });
+    return createElement(
+      "button",
+      { type: "button", onClick: view.refresh },
+      view.refs.map((ref) => ref.name).join(","),
+    );
+  }
+  try {
+    await act(() => {
+      renderer = create(createElement(HistoryRefsProbe, { cwd: target.cwd }));
+    });
+    expect(renderer!.root.findByType("button").props.children).toBe("main");
+    await act(() => renderer!.update(createElement(HistoryRefsProbe, { cwd: target.cwd })));
+    expect(renderer!.root.findByType("button").props.children).toBe("main");
+
+    const continuation = { ...firstPage, refs: [{ ...branch, name: "continuation" }] };
+    state.historyResults = [AsyncResult.success(firstPage), AsyncResult.success(continuation)];
+    await act(() => renderer!.update(createElement(HistoryRefsProbe, { cwd: target.cwd })));
+    expect(renderer!.root.findByType("button").props.children).toBe("main,continuation");
+
+    const replacement = { ...firstPage, refs: [{ ...branch, name: "replacement" }] };
+    state.historyResults = [AsyncResult.success(replacement)];
+    await act(() => renderer!.update(createElement(HistoryRefsProbe, { cwd: target.cwd })));
+    expect(renderer!.root.findByType("button").props.children).toBe("replacement");
+
+    state.historyResults = [AsyncResult.initial(true)];
+    await act(() => renderer!.root.findByType("button").props.onClick());
+    expect(renderer!.root.findByType("button").props.children).toBe("replacement");
+
+    state.historyResults = [AsyncResult.success({ ...firstPage, refs: [], currentRef: null })];
+    await act(() => renderer!.update(createElement(HistoryRefsProbe, { cwd: target.cwd })));
+    expect(renderer!.root.findByType("button").props.children).toBe("");
+
+    state.historyResults = [AsyncResult.success(firstPage)];
+    await act(() => renderer!.update(createElement(HistoryRefsProbe, { cwd: target.cwd })));
+    state.historyResults = [AsyncResult.initial(true)];
+    await act(() =>
+      renderer!.update(createElement(HistoryRefsProbe, { cwd: "/other-repository" })),
+    );
+    expect(renderer!.root.findByType("button").props.children).toBe("");
+  } finally {
+    await act(() => renderer?.unmount());
+    state.realHooks = false;
+  }
 });
 
 const contentTarget = {
