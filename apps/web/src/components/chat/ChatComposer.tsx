@@ -46,7 +46,10 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
+import {
+  composerApprovalAction,
+  type ApprovalResponder,
+} from "@t3tools/client-runtime/state/thread-requests";
 import { approvalRejectionDraftKey } from "@t3tools/client-runtime/state/approval-explanations";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
@@ -3607,9 +3610,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPaste={onComposerPasteStable}
                     placeholder={
                       isComposerApprovalState
-                        ? activePendingApproval?.supportsFeedback
-                          ? "Send feedback to decline this request"
-                          : "Send a message to decline and redirect the agent"
+                        ? composerApprovalAction(
+                            pendingApprovals.filter(
+                              (approval) => !heldRequestIds.has(approval.requestId),
+                            ),
+                          ).type === "blocked"
+                          ? "Choose an approval action above before sending"
+                          : activePendingApproval?.supportsFeedback
+                            ? "Send feedback to decline this request"
+                            : "Send a message to decline and redirect the agent"
                         : activePendingProgress
                           ? isChoiceOnlyPendingQuestion
                             ? "Choose an option above"

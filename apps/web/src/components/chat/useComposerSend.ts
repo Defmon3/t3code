@@ -30,6 +30,7 @@ import {
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
+  composerApprovalAction,
   declinePendingApprovals,
   sendApprovalFeedback,
 } from "@t3tools/client-runtime/state/thread-requests";
@@ -550,10 +551,13 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
-    const approvalFeedbackTarget = pendingApprovalsRef.current.find(
-      (approval) =>
-        approval.supportsFeedback && approval.requestId === sendCtx.shownPendingApprovalIds[0],
+    const approvalAction = composerApprovalAction(
+      pendingApprovalsRef.current.filter((approval) =>
+        sendCtx.shownPendingApprovalIds.includes(approval.requestId),
+      ),
     );
+    const approvalFeedbackTarget =
+      approvalAction.type === "feedback" ? approvalAction.approval : undefined;
     const multipleModelBlock =
       multipleModelSelections === null
         ? null
@@ -1054,6 +1058,10 @@ export function useComposerSend(input: ComposerSendInput) {
             sendCtx?.shownPendingApprovalIds.includes(approval.requestId),
           )
         : [];
+    if (composerApprovalAction(approvalsToDecline).type === "blocked") {
+      sendInFlightRef.current = false;
+      return;
+    }
     if (approvalsToDecline.length > 0 || approvalFeedbackTarget !== undefined) {
       // A draft edited since send, or a paste still landing in it, is no longer the message
       // the user sent.

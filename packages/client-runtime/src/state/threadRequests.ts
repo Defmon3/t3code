@@ -31,6 +31,16 @@ export type ApprovalResponder = (
   duration?: HookApprovalDuration,
 ) => Promise<AtomCommandResult<unknown, unknown> | undefined>;
 
+export function composerApprovalAction(approvals: ReadonlyArray<ThreadPendingApproval>) {
+  if (approvals.some((approval) => approval.hookRequestId !== undefined)) {
+    return { type: "blocked" as const };
+  }
+  const first = approvals[0];
+  return first?.supportsFeedback
+    ? { type: "feedback" as const, approval: first }
+    : { type: "redirect" as const };
+}
+
 /** Feedback belongs to the displayed request, which may be a native child's tool call. */
 export async function sendApprovalFeedback(
   approval: ThreadPendingApproval,

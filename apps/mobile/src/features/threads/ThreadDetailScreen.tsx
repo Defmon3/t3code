@@ -53,6 +53,7 @@ import {
   type CodexArtifactTemplate,
 } from "@t3tools/shared/codexArtifactTemplates";
 import {
+  composerApprovalAction,
   declinePendingApprovals,
   sendApprovalFeedback,
   type ApprovalResponder,
@@ -1294,8 +1295,9 @@ function ThreadDetailBody(
         ? async (text: string, hasAttachmentsOrContext: boolean) => {
             if (scope.aborted || stillSendable?.() === false || props.respondingApprovalId !== null)
               return false;
-            const feedbackTarget = approvalsToDecline[0];
-            if (feedbackTarget?.supportsFeedback) {
+            const approvalAction = composerApprovalAction(approvalsToDecline);
+            if (approvalAction.type === "blocked") return false;
+            if (approvalAction.type === "feedback") {
               if (hasAttachmentsOrContext) {
                 Dialog.alert(
                   "Approval feedback",
@@ -1303,7 +1305,11 @@ function ThreadDetailBody(
                 );
                 return false;
               }
-              return (await sendApprovalFeedback(feedbackTarget, text, props.onRespondToApproval))
+              return (await sendApprovalFeedback(
+                approvalAction.approval,
+                text,
+                props.onRespondToApproval,
+              ))
                 ? ("responded" as const)
                 : false;
             }
@@ -1873,9 +1879,12 @@ function ThreadDetailBody(
                         editorRef={composerEditorRef}
                         placeholder={
                           props.activePendingApproval
-                            ? props.activePendingApproval.supportsFeedback
-                              ? "Send feedback to decline this request"
-                              : "Send a message to decline and redirect the agent"
+                            ? composerApprovalAction(props.activePendingApprovals).type ===
+                              "blocked"
+                              ? "Choose an approval action above before sending"
+                              : props.activePendingApproval.supportsFeedback
+                                ? "Send feedback to decline this request"
+                                : "Send a message to decline and redirect the agent"
                             : "Ask anything"
                         }
                         contentMaxWidth={contentMaxWidth}

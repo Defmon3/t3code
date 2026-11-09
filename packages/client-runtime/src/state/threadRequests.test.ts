@@ -24,6 +24,7 @@ import {
   unhandledChildThreadApprovals,
   type PendingThreadRequests,
   derivePendingThreadRequests,
+  composerApprovalAction,
   declinePendingApprovals,
   sendApprovalFeedback,
   makeThreadRequestsResolvedAnnouncer,
@@ -51,6 +52,30 @@ describe("declining approvals before sending", () => {
     ...approval,
     requestId: RuntimeRequestId.make("second-approval"),
   };
+
+  it.each([true, false])(
+    "keeps custom hook approvals pending when composer text is submitted (feedback %s)",
+    (supportsFeedback) => {
+      const hook = { ...second, hookRequestId: "custom-hook", supportsFeedback };
+
+      expect(composerApprovalAction([hook])).toEqual({ type: "blocked" });
+      expect(composerApprovalAction([approval, hook])).toEqual({ type: "blocked" });
+      expect(composerApprovalAction([{ ...approval, supportsFeedback: true }, hook])).toEqual({
+        type: "blocked",
+      });
+    },
+  );
+
+  it("preserves native approval feedback and redirects when no hook is pending", () => {
+    const withFeedback = { ...approval, supportsFeedback: true };
+
+    expect(composerApprovalAction([withFeedback, second])).toEqual({
+      type: "feedback",
+      approval: withFeedback,
+    });
+    expect(composerApprovalAction([approval, second])).toEqual({ type: "redirect" });
+    expect(composerApprovalAction([])).toEqual({ type: "redirect" });
+  });
 
   it.each([
     [{ command: "git status", cwd: "/workspace" }, "git status", "/workspace"],
