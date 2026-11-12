@@ -65,13 +65,26 @@ describe("PullRequestListResult", () => {
    * with an optional value, for one — fails as an interrupted request rather than as a schema
    * error.
    */
-  it("round-trips through the JSON codec the RPC serializes with", () => {
-    const codec = Schema.toCodecJson(PullRequestListResult);
+  it.each([undefined, null, "Changes to the server"])(
+    "round-trips labels with description %s through the RPC codec",
+    (description) => {
+      const codec = Schema.toCodecJson(PullRequestListResult);
+      const result = {
+        ...LIST_RESULT,
+        entries: LIST_RESULT.entries.map((entry) => ({
+          ...entry,
+          labels: entry.labels.map((label) => ({
+            ...label,
+            ...(description === undefined ? {} : { description }),
+          })),
+        })),
+      };
 
-    const decoded = Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(LIST_RESULT));
+      const decoded = Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(result));
 
-    expect(decoded).toStrictEqual(LIST_RESULT);
-  });
+      expect(decoded).toStrictEqual(result);
+    },
+  );
 });
 
 describe("PullRequestCapabilities", () => {

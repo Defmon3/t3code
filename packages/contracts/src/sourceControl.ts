@@ -25,17 +25,11 @@ export type SourceControlActor = typeof SourceControlActor.Type;
 export const SourceControlLabel = Schema.Struct({
   name: TrimmedNonEmptyString,
   color: Schema.NullOr(Schema.String),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type SourceControlLabel = typeof SourceControlLabel.Type;
 
-/**
- * Where each repository a listing already reached carries on from, keyed `"<host> <repository>"`
- * — which is how a listing tells two repositories apart, since the same `owner/repo` exists on
- * github.com and on an Enterprise install at once.
- *
- * Each value is opaque: only the provider that issued one knows what it means, and the page hands
- * back exactly what it was given rather than composing one.
- */
+/** Cursors are opaque and keyed by "<host> <repository>"; return each value unchanged. */
 export const SourceControlListCursors = Schema.Record(
   TrimmedNonEmptyString,
   // Bounded because it arrives from the page and is unfolded into a host's own filter.
@@ -51,14 +45,6 @@ export const SourceControlListProjectError = Schema.Struct({
 });
 export type SourceControlListProjectError = typeof SourceControlListProjectError.Type;
 
-/**
- * The host a project's repository is addressed below. `canonicalKey` is the normalized remote,
- * `host/owner/repo`, so its first segment is the host; the provider kind stands in when there is
- * no key to read, which keeps one bucket per kind for identities recorded before it existed.
- *
- * Shared between the server and the page so both bucket a workspace the same way — the page knows
- * its hosts before a listing answers, and the two must agree on what they are called.
- */
 export function sourceControlHostOf(
   identity:
     | {

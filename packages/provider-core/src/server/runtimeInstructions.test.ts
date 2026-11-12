@@ -20,6 +20,10 @@ describe("buildRuntimeInstructions", () => {
       assert.equal(instructions.includes("<issue_linking>"), issueToolsAvailable);
       assert.equal(instructions.includes("<pull_request_linking>"), pullRequestLinking);
       assert.include(instructions, "through the Codex harness.");
+      assert.include(
+        instructions,
+        "Link every other file you cite or produce by its absolute path",
+      );
     },
   );
 

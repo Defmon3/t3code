@@ -138,9 +138,11 @@ const CLOUDFLARED_RELEASE_ASSETS: Readonly<
 
 const INSTALL_LOCK_RETRY_COUNT = 100;
 const INSTALL_LOCK_RETRY_DELAY = "100 millis";
-// Legacy locks have no owner; allow both ten-minute download stages and the install tail.
-const INSTALL_LOCK_LEGACY_STALE_MS = 30 * 60 * 1_000;
+// why: Ownerless locks must allow both ten-minute download stages and the install tail.
+const INSTALL_LOCK_OWNERLESS_STALE_MS = 30 * 60 * 1_000;
 const VERSION_PROBE_TIMEOUT = "10 seconds";
+// Antivirus scans can hold the first launch of a freshly downloaded binary for 20-30 s.
+const INSTALL_VALIDATION_TIMEOUT = "2 minutes";
 
 const ACTIVATE_RETRY_COUNT = 40;
 const ACTIVATE_RETRY_DELAY = "250 millis";
@@ -299,19 +301,23 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     return platform === "win32" || (info.value.mode & 0o111) !== 0;
   });
 
+  const runVersionProbe = Effect.fn("cloudflared.runVersionProbe")(function* (
+    executablePath: string,
+    timeout: Duration.Input,
+  ) {
+    return yield* spawner
+      .string(ChildProcess.make(executablePath, ["version"], { stdin: "ignore", stderr: "ignore" }))
+      .pipe(
+        Effect.map(parseCloudflaredVersionOutput),
+        Effect.timeoutOption(timeout),
+        Effect.map(Option.getOrNull),
+        Effect.orElseSucceed(() => null),
+      );
+  });
+
   // Cache successful version probes per file revision; do not let transient failures hide valid binaries.
   const versionCache = yield* Cache.makeWith(
-    (key: VersionProbeKey) =>
-      spawner
-        .string(
-          ChildProcess.make(key.executablePath, ["version"], { stdin: "ignore", stderr: "ignore" }),
-        )
-        .pipe(
-          Effect.map(parseCloudflaredVersionOutput),
-          Effect.timeoutOption(VERSION_PROBE_TIMEOUT),
-          Effect.map(Option.getOrNull),
-          Effect.orElseSucceed(() => null),
-        ),
+    (key: VersionProbeKey) => runVersionProbe(key.executablePath, VERSION_PROBE_TIMEOUT),
     {
       capacity: 16,
       timeToLive: (exit) =>
@@ -523,30 +529,30 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     lockPath: string,
   ) {
     const owner = `${process.pid}-${yield* random.uuidV4()}`;
-    const candidate = yield* Effect.acquireRelease(
-      fileSystem.makeTempDirectory({ directory: path.dirname(lockPath), prefix: ".lock-" }),
-      (directory) =>
-        fileSystem.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore),
-    );
-    yield* fileSystem.writeFileString(path.join(candidate, owner), "");
     for (let attempt = 0; attempt < INSTALL_LOCK_RETRY_COUNT; attempt += 1) {
-      const acquired = yield* Effect.acquireRelease(
-        // Publish a populated directory atomically, with no ownerless acquisition window.
-        fileSystem.rename(candidate, lockPath),
-        () => releaseOwnedLock(lockPath, owner),
+      const acquired = yield* Effect.acquireRelease(fileSystem.makeDirectory(lockPath), () =>
+        releaseOwnedLock(lockPath, owner),
       ).pipe(
         Effect.as(true),
         Effect.catchIf(isLockContention, () => Effect.succeed(false)),
       );
-      if (acquired) return;
+      if (acquired) {
+        yield* fileSystem.writeFileString(path.join(lockPath, owner), "");
+        return;
+      }
 
       const lockInfo = yield* fileSystem.stat(lockPath).pipe(Effect.option);
       if (Option.isNone(lockInfo)) continue;
+      const now = yield* Clock.currentTimeMillis;
+      const ownerlessIsStale = Option.exists(
+        lockInfo.value.mtime,
+        (mtime) => now - mtime.getTime() > INSTALL_LOCK_OWNERLESS_STALE_MS,
+      );
       if (lockInfo.value.type === "Directory") {
         const owners = yield* fileSystem
           .readDirectory(lockPath)
           .pipe(Effect.orElseSucceed(() => []));
-        let recovered = owners.length === 0;
+        let recovered = owners.length === 0 && ownerlessIsStale;
         for (const entry of owners) {
           const pid = parseLockOwnerPid(entry);
           if (pid !== null && !processIsAlive(pid)) {
@@ -558,14 +564,10 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
           yield* removeEmptyLock(lockPath);
           continue;
         }
-      } else {
-        const now = yield* Clock.currentTimeMillis;
-        const mtime = lockInfo.value.mtime;
-        if (Option.isSome(mtime) && now - mtime.value.getTime() > INSTALL_LOCK_LEGACY_STALE_MS) {
-          // Nonrecursive removal also refuses a populated directory that replaced this file.
-          yield* fileSystem.remove(lockPath, { force: true }).pipe(Effect.ignore);
-          continue;
-        }
+      } else if (ownerlessIsStale) {
+        // Nonrecursive removal also refuses a populated directory that replaced this file.
+        yield* fileSystem.remove(lockPath, { force: true }).pipe(Effect.ignore);
+        continue;
       }
       yield* Effect.sleep(INSTALL_LOCK_RETRY_DELAY);
     }
@@ -648,7 +650,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       }
       yield* report("validating");
       // Verify the pin so mislabeled assets cannot cause repeated redownloads.
-      const installedVersion = yield* probeVersion(executablePath);
+      const installedVersion = yield* runVersionProbe(executablePath, INSTALL_VALIDATION_TIMEOUT);
       if (installedVersion !== CLOUDFLARED_VERSION) {
         return yield* new RelayClientInstallError({
           reason: "validation_failed",

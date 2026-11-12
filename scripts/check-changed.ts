@@ -32,7 +32,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import type * as PlatformError from "effect/PlatformError";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -59,6 +59,56 @@ export interface Step<R> {
   // Vitest runs started together race to rebuild node_modules/.vitest-cache (ENOTEMPTY).
   readonly serial?: boolean;
 }
+
+const isCommandLineLimit = Schema.is(
+  Schema.Struct({ code: Schema.Literals(["E2BIG", "ENAMETOOLONG"]) }),
+);
+
+export const runBatches = Effect.fn("checkChanged.runBatches")(function* <R>(
+  selections: ReadonlyArray<string>,
+  run: (
+    selections: ReadonlyArray<string>,
+  ) => Effect.Effect<
+    { readonly ok: boolean; readonly output: string },
+    PlatformError.PlatformError,
+    R
+  >,
+): Effect.fn.Return<{ readonly ok: boolean; readonly output: string }, never, R> {
+  return yield* run(selections).pipe(
+    Effect.catchDefect((cause) =>
+      isCommandLineLimit(cause)
+        ? Effect.fail(
+            PlatformError.systemError({
+              _tag: "Unknown",
+              module: "ChildProcess",
+              method: "spawn",
+              cause,
+            }),
+          )
+        : Effect.die(cause),
+    ),
+    Effect.catch((error) => {
+      const cause = error.reason.cause;
+      if (!isCommandLineLimit(cause) || selections.length < 2) {
+        return Effect.succeed({ ok: false, output: error.message });
+      }
+      const middle = Math.ceil(selections.length / 2);
+      return Effect.forEach(
+        [selections.slice(0, middle), selections.slice(middle)],
+        (batch) => runBatches(batch, run),
+        { concurrency: 1 },
+      ).pipe(
+        Effect.map((results) => ({
+          ok: results.every((result) => result.ok),
+          output: [
+            `Checking smaller batches after the host rejected the command line (${cause.code}).`,
+            ...results.map((result) => result.output),
+          ].join("\n"),
+        })),
+      );
+    }),
+  );
+});
 
 // Interrupting a step at its timeout closes the scopes of the processes it
 // spawned, which kills each one's process group.
@@ -186,7 +236,7 @@ const TEST = /\.test\.[cm]?[jt]sx?$/;
 // CI runs the .github/scripts tests with `node --test`; vitest passes a failing node:test file.
 const NODE_TEST = /^\.github[/\\]scripts[/\\]/;
 export const splitTests = (tests: Iterable<string>) => {
-  const all = [...tests];
+  const all = [...new Set([...tests].map((file) => file.replaceAll("\\", "/")))];
   return {
     vitestTests: all.filter((file) => !NODE_TEST.test(file)),
     nodeTests: all.filter((file) => NODE_TEST.test(file)),
@@ -229,6 +279,7 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
   // macOS counts its file cache as used, so available memory there would
   // starve a large Mac. Elsewhere availableMemory() honors a cgroup limit.
   const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
   const concurrency = Option.getOrElse(
     yield* override("concurrency", input.concurrency, "CHECK_CHANGED_CONCURRENCY"),
     () =>
@@ -263,7 +314,7 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
   const inputKey = Effect.gen(function* () {
     const hash = NodeCrypto.createHash("sha256");
     // CI changes test behavior (vite.config.ts rejects .only under CI).
-    hash.update(`${process.version}\0${base}\0${ci}\0`);
+    hash.update(`${process.version}\0${platform}\0${architecture}\0${base}\0${ci}\0`);
     hash.update(
       yield* git(root, [
         "diff",
@@ -409,7 +460,7 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
 
   // Output is piped, so keep the colors a terminal would get.
   const env = process.stdout.isTTY ? { FORCE_COLOR: "1" } : {};
-  const vp = (args: ReadonlyArray<string>, cwd = root) =>
+  const spawnVp = (args: ReadonlyArray<string>, cwd = root) =>
     Effect.scoped(
       Effect.gen(function* () {
         const [executable, commandArgs] = vitePlusCommand(args, platform);
@@ -432,7 +483,11 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
         );
         return { ok: exitCode === 0, output };
       }),
-    ).pipe(Effect.catch((error) => Effect.succeed({ ok: false, output: error.message })));
+    );
+  const vp = (args: ReadonlyArray<string>, cwd = root) =>
+    spawnVp(args, cwd).pipe(
+      Effect.catch((error) => Effect.succeed({ ok: false, output: error.message })),
+    );
 
   // Resolve without the lockfile in a temp copy to preserve the working tree and lockfile.
   // Copy mobile modules too: they are file: dependencies, not workspace packages.
@@ -478,15 +533,32 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
   const filters = (names: ReadonlyArray<string>) => names.flatMap((name) => ["--filter", name]);
   const typecheckWorkers = Math.min(concurrency, affected.length);
   const command = (name: string, args: ReadonlyArray<string>) => ({ name, run: vp(args) });
-  const compilerFiles = compilerApps.reduce((count, app) => count + app.names.length, 0);
+  const batchCommand = (
+    name: string,
+    selections: ReadonlyArray<string>,
+    args: (batch: ReadonlyArray<string>) => ReadonlyArray<string>,
+  ) => ({ name, run: runBatches(selections, (batch) => spawnVp(args(batch))) });
 
   const steps: Array<Step<never>> = [
     ...(runPatchCheck ? [{ name: "unused patches", run: checkPatches }] : []),
     ...(present.length > 0
-      ? [command("format", ["fmt", "--check", "--no-error-on-unmatched-pattern", ...present])]
+      ? [
+          batchCommand("format", present, (batch) => [
+            "fmt",
+            "--check",
+            "--no-error-on-unmatched-pattern",
+            ...batch,
+          ]),
+        ]
       : []),
     ...(code.length > 0
-      ? [command("lint", ["lint", "--no-error-on-unmatched-pattern", ...code])]
+      ? [
+          batchCommand("lint", code, (batch) => [
+            "lint",
+            "--no-error-on-unmatched-pattern",
+            ...batch,
+          ]),
+        ]
       : []),
     ...(runKnip
       ? knipPasses.map((args, index) => command(`knip ${index + 1}/${knipPasses.length}`, args))
@@ -516,11 +588,11 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
     ...(vitestTests.length > 0
       ? [
           {
-            ...command(`test (${vitestTests.length} files)`, [
+            ...batchCommand(`test (${vitestTests.length} files)`, vitestTests, (batch) => [
               "test",
               "run",
               "--passWithNoTests",
-              ...vitestTests,
+              ...batch,
             ]),
             serial: true,
           },
@@ -528,27 +600,23 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
       : []),
     ...(nodeTests.length > 0
       ? [
-          command(`node --test (${nodeTests.length} files)`, [
+          batchCommand(`node --test (${nodeTests.length} files)`, nodeTests, (batch) => [
             "exec",
             "node",
             "--test",
-            ...nodeTests,
+            ...batch,
           ]),
         ]
       : []),
     ...(compilerApps.length > 0
-      ? [
-          {
-            ...command(`react compiler (${compilerFiles} files)`, [
-              "test",
-              "run",
-              ...compilerApps.map((app) => app.test),
-              "-t",
-              compilerApps.flatMap((app) => app.pattern).join("|"),
-            ]),
-            serial: true,
-          },
-        ]
+      ? compilerApps.map((app) => ({
+          ...batchCommand(
+            `react compiler (${app.names.length} files: ${app.test})`,
+            app.pattern,
+            (batch) => ["test", "run", app.test, "-t", batch.join("|")],
+          ),
+          serial: true,
+        }))
       : []),
   ];
 

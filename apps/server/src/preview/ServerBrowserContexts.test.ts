@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - Native path fixtures exercise a Node adapter without Effect.
 import * as NodeEvents from "node:events";
+import * as NodePath from "node:path";
 
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
 import { chromium, type Browser, type BrowserContext, type BrowserType } from "playwright-core";
@@ -52,8 +54,11 @@ const makeBrowser = () => {
   };
 };
 
+const profilesDir = NodePath.join("/test", "profiles");
+const teamProfilePath = NodePath.join(profilesDir, "work%2Fteam");
+
 const options = () => ({
-  profilesDir: "/test/profiles",
+  profilesDir,
   executable: vi.fn(async () => "/test/chromium"),
   env: {},
 });
@@ -108,6 +113,26 @@ describe("ServerBrowserContexts", () => {
     }
   });
 
+  it("closes a scratch context when creating its page fails", async () => {
+    const browser = makeBrowser();
+    launches.launch.mockResolvedValue(browser as unknown as Browser);
+    const pool = new ServerBrowserContexts(options());
+    const peer = await pool.contextFor("default", "peer");
+    const context = await browser.newContext();
+    const failure = new Error("newPage failed");
+    browser.created[1]!.newPage.mockRejectedValueOnce(failure);
+    browser.newContext.mockResolvedValueOnce(context);
+    try {
+      await expect(pool.scratchPage()).rejects.toBe(failure);
+      expect(context.close).toHaveBeenCalledOnce();
+      expect(browser.contexts()).toEqual([peer]);
+      expect(peer.close).not.toHaveBeenCalled();
+      expect(browser.close).not.toHaveBeenCalled();
+    } finally {
+      await pool.close();
+    }
+  });
+
   it("lazily shares one browser across concurrent isolated sessions and reuses each context", async () => {
     const browser = makeBrowser();
     const launch = Promise.withResolvers<Browser>();
@@ -155,11 +180,11 @@ describe("ServerBrowserContexts", () => {
     expect(await pool.contextFor("work/team")).toBe(persistent);
     expect(await pool.contextFor("work/team", "agent")).not.toBe(persistent);
     expect(launches.persistent).toHaveBeenCalledExactlyOnceWith(
-      "/test/profiles/work%2Fteam",
+      teamProfilePath,
       expect.objectContaining({ chromiumSandbox: true, executablePath: "/test/chromium-launcher" }),
     );
     expect(release).toHaveBeenCalledTimes(2);
-    expect(launches.mkdir).toHaveBeenCalledWith("/test/profiles/work%2Fteam", { recursive: true });
+    expect(launches.mkdir).toHaveBeenCalledWith(teamProfilePath, { recursive: true });
     await pool.close();
     expect(human.close).toHaveBeenCalledTimes(1);
   });
@@ -201,7 +226,7 @@ describe("ServerBrowserContexts", () => {
     });
     await pool.clearProfile("work/team");
     expect(onContextClose).toHaveBeenCalledExactlyOnceWith(persistent);
-    expect(launches.rm).toHaveBeenCalledExactlyOnceWith("/test/profiles/work%2Fteam", {
+    expect(launches.rm).toHaveBeenCalledExactlyOnceWith(teamProfilePath, {
       recursive: true,
       force: true,
     });
@@ -210,7 +235,7 @@ describe("ServerBrowserContexts", () => {
     launches.persistent.mockResolvedValue(makeContext() as unknown as BrowserContext);
     expect(await pool.contextFor("work/team")).not.toBe(persistent);
     await pool.clearProfile("never-opened");
-    expect(launches.rm).toHaveBeenLastCalledWith("/test/profiles/never-opened", {
+    expect(launches.rm).toHaveBeenLastCalledWith(NodePath.join(profilesDir, "never-opened"), {
       recursive: true,
       force: true,
     });
@@ -233,7 +258,7 @@ describe("ServerBrowserContexts", () => {
 
     expect(deletionsBeforeClose).toBe(0);
     expect(human.close).toHaveBeenCalledTimes(1);
-    expect(launches.rm).toHaveBeenCalledExactlyOnceWith("/test/profiles/work%2Fteam", {
+    expect(launches.rm).toHaveBeenCalledExactlyOnceWith(teamProfilePath, {
       recursive: true,
       force: true,
     });

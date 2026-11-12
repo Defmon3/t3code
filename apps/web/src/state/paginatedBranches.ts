@@ -1,8 +1,6 @@
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 
-const DEFAULT_NEXT_PAGE_DISTANCE_PX = 96;
-
 export function isPaginatedBranchesNextPagePending<A, E>(
   results: ReadonlyArray<AsyncResult.AsyncResult<A, E>>,
 ): boolean {
@@ -12,24 +10,4 @@ export function isPaginatedBranchesNextPagePending<A, E>(
     lastResult?.waiting === true &&
     Option.isNone(AsyncResult.value(lastResult))
   );
-}
-
-export function shouldLoadNextBranchPageAfterScroll({
-  previousScrollTop,
-  scrollTop,
-  scrollHeight,
-  clientHeight,
-  distanceThreshold = DEFAULT_NEXT_PAGE_DISTANCE_PX,
-}: {
-  previousScrollTop: number | null;
-  scrollTop: number;
-  scrollHeight: number;
-  clientHeight: number;
-  distanceThreshold?: number;
-}): boolean {
-  if (previousScrollTop === null || scrollTop <= previousScrollTop) {
-    return false;
-  }
-
-  return scrollHeight - scrollTop - clientHeight <= distanceThreshold;
 }

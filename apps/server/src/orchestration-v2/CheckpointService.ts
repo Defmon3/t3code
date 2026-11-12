@@ -248,14 +248,25 @@ export const layer: Layer.Layer<
     const withWorkspaceLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
       workspaceLocks.withLock(cwd, effect);
 
-    const isGitCheckpointable = (cwd: string) =>
-      checkpointStore.isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false));
+    // A failed probe is an operational error, not proof that the workspace has no repository.
+    const probeRepository = (scope: OrchestrationV2CheckpointScope) =>
+      checkpointStore.isGitRepository(scope.cwd).pipe(
+        Effect.map((isRepository) =>
+          isRepository ? ("repository" as const) : ("missing" as const),
+        ),
+        Effect.catch((cause) =>
+          Effect.logWarning("orchestration V2 checkpoint repository probe failed", {
+            scopeId: scope.id,
+            cause: String(cause),
+          }).pipe(Effect.as("error" as const)),
+        ),
+      );
 
     const captureBaseline: CheckpointServiceV2Shape["captureBaseline"] = (input) =>
       withWorkspaceLock(
         input.scope.cwd,
         Effect.gen(function* () {
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          if (!(yield* checkpointStore.isGitRepository(input.scope.cwd))) {
             return;
           }
 
@@ -289,7 +300,6 @@ export const layer: Layer.Layer<
             operation: "captureBaseline",
             scopeId: input.scope.id,
             cwd: input.scope.cwd,
-            timeout: CHECKPOINT_CAPTURE_TIMEOUT,
           }),
         ),
         Effect.mapError(
@@ -313,27 +323,28 @@ export const layer: Layer.Layer<
             scopeId: input.scope.id,
             ordinalWithinScope: input.ordinalWithinScope,
           });
-          const available = yield* withWorkspaceLock(
+          const status = yield* withWorkspaceLock(
             input.scope.cwd,
             Effect.gen(function* () {
-              const checkpointable =
-                input.forceMissing !== true && (yield* isGitCheckpointable(input.scope.cwd));
-              return checkpointable
+              const repository =
+                input.forceMissing === true ? "missing" : yield* probeRepository(input.scope);
+              return repository === "repository"
                 ? yield* checkpointStore
                     .hasCheckpointRef({
                       cwd: input.scope.cwd,
                       checkpointRef,
                     })
                     .pipe(
+                      Effect.map((exists) => (exists ? ("ready" as const) : ("missing" as const))),
                       Effect.catch((cause) =>
                         Effect.logWarning("orchestration V2 baseline ref lookup failed", {
                           scopeId: input.scope.id,
                           checkpointRef,
                           cause: String(cause),
-                        }).pipe(Effect.as(false)),
+                        }).pipe(Effect.as("error" as const)),
                       ),
                     )
-                : false;
+                : repository;
             }),
           ).pipe(
             Effect.timeoutOrElse({
@@ -344,7 +355,7 @@ export const layer: Layer.Layer<
                   scopeId: input.scope.id,
                   cwd: input.scope.cwd,
                   timeout: CHECKPOINT_CAPTURE_TIMEOUT,
-                }).pipe(Effect.as(false)),
+                }).pipe(Effect.as("missing" as const)),
             }),
           );
           return makeCheckpoint({
@@ -356,7 +367,7 @@ export const layer: Layer.Layer<
             ordinalWithinScope: input.ordinalWithinScope,
             appRunOrdinal: null,
             ref: checkpointRef,
-            status: available ? "ready" : "missing",
+            status,
             files: [],
             capturedAt: input.capturedAt,
           });
@@ -410,10 +421,12 @@ export const layer: Layer.Layer<
         return yield* withWorkspaceLock(
           input.scope.cwd,
           Effect.gen(function* () {
-            if (input.forceMissing === true || !(yield* isGitCheckpointable(input.scope.cwd))) {
+            const repository =
+              input.forceMissing === true ? "missing" : yield* probeRepository(input.scope);
+            if (repository !== "repository") {
               return makeCheckpoint({
                 ...checkpoint,
-                status: "missing",
+                status: repository,
                 files: [],
               });
             }

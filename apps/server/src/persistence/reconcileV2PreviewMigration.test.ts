@@ -31,6 +31,12 @@ import RepairBooleanSettledOverride from "./Migrations/077_RepairBooleanSettledO
 import DropOrchestrationEventCorrelationIndex from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
 import DelegatedRecoveryIndexes from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 import ScheduledTaskThreadMode from "./Migrations/080_ScheduledTaskThreadMode.ts";
+import ProjectionMessageSearchText from "./Migrations/081_ProjectionMessageSearchText.ts";
+import TurnItemConversationIndex from "./Migrations/082_TurnItemConversationIndex.ts";
+import CommandReadIndexes from "./Migrations/083_CommandReadIndexes.ts";
+import LastExecutedRunIndex from "./Migrations/084_LastExecutedRunIndex.ts";
+import TurnItemCounts from "./Migrations/085_TurnItemCounts.ts";
+import { reconciledV2PreviewHistory } from "./reconcileV2PreviewMigration.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -69,10 +75,15 @@ const nightlyMigrations = [
   ["DropOrchestrationEventCorrelationIndex", DropOrchestrationEventCorrelationIndex],
   ["DelegatedRecoveryIndexes", DelegatedRecoveryIndexes],
   ["ScheduledTaskThreadMode", ScheduledTaskThreadMode],
+  ["ProjectionMessageSearchText", ProjectionMessageSearchText],
+  ["TurnItemConversationIndex", TurnItemConversationIndex],
+  ["CommandReadIndexes", CommandReadIndexes],
+  ["LastExecutedRunIndex", LastExecutedRunIndex],
+  ["TurnItemCounts", TurnItemCounts],
 ] as const;
 
 describe("V2 preview upgrade", () => {
-  it.effect.each([2, 15, 16, 17, 18, 19, 20])(
+  it.effect.each([2, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25])(
     "rebases a valid nightly migration prefix of length %s",
     (prefixLength) =>
       Effect.gen(function* () {
@@ -90,6 +101,15 @@ describe("V2 preview upgrade", () => {
         const guides = yield* sql`SELECT * FROM pull_request_review_guides`;
         const installedHistory = yield* sql`
           SELECT * FROM effect_sql_migrations WHERE migration_id <= 60 ORDER BY migration_id`;
+        const recorded = yield* sql<{ readonly id: number; readonly name: string }>`
+          SELECT migration_id AS id, name FROM effect_sql_migrations ORDER BY migration_id`;
+
+        assert.deepStrictEqual(
+          reconciledV2PreviewHistory(recorded),
+          migrationManifest
+            .filter(([id]) => id <= 63 + prefixLength)
+            .map(([id, name]) => ({ id, name })),
+        );
 
         const executed = yield* runMigrations();
         assert.deepStrictEqual(executed.slice(0, 3), [
@@ -119,7 +139,7 @@ describe("V2 preview upgrade", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([70, 79, 80, 81, 82])(
+  it.effect.each([70, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88])(
     "appends nightly migrations without rewriting fork history through %s",
     (installedId) =>
       Effect.gen(function* () {
@@ -173,6 +193,13 @@ describe("V2 preview upgrade", () => {
         VALUES (61, 'PullRequestReviewGuides')`;
       yield* sql`INSERT INTO pull_request_review_guides VALUES ('github.com', 'team/repo', 1, '{}')`;
       const guides = yield* sql`SELECT * FROM pull_request_review_guides`;
+      const recorded = yield* sql<{ readonly id: number; readonly name: string }>`
+        SELECT migration_id AS id, name FROM effect_sql_migrations ORDER BY migration_id`;
+
+      assert.deepStrictEqual(
+        reconciledV2PreviewHistory(recorded),
+        migrationManifest.filter(([id]) => id <= 60).map(([id, name]) => ({ id, name })),
+      );
 
       assert.deepStrictEqual(yield* runMigrations(), [
         [61, "ProjectSkillShortcuts"],
@@ -198,6 +225,11 @@ describe("V2 preview upgrade", () => {
         [81, "DropOrchestrationEventCorrelationIndex"],
         [82, "DelegatedRecoveryIndexes"],
         [83, "ScheduledTaskThreadMode"],
+        [84, "ProjectionMessageSearchText"],
+        [85, "TurnItemConversationIndex"],
+        [86, "CommandReadIndexes"],
+        [87, "LastExecutedRunIndex"],
+        [88, "TurnItemCounts"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -264,6 +296,11 @@ describe("V2 preview upgrade", () => {
         [81, "DropOrchestrationEventCorrelationIndex"],
         [82, "DelegatedRecoveryIndexes"],
         [83, "ScheduledTaskThreadMode"],
+        [84, "ProjectionMessageSearchText"],
+        [85, "TurnItemConversationIndex"],
+        [86, "CommandReadIndexes"],
+        [87, "LastExecutedRunIndex"],
+        [88, "TurnItemCounts"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -370,6 +407,11 @@ describe("V2 preview upgrade", () => {
         [81, "DropOrchestrationEventCorrelationIndex"],
         [82, "DelegatedRecoveryIndexes"],
         [83, "ScheduledTaskThreadMode"],
+        [84, "ProjectionMessageSearchText"],
+        [85, "TurnItemConversationIndex"],
+        [86, "CommandReadIndexes"],
+        [87, "LastExecutedRunIndex"],
+        [88, "TurnItemCounts"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -415,7 +457,19 @@ describe("V2 preview upgrade", () => {
         const threads = yield* sql`SELECT * FROM projection_threads`;
         yield* sql`INSERT INTO work_item_links VALUES ('github', 'https://github.com/a/b/issues/1', 'a/b', 1, 'Issue', 'github', 'https://github.com/a/b/pull/2', 'a/b', 2, 'Fix')`;
         const links = yield* sql`SELECT * FROM work_item_links`;
-        const issueHistory = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        const issueHistory = yield* sql<{
+          readonly migration_id: number;
+          readonly name: string;
+          readonly created_at: string;
+        }>`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        assert.deepStrictEqual(
+          reconciledV2PreviewHistory(
+            issueHistory.map((row) => ({ id: row.migration_id, name: row.name })),
+          ),
+          migrationManifest
+            .filter(([id]) => id < (issueId === 62 ? 64 : issueId))
+            .map(([id, name]) => ({ id, name })),
+        );
         yield* runMigrations();
         assert.deepStrictEqual(
           yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -463,8 +517,17 @@ describe("V2 preview upgrade", () => {
         yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES (${issueId}, 'ProjectionThreadIssues'), (${issueId + 1}, 'UnknownFork')`;
         yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
-        const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        const history = yield* sql<{
+          readonly migration_id: number;
+          readonly name: string;
+          readonly created_at: string;
+        }>`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
         const links = yield* sql`SELECT * FROM work_item_links`;
+        assert.isNull(
+          reconciledV2PreviewHistory(
+            history.map((row) => ({ id: row.migration_id, name: row.name })),
+          ),
+        );
         assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations())));
         assert.deepStrictEqual(
           yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,

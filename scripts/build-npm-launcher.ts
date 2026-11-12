@@ -20,6 +20,22 @@ import { windowsSystemTar } from "./lib/windows-tar.ts";
 export const NPM_LAUNCHER_PACKAGE_NAME = "t3";
 
 const encodePackageJson = Schema.encodeEffect(fromJsonStringPretty(Schema.Unknown));
+const decodeMigrationModule = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    migrationManifest: Schema.NonEmptyArray(
+      Schema.Tuple([Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)), Schema.String]),
+    ),
+  }),
+);
+
+class NpmLauncherMigrationManifestError extends Schema.TaggedError<NpmLauncherMigrationManifestError>()(
+  "NpmLauncherMigrationManifestError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Failed to read registered server migrations.";
+  }
+}
 
 export class NpmLauncherCommandFailedError extends Schema.TaggedError<NpmLauncherCommandFailedError>()(
   "NpmLauncherCommandFailedError",
@@ -46,18 +62,16 @@ export function npmLauncherPackageManifest(version: string, databaseMigration: n
   };
 }
 
-/** Highest server migration id, from the `NNN_Name.ts` files the server registers. */
 const latestServerMigrationId = Effect.fn("latestServerMigrationId")(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = yield* path.fromFileUrl(
-    new URL("../apps/server/src/persistence/Migrations/", import.meta.url),
-  );
-  const ids = (yield* fs.readDirectory(dir)).flatMap((name) => {
-    const id = /^(\d+)_\w+\.ts$/.exec(name)?.[1];
-    return id === undefined ? [] : [Number(id)];
+  const migrationModule = yield* Effect.tryPromise({
+    try: (): Promise<unknown> =>
+      import(new URL("../apps/server/src/persistence/Migrations.ts", import.meta.url).href),
+    catch: (cause) => new NpmLauncherMigrationManifestError({ cause }),
   });
-  return Math.max(0, ...ids);
+  const { migrationManifest } = yield* decodeMigrationModule(migrationModule).pipe(
+    Effect.mapError((cause) => new NpmLauncherMigrationManifestError({ cause })),
+  );
+  return Math.max(...migrationManifest.map(([id]) => id));
 });
 
 export const buildNpmLauncher = Effect.fn("buildNpmLauncher")(function* (input: {

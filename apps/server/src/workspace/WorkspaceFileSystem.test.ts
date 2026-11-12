@@ -290,6 +290,14 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           const error = yield* workspaceFileSystem.readFile(input).pipe(Effect.flip);
           expect(error).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
         }
+        const metadata = yield* workspaceFileSystem.getMetadata({
+          paths: [
+            path.join(config.secretsDir, "example.bin"),
+            path.join(config.stateDir, "statev2.sqlite"),
+            config.stateDir,
+          ],
+        });
+        expect(metadata.entries).toEqual([null, null, { kind: "directory" }]);
       }),
     );
 
@@ -651,7 +659,8 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           const cwdAlias = path.join(parentDir, "workspace-alias");
           yield* writeTextFile(cwd, "docs/README.md", "old\n");
           yield* fileSystem.symlink(path.join(cwd, "docs"), path.join(cwd, "docs-alias"));
-          yield* fileSystem.symlink("docs/README.md", path.join(cwd, "README.md"));
+          const relativeTarget = path.join("docs", "README.md");
+          yield* fileSystem.symlink(relativeTarget, path.join(cwd, "README.md"));
           yield* fileSystem.symlink(cwd, cwdAlias);
 
           yield* workspaceFileSystem.writeFile({
@@ -681,7 +690,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
             "# Plan\n",
           );
           expect(yield* fileSystem.readFileString(path.join(cwd, "docs/README.md"))).toBe("new\n");
-          expect(yield* fileSystem.readLink(path.join(cwd, "README.md"))).toBe("docs/README.md");
+          expect(yield* fileSystem.readLink(path.join(cwd, "README.md"))).toBe(relativeTarget);
           expect(yield* fileSystem.readFileString(path.join(cwd, "notes.md"))).toBe("notes\n");
           expect(yield* fileSystem.readFileString(path.join(cwd, "dotdot.md"))).toBe("dotdot\n");
         }),

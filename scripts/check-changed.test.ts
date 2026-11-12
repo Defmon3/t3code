@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import { assert, describe, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as PlatformError from "effect/PlatformError";
 import * as Fiber from "effect/Fiber";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -20,6 +21,7 @@ import {
   defaultConcurrency,
   docReaderTests,
   gitLines,
+  runBatches,
   runSteps,
   splitTests,
   type Step,
@@ -29,6 +31,59 @@ import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
 const GiB = 1024 ** 3;
 
 describe("check:changed", () => {
+  it.effect.each([
+    { code: "E2BIG", defect: false, failing: null },
+    { code: "ENAMETOOLONG", defect: true, failing: "first" },
+  ])("does not lose selections or hide a batch failure after $code", ({ code, defect, failing }) =>
+    Effect.gen(function* () {
+      const selected = ["first", "second", "third", "fourth", "fifth"];
+      const checked: string[] = [];
+      const result = yield* runBatches(selected, (batch) => {
+        if (batch.length > 2) {
+          const cause = Object.assign(new Error(code), { code });
+          return defect
+            ? Effect.die(cause)
+            : Effect.fail(
+                PlatformError.systemError({
+                  _tag: "Unknown",
+                  module: "ChildProcess",
+                  method: "spawn",
+                  cause,
+                }),
+              );
+        }
+        checked.push(...batch);
+        return Effect.succeed({ ok: !batch.includes(failing ?? ""), output: batch.join("\n") });
+      });
+
+      assert.deepStrictEqual(checked, selected);
+      assert.strictEqual(result.ok, failing === null);
+      for (const selection of selected) assert.include(result.output, selection);
+    }),
+  );
+
+  it.effect.each([
+    { code: "E2BIG", selected: ["only"] },
+    { code: "ENOENT", selected: ["first", "second"] },
+  ])("reports $code when batching cannot run a check", ({ code, selected }) =>
+    Effect.gen(function* () {
+      const result = yield* runBatches(selected, () =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "Unknown",
+            module: "ChildProcess",
+            method: "spawn",
+            description: code,
+            cause: Object.assign(new Error(code), { code }),
+          }),
+        ),
+      );
+
+      assert.isFalse(result.ok);
+      assert.include(result.output, code);
+    }),
+  );
+
   it("bounds the default concurrency by the scarcer of cores and available memory", () => {
     assert.strictEqual(defaultConcurrency(32, 128 * GiB), 16);
     assert.strictEqual(defaultConcurrency(32, 20 * GiB), 3);
@@ -147,6 +202,7 @@ describe("check:changed", () => {
     assert.deepStrictEqual(
       splitTests([
         "apps/server/src/ws.test.ts",
+        "apps\\server\\src\\ws.test.ts",
         ".github/scripts/ci-changes.test.cjs",
         ".github\\scripts\\thread-transfer-report.test.cjs",
         "scripts/check-changed.test.ts",
@@ -155,7 +211,7 @@ describe("check:changed", () => {
         vitestTests: ["apps/server/src/ws.test.ts", "scripts/check-changed.test.ts"],
         nodeTests: [
           ".github/scripts/ci-changes.test.cjs",
-          ".github\\scripts\\thread-transfer-report.test.cjs",
+          ".github/scripts/thread-transfer-report.test.cjs",
         ],
       },
     );
