@@ -1775,10 +1775,15 @@ const make = Effect.gen(function* () {
           : pendingTaskApproval(childControls, task.id, childRun),
       waitTimedOut,
     } satisfies OrchestratorMcpDelegateTaskResult;
-    const response: OrchestratorMcpDelegateTaskResult =
-      endsTaskWait(result) || task.completionDelivery?.state === "disposed"
-        ? result
-        : { ...result, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT };
+    const showEndTurnGuidance =
+      !endsTaskWait(result) &&
+      task.completionDelivery?.state !== "disposed" &&
+      (yield* serverSettings.getSettings.pipe(
+        Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+      )).delegatedTaskEndTurnGuidance;
+    const response: OrchestratorMcpDelegateTaskResult = showEndTurnGuidance
+      ? { ...result, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT }
+      : result;
     if (
       acknowledgeTerminal &&
       isTerminalTaskStatus(status) &&
@@ -3396,12 +3401,17 @@ const make = Effect.gen(function* () {
         : [];
       const wakesCaller =
         ownedTask && !childRequests.some((request) => request.status === "pending");
+      const showEndTurnGuidance =
+        wakesCaller &&
+        (yield* serverSettings.getSettings.pipe(
+          Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+        )).delegatedTaskEndTurnGuidance;
       return {
         threadId: input.threadId,
         runId: result.run?.id ?? null,
         status,
         timedOut: result.timedOut,
-        ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
+        ...(showEndTurnGuidance ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
         ...(result.resultRun === undefined
           ? {}
           : {

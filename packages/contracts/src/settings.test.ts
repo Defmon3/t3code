@@ -382,6 +382,28 @@ describe("provider enabled defaults", () => {
   });
 });
 
+describe("ServerSettings delegated task guidance", () => {
+  it("keeps guidance enabled for existing settings and leaves omitted patches unchanged", () => {
+    expect(decodeServerSettings({}).delegatedTaskEndTurnGuidance).toBe(true);
+    expect(decodeServerSettingsPatch({})).not.toHaveProperty("delegatedTaskEndTurnGuidance");
+  });
+
+  it.each([true, false])("persists guidance set to %s", (enabled) => {
+    const patch = decodeServerSettingsPatch({ delegatedTaskEndTurnGuidance: enabled });
+    const settings = decodeServerSettings(patch);
+
+    expect(encodeServerSettingsPatch(patch)).toEqual({ delegatedTaskEndTurnGuidance: enabled });
+    expect(decodeServerSettings(encodeServerSettings(settings)).delegatedTaskEndTurnGuidance).toBe(
+      enabled,
+    );
+  });
+
+  it.each([null, "false", 0])("rejects invalid guidance %j", (value) => {
+    expect(() => decodeServerSettings({ delegatedTaskEndTurnGuidance: value })).toThrow();
+    expect(() => decodeServerSettingsPatch({ delegatedTaskEndTurnGuidance: value })).toThrow();
+  });
+});
+
 describe("ServerSettings worktree defaults", () => {
   it("defaults the thread env mode to inherit and keeps stored values", () => {
     expect(decodeServerSettings({}).defaultThreadEnvMode).toBeNull();

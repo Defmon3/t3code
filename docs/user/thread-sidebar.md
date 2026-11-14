@@ -276,6 +276,11 @@ fill the screen; close the full-screen view to return to the parent and inspecto
 Stop on a thread also stops the subagents it delegated to.
 Before archiving the parent, wait for its delegated tasks to finish or cancel them.
 
+To stop telling agents to end their turn while a delegated task runs, set
+`"delegatedTaskEndTurnGuidance": false` in the server's `userdata/settings.json`.
+This takes effect after settings reload, without rebuilding a client. Completion
+delivery and waiting still work. Set it to `true` or remove it to restore the guidance.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.

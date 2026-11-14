@@ -526,12 +526,31 @@ describe("OrchestratorMcpService", () => {
 
       yield* Effect.gen(function* () {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const settings = yield* ServerSettings.ServerSettingsService;
         const running = yield* service.taskStatus(scope, taskId);
         assert.equal(running.status, "running");
         assert.equal(running.next, ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
         const waiting = yield* service.waitForThread(scope, { threadId: childThreadId });
         assert.isTrue(waiting.timedOut);
         assert.equal(waiting.next, ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
+
+        yield* settings.updateSettings({ delegatedTaskEndTurnGuidance: false });
+        const runningWithoutGuidance = yield* service.taskStatus(scope, taskId);
+        assert.equal(runningWithoutGuidance.status, "running");
+        assert.notProperty(runningWithoutGuidance, "next");
+        const waitingWithoutGuidance = yield* service.waitForThread(scope, {
+          threadId: childThreadId,
+        });
+        assert.isTrue(waitingWithoutGuidance.timedOut);
+        assert.notProperty(waitingWithoutGuidance, "next");
+
+        yield* settings.updateSettings({ delegatedTaskEndTurnGuidance: true });
+        const runningWithGuidance = yield* service.taskStatus(scope, taskId);
+        assert.equal(runningWithGuidance.next, ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
+        const waitingWithGuidance = yield* service.waitForThread(scope, {
+          threadId: childThreadId,
+        });
+        assert.equal(waitingWithGuidance.next, ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
 
         // A child waiting on a question or approval needs an answer, not a wake.
         pendingRequest = true;
@@ -547,7 +566,7 @@ describe("OrchestratorMcpService", () => {
         const waited = yield* service.waitForThread(scope, { threadId: childThreadId });
         assert.equal(waited.status, "completed");
         assert.notProperty(waited, "next");
-      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provideMerge(layerDependencies))));
     }),
   );
 
