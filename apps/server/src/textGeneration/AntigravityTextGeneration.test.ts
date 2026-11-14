@@ -343,7 +343,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
           { type: "text", text: expect.stringContaining("+handleRemoteCallback()") },
         ]);
         yield* fixture.assertCleaned;
-      }).pipe(Effect.scoped),
+      }),
   );
 
   it.effect("generates related issue matches without changing the project", () =>
@@ -389,7 +389,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         expect(error.detail).toContain("tool work");
         expect(fixture.state.cancellations).toBe(1);
         yield* fixture.assertCleaned;
-      }).pipe(Effect.scoped),
+      }),
   );
 
   it.effect("rejects native permission and choice requests instead of answering them", () =>
@@ -414,7 +414,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       expect(reply).toEqual({ outcome: { outcome: "cancelled" } });
       expect(error.detail).toContain("permission or user input");
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect.each(["file", "terminal", "extension"] as const)(
@@ -443,7 +443,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         const error = yield* Fiber.join(child).pipe(Effect.flip);
         expect(error.detail).toContain("tool or user input");
         yield* fixture.assertCleaned;
-      }).pipe(Effect.scoped),
+      }),
   );
 
   it.effect.each([
@@ -459,7 +459,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         .pipe(Effect.flip);
       expect(error.detail).toContain(detail);
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("does not return partial JSON after native cancellation", () =>
@@ -476,7 +476,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         .pipe(Effect.flip);
       expect(error.detail).toContain("cancelled");
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect.each([
@@ -497,7 +497,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       expect(error.detail).toBe(detail);
       expect(error.detail).not.toContain("Raw provider failure text.");
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect.each([
@@ -544,7 +544,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         expect(error.detail).toContain("wrote files");
         if (target !== undefined) expect(yield* fs.exists(target)).toBe(true);
         yield* fixture.assertCleaned;
-      }).pipe(Effect.scoped),
+      }),
   );
 
   it.effect("uses the native default without sending T3's default selection as a model ID", () =>
@@ -557,7 +557,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       expect(result).toEqual({ title: "Repair login" });
       expect(fixture.state.selectedModels).toEqual([]);
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect.each([
@@ -589,7 +589,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       expect(Exit.isSuccess(result)).toBe(available);
       expect(fixture.state.workspaces.length).toBe(available ? 1 : 0);
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("does not launch during sign-out or before sign-in", () =>
@@ -602,7 +602,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       expect(error.detail).toBe("Sign in before starting Antigravity.");
       expect(fixture.state.workspaces).toEqual([]);
       yield* fixture.assertCleaned;
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect.each(["caller", "sign-out"] as const)(
@@ -623,7 +623,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         }
         expect(fixture.state.cancellations).toBe(1);
         yield* fixture.assertCleaned;
-      }).pipe(Effect.scoped),
+      }),
   );
 
   it.effect("refuses unsafe native session IDs without deleting other files", () =>
@@ -636,7 +636,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       expect(fixture.state.prompts).toEqual([]);
       expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.db`)).toBe("helper session");
       expect(fixture.state.closed).toEqual(fixture.state.workspaces);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("keeps native sessions whose metadata belongs to a different workspace", () =>
@@ -654,7 +654,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         "keep this session",
       );
       expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.meta`)).toBe(metadata);
-    }).pipe(Effect.scoped),
+    }),
   );
 });
 
@@ -667,5 +667,5 @@ it.effect("retains filesystem services supplied only during construction", () =>
       title: "Repair login",
     });
     yield* fixture.assertCleaned;
-  }).pipe(Effect.scoped),
+  }),
 );

@@ -36,6 +36,12 @@ const NIGHTLY_MIGRATION_REBASE: ReadonlyArray<readonly [number, number, string]>
   [83, 86, "CommandReadIndexes"],
   [84, 87, "LastExecutedRunIndex"],
   [85, 88, "TurnItemCounts"],
+  [86, 89, "QueuedTurnInputIndex"],
+  [87, 90, "ProjectionProjectsCustomTitle"],
+  [88, 91, "TurnItemTypeStatusIndex"],
+  [89, 92, "ShellThreadReadIndexes"],
+  [90, 93, "AuthConnectDevices"],
+  [91, 94, "AuthConnectDeniedRequests"],
 ];
 
 function nightlyMigrationPrefix(history: ReadonlyArray<MigrationRow>) {

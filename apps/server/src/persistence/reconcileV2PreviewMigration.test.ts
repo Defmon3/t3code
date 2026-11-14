@@ -36,6 +36,12 @@ import TurnItemConversationIndex from "./Migrations/082_TurnItemConversationInde
 import CommandReadIndexes from "./Migrations/083_CommandReadIndexes.ts";
 import LastExecutedRunIndex from "./Migrations/084_LastExecutedRunIndex.ts";
 import TurnItemCounts from "./Migrations/085_TurnItemCounts.ts";
+import QueuedTurnInputIndex from "./Migrations/086_QueuedTurnInputIndex.ts";
+import ProjectionProjectsCustomTitle from "./Migrations/087_ProjectionProjectsCustomTitle.ts";
+import TurnItemTypeStatusIndex from "./Migrations/088_TurnItemTypeStatusIndex.ts";
+import ShellThreadReadIndexes from "./Migrations/089_ShellThreadReadIndexes.ts";
+import AuthConnectDevices from "./Migrations/090_AuthConnectDevices.ts";
+import AuthConnectDeniedRequests from "./Migrations/091_AuthConnectDeniedRequests.ts";
 import { reconciledV2PreviewHistory } from "./reconcileV2PreviewMigration.ts";
 
 const seedPreview = Effect.gen(function* () {
@@ -80,10 +86,16 @@ const nightlyMigrations = [
   ["CommandReadIndexes", CommandReadIndexes],
   ["LastExecutedRunIndex", LastExecutedRunIndex],
   ["TurnItemCounts", TurnItemCounts],
+  ["QueuedTurnInputIndex", QueuedTurnInputIndex],
+  ["ProjectionProjectsCustomTitle", ProjectionProjectsCustomTitle],
+  ["TurnItemTypeStatusIndex", TurnItemTypeStatusIndex],
+  ["ShellThreadReadIndexes", ShellThreadReadIndexes],
+  ["AuthConnectDevices", AuthConnectDevices],
+  ["AuthConnectDeniedRequests", AuthConnectDeniedRequests],
 ] as const;
 
 describe("V2 preview upgrade", () => {
-  it.effect.each([2, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25])(
+  it.effect.each([2, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])(
     "rebases a valid nightly migration prefix of length %s",
     (prefixLength) =>
       Effect.gen(function* () {
@@ -139,7 +151,7 @@ describe("V2 preview upgrade", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([70, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88])(
+  it.effect.each([70, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94])(
     "appends nightly migrations without rewriting fork history through %s",
     (installedId) =>
       Effect.gen(function* () {
@@ -230,6 +242,12 @@ describe("V2 preview upgrade", () => {
         [86, "CommandReadIndexes"],
         [87, "LastExecutedRunIndex"],
         [88, "TurnItemCounts"],
+        [89, "QueuedTurnInputIndex"],
+        [90, "ProjectionProjectsCustomTitle"],
+        [91, "TurnItemTypeStatusIndex"],
+        [92, "ShellThreadReadIndexes"],
+        [93, "AuthConnectDevices"],
+        [94, "AuthConnectDeniedRequests"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -301,6 +319,12 @@ describe("V2 preview upgrade", () => {
         [86, "CommandReadIndexes"],
         [87, "LastExecutedRunIndex"],
         [88, "TurnItemCounts"],
+        [89, "QueuedTurnInputIndex"],
+        [90, "ProjectionProjectsCustomTitle"],
+        [91, "TurnItemTypeStatusIndex"],
+        [92, "ShellThreadReadIndexes"],
+        [93, "AuthConnectDevices"],
+        [94, "AuthConnectDeniedRequests"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -412,6 +436,12 @@ describe("V2 preview upgrade", () => {
         [86, "CommandReadIndexes"],
         [87, "LastExecutedRunIndex"],
         [88, "TurnItemCounts"],
+        [89, "QueuedTurnInputIndex"],
+        [90, "ProjectionProjectsCustomTitle"],
+        [91, "TurnItemTypeStatusIndex"],
+        [92, "ShellThreadReadIndexes"],
+        [93, "AuthConnectDevices"],
+        [94, "AuthConnectDeniedRequests"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

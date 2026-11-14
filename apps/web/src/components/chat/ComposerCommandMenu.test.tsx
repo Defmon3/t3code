@@ -80,8 +80,11 @@ describe("composer issue suggestions", () => {
     );
   });
 
-  it("waits on issues and files only once the path query has text", () => {
+  it("waits on files immediately and on issues once the path query has text", () => {
     expect(isComposerPathMenuLoading({ query: "", issuesPending: true, filesPending: true })).toBe(
+      true,
+    );
+    expect(isComposerPathMenuLoading({ query: "", issuesPending: true, filesPending: false })).toBe(
       false,
     );
     expect(

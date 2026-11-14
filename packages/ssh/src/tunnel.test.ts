@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeZlib from "node:zlib";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -28,6 +29,12 @@ import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import {
+  captureLauncher,
+  captureLauncherFor,
+  runLauncher,
+  transportedScript,
+} from "./launcherTestHarness.ts";
 import * as SshAuth from "./auth.ts";
 import { remoteStateKey, shellSingleQuote } from "./command.ts";
 import { SshCommandError, SshPasswordPromptError, SshReadinessError } from "./errors.ts";
@@ -165,6 +172,11 @@ const serve = (tries) => {
 serve(40);
 `;
 
+const remoteScriptArguments = (command: ChildProcess.Command) => {
+  const args = commandArgs(command);
+  return args.slice(args.lastIndexOf("--") + 1).map((arg) => arg.slice(1, -1));
+};
+
 const localRemoteShellLayer = (home: string) =>
   Layer.effect(
     ChildProcessSpawner.ChildProcessSpawner,
@@ -177,14 +189,13 @@ const localRemoteShellLayer = (home: string) =>
           launches++ === 0
             ? ""
             : 'i=0; while [ ! -s "$HOME/servers" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i+1)); done; ';
-        const args = commandArgs(command);
-        const remoteCommand = args.slice(args.indexOf("sh")).join(" ").replace("sh -l ", "sh ");
+        const script = transportedScript(command);
         return spawner.spawn(
-          ChildProcess.make(fixtureShell, ["-s"], {
+          ChildProcess.make(fixtureShell, ["-s", "--", ...remoteScriptArguments(command)], {
             ...command.options,
             env: { ...command.options.env, HOME: home.replaceAll("\\", "/") },
             stdin: {
-              stream: Stream.make(new TextEncoder().encode(`${launchWait}exec ${remoteCommand}\n`)),
+              stream: Stream.make(new TextEncoder().encode(`${launchWait}${script}`)),
               endOnDone: true,
             },
             // Like an SSH session ending, the shell's exit leaves its nohup'd server running.
@@ -196,76 +207,84 @@ const localRemoteShellLayer = (home: string) =>
   );
 
 describe("ssh tunnel scripts", () => {
-  it.effect.each([true, false])(
-    "checks external server protocol before reuse (compatible: %s)",
-    (compatible) => {
-      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
-      let launches = 0;
-      let stops = 0;
-      const spawner = ChildProcessSpawner.make((command) => {
-        const args = commandArgs(command);
-        if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
-        if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
-        if (args.some((arg) => arg.includes("server-runtime.json"))) {
-          return Effect.succeed(
-            makeSuccessfulProcess(
-              `${compatible ? "loaded profile\n" : ""}{"pid":123,"port":3773,"origin":"http://127.0.0.1:3773"}`,
-            ),
-          );
-        }
-        if (args.some((arg) => arg.includes("kill -0 123")))
-          return Effect.succeed(makeSuccessfulProcess("alive"));
-        if (args.at(-2) === "--") launches += 1;
-        else stops += 1;
-        return Effect.succeed(makeSuccessfulProcess(""));
-      });
-      const http = HttpClient.make((request) =>
-        Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            new Response(
-              request.url.endsWith("/.well-known/t3/environment")
-                ? JSON.stringify({
-                    environmentId: "test",
-                    label: "test",
-                    platform: { os: "linux", arch: "x64" },
-                    serverVersion: "1.0.0",
-                    orchestrationProtocolVersion:
-                      ORCHESTRATION_PROTOCOL_VERSION + (compatible ? 0 : 1),
-                    capabilities: {},
-                  })
-                : "",
-              { status: 200 },
-            ),
+  it.effect.each([
+    { compatible: true, launcherId: null },
+    { compatible: false, launcherId: null },
+    { compatible: true, launcherId: "a".repeat(32) },
+    { compatible: false, launcherId: "a".repeat(32) },
+  ])("checks external server protocol before reuse: %j", ({ compatible, launcherId }) => {
+    const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+    let launches = 0;
+    let stops = 0;
+    const spawner = ChildProcessSpawner.make((command) => {
+      const args = commandArgs(command);
+      if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
+      if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
+      if (args.some((arg) => arg.includes("server-runtime.json"))) {
+        return Effect.succeed(
+          makeSuccessfulProcess(
+            `${compatible ? "loaded profile\n" : ""}{"pid":123,"port":3773,"origin":"http://127.0.0.1:3773"}`,
+          ),
+        );
+      }
+      if (args.some((arg) => arg.includes("kill -0 123")))
+        return Effect.succeed(makeSuccessfulProcess("alive"));
+      if (args.includes("-c")) {
+        launches += 1;
+        return Effect.succeed(makeSuccessfulProcess('{"remotePort":3773,"serverKind":"external"}'));
+      }
+      stops += 1;
+      return Effect.succeed(makeSuccessfulProcess(""));
+    });
+    const http = HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(
+            request.url.endsWith("/.well-known/t3/environment")
+              ? JSON.stringify({
+                  environmentId: "test",
+                  label: "test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "1.0.0",
+                  orchestrationProtocolVersion:
+                    ORCHESTRATION_PROTOCOL_VERSION + (compatible ? 0 : 1),
+                  capabilities: {},
+                })
+              : "",
+            { status: 200 },
           ),
         ),
-      );
-      const layer = Layer.mergeAll(
-        NodeServices.layer,
-        NodeCrypto.layer,
-        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Layer.succeed(HttpClient.HttpClient, http),
-        Layer.succeed(NetService.NetService, testNetService),
-        SshAuth.SshPasswordPrompt.disabledLayer,
-        SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
-      );
-      return Effect.gen(function* () {
-        const manager = yield* SshTunnel.SshEnvironmentManager;
-        const result = yield* Effect.result(manager.ensureEnvironment(target));
-        if (Result.isSuccess(result)) {
-          assert.isTrue(compatible);
-          assert.equal(result.success.remotePort, 3773);
-          assert.equal(result.success.remoteServerKind, "external");
-          yield* manager.disconnectEnvironment(target);
-        } else {
-          assert.isFalse(compatible);
-          assert.equal(result.failure._tag, "SshLaunchError");
-        }
-        assert.equal(launches, 0);
-        assert.equal(stops, 0);
-      }).pipe(Effect.provide(layer), Effect.scoped);
-    },
-  );
+      ),
+    );
+    const layer = Layer.mergeAll(
+      NodeServices.layer,
+      NodeCrypto.layer,
+      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Layer.succeed(HttpClient.HttpClient, http),
+      Layer.succeed(NetService.NetService, testNetService),
+      SshAuth.SshPasswordPrompt.disabledLayer,
+      SshTunnel.SshEnvironmentManager.layer({
+        resolveCliRunner: Effect.succeed(ARCHIVE),
+        resolveLauncherId: Effect.succeed(launcherId),
+      }),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const result = yield* Effect.result(manager.ensureEnvironment(target));
+      if (Result.isSuccess(result)) {
+        assert.isTrue(compatible);
+        assert.equal(result.success.remotePort, 3773);
+        assert.equal(result.success.remoteServerKind, "external");
+        yield* manager.disconnectEnvironment(target);
+      } else {
+        assert.isFalse(compatible);
+        assert.equal(result.failure._tag, "SshLaunchError");
+      }
+      assert.equal(launches, launcherId === null ? 0 : 1);
+      assert.equal(stops, 0);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
   it.effect.each(["", "managed"])("uses the launcher when the recorded process is %s", (status) => {
     const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
     let launches = 0;
@@ -323,6 +342,110 @@ describe("ssh tunnel scripts", () => {
 
       assert.equal(result.exitCode, 17, result.stderr);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("distinguishes an incompatible remote Node from a missing executable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ssh-node-" });
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      for (const missing of [false, true]) {
+        const nodeFixture = missing
+          ? "command() { return 1; }; "
+          : 'node() { cat >/dev/null; printf "Remote node 18.20.8 does not satisfy required range >=999.0.0.\\n" >&2; return 1; }; ';
+        const remoteShell = ChildProcessSpawner.make((command) => {
+          if (command._tag !== "StandardCommand") return spawner.spawn(command);
+          return spawner.spawn(
+            ChildProcess.make(fixtureShell, ["-s", "--", ...remoteScriptArguments(command)], {
+              ...command.options,
+              stdin: {
+                stream: Stream.make(
+                  new TextEncoder().encode(`${nodeFixture}\n${transportedScript(command)}`),
+                ),
+                endOnDone: true,
+              },
+              env: {
+                ...command.options.env,
+                HOME: home,
+                NVM_DIR: NodePath.join(home, ".nvm"),
+                FNM_DIR: NodePath.join(home, ".fnm"),
+                VOLTA_HOME: NodePath.join(home, ".volta"),
+              },
+            }),
+          );
+        });
+        const result = yield* SshTunnel.launchOrReuseRemoteServer(
+          { alias: "devbox", hostname: "devbox", username: null, port: null },
+          undefined,
+          { nodeScriptPath: "/unused/server.ts", nodeEngineRange: ">=999.0.0" },
+        ).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, remoteShell),
+          Effect.result,
+        );
+        assert.isTrue(Result.isFailure(result));
+        if (!Result.isFailure(result)) return;
+        assert.isTrue(isSshCommandError(result.failure));
+        if (!isSshCommandError(result.failure)) return;
+        assert.equal(result.failure.exitCode, 1);
+        assert.equal(result.failure.stderr.includes("missing node on PATH"), missing);
+        assert.equal(
+          result.failure.stderr.includes("does not satisfy required range >=999.0.0"),
+          !missing,
+        );
+      }
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.live("reports only the failed launch's own output, not an earlier launch's log", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ssh-launch-log-" });
+      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+      const stateDir = NodePath.join(home, ".t3", "ssh-launch", yield* remoteStateKey(target));
+      const bin = NodePath.join(home, "bin");
+      yield* fs.makeDirectory(stateDir, { recursive: true });
+      yield* fs.makeDirectory(bin);
+      yield* fs.writeFileString(NodePath.join(stateDir, "server.log"), "EARLIER_LAUNCH\n");
+      // The new server exits without output. Readiness then fails after a process from the
+      // earlier launch writes through the log descriptor it still holds (fd 3).
+      yield* fs.writeFileString(
+        NodePath.join(bin, "node"),
+        '#!/bin/sh\n[ "$1" = - ] || exit 0\ncat >/dev/null\ncase "$2" in\n  */port) echo 37731 ;;\n  37731) { printf "EARLIER_PROCESS\\n" >&3; } 2>/dev/null; exit 1 ;;\n  *) exit 1 ;;\nesac\n',
+        { mode: 0o755 },
+      );
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const remoteShell = ChildProcessSpawner.make((command) => {
+        if (command._tag !== "StandardCommand") return spawner.spawn(command);
+        return spawner.spawn(
+          ChildProcess.make(fixtureShell, ["-s", "--", ...remoteScriptArguments(command)], {
+            ...command.options,
+            stdin: {
+              stream: Stream.make(
+                new TextEncoder().encode(
+                  `exec 3>>${shellSingleQuote(shellPath(`${stateDir}/server.log`))}\n${transportedScript(command)}`,
+                ),
+              ),
+              endOnDone: true,
+            },
+            env: { HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` },
+            extendEnv: false,
+          }),
+        );
+      });
+      const result = yield* SshTunnel.launchOrReuseRemoteServer(target, undefined, {
+        nodeScriptPath: "/unused/server.ts",
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, remoteShell),
+        Effect.result,
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (!Result.isFailure(result)) return;
+      assert.isTrue(isSshCommandError(result.failure));
+      if (!isSshCommandError(result.failure)) return;
+      assert.include(result.failure.stderr, "It wrote nothing to");
+      assert.notInclude(result.failure.stderr, "EARLIER_LAUNCH");
+      assert.notInclude(result.failure.stderr, "EARLIER_PROCESS");
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it("rejects archive versions that are not a single exact version segment", () => {
@@ -479,6 +602,114 @@ describe("ssh tunnel scripts", () => {
       assert.isBelow(spawnedCommands.flat().join(" ").length, 16_000);
     }).pipe(Effect.provide(layerProcess));
   });
+
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "loads login settings without changing the POSIX bootstrap or its state key",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ssh-login-" });
+        const startupFile = `${directory}/bash-env`;
+        const bash = `${directory}/bash`;
+        // System profiles can reset HOME. Suppress profile reads while BASH_ENV
+        // checks that the launcher still requests Bash login mode.
+        yield* fs.writeFileString(bash, '#!/bin/sh\nexec /bin/bash --noprofile "$@"\n');
+        yield* fs.chmod(bash, 0o755);
+        yield* fs.writeFileString(
+          startupFile,
+          "if shopt -q login_shell; then export T3_SSH_LOGIN_ENV=loaded; fi\n",
+        );
+        const target = { alias: "login-test", hostname: "login-test", username: null, port: null };
+        let remoteCommand = "";
+        const capture = ChildProcessSpawner.make((command) =>
+          Effect.sync(() => {
+            const args = commandArgs(command);
+            const payload = /[A-Za-z0-9+/]{40,}={0,2}/u.exec(args.join(" "))?.[0];
+            if (payload === undefined) throw new Error("SSH script payload is missing");
+            remoteCommand = args
+              .slice(args.indexOf(target.alias) + 1)
+              .join(" ")
+              .replace(
+                payload,
+                NodeZlib.gzipSync('printf "%s:%s" "${T3_SSH_LOGIN_ENV:-missing}" "$1"').toString(
+                  "base64",
+                ),
+              );
+            return makeSuccessfulProcess('{"remotePort":3774}\n');
+          }),
+        );
+        yield* SshTunnel.launchOrReuseRemoteServer(target, undefined, ARCHIVE).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, capture),
+        );
+        yield* fs.writeFileString(
+          `${directory}/.zprofile`,
+          "if [[ -o login ]]; then export T3_SSH_LOGIN_ENV=loaded; fi\n",
+        );
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const cases = [
+          { shell: bash, outerShell: "/bin/sh", expected: "loaded" },
+          { shell: "/bin/sh", outerShell: "/bin/sh", expected: "missing" },
+          { shell: "", outerShell: "/bin/sh", expected: "missing" },
+          { shell: undefined, outerShell: "/bin/sh", expected: "missing" },
+          { shell: "/unavailable/csh", outerShell: "/bin/sh", expected: "missing" },
+          { shell: "/unavailable/tcsh", outerShell: "/bin/sh", expected: "missing" },
+          { shell: "/unavailable/pwsh", outerShell: "/bin/sh", expected: "missing" },
+        ];
+        if (yield* fs.exists("/bin/zsh")) {
+          cases.push({ shell: "/bin/zsh", outerShell: "/bin/zsh", expected: "loaded" });
+        }
+        if (yield* fs.exists("/bin/tcsh")) {
+          cases.push({ shell: "/bin/tcsh", outerShell: "/bin/tcsh", expected: "missing" });
+        }
+        const environment = yield* HostProcess.Environment;
+        for (const folder of (environment.PATH ?? "").split(":")) {
+          const nu = `${folder}/nu`;
+          if (folder && (yield* fs.exists(nu))) {
+            cases.push({ shell: nu, outerShell: nu, expected: "missing" });
+            break;
+          }
+        }
+        for (const { shell, outerShell, expected } of cases) {
+          const child = yield* spawner.spawn(
+            ChildProcess.make(outerShell, ["-c", remoteCommand], {
+              env: {
+                PATH: environment.PATH ?? "/usr/bin:/bin",
+                HOME: directory,
+                XDG_CONFIG_HOME: directory,
+                SHELL: shell,
+                BASH_ENV: startupFile,
+                ZDOTDIR: directory,
+                T3_SSH_LOGIN_ENV: "",
+              },
+            }),
+          );
+          const [stdout, stderr, exitCode] = yield* Effect.all(
+            [
+              child.stdout.pipe(
+                Stream.decodeText(),
+                Stream.runFold(
+                  () => "",
+                  (a, b) => a + b,
+                ),
+              ),
+              child.stderr.pipe(
+                Stream.decodeText(),
+                Stream.runFold(
+                  () => "",
+                  (a, b) => a + b,
+                ),
+              ),
+              child.exitCode,
+            ],
+            { concurrency: "unbounded" },
+          );
+          assert.equal(Number(exitCode), 0, stderr);
+          // First-run shell messages can precede the bootstrap response.
+          const response = stdout.trim().split(/\r?\n/u).at(-1) ?? "";
+          assert.match(response, new RegExp(`^${expected}:[a-f0-9]{16}$`), shell || "unset SHELL");
+        }
+      }).pipe(Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer))),
+  );
 
   it.effect("accepts pretty-printed pairing JSON after remote shell startup noise", () => {
     const target = {
@@ -695,22 +926,31 @@ describe("ssh tunnel scripts", () => {
     }),
   );
 
-  it.effect("connects through a tunnel whose responses take longer than a second", () =>
+  it.effect("connects and reuses a tunnel whose responses take over a second", () =>
     Effect.gen(function* () {
       // Over a ~1s RTT link each request through the forward takes a few round trips.
       const RESPONSE_MS = 2_500;
       const tunnelSpawned = yield* Deferred.make<void>();
+      const reconnectProbed = yield* Deferred.make<void>();
+      const forwardReplaced = yield* Deferred.make<void>();
+      let forwards = 0;
+      let connected = false;
       const spawner = ChildProcessSpawner.make((command) =>
         commandArgs(command).includes("-N")
-          ? Deferred.succeed(tunnelSpawned, undefined).pipe(
+          ? Effect.sync(() => ++forwards).pipe(
+              Effect.flatMap((count) =>
+                Deferred.succeed(count === 1 ? tunnelSpawned : forwardReplaced, undefined),
+              ),
               Effect.as(makeRunningProcess(() => undefined)),
             )
           : Effect.succeed(makeManagedLaunchProcess(command)),
       );
       const httpClient = HttpClient.make((request) =>
-        Effect.sleep(Duration.millis(RESPONSE_MS)).pipe(
-          Effect.as(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
-        ),
+        Effect.gen(function* () {
+          if (connected) yield* Deferred.succeed(reconnectProbed, undefined);
+          yield* Effect.sleep(Duration.millis(RESPONSE_MS));
+          return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+        }),
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
@@ -740,6 +980,17 @@ describe("ssh tunnel scripts", () => {
           Result.isSuccess(result),
           Result.isFailure(result) ? result.failure.message : undefined,
         );
+        if (Result.isFailure(result)) return;
+
+        connected = true;
+        const reconnect = yield* Effect.forkChild(manager.ensureEnvironment(result.success.target));
+        yield* Deferred.await(reconnectProbed);
+        yield* TestClock.adjust(Duration.seconds(60));
+        const outcome = yield* Effect.raceFirst(
+          Fiber.join(reconnect).pipe(Effect.map((environment) => environment.httpBaseUrl)),
+          Deferred.await(forwardReplaced).pipe(Effect.as("replaced the forward")),
+        );
+        assert.equal(outcome, result.success.httpBaseUrl);
       }).pipe(Effect.provide(layer), Effect.scoped);
     }),
   );
@@ -965,7 +1216,7 @@ describe("ssh tunnel scripts", () => {
               }
               return tunnel;
             }
-            if (args.at(-2) === "--") {
+            if (remoteScriptArguments(command).length > 0) {
               if (isTarget) {
                 launches += 1;
                 remoteRunning = true;
@@ -1158,21 +1409,23 @@ server.listen(Number(flag("--port") ?? 0), "127.0.0.1", () => {
       const fakeServer = `${root}/fake-t3.cjs`;
       yield* fs.makeDirectory(home, { recursive: true });
       yield* fs.writeFileString(fakeServer, FAKE_SERVER);
-      // Runs the remote command locally under the temp HOME, without -l so the test
-      // machine's login profile cannot move HOME. setsid keeps a launched server alive
+      // Runs the remote command locally under the temp HOME. setsid keeps a launched server alive
       // when the command's process group goes away, as sshd would.
       const sshAsLocalShell = ChildProcessSpawner.make((command) => {
         if (command._tag !== "StandardCommand" || command.command !== "ssh") {
           return realSpawner.spawn(command);
         }
         if (command.args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
-        const remoteArgs = command.args.slice(command.args.indexOf("--") + 2);
         return realSpawner.spawn(
           ChildProcess.make(
             "setsid",
-            ["-w", fixtureShell, "-c", remoteArgs.join(" ").replace("sh -l ", "sh ")],
+            ["-w", fixtureShell, "-s", "--", ...remoteScriptArguments(command)],
             {
               ...command.options,
+              stdin: {
+                stream: Stream.make(new TextEncoder().encode(transportedScript(command))),
+                endOnDone: true,
+              },
               env: { PATH: process.env.PATH ?? "", HOME: home },
               extendEnv: false,
             },
@@ -1249,6 +1502,88 @@ server.listen(Number(flag("--port") ?? 0), "127.0.0.1", () => {
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
+  it.live("an update replaces the managed server after its connection is renamed", () =>
+    Effect.gen(function* () {
+      const { fs, home, fakeServer, sshAsLocalShell, stateDir } =
+        yield* prepare("an unrelated process");
+      const updatedServer = `${home}/fake-t3-next.cjs`;
+      yield* fs.writeFileString(updatedServer, FAKE_SERVER);
+      const renamed = { ...target, alias: "devbox-renamed" };
+      const launch = (
+        launchTarget: typeof renamed,
+        nodeScriptPath: string,
+        launcherId: string | null = "a".repeat(32),
+      ) =>
+        SshTunnel.launchOrReuseRemoteServer(
+          launchTarget,
+          undefined,
+          { nodeScriptPath },
+          launcherId,
+        ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, sshAsLocalShell));
+      const runtimePid = fs
+        .readFileString(`${home}/.t3/userdata/server-runtime.json`)
+        .pipe(Effect.map((runtime) => Number(JSON.parse(runtime).pid)));
+      const launchedPids: Array<number> = [];
+      yield* Effect.addFinalizer(() =>
+        Effect.forEach(launchedPids, (pid) =>
+          Effect.sync(() => {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {}
+          }),
+        ),
+      );
+
+      assert.equal((yield* launch(target, fakeServer)).remoteServerKind, "managed");
+      const originalPid = yield* runtimePid;
+      launchedPids.push(originalPid);
+
+      // Another desktop on another version shares the server; it must not take it over.
+      const otherDesktop = yield* launch(
+        { ...target, alias: "devbox-other" },
+        updatedServer,
+        "b".repeat(32),
+      );
+      assert.equal(otherDesktop.remoteServerKind, "external");
+      assert.isTrue(yield* isRunning(originalPid), "another desktop replaced the server");
+
+      const afterRename = yield* launch(renamed, fakeServer);
+      assert.equal(yield* runtimePid, originalPid, "renaming alone restarted the server");
+      assert.equal(
+        yield* fs.readFileString(`${stateDir}/managed`),
+        "external\n",
+        "the old alias still owns the server, so its disconnect would stop it",
+      );
+      const afterUpdate = yield* launch(renamed, updatedServer);
+      launchedPids.push(yield* runtimePid);
+      assert.deepEqual(
+        [afterRename.remoteServerKind, afterUpdate.remoteServerKind],
+        ["managed", "managed"],
+      );
+      assert.isFalse(
+        yield* isRunning(originalPid),
+        "the update left the server launched under the old alias running",
+      );
+
+      // A rename and an update in one reconnect still replace the server.
+      const updatedPid = yield* runtimePid;
+      const renamedAndUpdated = yield* launch({ ...target, alias: "devbox-again" }, fakeServer);
+      launchedPids.push(yield* runtimePid);
+      assert.equal(renamedAndUpdated.remoteServerKind, "managed");
+      assert.isFalse(yield* isRunning(updatedPid), "a rename with an update kept the old server");
+
+      // A server that a launch without an ID started under a reused key is not this desktop's.
+      const again = { ...target, alias: "devbox-again" };
+      process.kill(yield* runtimePid, "SIGKILL");
+      assert.equal((yield* launch(again, fakeServer, null)).remoteServerKind, "managed");
+      const unownedPid = yield* runtimePid;
+      launchedPids.push(unownedPid);
+      const final = yield* launch({ ...target, alias: "devbox-final" }, updatedServer);
+      assert.equal(final.remoteServerKind, "external");
+      assert.isTrue(yield* isRunning(unownedPid), "a stale launcher ID claimed another's server");
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
   it.live.each(staleIds)("disconnecting does not signal %s named by the managed pid file", (kind) =>
     Effect.gen(function* () {
       const { fs, holder, sshAsLocalShell, staleId, stateDir } = yield* prepare(kind);
@@ -1276,3 +1611,135 @@ server.listen(Number(flag("--port") ?? 0), "127.0.0.1", () => {
 // desktop app with network access on) listens on *:<port>. Linux refuses that
 // bind unless both sockets set SO_REUSEPORT, so on Linux the preload adds it to
 // the picker's probe and the holder sets it too.
+
+describe("SSH launch during desktop update", () => {
+  it.effect("archive launcher reuses the replacement without host Node", () =>
+    Effect.gen(function* () {
+      const script = yield* captureLauncherFor({ archiveVersion: "1.2.3" });
+      const result = runLauncher(script, {
+        archive: true,
+        marker: { startedAt: 0, expiresAt: 60_000 },
+        readyAt: 2_000,
+      });
+      assert.deepEqual(result.output, { remotePort: 4888, serverKind: "external" });
+      assert.equal(result.now, 2_000);
+      assert.isFalse(result.events.some((event) => event.startsWith("start ")));
+    }),
+  );
+
+  it.effect.each(["managed", "external"] as const)(
+    "reuses recorded %s server without runtime metadata or an update wait",
+    (recordedKind) =>
+      Effect.gen(function* () {
+        const result = runLauncher(yield* captureLauncher, {
+          marker: { startedAt: 0, expiresAt: 60_000 },
+          recordedKind,
+        });
+        assert.deepEqual(result.output, { remotePort: 5999, serverKind: recordedKind });
+        assert.equal(result.now, 0);
+        assert.isFalse(result.events.some((event) => event.startsWith("kill ")));
+        assert.isFalse(result.events.some((event) => event.startsWith("start ")));
+      }),
+  );
+
+  it.effect.each([
+    ["malformed", "broken"],
+    ["future", { startedAt: 1_000, expiresAt: 61_000 }],
+    ["expired", { startedAt: -60_000, expiresAt: 0 }],
+  ] as const)("preserves %s markers without waiting", ([, marker]) =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, { marker });
+      assert.equal(result.now, 0);
+      assert.isTrue(result.markerExists);
+      assert.deepEqual(result.output, { remotePort: 5999, serverKind: "managed" });
+    }),
+  );
+
+  it.effect("bounds the wait when the host clock jumps back", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {
+        marker: { startedAt: 0, expiresAt: 60_000 },
+        clockJump: -30_000,
+      });
+      assert.deepEqual(result.output, { remotePort: 5999, serverKind: "managed" });
+      assert.isBelow(result.events.filter((event) => event.startsWith("runtime ")).length, 62);
+    }),
+  );
+
+  it.effect("refreshes runtime after readiness removes the marker between polls", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {
+        marker: { startedAt: 0, expiresAt: 60_000 },
+        readyAt: 8_000,
+        clearMarkerOnReady: true,
+      });
+      assert.deepEqual(result.output, { remotePort: 4888, serverKind: "external" });
+      assert.equal(result.now, 8_000);
+      assert.isFalse(result.markerExists);
+      assert.isFalse(result.events.some((event) => event.startsWith("start ")));
+      assert.isFalse(result.events.some((event) => event.startsWith("kill ")));
+    }),
+  );
+
+  it.effect("reuses a runtime published before the first marker read", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {
+        marker: { startedAt: 0, expiresAt: 60_000 },
+        publishAfterFirstRuntimeRead: true,
+      });
+      assert.deepEqual(result.output, { remotePort: 4888, serverKind: "external" });
+      assert.equal(result.now, 0);
+      assert.isFalse(result.events.some((event) => event.startsWith("start ")));
+    }),
+  );
+
+  it.effect("waits across the eight-second installer gap and reuses the replacement server", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {
+        marker: { startedAt: 0, expiresAt: 60_000 },
+        readyAt: 8_000,
+      });
+      assert.deepEqual(result.output, { remotePort: 4888, serverKind: "external" });
+      assert.equal(result.now, 8_000);
+      assert.isFalse(result.events.some((event) => event.startsWith("start ")));
+      assert.isAtLeast(result.events.filter((event) => event.startsWith("runtime ")).length, 2);
+    }),
+  );
+
+  it.effect("keeps waiting while a stale runtime record points at a dead port", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {
+        marker: { startedAt: 0, expiresAt: 60_000 },
+        initialPort: 3773,
+        readyAt: 3_000,
+      });
+      assert.deepEqual(result.output, { remotePort: 4888, serverKind: "external" });
+      assert.equal(result.now, 3_000);
+      assert.isFalse(result.events.some((event) => event.startsWith("start ")));
+    }),
+  );
+
+  it.effect("starts a server when the marker expires without a replacement becoming ready", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {
+        marker: { startedAt: 0, expiresAt: 60_000 },
+      });
+      assert.deepEqual(result.output, { remotePort: 5999, serverKind: "managed" });
+      assert.isAtLeast(result.now, 60_000);
+      assert.isAtMost(result.now, 61_000);
+      assert.isTrue(result.markerExists, "an expired marker is ignored, not deleted");
+      assert.equal(result.events.filter((event) => event.startsWith("start ")).length, 1);
+    }),
+  );
+
+  it.effect("starts immediately without a marker", () =>
+    Effect.gen(function* () {
+      const result = runLauncher(yield* captureLauncher, {});
+      assert.deepEqual(result.output, { remotePort: 5999, serverKind: "managed" });
+      assert.equal(result.now, 0);
+      assert.equal(result.events.filter((event) => event.startsWith("start ")).length, 1);
+      assert.equal(result.events.filter((event) => event.startsWith("marker ")).length, 1);
+      assert.equal(result.events.filter((event) => event.startsWith("runtime ")).length, 1);
+    }),
+  );
+});
