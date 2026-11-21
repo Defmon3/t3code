@@ -431,7 +431,7 @@ export DEBIAN_FRONTEND=noninteractive
 export PATH=/root/.cargo/bin:$PATH
 sed -i 's|http://deb.debian.org/debian$|https://snapshot.debian.org/archive/debian/20261120T000000Z/|; s|http://deb.debian.org/debian-security$|https://snapshot.debian.org/archive/debian-security/20261120T000000Z/|' /etc/apt/sources.list.d/debian.sources
 timeout -k 60s 20m apt-get -o Acquire::Check-Valid-Until=false update
-timeout -k 60s 30m apt-get install -y --no-install-recommends build-essential fakeroot imagemagick libatomic1 libsecret-1-dev patchelf pkg-config python3
+timeout -k 60s 30m apt-get install -y --no-install-recommends build-essential fakeroot imagemagick libasound2 libatomic1 libatspi2.0-0 libgbm1 libgtk-3-0 libnotify4 libnss3 libsecret-1-dev libuuid1 libxss1 libxtst6 patchelf pkg-config python3
 timeout -k 60s 20m curl -fsSLo /tmp/rustup-init https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init
 chmod +x /tmp/rustup-init
 timeout -k 60s 20m /tmp/rustup-init -y --profile minimal --default-toolchain 1.99.1
