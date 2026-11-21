@@ -1,5 +1,6 @@
 import { assert, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type { IssueLink } from "@t3tools/contracts";
 import * as TestClock from "effect/testing/TestClock";
@@ -76,7 +77,7 @@ it.effect.each(["merge", "disable-auto-merge"] as const)(
                 );
               },
             },
-          }),
+          }).pipe(Layer.merge(FileSystem.layerNoop({}))),
         ),
       );
       const cli = yield* GitLabPullRequestCli.make.pipe(
@@ -563,7 +564,7 @@ describe("getChangeRequest linked issues", () => {
     >(() => Effect.succeed([issue(34, false)]));
     return read.pipe(
       Effect.map((detail) => {
-        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
+        expect(detail.linkedIssues?.map((link) => [link.number, link.closesIssue])).toEqual([
           [12, true],
           [34, false],
         ]);
@@ -589,7 +590,7 @@ describe("getChangeRequest linked issues", () => {
     return read.pipe(
       Effect.map((detail) => {
         expect(listCitedIssues.mock.calls[0]?.[0].numbers).toEqual([34]);
-        expect(detail.linkedIssues.map((link) => link.number)).toEqual([34]);
+        expect(detail.linkedIssues?.map((link) => link.number)).toEqual([34]);
       }),
       Effect.provide(
         layerWith({
@@ -616,7 +617,7 @@ describe("getChangeRequest linked issues", () => {
       Effect.map((detail) => {
         expect(listCitedIssues).toHaveBeenCalledTimes(1);
         expect(listCitedIssues.mock.calls[0]?.[0].numbers).toEqual(citedNumbers);
-        expect(detail.linkedIssues.map((link) => link.number)).toEqual(
+        expect(detail.linkedIssues?.map((link) => link.number)).toEqual(
           numbers.slice(0, linkedCount + 10),
         );
         expect(detail.linkedIssuesTruncated).toBe(count - linkedCount > 10);

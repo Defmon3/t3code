@@ -231,13 +231,18 @@ describe("root reopen shortcut", () => {
       state.shellStatus = shellStatus;
       const issuesRef = { environmentId: "remote", threadId: "issues-panel" } as ScopedThreadRef;
       const target = { projectId: "project-1", repository: "owner/repo", number: 42 };
+      const issueTarget = {
+        projectId: target.projectId,
+        tracker: "github",
+        scope: target.repository,
+        key: "42",
+      };
       const surface =
         kind === "issue"
           ? ({
               kind,
-              id: issueSurfaceId({ ...target, provider: "github" }),
-              provider: "github",
-              ...target,
+              id: issueSurfaceId(issueTarget),
+              ...issueTarget,
             } as const)
           : ({ kind, id: pullRequestSurfaceId(target), ...target } as const);
       const store = useClosedViewStore.getState();
@@ -342,14 +347,19 @@ describe("root reopen shortcut", () => {
       expect(useClosedViewStore.getState().entries).toEqual([]);
     },
   );
-  it("forwards address-bar focus and zoom from a focused desktop page", async () => {
+  it("forwards address-bar focus, zoom, and panel new and close from a focused desktop page", async () => {
     setup();
     await using _shortcut = await renderShortcut();
     expect(state.setShortcuts).toHaveBeenLastCalledWith(
       expect.arrayContaining(
-        ["preview.focusUrl", "preview.zoomIn", "preview.zoomOut", "preview.resetZoom"].map(
-          (command) => expect.objectContaining({ command }),
-        ),
+        [
+          "preview.focusUrl",
+          "preview.zoomIn",
+          "preview.zoomOut",
+          "preview.resetZoom",
+          "rightPanel.new",
+          "rightPanel.close",
+        ].map((command) => expect.objectContaining({ command })),
       ),
     );
   });

@@ -11,9 +11,10 @@ import {
   sendApprovalFeedback,
   type ApprovalResponder,
 } from "@t3tools/client-runtime/state/thread-requests";
+import { T, useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import {
@@ -26,7 +27,8 @@ import {
   type ApprovalRejectionDraft,
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -42,12 +44,6 @@ export interface PendingApprovalCardProps {
   readonly onRespond: ApprovalResponder;
 }
 
-const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
-  { decision: "accept", label: "Allow once" },
-  { decision: "acceptForSession", label: "Allow session" },
-  { decision: "decline", label: "Decline" },
-];
-
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const key = approvalRejectionDraftKey(props.threadRef, props.approval);
   return props.approval.requestKind === "command" ? (
@@ -58,6 +54,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
 }
 
 function CommandPendingApprovalCard(props: PendingApprovalCardProps) {
+  const m = useMessages();
   const explanationAtom = approvalExplanationAtom(
     approvalExplanationTarget(props.threadRef, props.approval),
   );
@@ -67,7 +64,7 @@ function CommandPendingApprovalCard(props: PendingApprovalCardProps) {
     <PendingApprovalCardContent
       {...props}
       explanation={{
-        view: approvalExplanationView(result),
+        view: approvalExplanationView(result, m),
         waiting: result.waiting,
         refresh: refreshExplanation,
       }}
@@ -84,16 +81,24 @@ function PendingApprovalCardContent(
     };
   },
 ) {
+  const gt = useGT();
+  const m = useMessages();
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const preferencesReady = AsyncResult.isSuccess(preferences) && !preferences.waiting;
   const rememberedDuration = AsyncResult.isSuccess(preferences)
     ? (preferences.value.rememberedHookApprovalDuration ??
       DEFAULT_CLIENT_SETTINGS.rememberedHookApprovalDuration)
     : DEFAULT_CLIENT_SETTINGS.rememberedHookApprovalDuration;
   const bypass = props.approval.bypass;
-  const options: ReadonlyArray<ProviderApprovalOption> =
-    props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
+  const options: ReadonlyArray<ProviderApprovalOption> = props.approval.options ?? [
+    { decision: "accept", label: gt("Allow once") },
+    { decision: "acceptForSession", label: gt("Allow session") },
+    {
+      decision: "decline",
+      label: gt("Decline", { $context: "verb, rejects the approval request" }),
+    },
+  ];
   const warning = options.find((option) => option.warning)?.warning;
   const canRespond = props.approval.responseCapability === "live";
   const disabled =
@@ -137,12 +142,12 @@ function PendingApprovalCardContent(
             tintColorClassName="accent-danger-foreground"
           />
           <Text className="min-w-0 flex-1 font-t3-bold text-sm text-danger-foreground">
-            BYPASS ATTEMPT
+            <T>BYPASS ATTEMPT</T>
           </Text>
         </View>
       ) : (
         <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-          Approval needed
+          <T>Approval needed</T>
         </Text>
       )}
       <Text className="font-t3-bold text-lg text-foreground">
@@ -151,10 +156,13 @@ function PendingApprovalCardContent(
       {bypass ? (
         <View className="gap-1">
           <Text selectable className="font-t3-bold text-sm text-danger-foreground">
-            Rule: {bypass.rule}
+            {gt("Rule: {rule}", { rule: bypass.rule })}
           </Text>
           <Text selectable className="text-sm text-foreground">
-            Technique: {bypass.technique} · Tier {bypass.tier}
+            {gt("Technique: {technique} · Tier {tier}", {
+              technique: bypass.technique,
+              tier: bypass.tier,
+            })}
           </Text>
           <Text selectable className="text-sm leading-normal text-foreground">
             {bypass.reasoning}
@@ -169,7 +177,7 @@ function PendingApprovalCardContent(
               : "max-h-24 rounded-lg border border-border bg-card"
           }
           nestedScrollEnabled
-          accessibilityLabel="Command"
+          accessibilityLabel={gt("Command")}
           showsVerticalScrollIndicator
         >
           {bypass ? (
@@ -185,14 +193,18 @@ function PendingApprovalCardContent(
                       : "text-foreground",
                   )}
                 >
-                  Step {index + 1}
-                  {step.triggered ? " · TRIGGERED" : ""}: {step.command}
+                  {step.triggered
+                    ? gt("Step {step} · TRIGGERED: {command}", {
+                        step: index + 1,
+                        command: step.command,
+                      })
+                    : gt("Step {step}: {command}", { step: index + 1, command: step.command })}
                 </Text>
               ))}
             </View>
           ) : (
             <Text selectable className="p-3 font-mono text-base leading-normal text-foreground">
-              {props.approval.command ?? props.approval.detail ?? "Command details unavailable"}
+              {props.approval.command ?? props.approval.detail ?? gt("Command details unavailable")}
             </Text>
           )}
         </ScrollView>
@@ -204,30 +216,35 @@ function PendingApprovalCardContent(
       {bypass ? (
         <View className="gap-1">
           <Text selectable className="text-xs text-foreground">
-            Runtime: {bypass.runtime} · Model: {bypass.model}
+            {gt("Runtime: {runtime} · Model: {model}", {
+              runtime: bypass.runtime,
+              model: bypass.model,
+            })}
           </Text>
           {commandExpanded ? (
             <>
               <Text selectable className="text-xs text-foreground">
-                Session: {bypass.sessionId}
+                {gt("Session: {value}", { value: bypass.sessionId })}
               </Text>
               <Text selectable className="text-xs text-foreground">
-                Thread: {bypass.threadTitle}
+                {gt("Thread: {value}", { value: bypass.threadTitle })}
               </Text>
               <Text selectable className="text-xs text-foreground">
-                Thread ID: {bypass.threadId}
+                {gt("Thread ID: {value}", { value: bypass.threadId })}
               </Text>
             </>
           ) : (
             <Text className="text-xs text-foreground-secondary">
-              Expand to see session and thread details.
+              <T>Expand to see session and thread details.</T>
             </Text>
           )}
         </View>
       ) : null}
       {isCommand && props.approval.cwd ? (
         <View className="gap-1">
-          <Text className="font-t3-bold text-sm text-foreground">Working directory</Text>
+          <Text className="font-t3-bold text-sm text-foreground">
+            <T>Working directory</T>
+          </Text>
           <Text selectable className="font-mono text-sm text-foreground">
             {props.approval.cwd}
           </Text>
@@ -250,19 +267,21 @@ function PendingApprovalCardContent(
           onPress={() => setExplanationOpen((open) => !open)}
         >
           <Text className="font-t3-bold text-xs text-foreground-secondary underline">
-            {FULL_ACCESS_OVERRIDE_QUESTION}
+            {m(FULL_ACCESS_OVERRIDE_QUESTION)}
           </Text>
           {explanationOpen ? (
             <Text className="mt-1 font-sans text-xs leading-normal text-foreground-muted">
-              {fullAccessOverrideExplanation(props.approval.fullAccessOverride)}
+              {fullAccessOverrideExplanation(props.approval.fullAccessOverride, m)}
             </Text>
           ) : null}
         </Pressable>
       ) : null}
       {!canRespond ? (
         <Text className="font-sans text-sm leading-5 text-foreground-muted">
-          The provider process for this request is no longer available. Interrupt or restart the run
-          to continue.
+          <T>
+            The provider process for this request is no longer available. Interrupt or restart the
+            run to continue.
+          </T>
         </Text>
       ) : null}
       {warning ? (
@@ -277,12 +296,14 @@ function PendingApprovalCardContent(
       ) : null}
       {canRejectWithReason && reason !== null ? (
         <View className="gap-2">
-          <Text className="font-t3-bold text-sm text-foreground">Reason for rejection</Text>
+          <Text className="font-t3-bold text-sm text-foreground">
+            <T>Reason for rejection</T>
+          </Text>
           <AppTextInput
             autoFocus={draft.status === "manual"}
             multiline
-            accessibilityLabel="Reason for rejection"
-            placeholder="Tell the agent what to change"
+            accessibilityLabel={gt("Reason for rejection")}
+            placeholder={gt("Tell the agent what to change")}
             textAlignVertical="top"
             value={reason}
             editable={!responseDisabled}
@@ -293,12 +314,12 @@ function PendingApprovalCardContent(
           />
           {feedbackFailed ? (
             <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
-              Rejection failed. Your reason is kept. Try again.
+              <T>Rejection failed. Your reason is kept. Try again.</T>
             </Text>
           ) : null}
           <View className="flex-row flex-wrap gap-2.5">
             <Button
-              label="Cancel"
+              label={gt("Cancel")}
               tone="secondary"
               disabled={props.respondingApprovalId === props.approval.requestId}
               onPress={() => {
@@ -307,7 +328,7 @@ function PendingApprovalCardContent(
               }}
             />
             <Button
-              label="Reject with reason"
+              label={gt("Reject with reason")}
               tone="danger"
               loading={props.respondingApprovalId === props.approval.requestId}
               disabled={responseDisabled || !reason.trim()}
@@ -319,7 +340,7 @@ function PendingApprovalCardContent(
       <View className="gap-2">
         {isCommand ? (
           <Button
-            label={commandExpanded ? "Collapse" : "Expand"}
+            label={commandExpanded ? gt("Collapse") : gt("Expand")}
             tone="secondary"
             expanded={commandExpanded}
             onPress={() => setCommandExpanded((expanded) => !expanded)}
@@ -331,7 +352,7 @@ function PendingApprovalCardContent(
             <View key={option.decision} className="flex-row items-center gap-2.5">
               <View className="min-w-0 flex-1">
                 <Button
-                  label={hookApprovalDurations[rememberedDuration].approvalLabel}
+                  label={m(hookApprovalDurations[rememberedDuration].approvalLabel)}
                   tone="secondary"
                   disabled={responseDisabled || !preferencesReady}
                   onPress={() => {
@@ -347,10 +368,10 @@ function PendingApprovalCardContent(
                 />
               </View>
               <Menu
-                title="Approval duration"
+                title={gt("Approval duration")}
                 actions={Object.values(hookApprovalDurations).map((choice) => ({
                   id: choice.duration,
-                  title: choice.label,
+                  title: m(choice.label),
                   attributes: { disabled: responseDisabled || !preferencesReady },
                 }))}
                 onPressAction={({ nativeEvent }) => {
@@ -358,7 +379,7 @@ function PendingApprovalCardContent(
                     (value) => value.duration === nativeEvent.event,
                   );
                   if (!responseDisabled && preferencesReady && choice) {
-                    savePreferences({ rememberedHookApprovalDuration: choice.duration });
+                    void savePreferences({ rememberedHookApprovalDuration: choice.duration });
                     void props.onRespond(
                       props.approval.requestId,
                       "acceptForSession",
@@ -370,7 +391,7 @@ function PendingApprovalCardContent(
               >
                 <Button
                   label="▾"
-                  accessibilityLabel="Approval duration"
+                  accessibilityLabel={gt("Approval duration")}
                   disabled={responseDisabled || !preferencesReady}
                   onPress={() => {}}
                 />
@@ -379,7 +400,7 @@ function PendingApprovalCardContent(
           ) : (
             <Button
               key={option.decision}
-              label={option.label}
+              label={m(option.label)}
               tone={
                 option.decision === "accept"
                   ? "primary"
@@ -395,7 +416,7 @@ function PendingApprovalCardContent(
         )}
         {canRejectWithReason && reason === null ? (
           <Button
-            label="Reject with reason"
+            label={gt("Reject with reason")}
             tone="secondary"
             expanded={reason !== null}
             disabled={responseDisabled}
@@ -409,7 +430,7 @@ function PendingApprovalCardContent(
       </View>
       {!props.canOperateThread ? (
         <Text className="font-sans text-xs text-foreground-muted">
-          This connection cannot respond to approvals.
+          <T>This connection cannot respond to approvals.</T>
         </Text>
       ) : null}
     </View>
@@ -425,9 +446,12 @@ function CommandApprovalExplanation({
   readonly waiting: boolean;
   readonly onRefresh: () => void;
 }) {
+  const gt = useGT();
   return (
     <View className="gap-2 border-t border-border pt-3" accessibilityLiveRegion="polite">
-      <Text className="font-t3-bold text-sm text-foreground">AI explanation</Text>
+      <Text className="font-t3-bold text-sm text-foreground">
+        <T>AI explanation</T>
+      </Text>
       {explanation.status === "ready" ? (
         <>
           <Text
@@ -440,7 +464,9 @@ function CommandApprovalExplanation({
                   : "text-warning-foreground",
             )}
           >
-            AI judgement: {approvalJudgementLabels[explanation.judgement.verdict]}
+            {gt("AI judgement: {verdict}", {
+              verdict: approvalJudgementLabels[explanation.judgement.verdict],
+            })}
           </Text>
           <Text className="font-sans text-sm leading-normal text-foreground">
             {explanation.judgement.reason}
@@ -478,7 +504,7 @@ function CommandApprovalExplanation({
       )}
       {explanation.status === "error" ? (
         <Button
-          label="Retry explanation"
+          label={gt("Retry explanation")}
           tone="secondary"
           disabled={waiting}
           loading={waiting}

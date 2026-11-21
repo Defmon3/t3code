@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@t3tools/client-runtime/source-control-clients";
 import * as Schema from "effect/Schema";
+import { decodeMsg } from "gt-react";
 
 import {
   filterAvailableSettingsSearchItems,
@@ -16,7 +17,6 @@ import {
   searchSettings,
   SETTINGS_NAV_GROUPS,
   SETTINGS_SEARCH_ITEMS,
-  SETTINGS_SECTION_LABELS,
   sourceControlHostSearchItems,
   sourceControlHostSettingsSearchId,
   type SettingsSearchItem,
@@ -59,24 +59,6 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
-  it.each(["Gemini", "Wonton", "approval explanation", "approval API key"])(
-    "finds the environment approval explanation key with %s",
-    (query) => {
-      expect(searchSettings(query)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "approval-explanation-api-key",
-            to: "/settings/threads",
-            scope: "environment",
-          }),
-        ]),
-      );
-      expect(getSettingsSearchTargetScope("approval-explanation-api-key")?.scope).toBe(
-        "environment",
-      );
-    },
-  );
-
   it("matches titles, sections, and remembered setting details", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
@@ -97,6 +79,12 @@ describe("searchSettings", () => {
   it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {
     expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).not.toContain("/settings/secrets");
     expect(searchSettings("1password").map((item) => item.to)).not.toContain("/settings/secrets");
+  });
+
+  it("finds where subagents and side chats open by any of its names", () => {
+    for (const query of ["side panel", "subagent", "side chat", "linked thread", "middle click"]) {
+      expect(searchSettings(query).map((item) => item.id)).toContain("side-thread-open-target");
+    }
   });
 
   it("finds the Scheduled tasks page", () => {
@@ -252,62 +240,6 @@ describe("searchSettings", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
-
-  it("routes Linear issue tracking to source control", () => {
-    expect(SETTINGS_SECTION_LABELS["/settings/source-control"]).toBe("Source control");
-    expect(Object.keys(SETTINGS_SECTION_LABELS)).not.toContain("/settings/issue-tracking");
-    expect(searchSettings("issue tracking")[0]).toMatchObject({
-      id: "linear",
-      to: "/settings/source-control",
-    });
-    expect(searchSettings("Linear")[0]).toMatchObject({
-      id: "linear",
-      to: "/settings/source-control",
-    });
-  });
-});
-
-describe("source control host search items", () => {
-  const definition = {
-    ...UNKNOWN_SOURCE_CONTROL_CLIENT,
-    kind: SourceControlProviderKind.make("example"),
-    label: "Example",
-    searchKeywords: ["sample"],
-    settings: makeProviderSettingsSchema({ apiToken: Schema.String }),
-  };
-
-  it("lists a host by its label, its keywords, and its settings fields", () => {
-    const items = sourceControlHostSearchItems([UNKNOWN_SOURCE_CONTROL_CLIENT, definition]);
-    expect(items.map((item) => item.title)).toEqual(["Example credentials"]);
-    expect(searchSettings("sample apitoken", items).map((item) => item.id)).toEqual([
-      sourceControlHostSettingsSearchId("example"),
-    ]);
-  });
-
-  it("lists a host with credentials by its accounts, token and CLI", () => {
-    const items = sourceControlHostSearchItems([
-      {
-        ...definition,
-        credentials: {
-          cliName: "ex",
-          cliLabel: "Example CLI",
-          loginCommand: "ex login",
-          tokenEnvVar: "EX_TOKEN",
-          tokenAccess: "access",
-          newTokenUrl: (host: string) => `https://${host}/tokens`,
-        },
-      },
-    ]);
-    expect(items.map((item) => item.title)).toEqual(["Example accounts and token"]);
-    expect(searchSettings("ex switch accounts", items)).toHaveLength(1);
-  });
-
-  it("finds the built-in hosts by their own words", () => {
-    expect(searchSettings("codeberg").map((item) => item.id)).toContain("source-control");
-    expect(searchSettings("ghes").map((item) => item.id)).toContain(
-      sourceControlHostSettingsSearchId("github"),
-    );
-  });
 });
 
 describe("settings search targets", () => {
@@ -399,6 +331,50 @@ describe("auto-settlement search availability", () => {
     ).toBe(true);
   });
 });
+
+describe("source control host search items", () => {
+  const definition = {
+    ...UNKNOWN_SOURCE_CONTROL_CLIENT,
+    kind: SourceControlProviderKind.make("example"),
+    label: "Example",
+    searchKeywords: ["sample"],
+    settings: makeProviderSettingsSchema({ apiToken: Schema.String }),
+  };
+
+  it("lists a host by its label, its keywords, and its settings fields", () => {
+    const items = sourceControlHostSearchItems([UNKNOWN_SOURCE_CONTROL_CLIENT, definition]);
+    expect(items.map((item) => decodeMsg(item.title))).toEqual(["Example credentials"]);
+    expect(searchSettings("sample apitoken", items).map((item) => item.id)).toEqual([
+      sourceControlHostSettingsSearchId("example"),
+    ]);
+  });
+
+  it("lists a host with credentials by its accounts, token and CLI", () => {
+    const items = sourceControlHostSearchItems([
+      {
+        ...definition,
+        credentials: {
+          cliName: "ex",
+          cliLabel: "Example CLI",
+          loginCommand: "ex login",
+          tokenEnvVar: "EX_TOKEN",
+          tokenAccess: "access",
+          newTokenUrl: (host) => `https://${host}/tokens`,
+        },
+      },
+    ]);
+    expect(items.map((item) => decodeMsg(item.title))).toEqual(["Example accounts and token"]);
+    expect(searchSettings("ex switch accounts", items)).toHaveLength(1);
+  });
+
+  it("finds the built-in hosts by their own words", () => {
+    expect(searchSettings("codeberg").map((item) => item.id)).toContain("source-control");
+    expect(searchSettings("ghes").map((item) => item.id)).toContain(
+      sourceControlHostSettingsSearchId("github"),
+    );
+  });
+});
+
 describe("movedSettingsPath", () => {
   it("sends old links to the page their row moved to", () => {
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(

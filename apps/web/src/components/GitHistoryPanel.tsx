@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import { useGT } from "gt-react";
 import { AsyncResult } from "effect/reactivity";
 import { toastManager } from "./ui/toast";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -217,6 +218,7 @@ function useGitHistoryModel(
 }
 
 function GitHistoryPanelContent(props: GitHistoryPanelProps) {
+  const gt = useGT();
   const panelRef = useRef<HTMLElement | null>(null);
   const [fallbackStateStore] = useState(createGitHistoryPanelStore);
   const stateStore = props.stateStore ?? fallbackStateStore;
@@ -294,7 +296,10 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     });
     setSyncPendingAction(null);
     if (AsyncResult.isSuccess(result)) {
-      toastManager.add({ type: "success", title: `Git ${request.input.action} completed` });
+      toastManager.add({
+        type: "success",
+        title: gt("Git {action} completed", { action: request.input.action }),
+      });
       return;
     }
     const error = String(Cause.squash(result.cause));
@@ -315,7 +320,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     }
     toastManager.add({
       type: "error",
-      title: `Git ${request.input.action} failed`,
+      title: gt("Git {action} failed", { action: request.input.action }),
       description: error,
     });
   };
@@ -392,7 +397,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
   const isFetchingNextPage = pagination.isFetchingNextPage;
 
   const failed = pagination.failed;
-  const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause) : null;
+  const error = failed?._tag === "Failure" ? queryErrorMessage(failed.cause, gt) : null;
   const isPending =
     refSelectionError === null &&
     (selectedRevision === undefined || results.some((result) => result.waiting));
@@ -618,7 +623,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
     <section
       ref={panelRef}
       className="@container/history-list flex size-full min-h-0 min-w-0 flex-col bg-background"
-      aria-label="Git history"
+      aria-label={gt("Git history")}
     >
       <header
         className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3 py-2"
@@ -628,10 +633,10 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           <Badge
             variant="outline"
             className="w-full min-w-0 max-w-64"
-            title={selectedRevision?.label ?? "All refs"}
+            title={selectedRevision?.label ?? gt("All refs")}
           >
             <GitBranchIcon className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate">{selectedRevision?.label ?? "All refs"}</span>
+            <span className="truncate">{selectedRevision?.label ?? gt("All refs")}</span>
           </Badge>
           {history.length > 0 ? (
             <span className="hidden text-2xs tabular-nums text-muted-foreground min-[440px]:inline">
@@ -650,7 +655,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
               aria-expanded={mobilePane === "refs"}
               className="shrink-0"
             >
-              <GitBranchIcon className="size-3.5" /> Branches
+              <GitBranchIcon className="size-3.5" /> {gt("Branches")}
             </Button>
             <Button
               ref={detailsButtonRef}
@@ -662,7 +667,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
               aria-expanded={mobilePane === "details"}
               className="shrink-0"
             >
-              <FileIcon className="size-3.5" /> Details
+              <FileIcon className="size-3.5" /> {gt("Details")}
             </Button>
           </>
         ) : null}
@@ -671,7 +676,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           size="icon-xs"
           onClick={refresh}
           disabled={isPending}
-          aria-label="Refresh Git history"
+          aria-label={gt("Refresh Git history")}
           className="shrink-0"
         >
           <RefreshCwIcon className={cn("size-3.5", isPending && "animate-spin")} />
@@ -720,13 +725,13 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
               <>
                 <p className="text-xs text-destructive">{refSelectionError}</p>
                 <Button size="sm" variant="outline" onClick={onRetryRefs}>
-                  Retry refs
+                  {gt("Retry refs")}
                 </Button>
               </>
             ) : (
               <div className="flex items-center text-xs text-muted-foreground">
                 <RefreshCwIcon className="mr-2 size-3.5 animate-spin" />
-                <span>Loading history…</span>
+                <span>{gt("Loading history…")}</span>
               </div>
             )}
           </div>
@@ -735,23 +740,23 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <p className="text-xs text-destructive">{error}</p>
           <Button size="sm" variant="outline" onClick={refresh}>
-            Retry
+            {gt("Retry")}
           </Button>
         </div>
       ) : refPaginationError && history.length === 0 ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <p className="text-xs text-destructive">{refPaginationError}</p>
           <Button size="sm" variant="outline" onClick={onRetryRefs}>
-            Retry refs
+            {gt("Retry refs")}
           </Button>
         </div>
       ) : !isRepo ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
-          This folder is not a Git repository.
+          {gt("This folder is not a Git repository.")}
         </div>
       ) : history.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
-          This repository has no commits yet.
+          {gt("This repository has no commits yet.")}
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1">
@@ -769,7 +774,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           ) : null}
           {isWideLayout ? (
             <PaneResizeHandle
-              label="Resize branches pane"
+              label={gt("Resize branches pane")}
               value={refsPaneWidth}
               min={REFS_PANE_MIN_WIDTH}
               max={REFS_PANE_MAX_WIDTH}
@@ -810,8 +815,8 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                     event.preventDefault();
                     setFilter("");
                   }}
-                  placeholder="Text or hash"
-                  aria-label="Filter Git history"
+                  placeholder={gt("Text or hash")}
+                  aria-label={gt("Filter Git history")}
                 />
                 {filter.length > 0 ? (
                   <Button
@@ -819,7 +824,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                     size="icon-xs"
                     variant="ghost-muted"
                     className="absolute top-1/2 right-3 -translate-y-1/2"
-                    aria-label="Clear Git history search"
+                    aria-label={gt("Clear Git history search")}
                     onClick={() => {
                       setFilter("");
                       searchInputRef.current?.focus();
@@ -833,24 +838,24 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                 <div className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-2xs text-destructive">
                   <span className="truncate">{error}</span>
                   <Button size="xs" variant="ghost" className="shrink-0" onClick={refresh}>
-                    Retry
+                    {gt("Retry")}
                   </Button>
                 </div>
               ) : null}
               <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/20 text-3xs font-medium text-muted-foreground">
                 <div className="shrink-0" style={{ width: graphColumnWidth(laneCount) }} />
                 <div className="grid min-w-0 flex-1 grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_minmax(5rem,7rem)_8.5rem_5rem] gap-x-3 pr-3 @max-[720px]:grid-cols-[minmax(10rem,1fr)_5rem]">
-                  <span>Subject</span>
+                  <span>{gt("Subject")}</span>
                   <span className="@max-[720px]:hidden" />
-                  <span className="@max-[720px]:hidden">Author</span>
-                  <span className="@max-[720px]:hidden">Date</span>
-                  <span>Hash</span>
+                  <span className="@max-[720px]:hidden">{gt("Author")}</span>
+                  <span className="@max-[720px]:hidden">{gt("Date")}</span>
+                  <span>{gt("Hash")}</span>
                 </div>
               </div>
               {filteredRows.length === 0 ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground">
                   <span className={error ? "text-destructive" : undefined}>
-                    {error ?? "No loaded commits match this filter."}
+                    {error ?? gt("No loaded commits match this filter.")}
                   </span>
                   {error || hasMore ? (
                     <Button
@@ -860,10 +865,10 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                       disabled={isFetchingNextPage}
                     >
                       {isFetchingNextPage
-                        ? "Searching older commits…"
+                        ? gt("Searching older commits…")
                         : error
-                          ? "Retry older commits"
-                          : "Search older commits"}
+                          ? gt("Retry older commits")
+                          : gt("Search older commits")}
                     </Button>
                   ) : null}
                 </div>
@@ -897,7 +902,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                     onClick={loadNext}
                     disabled={isFetchingNextPage}
                   >
-                    {isFetchingNextPage ? "Loading more…" : "Load more"}
+                    {isFetchingNextPage ? gt("Loading more…") : gt("Load more")}
                   </Button>
                 </div>
               ) : null}
@@ -905,7 +910,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
           </div>
           {isWideLayout ? (
             <PaneResizeHandle
-              label="Resize commit details pane"
+              label={gt("Resize commit details pane")}
               value={detailsPaneWidth}
               min={DETAILS_PANE_MIN_WIDTH}
               max={DETAILS_PANE_MAX_WIDTH}
@@ -959,7 +964,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
       {!isWideLayout && mobilePane === "refs" ? (
         <Sheet open onOpenChange={(open) => !open && setMobilePane(null)}>
           <SheetPopup side="left" showCloseButton={false} className="w-full max-w-none">
-            <SheetTitle className="sr-only">Branches and tags</SheetTitle>
+            <SheetTitle className="sr-only">{gt("Branches and tags")}</SheetTitle>
             <GitRefsPane
               id="git-history-refs-panel"
               className="!w-full !min-w-0 !max-w-none !flex-1 !border-r-0 !bg-background"
@@ -972,7 +977,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
       {!isWideLayout && mobilePane === "details" ? (
         <Sheet open onOpenChange={(open) => !open && setMobilePane(null)}>
           <SheetPopup side="right" showCloseButton className="w-full max-w-none">
-            <SheetTitle className="sr-only">Commit details</SheetTitle>
+            <SheetTitle className="sr-only">{gt("Commit details")}</SheetTitle>
             <CommitDetailsPane
               id="git-history-details-panel"
               className="!w-full !min-w-0 !max-w-none !flex-1 !border-l-0"
@@ -1002,14 +1007,20 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Push to default branch?</AlertDialogTitle>
+            <AlertDialogTitle>{gt("Push to default branch?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Push {defaultBranchPushConfirmation?.input.refName} to{" "}
-              {defaultBranchPushConfirmation?.upstreamName}.
+              {defaultBranchPushConfirmation
+                ? gt("Push {ref} to {upstream}.", {
+                    ref: defaultBranchPushConfirmation.input.refName,
+                    upstream: defaultBranchPushConfirmation.upstreamName,
+                  })
+                : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               onClick={() => {
                 if (
@@ -1022,7 +1033,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
                 setDefaultBranchPushConfirmation(null);
               }}
             >
-              Push
+              {gt("Push")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -1035,13 +1046,15 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Git sync needs resolution</AlertDialogTitle>
+            <AlertDialogTitle>{gt("Git sync needs resolution")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Open a draft task for an agent to resolve this Git conflict.
+              {gt("Open a draft task for an agent to resolve this Git conflict.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               onClick={() => {
                 if (solvePrompt) props.onSolveGitSync?.(solvePrompt);
@@ -1049,7 +1062,7 @@ function GitHistoryPanelContent(props: GitHistoryPanelProps) {
               }}
             >
               <HammerIcon className="size-3.5" />
-              Solve
+              {gt("Solve")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

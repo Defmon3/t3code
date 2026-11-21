@@ -3,16 +3,15 @@ import {
   ComposerContextId,
   EventId,
   ProjectId,
+  IssueTrackerKind,
   ProviderInstanceId,
   type OrchestrationMessageContext,
   ThreadId,
-  ThreadIssueLinks,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 
@@ -25,7 +24,6 @@ import * as ProjectionStore from "../ProjectionStore.ts";
 
 import { layerReaderDatabase, traceSqlRouting } from "../../persistence/testkit/SqliteRouting.ts";
 
-const encodeIssueLinks = Schema.encodeEffect(Schema.fromJsonString(ThreadIssueLinks));
 const layerDatabase = layerReaderDatabase;
 const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
 const layerProjectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(layerDatabase));
@@ -580,7 +578,7 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
             '2026-01-04T00:00:00.000Z', NULL)
       `;
 
-      const issues = [
+      const legacyIssues = [
         {
           provider: "github",
           repository: "pingdotgg/t3code",
@@ -589,7 +587,21 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
           title: "Saved issue",
         },
       ];
-      const issueLinksJson = yield* encodeIssueLinks(issues);
+      const issueLinksJson = JSON.stringify(legacyIssues);
+      const issues = [
+        {
+          tracker: IssueTrackerKind.make("github"),
+          host: "github.com",
+          scope: "pingdotgg/t3code",
+          key: "12",
+          displayKey: "#12",
+          projectId: ProjectId.make("project:legacy-import"),
+          source: "manual" as const,
+          linkedAt: "2026-01-04T00:00:00.000Z",
+          url: "https://github.com/pingdotgg/t3code/issues/12",
+          title: "Saved issue",
+        },
+      ];
       yield* sql`UPDATE projection_threads SET issue_links_json = ${issueLinksJson} WHERE thread_id = ${threadId}`;
       assert.equal(yield* importer.pendingThreadCount, 1);
       const shellImport = yield* importer.reconcileShells;
@@ -848,7 +860,7 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
           'az'
         )
       `;
-      const issues = [
+      const legacyIssues = [
         {
           provider: "github",
           repository: "pingdotgg/t3code",
@@ -857,7 +869,21 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
           title: "Saved issue",
         },
       ];
-      const issueLinksJson = yield* encodeIssueLinks(issues);
+      const issueLinksJson = JSON.stringify(legacyIssues);
+      const issues = [
+        {
+          tracker: IssueTrackerKind.make("github"),
+          host: "github.com",
+          scope: "pingdotgg/t3code",
+          key: "12",
+          displayKey: "#12",
+          projectId: ProjectId.make("project:legacy-metadata-upgrade"),
+          source: "manual" as const,
+          linkedAt: "2026-01-01T00:00:00.000Z",
+          url: "https://github.com/pingdotgg/t3code/issues/12",
+          title: "Saved issue",
+        },
+      ];
       yield* sql`UPDATE projection_threads SET issue_links_json = ${issueLinksJson} WHERE thread_id = ${threadId}`;
       yield* importer.reconcileShells;
       yield* maintenance.rebuild;

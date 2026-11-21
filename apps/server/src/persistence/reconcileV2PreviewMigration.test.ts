@@ -94,6 +94,18 @@ const nightlyMigrations = [
   ["AuthConnectDeniedRequests", AuthConnectDeniedRequests],
 ] as const;
 
+const expectedWorkItemLink = (issueUrl: string, pullRequestUrl: string) => ({
+  issue_provider: "github",
+  issue_url: issueUrl,
+  issue_display_key: "#1",
+  issue_title: "Issue",
+  pull_request_provider: "github",
+  pull_request_url: pullRequestUrl,
+  pull_request_repository: "a/b",
+  pull_request_number: 2,
+  pull_request_title: "Fix",
+});
+
 describe("V2 preview upgrade", () => {
   it.effect.each([2, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])(
     "rebases a valid nightly migration prefix of length %s",
@@ -160,7 +172,6 @@ describe("V2 preview upgrade", () => {
         const installedHistory =
           yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
         yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
-        const links = yield* sql`SELECT * FROM work_item_links`;
 
         assert.deepStrictEqual(
           yield* runMigrations(),
@@ -170,7 +181,9 @@ describe("V2 preview upgrade", () => {
           yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${installedId} ORDER BY migration_id`,
           installedHistory,
         );
-        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, [
+          expectedWorkItemLink("issue", "pr"),
+        ]);
         assert.deepStrictEqual(
           yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
             AND name = 'orchestration_v2_projection_turn_items_stop_request_idx'`,
@@ -213,42 +226,10 @@ describe("V2 preview upgrade", () => {
         migrationManifest.filter(([id]) => id <= 60).map(([id, name]) => ({ id, name })),
       );
 
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [61, "ProjectSkillShortcuts"],
-        [62, "ProjectionThreadIssues"],
-        [63, "WorkItemLinks"],
-        [64, "PullRequestReviewGuides"],
-        [65, "ThreadFailureLookupIndex"],
-        [66, "DropUnusedV1Projections"],
-        [67, "CanonicalizeThreadPullRequestLinks"],
-        [68, "CodexUsageNativeTurnIndex"],
-        [69, "RepairClientSettlementTimestamps"],
-        [70, "WebhookDedupe"],
-        [71, "ShellStopRequestIndex"],
-        [72, "ThreadMessageSearch"],
-        [73, "PeerLinks"],
-        [74, "PeerLinkFence"],
-        [75, "WaitingLinkRequestIndex"],
-        [76, "ActiveTurnItemIndexes"],
-        [77, "ExcludeAttachmentPlaceholdersFromSearch"],
-        [78, "SubagentDeliveryState"],
-        [79, "ProjectionProjectsPinArchive"],
-        [80, "RepairBooleanSettledOverride"],
-        [81, "DropOrchestrationEventCorrelationIndex"],
-        [82, "DelegatedRecoveryIndexes"],
-        [83, "ScheduledTaskThreadMode"],
-        [84, "ProjectionMessageSearchText"],
-        [85, "TurnItemConversationIndex"],
-        [86, "CommandReadIndexes"],
-        [87, "LastExecutedRunIndex"],
-        [88, "TurnItemCounts"],
-        [89, "QueuedTurnInputIndex"],
-        [90, "ProjectionProjectsCustomTitle"],
-        [91, "TurnItemTypeStatusIndex"],
-        [92, "ShellThreadReadIndexes"],
-        [93, "AuthConnectDevices"],
-        [94, "AuthConnectDeniedRequests"],
-      ]);
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id >= 61),
+      );
       assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
@@ -282,50 +263,10 @@ describe("V2 preview upgrade", () => {
       const sql = yield* SqlClient.SqlClient;
       yield* seedPreview;
       const imports = yield* sql`SELECT * FROM orchestration_v2_legacy_imports`;
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [53, "PullRequestFilesViewed"],
-        [54, "ProjectionThreadsAutoSettleDisabledAt"],
-        [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ScheduledTaskWebhooks"],
-        [58, "WebhookRelayDeliveries"],
-        [59, "McpAppModelContext"],
-        [60, "ThreadSnapshotWindowIndexes"],
-        [61, "ProjectSkillShortcuts"],
-        [62, "ProjectionThreadIssues"],
-        [63, "WorkItemLinks"],
-        [64, "PullRequestReviewGuides"],
-        [65, "ThreadFailureLookupIndex"],
-        [66, "DropUnusedV1Projections"],
-        [67, "CanonicalizeThreadPullRequestLinks"],
-        [68, "CodexUsageNativeTurnIndex"],
-        [69, "RepairClientSettlementTimestamps"],
-        [70, "WebhookDedupe"],
-        [71, "ShellStopRequestIndex"],
-
-        [72, "ThreadMessageSearch"],
-        [73, "PeerLinks"],
-        [74, "PeerLinkFence"],
-        [75, "WaitingLinkRequestIndex"],
-        [76, "ActiveTurnItemIndexes"],
-        [77, "ExcludeAttachmentPlaceholdersFromSearch"],
-        [78, "SubagentDeliveryState"],
-        [79, "ProjectionProjectsPinArchive"],
-        [80, "RepairBooleanSettledOverride"],
-        [81, "DropOrchestrationEventCorrelationIndex"],
-        [82, "DelegatedRecoveryIndexes"],
-        [83, "ScheduledTaskThreadMode"],
-        [84, "ProjectionMessageSearchText"],
-        [85, "TurnItemConversationIndex"],
-        [86, "CommandReadIndexes"],
-        [87, "LastExecutedRunIndex"],
-        [88, "TurnItemCounts"],
-        [89, "QueuedTurnInputIndex"],
-        [90, "ProjectionProjectsCustomTitle"],
-        [91, "TurnItemTypeStatusIndex"],
-        [92, "ShellThreadReadIndexes"],
-        [93, "AuthConnectDevices"],
-        [94, "AuthConnectDeniedRequests"],
-      ]);
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id >= 53 && id !== 55),
+      );
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -400,49 +341,10 @@ describe("V2 preview upgrade", () => {
       );
       assert.strictEqual((yield* sql`SELECT * FROM orchestration_v2_legacy_imports`).length, 1);
       yield* sql`DROP TRIGGER fail_preview_upgrade`;
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [53, "PullRequestFilesViewed"],
-        [54, "ProjectionThreadsAutoSettleDisabledAt"],
-        [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ScheduledTaskWebhooks"],
-        [58, "WebhookRelayDeliveries"],
-        [59, "McpAppModelContext"],
-        [60, "ThreadSnapshotWindowIndexes"],
-        [61, "ProjectSkillShortcuts"],
-        [62, "ProjectionThreadIssues"],
-        [63, "WorkItemLinks"],
-        [64, "PullRequestReviewGuides"],
-        [65, "ThreadFailureLookupIndex"],
-        [66, "DropUnusedV1Projections"],
-        [67, "CanonicalizeThreadPullRequestLinks"],
-        [68, "CodexUsageNativeTurnIndex"],
-        [69, "RepairClientSettlementTimestamps"],
-        [70, "WebhookDedupe"],
-        [71, "ShellStopRequestIndex"],
-        [72, "ThreadMessageSearch"],
-        [73, "PeerLinks"],
-        [74, "PeerLinkFence"],
-        [75, "WaitingLinkRequestIndex"],
-        [76, "ActiveTurnItemIndexes"],
-        [77, "ExcludeAttachmentPlaceholdersFromSearch"],
-        [78, "SubagentDeliveryState"],
-        [79, "ProjectionProjectsPinArchive"],
-        [80, "RepairBooleanSettledOverride"],
-        [81, "DropOrchestrationEventCorrelationIndex"],
-        [82, "DelegatedRecoveryIndexes"],
-        [83, "ScheduledTaskThreadMode"],
-        [84, "ProjectionMessageSearchText"],
-        [85, "TurnItemConversationIndex"],
-        [86, "CommandReadIndexes"],
-        [87, "LastExecutedRunIndex"],
-        [88, "TurnItemCounts"],
-        [89, "QueuedTurnInputIndex"],
-        [90, "ProjectionProjectsCustomTitle"],
-        [91, "TurnItemTypeStatusIndex"],
-        [92, "ShellThreadReadIndexes"],
-        [93, "AuthConnectDevices"],
-        [94, "AuthConnectDeniedRequests"],
-      ]);
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id >= 53 && id !== 55),
+      );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
@@ -486,7 +388,6 @@ describe("V2 preview upgrade", () => {
         VALUES ('thread', 'project', 'Thread', '2026-10-07', '2026-10-07', '[{"url":"https://github.com/a/b/issues/1"}]')`;
         const threads = yield* sql`SELECT * FROM projection_threads`;
         yield* sql`INSERT INTO work_item_links VALUES ('github', 'https://github.com/a/b/issues/1', 'a/b', 1, 'Issue', 'github', 'https://github.com/a/b/pull/2', 'a/b', 2, 'Fix')`;
-        const links = yield* sql`SELECT * FROM work_item_links`;
         const issueHistory = yield* sql<{
           readonly migration_id: number;
           readonly name: string;
@@ -512,7 +413,9 @@ describe("V2 preview upgrade", () => {
           ],
         );
         assert.deepStrictEqual(yield* sql`SELECT * FROM projection_threads`, threads);
-        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, [
+          expectedWorkItemLink("https://github.com/a/b/issues/1", "https://github.com/a/b/pull/2"),
+        ]);
         assert.deepStrictEqual(
           yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id < ${issueId} ORDER BY migration_id`,
           baseHistory,

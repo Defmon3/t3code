@@ -7,6 +7,7 @@ import {
   MessageId,
   NodeId,
   ORCHESTRATION_V2_WS_METHODS,
+  IssueTrackerKind,
   ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
@@ -224,22 +225,34 @@ describe("V2 environment commands", () => {
   it.effect.each<Pick<UpdateThreadMetadataInput, "issueLink" | "issueUnlink">>([
     {
       issueLink: {
-        provider: "gitlab",
-        repository: "team/project",
-        number: 42,
+        tracker: IssueTrackerKind.make("gitlab"),
+        host: "gitlab.example.test",
+        scope: "team/project",
+        key: "42",
+        projectId: ProjectId.make("project:issue"),
+        displayKey: "#42",
+        source: "manual",
+        linkedAt: "2026-01-01T00:00:00.000Z",
         url: "https://gitlab.example.test/team/project/-/issues/42",
         title: "Fix the shared issue links",
       },
     },
     {
       issueUnlink: {
-        provider: "gitlab",
-        repository: "team/project",
-        number: 42,
-        url: "https://gitlab.example.test/team/project/-/issues/42",
+        tracker: IssueTrackerKind.make("gitlab"),
+        host: "gitlab.example.test",
+        scope: "team/project",
+        key: "42",
       },
     },
-    { issueUnlink: { provider: "github", repository: "team/project", number: 42 } },
+    {
+      issueUnlink: {
+        tracker: IssueTrackerKind.make("github"),
+        host: "github.com",
+        scope: "team/project",
+        key: "42",
+      },
+    },
   ])("dispatches issue-only metadata changes unchanged: %j", (metadata) =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
@@ -299,6 +312,7 @@ describe("V2 environment commands", () => {
   it.effect("resolves run ordinal zero to the persisted thread-start checkpoint", () =>
     Effect.gen(function* () {
       const scopeId = CheckpointScopeId.make("checkpoint-scope-root");
+      const repositoryScopeId = CheckpointScopeId.make("checkpoint-scope-repository");
       const checkpointId = CheckpointId.make("checkpoint-thread-start");
       const projection: OrchestrationV2ThreadProjection = {
         ...v2Projection,
@@ -316,6 +330,38 @@ describe("V2 environment commands", () => {
             status: "ready",
             files: [],
             capturedAt: v2Now,
+          },
+          // A tracked repository's first baseline, recorded after the thread's own.
+          {
+            id: CheckpointId.make("checkpoint-repository-start"),
+            threadId: v2ThreadId,
+            scopeId: repositoryScopeId,
+            runId: null,
+            nodeId: NodeId.make("node-run-1"),
+            parentCheckpointId: null,
+            ordinalWithinScope: 0,
+            appRunOrdinal: null,
+            ref: CheckpointRef.make("refs/t3/repository-start"),
+            status: "ready",
+            files: [],
+            capturedAt: v2Now,
+          },
+        ],
+        checkpointScopes: [
+          {
+            id: repositoryScopeId,
+            threadId: v2ThreadId,
+            runId: null,
+            nodeId: NodeId.make("node-run-1"),
+            parentScopeId: scopeId,
+            providerThreadId: null,
+            kind: "manual",
+            ordinalWithinParent: 1,
+            advancesAppRunCount: false,
+            cwd: "/workspace/api",
+            label: "api",
+            repositoryPath: "/workspace/api",
+            createdAt: v2Now,
           },
         ],
       };
@@ -418,6 +464,86 @@ describe("V2 environment commands", () => {
       }
       expect(projectionRequests).toEqual([]);
     }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  it.effect(
+    "sends fallback text only on empty manual continuations for servers without native resume",
+    () =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({ commands, projects: [] });
+        const resumedRunId = RunId.make("run-interrupted");
+
+        yield* startThreadTurn({
+          commandId: CommandId.make("command-resume-empty"),
+          threadId: v2ThreadId,
+          manualContinuationOfRunId: resumedRunId,
+          message: {
+            messageId: MessageId.make("message-resume-empty"),
+            role: "user",
+            text: "",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        yield* startThreadTurn({
+          commandId: CommandId.make("command-resume-text"),
+          threadId: v2ThreadId,
+          manualContinuationOfRunId: resumedRunId,
+          message: {
+            messageId: MessageId.make("message-resume-text"),
+            role: "user",
+            text: "Keep going",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        yield* startThreadTurn({
+          commandId: CommandId.make("command-start-empty"),
+          threadId: v2ThreadId,
+          message: {
+            messageId: MessageId.make("message-start-empty"),
+            role: "user",
+            text: "",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        expect(commands).toEqual([
+          expect.objectContaining({
+            type: "message.dispatch",
+            commandId: "command-resume-empty",
+            threadId: v2ThreadId,
+            manualContinuationOfRunId: resumedRunId,
+            text: "Continue where you left off.",
+            dispatchMode: { type: "start_immediately" },
+          }),
+          expect.objectContaining({
+            type: "message.dispatch",
+            commandId: "command-resume-text",
+            threadId: v2ThreadId,
+            manualContinuationOfRunId: resumedRunId,
+            text: "Keep going",
+            dispatchMode: { type: "start_immediately" },
+          }),
+          expect.objectContaining({
+            type: "message.dispatch",
+            commandId: "command-start-empty",
+            threadId: v2ThreadId,
+            text: "",
+            dispatchMode: { type: "start_immediately" },
+          }),
+        ]);
+      }).pipe(Effect.provide(layerTestRandom)),
   );
 
   // A dead socket reaches the caller as a protocol error, or as an interrupt when

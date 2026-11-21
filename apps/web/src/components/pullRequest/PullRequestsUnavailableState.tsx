@@ -1,44 +1,60 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { T, useGT } from "gt-react";
 import { ExternalLinkIcon } from "lucide-react";
 
+import { Button } from "../ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { PullRequestGlyph } from "./pullRequestIcons";
 
-import { UnavailableState } from "../sourceControl/UnavailableState";
-import { Button } from "../ui/button";
-
 export function PullRequestsUnavailableState({
-  title = "Could not load pull requests",
+  title,
   error,
   onRetry,
   refreshing = false,
-  gitHubUrl,
   host,
 }: {
   title?: string;
   error: string;
   onRetry?: () => void;
   refreshing?: boolean;
-  gitHubUrl?: string;
   host?: { readonly url: string; readonly openLabel: string };
 }) {
+  const gt = useGT();
   return (
-    <UnavailableState
-      icon={<PullRequestGlyph.pullRequest />}
-      title={title}
-      error={error}
-      onRetry={onRetry}
-      refreshing={refreshing}
-      action={
-        gitHubUrl || host ? (
-          <Button
-            size="sm"
-            variant="outline"
-            render={<a href={host?.url ?? gitHubUrl} target="_blank" rel="noopener noreferrer" />}
-          >
-            <ExternalLinkIcon aria-hidden className="size-3.5" />
-            {host?.openLabel ?? "Open on GitHub"}
-          </Button>
-        ) : null
-      }
-    />
+    <Empty className="scrollbar-gutter-both min-h-0 justify-center-safe overflow-y-auto [&>*]:shrink-0">
+      <EmptyMedia variant="icon">
+        <PullRequestGlyph.pullRequest />
+      </EmptyMedia>
+      <EmptyHeader>
+        <EmptyTitle>{title ?? gt("Could not load pull requests")}</EmptyTitle>
+        <EmptyDescription>{error}</EmptyDescription>
+      </EmptyHeader>
+      {onRetry || host ? (
+        <div className="flex flex-wrap justify-center gap-2">
+          {onRetry ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onRetry}
+              disabled={refreshing}
+              aria-busy={refreshing}
+            >
+              <RefreshIcon size="sm" refreshing={refreshing} />
+              <T>Retry</T>
+            </Button>
+          ) : null}
+          {host ? (
+            <Button
+              size="sm"
+              variant="outline"
+              render={<a href={host.url} target="_blank" rel="noopener noreferrer" />}
+            >
+              <ExternalLinkIcon aria-hidden className="size-3.5" />
+              {host.openLabel}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </Empty>
   );
 }

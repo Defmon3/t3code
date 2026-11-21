@@ -1,4 +1,5 @@
 import { AuthSettingsWriteScope, type EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -8,10 +9,12 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { SecretInput } from "./SecretInput";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 export function ApprovalExplanationSettings() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const { scope, environment } = useSettingsScope();
   const environmentId = scope.kind === "environment" ? environment?.environmentId : null;
 
@@ -20,15 +23,17 @@ export function ApprovalExplanationSettings() {
       serverScoped
       settingKeys={["approvalExplanationApiKey"]}
       {...searchableSetting("approval-explanation-api-key")}
-      description="Explains approval commands with Gemini 3.1 Flash Lite through Wonton. The API key is stored encrypted on the selected environment."
+      description={gt(
+        "Explains approval commands with Gemini 3.1 Flash Lite through Wonton. The API key is stored encrypted on the selected environment.",
+      )}
       control={
         environmentId ? (
           <ApprovalExplanationKeyForm key={environmentId} environmentId={environmentId} />
         ) : (
           <span className="text-sm text-muted-foreground">
             {scope.kind === "environment"
-              ? "Reconnect this environment to configure its key."
-              : "Select one environment above to configure its key."}
+              ? gt("Reconnect this environment to configure its key.")
+              : gt("Select one environment above to configure its key.")}
           </span>
         )
       }
@@ -37,6 +42,7 @@ export function ApprovalExplanationSettings() {
 }
 
 function ApprovalExplanationKeyForm({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
   const configured = useEnvironmentSettings(
     environmentId,
     (settings) => settings.approvalExplanationApiKey.length > 0,
@@ -66,7 +72,7 @@ function ApprovalExplanationKeyForm({ environmentId }: { readonly environmentId:
     <div className="flex w-full min-w-0 flex-col gap-2">
       <SecretInput
         size="sm"
-        aria-label="Approval explanation API key"
+        aria-label={gt("Approval explanation API key")}
         configured={configured}
         value={draft}
         disabled={!canConfigure || saving}
@@ -83,7 +89,7 @@ function ApprovalExplanationKeyForm({ environmentId }: { readonly environmentId:
       />
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <span className="mr-auto text-xs text-muted-foreground" role="status">
-          {saving ? "Saving…" : configured ? "Key saved" : "No key saved"}
+          {saving ? gt("Saving…") : configured ? gt("Key saved") : gt("No key saved")}
         </span>
         {configured ? (
           <Button
@@ -92,7 +98,7 @@ function ApprovalExplanationKeyForm({ environmentId }: { readonly environmentId:
             disabled={!canConfigure || saving}
             onClick={() => void save("")}
           >
-            Clear key
+            {gt("Clear key")}
           </Button>
         ) : null}
         <Button
@@ -100,16 +106,16 @@ function ApprovalExplanationKeyForm({ environmentId }: { readonly environmentId:
           disabled={!canConfigure || saving || !draft.trim()}
           onClick={() => void save(draft.trim())}
         >
-          {configured ? "Replace key" : "Save key"}
+          {configured ? gt("Replace key") : gt("Save key")}
         </Button>
       </div>
       {saveState === "failed" ? (
         <span role="alert" className="text-xs text-destructive">
-          Key not saved. Your entry is kept. Try again.
+          {gt("Key not saved. Your entry is kept. Try again.")}
         </span>
       ) : !canConfigure ? (
         <span className="text-xs text-muted-foreground">
-          This connection cannot change settings.
+          {gt("This connection cannot change settings.")}
         </span>
       ) : null}
     </div>

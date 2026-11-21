@@ -21,6 +21,7 @@ export function formatBuildIdentityLabel(input: {
   return [input.stageLabel, builtAtLabel, commitLabel].filter(Boolean).join(" · ");
 }
 
+export const CUSTOM_RELEASE_CHANNEL: EnvironmentIdentificationPillLabel = "Custom";
 const STAGE_BACKDROP_VIEW_BOX = "0 0 8192 96";
 
 export function resolveSidebarStageBackdropVariant(
@@ -40,9 +41,11 @@ export function resolveEnvironmentIdentificationPillLabel(
   stageLabel: string,
   isCustomBuild = false,
 ): EnvironmentIdentificationPillLabel | null {
-  if (isCustomBuild) return "Custom";
+  if (isCustomBuild) return CUSTOM_RELEASE_CHANNEL;
   const normalized = stageLabel.trim().toLowerCase();
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- release channel names
   if (normalized === "dev") return "Dev";
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- release channel names
   if (normalized === "nightly") return "Nightly";
   return null;
 }

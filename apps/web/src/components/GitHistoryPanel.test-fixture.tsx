@@ -16,6 +16,18 @@ import { afterEach, beforeEach, expect, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
 import { visitElements } from "../test/reactElementTree";
 
+vi.mock("gt-react", async (importOriginal) => {
+  const gt = await importOriginal<typeof import("gt-react")>();
+  return {
+    ...gt,
+    useGT:
+      () =>
+      (text: string, values = {}) =>
+        gt.gtFallback(text, { ...values, $locale: "en" }),
+    useMessages: () => (text: string) => gt.decodeOptions(text)?.$_source ?? text,
+  };
+});
+
 type PageResult =
   | { readonly _tag: "Initial"; readonly waiting: true }
   | { readonly _tag: "Failure"; readonly cause: Cause.Cause<unknown> }
@@ -82,7 +94,8 @@ const historyState = vi.hoisted(() => ({
 
 const fontState = vi.hoisted(() => ({ interfaceSize: 16 }));
 
-vi.mock("../hooks/useCopyToClipboard", () => ({
+vi.mock("../hooks/useCopyToClipboard", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/useCopyToClipboard")>()),
   useCopyToClipboard: (options?: { readonly onError?: (error: Error) => void }) => ({
     copyToClipboard: () => options?.onError?.(new Error("Clipboard permission was denied.")),
     isCopied: false,
@@ -286,7 +299,7 @@ vi.mock("../state/query", () => ({
       return {
         ...base,
         data: errorCause === null ? historyState.commitFiles : null,
-        error: errorCause === null ? null : "Git browsing snapshot expired.",
+        error: errorCause === null ? null : Cause.pretty(errorCause),
         errorCause,
         refresh: historyState.commitFilesRefresh,
       };

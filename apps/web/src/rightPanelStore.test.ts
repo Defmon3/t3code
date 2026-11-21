@@ -1,8 +1,9 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { useClosedViewStore } from "./closedViewStore";
+import { linkedThreadTitle } from "./linkedThreadSurface";
 import { reopenClosedView } from "./reopenClosedView";
 import {
   issueSurfaceId,
@@ -12,10 +13,8 @@ import {
   pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
-  selectSelectedRightPanelSurface,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
-  updateIssueTabStatus,
   useRightPanelStore,
 } from "./rightPanelStore";
 
@@ -306,9 +305,12 @@ describe("rightPanelStore", () => {
     {
       choice: "issue",
       choose: () =>
-        useRightPanelStore
-          .getState()
-          .openIssue(refA, { projectId: "project-a", repository: "pingdotgg/t3code", number: 1 }),
+        useRightPanelStore.getState().openIssue(refA, {
+          projectId: "project-a",
+          tracker: "github",
+          scope: "pingdotgg/t3code",
+          key: "1",
+        }),
     },
     {
       choice: "issue selection",
@@ -565,6 +567,121 @@ describe("rightPanelStore", () => {
     expect(selectThreadRightPanelState(migrated.byThreadKey, refA).maximized).toBe(true);
   });
 
+  it("opens a linked thread once per thread and environment it is read through", () => {
+    const store = useRightPanelStore.getState();
+    const target = {
+      viaEnvironmentId: EnvironmentId.make("env-1"),
+      environmentId: EnvironmentId.make("env:b"),
+      threadId: ThreadId.make("there"),
+      label: "fs-17",
+      title: null,
+    };
+    store.openLinkedThread(refA, target);
+    store.open(refA, "diff");
+    store.openLinkedThread(refA, { ...target, label: "renamed", title: "Fix the build" });
+    store.openLinkedThread(refA, { ...target, title: null });
+    store.openLinkedThread(refA, { ...target, viaEnvironmentId: EnvironmentId.make("env-2") });
+    const panel = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(panel.surfaces.map((surface) => surface.id)).toEqual([
+      "linked-thread:env-1:env%3Ab:there",
+      "diff",
+      "linked-thread:env-2:env%3Ab:there",
+    ]);
+    // A click that knows no title keeps the one an earlier click or read gave.
+    expect(panel.surfaces[0]).toMatchObject({ label: "fs-17", title: "Fix the build" });
+    store.setLinkedThreadTitle(refA, "linked-thread:env-1:env%3Ab:there", "Fix flaky test");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces[0],
+    ).toMatchObject({ title: "Fix flaky test" });
+    // The tab is named for the thread once its title is known, else for where it is.
+    expect(linkedThreadTitle({ title: "Fix flaky test" }, "Thread on fs-17")).toBe(
+      "Fix flaky test",
+    );
+    expect(linkedThreadTitle({ title: " " }, "Thread on fs-17")).toBe("Thread on fs-17");
+    expect(linkedThreadTitle({ title: null }, "Thread on fs-17")).toBe("Thread on fs-17");
+  });
+
+  it("keeps saved linked threads it can show and drops surfaces it cannot", () => {
+    const linked = {
+      id: "linked-thread:stale-id",
+      kind: "linked-thread",
+      viaEnvironmentId: "env-1",
+      environmentId: "env-b",
+      threadId: "there",
+      label: "fs-17",
+    };
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "linked-thread:stale-id",
+          surfaces: [
+            linked,
+            { ...linked, id: "linked-thread:no-thread", threadId: undefined },
+            { id: "hologram:1", kind: "hologram" },
+            null,
+            { id: "diff", kind: "diff" },
+          ],
+        },
+      },
+    });
+    expect(selectThreadRightPanelState(migrated.byThreadKey, refA)).toEqual({
+      isOpen: true,
+      // The saved id no longer names a surface, so the first one left is shown.
+      activeSurfaceId: "linked-thread:env-1:env-b:there",
+      surfaces: [
+        {
+          id: "linked-thread:env-1:env-b:there",
+          kind: "linked-thread",
+          viaEnvironmentId: "env-1",
+          environmentId: "env-b",
+          threadId: "there",
+          label: "fs-17",
+          title: null,
+        },
+        { id: "diff", kind: "diff" },
+      ],
+    });
+  });
+
+  it("opens a side chat or subagent once per thread, and never the panel's own thread", () => {
+    const store = useRightPanelStore.getState();
+    const child = ThreadId.make("child");
+    store.openThread(refA, child);
+    store.open(refA, "diff");
+    store.openThread(refA, child);
+    store.openThread(refA, refA.threadId);
+    const panel = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(panel.surfaces.map((surface) => surface.id)).toEqual(["thread:child", "diff"]);
+    expect(panel.activeSurfaceId).toBe("thread:child");
+  });
+
+  it("keeps side chat tabs saved before they became thread surfaces", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "side-chat:side",
+          surfaces: [
+            { id: "diff", kind: "diff" },
+            { id: "side-chat:side", kind: "side-chat", threadId: "side" },
+            { id: "side-chat:gone", kind: "side-chat" },
+            { id: "thread:stale", kind: "thread", threadId: "sub" },
+          ],
+        },
+      },
+    });
+    expect(selectThreadRightPanelState(migrated.byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "thread:side",
+      surfaces: [
+        { id: "diff", kind: "diff" },
+        { id: "thread:side", kind: "thread", threadId: "side" },
+        { id: "thread:sub", kind: "thread", threadId: "sub" },
+      ],
+    });
+  });
+
   it("drops the legacy singleton terminal surface during migration", () => {
     expect(
       migratePersistedRightPanelState({
@@ -700,8 +817,9 @@ describe("rightPanelStore", () => {
   it("drops the issues list's shared panel so a restart opens the page fresh", () => {
     const id = issueSurfaceId({
       projectId: "project-a",
-      repository: "pingdotgg/t3code",
-      number: 4909,
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4909",
     });
     const panelState = {
       isOpen: true,
@@ -711,8 +829,9 @@ describe("rightPanelStore", () => {
           id,
           kind: "issue" as const,
           projectId: "project-a",
-          repository: "pingdotgg/t3code",
-          number: 4909,
+          tracker: "github",
+          scope: "pingdotgg/t3code",
+          key: "4909",
         },
       ],
     };
@@ -1118,8 +1237,9 @@ describe("rightPanelStore", () => {
     store.openIssue(scopeThreadRef(refA.environmentId, ThreadId.make("issues-panel")), {
       environmentId: refA.environmentId,
       projectId: pr.projectId,
-      repository: pr.repository,
-      number: pr.number,
+      tracker: "github",
+      scope: pr.repository,
+      key: String(pr.number),
     });
     const { storage, name } = useRightPanelStore.persist.getOptions();
     const persisted = await storage!.getItem(name!);
@@ -1141,8 +1261,18 @@ describe("rightPanelStore", () => {
   });
 
   it("tracks one surface per issue", () => {
-    const first = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
-    const second = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4910 };
+    const first = {
+      projectId: "project-a",
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4909",
+    };
+    const second = {
+      projectId: "project-a",
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4910",
+    };
     useRightPanelStore.getState().openIssue(refA, first);
     useRightPanelStore.getState().openIssue(refA, second);
     useRightPanelStore.getState().openIssue(refA, first);
@@ -1159,8 +1289,9 @@ describe("rightPanelStore", () => {
     const local = {
       environmentId: "local",
       projectId: "project-a",
-      repository: "pingdotgg/t3code",
-      number: 4909,
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4909",
     };
     const remote = { ...local, environmentId: "remote" };
 
@@ -1177,11 +1308,11 @@ describe("rightPanelStore", () => {
   it("keeps equal issue references from two providers as two tabs", () => {
     const linear = {
       projectId: "project-a",
-      repository: "ENG",
-      number: 12,
-      provider: "linear",
+      scope: "ENG",
+      key: "12",
+      tracker: "linear",
     };
-    const github = { ...linear, provider: "github" };
+    const github = { ...linear, tracker: "github" };
 
     useRightPanelStore.getState().openIssue(refA, linear);
     useRightPanelStore.getState().openIssue(refA, github);
@@ -1198,15 +1329,16 @@ describe("rightPanelStore", () => {
       issueSurfaceId({
         environmentId: "github",
         projectId: "project-a",
-        repository: "ENG",
-        number: 12,
+        tracker: "linear",
+        scope: "ENG",
+        key: "12",
       }),
     ).not.toBe(
       issueSurfaceId({
         projectId: "project-a",
-        provider: "github",
-        repository: "ENG",
-        number: 12,
+        tracker: "github",
+        scope: "ENG",
+        key: "12",
       }),
     );
   });
@@ -1214,9 +1346,9 @@ describe("rightPanelStore", () => {
   it("keeps the issue browser one tab while the issue it shows changes", () => {
     const target = {
       projectId: "project-a",
-      provider: "github",
-      repository: "pingdotgg/t3code",
-      number: 4909,
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4909",
     };
     useRightPanelStore.getState().openRepository(refA, "issues");
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
@@ -1244,8 +1376,18 @@ describe("rightPanelStore", () => {
   });
 
   it("leaves per-issue surfaces alone when the browser's issue changes", () => {
-    const opened = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
-    const browsed = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4910 };
+    const opened = {
+      projectId: "project-a",
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4909",
+    };
+    const browsed = {
+      projectId: "project-a",
+      tracker: "github",
+      scope: "pingdotgg/t3code",
+      key: "4910",
+    };
     useRightPanelStore.getState().openIssue(refA, opened);
     useRightPanelStore.getState().openRepository(refA, "issues");
     useRightPanelStore.getState().selectRepositoryIssue(refA, browsed);
@@ -1390,31 +1532,6 @@ describe("rightPanelStore", () => {
         refAfterServerADisconnects,
       ).surfaces,
     ).toEqual([]);
-  });
-
-  it("keys issue status by the provider-specific surface id", () => {
-    const target = {
-      projectId: "project-a",
-      provider: "linear",
-      repository: "ENG",
-      number: 12,
-    };
-    useRightPanelStore.getState().openIssue(refA, target);
-    const surface = selectSelectedRightPanelSurface(
-      useRightPanelStore.getState().byThreadKey,
-      refA,
-    );
-    expect(surface).not.toBeNull();
-
-    const status = {
-      projectId: target.projectId,
-      repository: target.repository,
-      number: target.number,
-      state: "closed" as const,
-      stateReason: "completed" as const,
-    };
-    const statuses = updateIssueTabStatus({}, surface!.id, status);
-    expect(statuses[surface!.id]).toEqual(status);
   });
 
   it("tracks split panes and the active pane within a terminal surface", () => {

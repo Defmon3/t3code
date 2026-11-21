@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointRef,
   CheckpointScopeId,
   ProjectId,
   RunId,
@@ -36,168 +37,115 @@ const layerNoProject = Layer.mergeAll(
   Layer.mock(ProjectEnrichment.ProjectEnrichmentService)({}),
 );
 
-it.effect.each(["context", "workspace", "local-status"] as const)(
-  "finishes checkpoints while optional %s refresh and its replacement cleanup are blocked",
-  (phase) =>
-    Effect.gen(function* () {
-      const threadId = ThreadId.make("thread-blocked-refresh");
-      const runId = RunId.make("run-blocked-refresh");
-      const scopeId = CheckpointScopeId.make("scope-blocked-refresh");
-      const started = yield* Deferred.make<void>();
-      const releaseWork = yield* Deferred.make<void>();
-      const cleanupStarted = yield* Deferred.make<void>();
-      const releaseCleanup = yield* Deferred.make<void>();
-      const secondStarted = yield* Deferred.make<void>();
-      const firstFinalized = yield* Deferred.make<void>();
-      const secondFinalized = yield* Deferred.make<void>();
-      let attempts = 0;
-      let captures = 0;
-      const refreshWork = Effect.gen(function* () {
-        attempts += 1;
-        if (attempts === 1) {
-          yield* Deferred.succeed(started, undefined);
-          yield* Deferred.await(releaseWork).pipe(
-            Effect.ensuring(
-              Deferred.succeed(cleanupStarted, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseCleanup)),
-              ),
-            ),
-          );
-        } else {
-          yield* Deferred.succeed(secondStarted, undefined);
-        }
-      });
-      const projections = Layer.mock(ProjectionStore.ProjectionStoreV2)({
-        getThreadShell: () => Effect.succeed(null),
-        getCheckpointContext: () =>
-          (phase === "context" ? refreshWork : Effect.void).pipe(
-            Effect.as({
-              runs: [],
-              checkpointScopes: [{ id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" }],
-              checkpoints: [],
-            }),
-          ),
-      });
-      const observer = RunFinalization.layerObserver.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            projections,
-            layerNoProject,
-            Layer.mock(WorkspaceEntries.WorkspaceEntries)({
-              refresh: () => (phase === "workspace" ? refreshWork : Effect.void),
-            }),
-            Layer.mock(PullRequestService.PullRequestService)({
-              refreshAfterTurn: () => Effect.void,
-            }),
-            Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
-              refreshLocalStatus: () =>
-                (phase === "local-status" ? refreshWork : Effect.void).pipe(
-                  Effect.as({
-                    isRepo: true,
-                    hasPrimaryRemote: true,
-                    isDefaultRef: true,
-                    refName: "main",
-                    hasWorkingTreeChanges: false,
-                    workingTree: { files: [], insertions: 0, deletions: 0 },
-                  }),
-                ),
-            }),
-          ),
-        ),
-      );
-      const layer = RunFinalization.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            projections,
-            observer,
-            Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
-              execute: () =>
-                Effect.sync(() => {
-                  captures += 1;
-                }),
-            }),
-          ),
-        ),
-      );
-      yield* Effect.gen(function* () {
-        const service = yield* RunFinalization.RunFinalizationService;
-        const first = yield* service.finalize({ threadId, runId, scopeId }).pipe(
-          Effect.tap(() => Deferred.succeed(firstFinalized, undefined)),
-          Effect.forkChild,
-        );
-        yield* Deferred.await(started);
-        yield* TestClock.adjust("0 millis");
-        assert.isTrue(yield* Deferred.isDone(firstFinalized));
-        const second = yield* service
-          .finalize({
-            threadId,
-            runId: RunId.make("run-newer-refresh"),
-            scopeId,
-          })
-          .pipe(
-            Effect.tap(() => Deferred.succeed(secondFinalized, undefined)),
-            Effect.forkChild,
-          );
-        yield* TestClock.adjust("0 millis");
-        assert.isTrue(yield* Deferred.isDone(secondFinalized));
-        yield* Deferred.await(cleanupStarted);
-        yield* Deferred.await(secondStarted);
-        assert.strictEqual(captures, 2);
-        yield* Deferred.succeed(releaseCleanup, undefined);
-        yield* Fiber.join(first);
-        yield* Fiber.join(second);
-      }).pipe(
-        Effect.ensuring(
-          Deferred.succeed(releaseCleanup, undefined).pipe(
-            Effect.andThen(Deferred.succeed(releaseWork, undefined)),
-          ),
-        ),
-        Effect.provide(layer),
-        Effect.scoped,
-      );
-    }),
-);
-
-it.effect("completes finalization when the post-checkpoint workspace refresh fails", () => {
-  const threadId = ThreadId.make("thread_refresh_failure");
-  const runId = RunId.make("run_refresh_failure");
-  const scopeId = CheckpointScopeId.make("scope_refresh_failure");
-  const captured: string[] = [];
-  const layer = RunFinalization.layer.pipe(
+const finalizationLayer = (
+  scopeId: CheckpointScopeId,
+  runId: RunId,
+  steps: string[],
+  refresh: (typeof RunFinalization.RunFinalizationObserver)["Service"]["refresh"],
+) => {
+  const usedRepositoryScopeId = CheckpointScopeId.make(`${scopeId}_api`);
+  const idleRepositoryScopeId = CheckpointScopeId.make(`${scopeId}_docs`);
+  const repositoryCheckpoint = (repositoryScopeId: CheckpointScopeId, checkpointRunId: RunId) => ({
+    scopeId: repositoryScopeId,
+    runId: checkpointRunId,
+    ordinalWithinScope: 1,
+    appRunOrdinal: null,
+    status: "ready" as const,
+    ref: CheckpointRef.make(`refs/t3/test/${repositoryScopeId}`),
+  });
+  return RunFinalization.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
           execute: () =>
             Effect.sync(() => {
-              captured.push("checkpoint");
+              steps.push("checkpoint");
             }),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getCheckpointContext: () =>
             Effect.succeed({
               runs: [],
-              checkpointScopes: [{ id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" }],
-              checkpoints: [],
+              checkpointScopes: [
+                { id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" },
+                {
+                  id: usedRepositoryScopeId,
+                  runId,
+                  kind: "manual" as const,
+                  cwd: "/api",
+                  repositoryPath: "/api",
+                },
+                {
+                  id: idleRepositoryScopeId,
+                  runId,
+                  kind: "manual" as const,
+                  cwd: "/docs",
+                  repositoryPath: "/docs",
+                },
+              ],
+              checkpoints: [
+                repositoryCheckpoint(usedRepositoryScopeId, runId),
+                repositoryCheckpoint(idleRepositoryScopeId, RunId.make("run_before")),
+              ],
             }),
         }),
         Layer.succeed(RunFinalization.RunFinalizationObserver, {
-          refresh: () =>
-            Effect.gen(function* () {
-              captured.push("refresh");
-              return yield* new RunFinalization.RunFinalizationRefreshError({
-                cwd: "/repo",
-                cause: new Error("Git command timed out"),
-              });
-            }),
+          refresh,
           refreshAfterTurn: () => Effect.void,
+          refreshRepositories: ({ cwds }) =>
+            Effect.sync(() => {
+              steps.push(`repositories:${cwds.join(",")}`);
+            }),
         }),
       ),
     ),
   );
+};
+
+it.effect("completes finalization when the post-checkpoint workspace refresh fails", () => {
+  const threadId = ThreadId.make("thread_refresh_failure");
+  const runId = RunId.make("run_refresh_failure");
+  const scopeId = CheckpointScopeId.make("scope_refresh_failure");
+  const captured: string[] = [];
+  const layer = finalizationLayer(scopeId, runId, captured, () =>
+    Effect.gen(function* () {
+      captured.push("refresh");
+      return yield* new RunFinalization.RunFinalizationRefreshError({
+        cwd: "/repo",
+        cause: new Error("Git command timed out"),
+      });
+    }),
+  );
   return Effect.gen(function* () {
     const service = yield* RunFinalization.RunFinalizationService;
     yield* service.finalize({ threadId, runId, scopeId });
-    assert.deepEqual(captured, ["checkpoint", "refresh"]);
+    // Only the tracked repository this run checkpointed is refreshed.
+    assert.deepEqual(captured, ["checkpoint", "refresh", "repositories:/api"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("completes finalization without waiting for the display refresh", () => {
+  const threadId = ThreadId.make("thread_slow_refresh");
+  const runId = RunId.make("run_slow_refresh");
+  const scopeId = CheckpointScopeId.make("scope_slow_refresh");
+  const steps: string[] = [];
+  const release = Deferred.makeUnsafe<void>();
+  const refreshed = Deferred.makeUnsafe<void>();
+  const layer = finalizationLayer(scopeId, runId, steps, () =>
+    Deferred.await(release).pipe(Effect.andThen(Deferred.succeed(refreshed, undefined))),
+  );
+  return Effect.gen(function* () {
+    const service = yield* RunFinalization.RunFinalizationService;
+    const finalize = yield* service
+      .finalize({ threadId, runId, scopeId })
+      .pipe(Effect.timeoutOption("1 minute"), Effect.forkChild({ startImmediately: true }));
+    yield* TestClock.adjust("1 minute");
+    assert.isTrue(
+      Option.isSome(yield* Fiber.join(finalize)),
+      "finalization waited on the display refresh, blocking the thread's next turn",
+    );
+    yield* Deferred.succeed(release, undefined);
+    yield* Deferred.await(refreshed);
   }).pipe(Effect.provide(layer));
 });
 

@@ -1,308 +1,191 @@
-import { describe, expect, it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import {
+  IssueTrackerKind,
   ProjectId,
-  IssueOperationError,
-  PullRequestOperationError,
-  TextGenerationError,
-  type IssueDetail,
-  type IssueListResult,
+  SourceControlProviderKind,
+  type IssueListEntry,
   type PullRequestDetail,
-  type PullRequestListResult,
+  type PullRequestListEntry,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as IssueService from "../issue/IssueService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as WorkItemLinks from "./WorkItemLinks.ts";
 import * as WorkItemMatches from "./WorkItemMatches.ts";
 
 const projectId = ProjectId.make("project");
-const item = (number: number) => ({
+const createdAt = "2026-01-01T00:00:00Z";
+const issue = (key: string, title: string): IssueListEntry => ({
+  tracker: IssueTrackerKind.make("linear"),
+  host: "linear.app",
+  scope: "ENG",
+  key,
+  url: `https://linear.app/acme/issue/${key}/some-title`,
+  displayKey: key,
   projectId,
-  provider: "github",
-  repository: "acme/app",
+  projectTitle: "Repository",
+  title,
+  state: { category: "open", name: "Open" },
+  author: null,
+  createdAt,
+  updatedAt: createdAt,
+  closedAt: null,
+  assignees: [],
+  labels: [],
+  commentCount: 0,
+});
+const source = issue("ENG-11", "Repair login state");
+const duplicate = issue("ENG-12", "Repair login cache");
+const pullRequest = (number: number, title: string): PullRequestListEntry => ({
+  provider: SourceControlProviderKind.make("github"),
+  host: "github.com",
+  repository: "acme/web",
+  url: `https://github.com/acme/web/pull/${number}`,
   number,
-  title: "Session refresh",
-  url: `https://github.com/acme/app/issues/${number}`,
+  title,
+  projectId,
+  projectTitle: "Repository",
+  state: "open",
+  author: null,
+  createdAt,
+  updatedAt: createdAt,
+  headBranch: "topic",
+  baseBranch: "main",
+  isDraft: false,
+  mergeability: "unknown",
+  additions: 0,
+  deletions: 0,
+  viewerReviewRequested: false,
+  labels: [],
 });
-const detail = (number: number) => ({
-  ...item(number),
-  workspaceRoot: "/workspace",
-  body: "Refresh expired sessions",
-  capabilities: { referenceStyle: "hash" },
-  linkedPullRequests: [item(2)],
-  linkedIssues: [item(2)],
-});
-const dependencies = Layer.mergeAll(
-  Layer.mock(IssueService.IssueService)({
-    detail: ({ number }) => Effect.succeed(detail(number) as unknown as IssueDetail),
-    list: () =>
-      Effect.succeed({ entries: [item(1), item(2), item(3)] } as unknown as IssueListResult),
-  }),
-  Layer.mock(PullRequestService.PullRequestService)({
-    detail: ({ number }) => Effect.succeed(detail(number) as unknown as PullRequestDetail),
-    list: () =>
-      Effect.succeed({ entries: [item(1), item(2), item(3)] } as unknown as PullRequestListResult),
-  }),
-  ServerSettings.layerTest(),
-);
+const saved = pullRequest(19, "Repair login state");
+const candidate = pullRequest(20, "Repair login cache");
 
-describe("WorkItemMatches", () => {
-  it.effect.each([
-    { kind: "issue", relationship: "related" },
-    { kind: "issue", relationship: "duplicate" },
-    { kind: "pull-request", relationship: "related" },
-    { kind: "pull-request", relationship: "duplicate" },
-  ] as const)(
-    "matches $kind $relationship candidates through the service",
-    ({ kind, relationship }) =>
-      Effect.gen(function* () {
-        const textGeneration = Layer.mock(TextGeneration.TextGeneration)({
-          findWorkItemMatches: (input) => {
-            expect(input.cwd).toBe("/workspace");
-            expect(input.relationship).toBe(relationship);
-            expect(input.source.kind).toBe(kind);
-            expect(input.candidates.map((candidate) => candidate.number)).toEqual(
-              relationship === "related" ? [1, 3] : [2, 3],
-            );
-            expect(
-              input.candidates.every(
-                (candidate) =>
-                  candidate.kind ===
-                  (relationship === "duplicate"
-                    ? kind
-                    : kind === "issue"
-                      ? "pull-request"
-                      : "issue"),
-              ),
-            ).toBe(true);
-            return Effect.succeed({
-              matches: [
-                { candidate: 2, confidence: "high", reason: "Same session fix" },
-                { candidate: 99, confidence: "high", reason: "Invalid" },
-              ],
-            });
-          },
-        });
-        const service = yield* WorkItemMatches.WorkItemMatches.pipe(
-          Effect.provide(
-            WorkItemMatches.layer.pipe(Layer.provide(dependencies), Layer.provide(textGeneration)),
-          ),
-        );
-        const result = yield* service.find({
-          projectId,
-          relationship,
-          source: { ...item(1), kind },
-        });
-        expect(result.matches.map((match) => match.number)).toEqual([3]);
-      }),
-  );
-
-  it.effect("skips generation when no candidates remain", () =>
+it.effect.each([
+  { relationship: "related", displayKey: "#20" },
+  { relationship: "duplicate", displayKey: "ENG-12" },
+] as const)(
+  "suggests $relationship items by their current tracker references",
+  ({ relationship, displayKey }) =>
     Effect.gen(function* () {
-      const service = yield* WorkItemMatches.WorkItemMatches;
-      expect(
-        yield* service.find({
-          projectId,
-          relationship: "duplicate",
-          source: { ...item(1), kind: "issue" },
+      const dependencies = Layer.mergeAll(
+        Layer.mock(IssueService.IssueService)({
+          detail: ({ key }) =>
+            Effect.succeed({
+              ...(key === source.key ? source : duplicate),
+              body: "Restore login after session changes.",
+              linkedPullRequests: [],
+              writable: true,
+              viewer: null,
+              states: [],
+              comments: [],
+              commentsCursor: null,
+              events: [],
+              capabilities: {
+                create: true,
+                edit: true,
+                comment: true,
+                labels: true,
+                assignees: true,
+                reactions: false,
+                templates: false,
+                linkedPullRequests: true,
+                events: true,
+                search: true,
+              },
+              viewerPermissions: {
+                setState: true,
+                comment: true,
+                edit: true,
+                labels: true,
+                assignees: true,
+              },
+            }),
+          list: () =>
+            Effect.succeed({
+              entries: [source, duplicate],
+              errors: [],
+              nextCursors: {},
+              trackers: [],
+              viewers: {},
+            }),
         }),
-      ).toEqual({ matches: [] });
-    }).pipe(
-      Effect.provide(
-        WorkItemMatches.layer.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              dependencies,
-              Layer.mock(IssueService.IssueService)({
-                detail: () => Effect.succeed(detail(1) as unknown as IssueDetail),
-                list: () => Effect.succeed({ entries: [item(1)] } as unknown as IssueListResult),
-              }),
-              Layer.mock(TextGeneration.TextGeneration)({
-                findWorkItemMatches: () => Effect.die("Must not generate"),
-              }),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-
-  it.effect.each(["github", "gitlab"])(
-    "excludes a Linear issue's known $0 pull request before reading candidates or generating matches",
-    (provider) =>
-      Effect.gen(function* () {
-        const pullRequest = {
-          ...item(2),
-          provider,
-          url:
-            provider === "github"
-              ? "https://github.com/acme/app/pull/2"
-              : "https://gitlab.com/acme/app/-/merge_requests/2",
-        };
-        const service = yield* WorkItemMatches.WorkItemMatches.pipe(
-          Effect.provide(
-            WorkItemMatches.layer.pipe(
-              Layer.provide(
-                Layer.mergeAll(
-                  dependencies,
-                  Layer.mock(IssueService.IssueService)({
-                    detail: () =>
-                      Effect.succeed({
-                        ...detail(1),
-                        provider: "linear",
-                        linkedPullRequests: [
-                          { ...pullRequest, url: `${pullRequest.url}#discussion` },
-                        ],
-                      } as unknown as IssueDetail),
-                  }),
-                  Layer.mock(PullRequestService.PullRequestService)({
-                    list: () =>
-                      Effect.succeed({
-                        entries: [pullRequest],
-                      } as unknown as PullRequestListResult),
-                    detail: () => Effect.die("Must not read a known pull request"),
-                  }),
-                  Layer.mock(TextGeneration.TextGeneration)({
-                    findWorkItemMatches: () =>
-                      Effect.die("Must not generate for a known pull request"),
-                  }),
-                ),
-              ),
-            ),
-          ),
-        );
-        expect(
-          yield* service.find({
-            projectId,
-            relationship: "related",
-            source: { kind: "issue", provider: "linear", repository: "ENG", number: 1 },
-          }),
-        ).toEqual({ matches: [] });
-      }),
-  );
-
-  it.effect(
-    "keeps pull requests with the same repository and number on other hosts or providers",
-    () =>
-      Effect.gen(function* () {
-        const known = { ...item(2), url: "https://github.com/acme/app/pull/2" };
-        const candidates = [
-          {
-            ...known,
-            projectId: ProjectId.make("enterprise-project"),
-            url: "https://github.example.com/acme/app/pull/2",
-          },
-          {
-            ...known,
-            projectId: ProjectId.make("gitlab-project"),
-            provider: "gitlab",
-            url: "https://gitlab.com/acme/app/-/merge_requests/2",
-          },
-        ];
-        const service = yield* WorkItemMatches.WorkItemMatches.pipe(
-          Effect.provide(
-            WorkItemMatches.layer.pipe(
-              Layer.provide(
-                Layer.mergeAll(
-                  dependencies,
-                  Layer.mock(IssueService.IssueService)({
-                    detail: () =>
-                      Effect.succeed({
-                        ...detail(1),
-                        linkedPullRequests: [known],
-                      } as unknown as IssueDetail),
-                  }),
-                  Layer.mock(PullRequestService.PullRequestService)({
-                    list: () =>
-                      Effect.succeed({ entries: candidates } as unknown as PullRequestListResult),
-                    detail: ({ projectId: candidateProjectId }) =>
-                      Effect.succeed({
-                        ...detail(2),
-                        ...candidates.find(
-                          (candidate) => candidate.projectId === candidateProjectId,
-                        ),
-                      } as unknown as PullRequestDetail),
-                  }),
-                  Layer.mock(TextGeneration.TextGeneration)({
-                    findWorkItemMatches: (input) => {
-                      expect(input.candidates.map((candidate) => candidate.url)).toEqual(
-                        candidates.map((candidate) => candidate.url),
-                      );
-                      return Effect.succeed({ matches: [] });
-                    },
-                  }),
-                ),
-              ),
-            ),
-          ),
-        );
-        yield* service.find({
-          projectId,
-          relationship: "related",
-          source: { ...item(1), kind: "issue" },
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.succeed({
+              provider: candidate.provider,
+              projectId: candidate.projectId,
+              number: candidate.number,
+              url: candidate.url,
+              repository: candidate.repository,
+              title: candidate.title,
+              body: "Fix login.",
+            } as PullRequestDetail),
+          withRoutingCredential: (_, operation) => operation,
+          list: () =>
+            Effect.succeed({
+              entries: [saved, candidate],
+              errors: [],
+              nextCursors: {},
+              viewers: {},
+              providers: [],
+              truncated: false,
+            }),
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getShell: () =>
+            Effect.succeedSome({
+              id: projectId,
+              title: "Repository",
+              workspaceRoot: "/repo",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt,
+              updatedAt: createdAt,
+            }),
+        }),
+        Layer.mock(WorkItemLinks.WorkItemLinks)({
+          list: () =>
+            Effect.succeed({
+              links: [{ issue: { ...source, provider: "linear" }, pullRequest: saved }],
+              truncated: false,
+            }),
+        }),
+        ServerSettings.layerTest(),
+        Layer.mock(TextGeneration.TextGeneration)({
+          findWorkItemMatches: () =>
+            Effect.succeed({
+              matches: [
+                { candidate: 1, confidence: "high", reason: "  Same login bug.  " },
+                { candidate: 1, confidence: "medium", reason: "Duplicate output" },
+                { candidate: 2, confidence: "medium", reason: "Unknown candidate" },
+              ],
+            }),
+        }),
+      );
+      const result = yield* Effect.gen(function* () {
+        const matches = yield* WorkItemMatches.WorkItemMatches;
+        return yield* matches.find({
+          source: { kind: "issue", reference: source },
+          relationship,
         });
-      }),
-  );
-
-  it.effect.each(["read-source", "list-candidates", "read-candidate", "generate"] as const)(
-    "preserves the underlying $0 failure",
-    (stage) =>
-      Effect.gen(function* () {
-        const issueCause = new IssueOperationError({ operation: "detail", detail: "Failed" });
-        const pullRequestCause = new PullRequestOperationError({
-          operation: "detail",
-          detail: "Failed",
-        });
-        const generationCause = new TextGenerationError({
-          operation: "findWorkItemMatches",
-          detail: "Failed",
-        });
-        const service = yield* WorkItemMatches.WorkItemMatches.pipe(
-          Effect.provide(
-            WorkItemMatches.layer.pipe(
-              Layer.provide(
-                Layer.mergeAll(
-                  dependencies,
-                  Layer.mock(IssueService.IssueService)({
-                    detail: () =>
-                      stage === "read-source"
-                        ? Effect.fail(issueCause)
-                        : Effect.succeed(detail(1) as unknown as IssueDetail),
-                  }),
-                  Layer.mock(PullRequestService.PullRequestService)({
-                    detail: () =>
-                      stage === "read-candidate"
-                        ? Effect.fail(pullRequestCause)
-                        : Effect.succeed(detail(3) as unknown as PullRequestDetail),
-                    list: () =>
-                      stage === "list-candidates"
-                        ? Effect.fail(pullRequestCause)
-                        : Effect.succeed({
-                            entries: [item(3)],
-                          } as unknown as PullRequestListResult),
-                  }),
-                  Layer.mock(TextGeneration.TextGeneration)({
-                    findWorkItemMatches: () => Effect.fail(generationCause),
-                  }),
-                ),
-              ),
-            ),
-          ),
-        );
-        const error = yield* service
-          .find({ projectId, relationship: "related", source: { ...item(1), kind: "issue" } })
-          .pipe(Effect.flip);
-        expect(error.operation).toBe(stage);
-        expect(error.cause).toBe(
-          stage === "generate"
-            ? generationCause
-            : stage === "read-source"
-              ? issueCause
-              : pullRequestCause,
-        );
-      }),
-  );
-});
+      }).pipe(Effect.provide(WorkItemMatches.layer.pipe(Layer.provide(dependencies))));
+      expect(result.matches).toHaveLength(1);
+      expect(result.matches[0]).toMatchObject({
+        displayKey,
+        reason: "Same login bug.",
+        source:
+          relationship === "related"
+            ? { kind: "pull-request", reference: { host: "github.com", number: 20 } }
+            : {
+                kind: "issue",
+                reference: { tracker: "linear", host: "linear.app", scope: "ENG", key: "ENG-12" },
+              },
+      });
+    }),
+);

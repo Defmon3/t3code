@@ -1,6 +1,11 @@
-import type { ComponentProps } from "react";
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { T, useGT, Var } from "gt-react";
+import { PlusIcon, SearchIcon } from "lucide-react";
 
-import { ListEmptyState } from "../sourceControl/ListEmptyState";
+import { openCommandPalette } from "../../commandPaletteBus";
+import { Button } from "../ui/button";
+import { PullRequestListGhost } from "./PullRequestGhosts";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 
 function BranchMark({ joined }: { joined: boolean }) {
   return (
@@ -41,28 +46,117 @@ function BranchMark({ joined }: { joined: boolean }) {
   );
 }
 
-type StateProps = Omit<
-  ComponentProps<typeof ListEmptyState>,
-  | "mark"
-  | "loadingLabel"
-  | "noProjectsDescription"
-  | "notFoundHint"
-  | "emptyTitle"
-  | "emptyDescription"
-  | "loadMoreLabel"
->;
+export function PullRequestListEmptyState({
+  query,
+  filtered,
+  searching,
+  hasProjects,
+  canLoadMore,
+  loadingMore,
+  refreshing,
+  onClearQuery,
+  onLoadMore,
+  onRefresh,
+}: {
+  query: string;
+  filtered: boolean;
+  searching: boolean;
+  hasProjects: boolean;
+  canLoadMore: boolean;
+  loadingMore: boolean;
+  refreshing: boolean;
+  onClearQuery: () => void;
+  onLoadMore: () => void;
+  onRefresh: () => void;
+}) {
+  const gt = useGT();
+  const shownQuery = query.length > 48 ? `${query.slice(0, 48)}…` : query;
+  if (!hasProjects) {
+    return (
+      <Empty>
+        <BranchMark joined={false} />
+        <EmptyHeader>
+          <EmptyTitle>
+            <T>No projects in this workspace</T>
+          </EmptyTitle>
+          <EmptyDescription>
+            <T>Add a project, and the pull requests from its repository appear here.</T>
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button size="sm" onClick={() => openCommandPalette({ open: "add-project" })}>
+            <PlusIcon className="size-3.5" />
+            <T>Add project</T>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
+  }
 
-export function PullRequestListEmptyState(props: StateProps) {
+  if (searching) {
+    return (
+      <PullRequestListGhost
+        rows={5}
+        caption={gt("Searching every host for “{query}”", { query: shownQuery })}
+      />
+    );
+  }
+
+  if (query.length > 0) {
+    return (
+      <Empty>
+        <BranchMark joined={false} />
+        <EmptyHeader>
+          <EmptyTitle>
+            <T>
+              Nothing matches “<Var>{shownQuery}</Var>”
+            </T>
+          </EmptyTitle>
+          <EmptyDescription>
+            <T>
+              The hosts were searched for it. Try fewer words, or search by number, author or
+              branch.
+            </T>
+          </EmptyDescription>
+        </EmptyHeader>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button size="sm" variant="outline" onClick={onClearQuery}>
+            <SearchIcon className="size-3.5" />
+            <T>Clear search</T>
+          </Button>
+          <Button size="sm" variant="outline" disabled={refreshing} onClick={onRefresh}>
+            <RefreshIcon size="sm" refreshing={refreshing} />
+            {refreshing ? gt("Checking...") : gt("Check again")}
+          </Button>
+        </div>
+      </Empty>
+    );
+  }
+
   return (
-    <ListEmptyState
-      {...props}
-      mark={<BranchMark joined={false} />}
-      loadingLabel="Loading pull requests"
-      noProjectsDescription="Add a project, and the pull requests from its repository appear here."
-      notFoundHint="The hosts were searched for it. Try fewer words, or search by number, author or branch."
-      emptyTitle="No pull requests"
-      emptyDescription="Pull requests from every project in this workspace appear here."
-      loadMoreLabel="Load more pull requests"
-    />
+    <Empty>
+      <BranchMark joined={false} />
+      <EmptyHeader>
+        <EmptyTitle>
+          {filtered ? gt("Nothing under these filters") : gt("No pull requests")}
+        </EmptyTitle>
+        <EmptyDescription>
+          {filtered
+            ? gt("Widen the state, involvement or project filter to see more.")
+            : gt("Pull requests from every project in this workspace appear here.")}
+        </EmptyDescription>
+      </EmptyHeader>
+      <div className="flex flex-wrap justify-center gap-2">
+        {canLoadMore ? (
+          <Button size="sm" variant="outline" disabled={loadingMore} onClick={onLoadMore}>
+            {loadingMore ? gt("Loading...") : gt("Load more pull requests")}
+          </Button>
+        ) : null}
+        <Button size="sm" variant="outline" disabled={refreshing} onClick={onRefresh}>
+          <RefreshIcon size="sm" refreshing={refreshing} />
+          {refreshing ? gt("Checking...") : gt("Check again")}
+        </Button>
+      </div>
+    </Empty>
   );
 }

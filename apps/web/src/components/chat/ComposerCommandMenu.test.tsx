@@ -1,4 +1,4 @@
-import { formatIssueReference, type IssueListEntry } from "@t3tools/contracts";
+import { IssueTrackerKind, type IssueListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -9,24 +9,22 @@ import {
 } from "./ComposerCommandMenu";
 
 const issue = {
-  provider: "github",
-  referenceStyle: "hash",
+  tracker: IssueTrackerKind.make("github"),
   host: "github.com",
   projectId: "project-1" as IssueListEntry["projectId"],
   projectTitle: "Acme",
-  repository: "acme/app",
-  number: 12,
+  scope: "acme/app",
+  key: "12",
+  displayKey: "#12",
   title: "Fix session refresh",
   url: "https://github.com/acme/app/issues/12",
   author: null,
-  state: "open",
-  stateReason: null,
+  state: { category: "open", name: "Open" },
   createdAt: "2026-08-20T10:00:00Z",
   updatedAt: "2026-08-20T11:00:00Z",
   closedAt: null,
   assignees: [],
   labels: [],
-  milestone: null,
   commentCount: 0,
 } satisfies IssueListEntry;
 
@@ -56,28 +54,20 @@ describe("composerSuggestionOptionId", () => {
 
 describe("composer issue suggestions", () => {
   it.each([
-    { entry: issue, expected: "acme/app#12" },
-    {
-      entry: { ...issue, provider: "linear", referenceStyle: "key-number", repository: "ENG" },
-      expected: "ENG-12",
-    },
-    {
-      entry: {
+    [issue, "acme/app#12"],
+    [
+      {
         ...issue,
-        provider: "another-tracker",
-        referenceStyle: "key-number",
-        repository: "APP",
+        tracker: IssueTrackerKind.make("linear"),
+        scope: "ENG",
+        key: "ENG-12",
+        displayKey: "ENG-12",
+        url: "https://linear.app/acme/issue/ENG-12",
       },
-      expected: "APP-12",
-    },
-  ] as const)("formats host-native issue reference $expected", ({ entry, expected }) => {
-    expect(formatIssueReference(entry)).toBe(expected);
-  });
-
-  it("serializes an issue mention with its exact URL", () => {
-    expect(serializeComposerIssueMention(issue)).toBe(
-      "[@acme/app#12](https://github.com/acme/app/issues/12) ",
-    );
+      "ENG-12",
+    ],
+  ] as const)("serializes the issue reference and exact URL", (entry, reference) => {
+    expect(serializeComposerIssueMention(entry)).toBe(`[@${reference}](${entry.url}) `);
   });
 
   it("waits on files immediately and on issues once the path query has text", () => {
@@ -125,8 +115,8 @@ describe("composer issue suggestions", () => {
     });
 
     expect(items.map((item) => item.id)).toEqual([
-      "issue:github:github.com:project-1:acme/app:12",
-      "issue:github:github.acme.test:project-1:acme/app:12",
+      "issue:github%00github.com%00acme%2Fapp%0012",
+      "issue:github%00github.acme.test%00acme%2Fapp%0012",
     ]);
   });
 });

@@ -193,7 +193,7 @@ export function gitHubReactionContent(
 }
 
 /** Keep the viewer in counts, not actors, to avoid duplicating 'You'. */
-function toReactions(
+export function toReactions(
   groups: ReadonlyArray<ReactionGroup> | null | undefined,
   viewer: string | null,
 ): ReadonlyArray<PullRequestReaction> {
@@ -391,6 +391,7 @@ export interface GitHubPullRequestActivity {
   readonly author: PullRequestActor | null;
   readonly comments: ReadonlyArray<PullRequestComment>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
+  readonly truncated: boolean;
 }
 
 /** GitHub returns endCursor even on the last page; hasNextPage is authoritative. */
@@ -1029,9 +1030,13 @@ export function toPullRequestWatchFingerprint(
 }
 
 export interface GitHubPullRequestCore extends GitHubPullRequestDetail {
+  readonly linkedIssues?: ReadonlyArray<IssueLink>;
+  readonly linkedIssuesTruncated?: boolean;
   readonly mergeQueueRemoval?: PullRequestMergeQueueRemoval;
   readonly maintainerCanModify: boolean;
   readonly canEditMaintainerEdits: boolean;
+  readonly mergeCommitSha?: string | null;
+  readonly mergedBy?: PullRequestActor | null;
   readonly reviewRequestTeams: ReadonlyArray<PullRequestActor>;
   readonly viewerAccess: GitHubViewerAccess & GitHubRepositoryAccess;
   readonly comparison: GitHubBaseComparison | null;
@@ -1095,6 +1100,8 @@ export function toPullRequestCore(result: PullRequestCore.Result): GitHubPullReq
       pr.headRepositoryOwner?.__typename === "User" &&
       pr.headRepository !== null &&
       pr.headRef !== null,
+    mergeCommitSha: trimmed(pr.mergeCommit?.oid),
+    mergedBy: toActor(pr.mergedBy),
     viewerAccess: {
       canWrite: toCanWrite(repository.viewerPermission),
       canDeleteBranch: toCanWrite(pr.headRepository?.viewerPermission) && pr.headRef !== null,
@@ -1791,7 +1798,7 @@ const LINKED_ISSUE_FRAGMENT = `fragment LinkedIssue on Issue {
  * GitHub reports closing links separately; mentions exist only as timeline cross-references.
  * Either endpoint may contain the issue, so read both sides.
  */
-export const LINKED_ISSUES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
+const LINKED_ISSUES_GRAPHQL_QUERY = `query PullRequestLinkedIssues($owner: String!, $name: String!, $number: Int!, $first: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       closingIssuesReferences(first: $first) {
@@ -1812,6 +1819,12 @@ export const LINKED_ISSUES_GRAPHQL_QUERY = `query($owner: String!, $name: String
 }
 
 ${LINKED_ISSUE_FRAGMENT}`;
+
+export const PullRequestLinkedIssues = GraphQL.query("PullRequestLinkedIssues", {
+  document: LINKED_ISSUES_GRAPHQL_QUERY,
+  variables: { owner: Schema.String, name: Schema.String, number: Schema.Int, first: Schema.Int },
+  result: Schema.Unknown,
+});
 
 const RawLinkedIssueSchema = Schema.Struct({
   number: Schema.optional(Schema.NullOr(Schema.Int)),
@@ -1943,7 +1956,7 @@ export function buildCitedIssuesGraphQlQuery(
   }
   return selections.length === 0
     ? null
-    : `query {\n${selections.join("\n")}\n}\n\n${LINKED_ISSUE_FRAGMENT}`;
+    : `query PullRequestCitedIssues {\n${selections.join("\n")}\n}\n\n${LINKED_ISSUE_FRAGMENT}`;
 }
 
 const RawCitedIssuesSchema = Schema.Struct({

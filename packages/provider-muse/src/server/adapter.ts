@@ -130,6 +130,7 @@ const MuseProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
+    supportsNativeResume: false,
     supportsActiveSteering: true,
     supportsSteeringByInterruptRestart: false,
     supportsQueuedMessages: true,
@@ -2182,6 +2183,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             if (declined !== undefined)
               yield* eventPermit.withPermits(1)(finish(turn, "failed", declined));
           } else {
+            const extraWorkspaceRoots = yield* Effect.forEach(
+              turnInput.runtimePolicy.workspace?.extraRoots ?? [],
+              (root) => museCanonicalPath(root).pipe(Effect.flatMap(museWorkspaceRoot)),
+            );
             const result = yield* request(
               "turn/start",
               {
@@ -2191,12 +2196,9 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     text: [
                       buildRuntimeInstructions({
                         harness: "Muse Code",
-                        issueToolsAvailable:
-                          (yield* mcpSessions.read(turnInput.threadId))?.capabilities?.has(
-                            "issues",
-                          ) ?? false,
                         model: session.model ?? undefined,
                         reasoningEffort: effort,
+                        runtimePolicy: turnInput.runtimePolicy,
                       }),
                       ...(turnInput.projectInstructions === undefined
                         ? []
@@ -2206,8 +2208,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                   ...parts,
                 ],
                 displayText: turnInput.message.text || "Image attachment",
-                // Resumed sessions retain old roots; pin edits to the current checkout.
-                workspaceRoots: [workspaceRoot],
+                // Resumed sessions retain old roots; pin edits to the current checkouts.
+                workspaceRoots: [workspaceRoot, ...extraWorkspaceRoots],
                 ifBusy: "queue",
                 ...(effort ? { reasoningEffort: effort } : {}),
               },

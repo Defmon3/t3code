@@ -7,6 +7,7 @@ import {
   ProjectSkillShortcuts,
   ProjectSkillShortcutColors,
   ProjectScript,
+  ProjectTrackedFolders,
   ReceivedProjectIcon,
 } from "./project.ts";
 
@@ -27,6 +28,8 @@ export const OrchestrationProjectShell = Schema.Struct({
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
+  // Absent from older servers; that means a single-folder project.
+  trackedFolders: Schema.optional(ProjectTrackedFolders),
   // Pinned projects lead project pickers; archived ones leave them. Optional so older servers decode.
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),

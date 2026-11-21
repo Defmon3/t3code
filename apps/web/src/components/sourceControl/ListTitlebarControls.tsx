@@ -1,7 +1,6 @@
-import { ChevronDownIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import {
   useEffect,
-  useRef,
   type Dispatch,
   type ReactNode,
   type RefObject,
@@ -10,35 +9,10 @@ import {
 
 import { cn } from "~/lib/utils";
 
-import { RefreshIcon } from "../ui/refresh-icon";
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ListFilterOption } from "./ListFilterMenu";
-
-export function ListRefreshControl({
-  label,
-  compact = false,
-  refreshing,
-  onRefresh,
-}: {
-  label: string;
-  compact?: boolean;
-  refreshing: boolean;
-  onRefresh: () => void;
-}) {
-  return (
-    <Button
-      size={compact ? "icon-sm" : "icon"}
-      variant={compact ? "ghost" : "outline"}
-      aria-label={label}
-      onClick={onRefresh}
-      disabled={refreshing}
-    >
-      <RefreshIcon size="md" refreshing={refreshing} />
-    </Button>
-  );
-}
 
 /** A compact stand-in for one pill group when the header is narrow. */
 export function CompactFilterMenu<Value extends string>({
@@ -132,57 +106,6 @@ export function CompactFilterMenu<Value extends string>({
   );
 }
 
-export function ExpandableSearch({
-  label,
-  searchInput,
-  searchValue,
-  open,
-  onOpenChange,
-  focusToken,
-  onFocusWithin,
-}: {
-  label: string;
-  searchInput: ReactNode;
-  searchValue: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  focusToken: number;
-  onFocusWithin?: (focused: boolean) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (open) containerRef.current?.querySelector("input")?.focus();
-  }, [open]);
-  const appliedFocusToken = useRef(focusToken);
-  useEffect(() => {
-    if (appliedFocusToken.current === focusToken) return;
-    appliedFocusToken.current = focusToken;
-    const input = containerRef.current?.querySelector("input");
-    input?.focus();
-    input?.select();
-  }, [focusToken]);
-  if (open || searchValue.length > 0) {
-    return (
-      <div
-        ref={containerRef}
-        className="w-56 min-w-24 shrink"
-        onFocus={() => onFocusWithin?.(true)}
-        onBlur={() => {
-          onFocusWithin?.(false);
-          if (searchValue.length === 0) onOpenChange(false);
-        }}
-      >
-        {searchInput}
-      </div>
-    );
-  }
-  return (
-    <Button size="icon-sm" variant="ghost" aria-label={label} onClick={() => onOpenChange(true)}>
-      <SearchIcon className="size-4" />
-    </Button>
-  );
-}
-
 export function useListSearchShortcut({
   active,
   condensed,
@@ -196,6 +119,7 @@ export function useListSearchShortcut({
   setSearchOpen: Dispatch<SetStateAction<boolean>>;
   setSearchFocusToken: Dispatch<SetStateAction<number>>;
 }) {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Listen for the editor search shortcut while this view is active.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!active || event.defaultPrevented) return;

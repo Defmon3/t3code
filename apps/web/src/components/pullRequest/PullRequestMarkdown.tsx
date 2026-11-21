@@ -1,9 +1,7 @@
+import { T, useGT, Var } from "gt-react";
 import { ExternalLinkIcon, PaperclipIcon } from "lucide-react";
 import { markdownImageSourceFragment } from "@t3tools/client-runtime/markdown-images";
-import {
-  sourceControlClients,
-  type ReferenceAutolink,
-} from "@t3tools/client-runtime/source-control-clients";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   SOURCE_CONTROL_MEDIA_ASSET,
   type AssetResource,
@@ -11,7 +9,6 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { createContext, useContext } from "react";
-import type { Options as ReactMarkdownOptions } from "react-markdown";
 import type { PluggableList } from "unified";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -20,24 +17,20 @@ import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
-import {
-  remarkPullRequestAutolinks,
-  splitPullRequestBody,
-  type PullRequestBodySegment,
-} from "./pullRequestMarkdown.logic";
+import { splitPullRequestBody, type PullRequestBodySegment } from "./pullRequestMarkdown.logic";
 
 export const PullRequestMarkdownContext = createContext<{
   /** Stable per repository, so comments share one renderer and its parse cache. */
-  remarkPlugins?: PluggableList;
-  lineBreaks?: boolean;
-  autolinks?: ((text: string) => ReadonlyArray<ReferenceAutolink>) | null;
+  remarkPlugins: PluggableList;
+  lineBreaks: boolean;
   threadRef: ScopedThreadRef | null;
-  panelRef?: ScopedThreadRef | null;
-  /** Claims a link to open in the app; returning false leaves it to the default handling. */
-  onOpenUrl?: (url: string) => boolean;
   /** The change request's `owner/name`, which can differ from the checkout the body renders in. */
-  repository?: string | null;
+  repository: string | null;
 } | null>(null);
+
+/** The list page panel that links in thread-less markdown open in; the Issues page provides its own. */
+export const PullRequestMarkdownPanelContext =
+  createContext<ScopedThreadRef>(PULL_REQUESTS_PANEL_REF);
 
 function PullRequestHostVideo({
   environmentId,
@@ -52,6 +45,7 @@ function PullRequestHostVideo({
   fetchUrl: string;
   repository: string | undefined;
 }) {
+  const gt = useGT();
   const resource: AssetResource = {
     _tag: SOURCE_CONTROL_MEDIA_ASSET,
     cwd,
@@ -66,7 +60,7 @@ function PullRequestHostVideo({
     <MediaVideoPlayer
       src={src === null ? null : src + markdownImageSourceFragment(url)}
       originalUrl={url}
-      label="Pull request video"
+      label={gt("Pull request video")}
       className="w-full"
       videoClassName="rounded-lg border border-border/60"
       onRetry={refreshAssetUrl}
@@ -89,11 +83,10 @@ function PullRequestBodySegmentView({
   lineBreaks: boolean;
   onTaskListChange: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
 }) {
+  const gt = useGT();
   const context = useContext(PullRequestMarkdownContext);
+  const listPanelRef = useContext(PullRequestMarkdownPanelContext);
   const repository = context?.repository ?? undefined;
-  const extraRemarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]> =
-    context?.remarkPlugins ??
-    (context?.autolinks ? [[remarkPullRequestAutolinks, { autolinks: context.autolinks }]] : []);
   if (segment.kind === "table") {
     return (
       <div className="space-y-3">
@@ -134,9 +127,9 @@ function PullRequestBodySegmentView({
         text={segment.kind === "markdown" ? segment.text : `![](<${segment.url}>)`}
         cwd={cwd}
         threadRef={threadRef}
-        pullRequestPanelRef={context?.panelRef ?? threadRef ?? PULL_REQUESTS_PANEL_REF}
+        pullRequestPanelRef={threadRef ?? listPanelRef}
         environmentId={environmentId}
-        extraRemarkPlugins={extraRemarkPlugins}
+        {...(context ? { extraRemarkPlugins: context.remarkPlugins } : {})}
         lineBreaks={lineBreaks}
         sourceControlMedia
         sourceControlMediaRepository={repository}
@@ -171,7 +164,7 @@ function PullRequestBodySegmentView({
         key={`${segment.id}:${segment.url}`}
         src={segment.url}
         originalUrl={segment.url}
-        label="Pull request video"
+        label={gt("Pull request video")}
         className="w-full"
         videoClassName="rounded-lg border border-border/60"
       />
@@ -187,7 +180,10 @@ function PullRequestBodySegmentView({
     >
       <PaperclipIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">
-        Open attachment on {hostMedia?.definition.label ?? new URL(segment.url).hostname}
+        <T>
+          Open attachment on{" "}
+          <Var>{hostMedia?.definition.label ?? new URL(segment.url).hostname}</Var>
+        </T>
       </span>
       <ExternalLinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
     </a>
@@ -215,29 +211,8 @@ export function PullRequestMarkdown({
   const segments = splitPullRequestBody(text);
   const context = useContext(PullRequestMarkdownContext);
   const resolvedThreadRef = threadRef ?? context?.threadRef ?? undefined;
-  const onOpenUrl = context?.onOpenUrl;
   return (
     <div
-      onClickCapture={
-        onOpenUrl === undefined
-          ? undefined
-          : (event) => {
-              if (
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              ) {
-                return;
-              }
-              const anchor = (event.target as Element).closest?.("a[href]");
-              if (anchor instanceof HTMLAnchorElement && onOpenUrl(anchor.href)) {
-                event.preventDefault();
-                event.stopPropagation();
-              }
-            }
-      }
       className={cn(
         "space-y-3 [&_[data-markdown-details]]:border-0 [&_[data-markdown-details-summary]]:text-foreground/80 [&_[data-markdown-details-summary]>svg]:text-muted-foreground/60",
         className,

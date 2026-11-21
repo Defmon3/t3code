@@ -52,9 +52,9 @@ describe("reopenClosedView", () => {
   it.each([false, true])("restores an issue tab and its selection: list=%s", async (list) => {
     const target = {
       projectId: "project-1",
-      provider: "github",
-      repository: "owner/repo",
-      number: 7,
+      tracker: "github",
+      scope: "owner/repo",
+      key: "7",
     };
     useRightPanelStore.getState().openIssue(threadRef, target);
     const issue = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef)

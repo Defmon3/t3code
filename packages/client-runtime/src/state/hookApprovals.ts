@@ -15,7 +15,7 @@ import {
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import * as Effect from "effect/Effect";
+import { msg } from "gt-i18n";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -123,13 +123,7 @@ export function createChildApprovalAtoms<R, E>(
   });
   const detailAtoms = Atom.family((key: string) => {
     const target = decodePendingApprovalTarget(JSON.parse(key));
-    return Atom.make((get) =>
-      Effect.promise(() => readDetails.run(get.registry, target)).pipe(
-        Effect.flatMap((result) =>
-          result._tag === "Success" ? Effect.succeed(result.value) : Effect.failCause(result.cause),
-        ),
-      ),
-    ).pipe(Atom.setIdleTTL(0));
+    return Atom.make((get) => readDetails.run(get.registry, target)).pipe(Atom.setIdleTTL(0));
   });
   const details = (target: {
     readonly environmentId: EnvironmentId;
@@ -271,14 +265,14 @@ export function hasHookApprovalGrantsCapability(
 export const hookApprovalDurations = {
   "15-minutes": {
     duration: "15-minutes",
-    label: "15 minutes",
-    approvalLabel: "Approve for 15 min",
+    label: msg("15 minutes"),
+    approvalLabel: msg("Approve for 15 min"),
   },
-  "1-hour": { duration: "1-hour", label: "1 hour", approvalLabel: "Approve for 1 hour" },
+  "1-hour": { duration: "1-hour", label: msg("1 hour"), approvalLabel: msg("Approve for 1 hour") },
   session: {
     duration: "session",
-    label: "This session",
-    approvalLabel: "Approve for this session",
+    label: msg("This session"),
+    approvalLabel: msg("Approve for this session"),
   },
 } satisfies Record<
   HookApprovalDuration,
@@ -286,9 +280,9 @@ export const hookApprovalDurations = {
 >;
 
 const hookApprovalOptions = [
-  { decision: "decline", label: "Reject" },
-  { decision: "acceptForSession", label: "Approve for this session" },
-  { decision: "accept", label: "Approve once" },
+  { decision: "decline", label: msg("Reject") },
+  { decision: "acceptForSession", label: msg("Approve for this session") },
+  { decision: "accept", label: msg("Approve once") },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 const bypassApprovalOptions = hookApprovalOptions.filter(

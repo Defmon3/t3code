@@ -9,9 +9,10 @@ import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { decodeLinkedThreadSurface } from "./linkedThreadSurface";
 import { resolveStorage } from "./lib/storage";
 import { randomUUID } from "./lib/utils";
-import { type RightPanelSurface } from "./rightPanelStore";
+import { decodeThreadSurface, type RightPanelSurface } from "./rightPanelStore";
 
 export type ClosedView =
   | {
@@ -62,6 +63,7 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
   switch (surface.kind) {
     case "diff":
     case "processes":
+    case "pull-requests":
     case "files":
       return surface.id === surface.kind;
     case "repository":
@@ -70,11 +72,9 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         ["history", "issues", "pull-requests"].includes(surface.view) &&
         (surface.selectedIssue == null ||
           (typeof surface.selectedIssue.projectId === "string" &&
-            typeof surface.selectedIssue.repository === "string" &&
-            Number.isSafeInteger(surface.selectedIssue.number) &&
-            surface.selectedIssue.number > 0 &&
-            (surface.selectedIssue.provider === undefined ||
-              typeof surface.selectedIssue.provider === "string")))
+            typeof surface.selectedIssue.tracker === "string" &&
+            typeof surface.selectedIssue.scope === "string" &&
+            typeof surface.selectedIssue.key === "string"))
       );
     case "preview":
       return surface.resourceId === null || typeof surface.resourceId === "string";
@@ -95,17 +95,13 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
             typeof surface.target.name === "string" &&
             (surface.target.platform === "ios" || surface.target.platform === "android")))
       );
-    case "issue":
+    case "thread":
+      return typeof surface.threadId === "string" && surface.id === `thread:${surface.threadId}`;
+    case "linked-thread":
       return (
-        typeof surface.projectId === "string" &&
-        typeof surface.repository === "string" &&
-        Number.isSafeInteger(surface.number) &&
-        surface.number > 0 &&
-        (surface.environmentId === undefined || typeof surface.environmentId === "string") &&
-        (surface.provider === undefined || typeof surface.provider === "string")
+        (surface.title === null || typeof surface.title === "string") &&
+        decodeLinkedThreadSurface(surface)?.id === surface.id
       );
-    case "side-chat":
-      return typeof surface.threadId === "string" && surface.id === `side-chat:${surface.threadId}`;
     case "pull-request":
       return (
         typeof surface.projectId === "string" &&
@@ -116,9 +112,26 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         (surface.host === undefined || typeof surface.host === "string") &&
         (surface.url === undefined || typeof surface.url === "string")
       );
+    case "issue":
+      return (
+        typeof surface.projectId === "string" &&
+        typeof surface.tracker === "string" &&
+        typeof surface.scope === "string" &&
+        typeof surface.key === "string" &&
+        (surface.environmentId === undefined || typeof surface.environmentId === "string") &&
+        (surface.host === undefined || typeof surface.host === "string") &&
+        (surface.url === undefined || typeof surface.url === "string")
+      );
     default:
       return false;
   }
+};
+
+/** A closed side chat tab saved before its surface became `thread`. */
+const renamedSideChatTab = (entry: unknown): unknown => {
+  const view = entry as { kind?: unknown; surface?: { kind?: unknown } | null } | null;
+  if (view?.kind !== "panel-tab" || view.surface?.kind !== "side-chat") return entry;
+  return { ...view, surface: decodeThreadSurface(view.surface) };
 };
 
 export const useClosedViewStore = create<ClosedViewStoreState>()(
@@ -150,13 +163,13 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      version: 2,
+      version: 3,
       migrate: (persisted) => {
         const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)
           ?.entries;
         return {
           entries: Array.isArray(entries)
-            ? entries.filter(isClosedViewEntry).filter(isPersistentView)
+            ? entries.map(renamedSideChatTab).filter(isClosedViewEntry).filter(isPersistentView)
             : [],
         };
       },

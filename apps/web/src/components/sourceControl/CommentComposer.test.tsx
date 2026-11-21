@@ -1,9 +1,9 @@
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { act } from "react";
+import { act } from "../../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
-import { issueEnvironment } from "~/state/issues";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { Textarea } from "../ui/textarea";
 import { CommentComposer } from "./CommentComposer";
 
@@ -21,14 +21,12 @@ vi.mock("../ui/popover", () => ({
 let renderer: ReactTestRenderer;
 afterEach(async () => {
   await act(() => renderer?.unmount());
-  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
 it.each([false, true])(
   "keeps the draft unless the combined action posted it: %s",
   async (commentPosted) => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     let finish!: (result: { commentPosted: boolean }) => void;
     const response = new Promise<{ commentPosted: boolean }>((resolve) => {
       finish = resolve;
@@ -39,7 +37,7 @@ it.each([false, true])(
           environmentId={"local" as EnvironmentId}
           detail={{ projectId: "project" as ProjectId, repository: "acme/app", number: 1 }}
           label="Comment on this issue"
-          command={issueEnvironment.comment}
+          command={pullRequestEnvironment.comment}
           followUpAction="close"
           onCommentAction={() => response}
           onCommented={() => undefined}
@@ -66,14 +64,13 @@ it.each([false, true])(
 );
 
 it("keeps a draft while posting is blocked and posts it once unblocked", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   post.mockResolvedValue({ _tag: "Success" });
   const composer = (actionPending: boolean) => (
     <CommentComposer
       environmentId={"local" as EnvironmentId}
       detail={{ projectId: "project" as ProjectId, repository: "acme/app", number: 1 }}
       label="Comment on this issue"
-      command={issueEnvironment.comment}
+      command={pullRequestEnvironment.comment}
       actionPending={actionPending}
       onCommented={() => undefined}
     />

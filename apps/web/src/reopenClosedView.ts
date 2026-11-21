@@ -1,9 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
-  IssueInvolvement,
-  IssueListSort,
-  IssueListState,
+  type IssueInvolvement,
   type EnvironmentId,
   type ProjectId,
   type PullRequestInvolvement,
@@ -26,9 +24,6 @@ import {
 } from "./rightPanelStore";
 
 const isPullRequestListSort = Schema.is(PullRequestListSort);
-const isIssueInvolvement = Schema.is(IssueInvolvement);
-const isIssueListState = Schema.is(IssueListState);
-const isIssueListSort = Schema.is(IssueListSort);
 
 export interface ReopenOwnerState {
   environmentKnown: boolean;
@@ -76,9 +71,9 @@ type PullRequestsSearchLike = Omit<PullRequestListPreferencePatch, "involvement"
   involvement?: PullRequestInvolvement | IssueInvolvement | undefined;
   repository?: string;
   number?: number;
-  selectedProjectId?: ProjectId;
-  selectedHost?: string;
-  selectedEnvironmentId?: EnvironmentId;
+  selectedProjectId?: ProjectId | undefined;
+  selectedHost?: string | undefined;
+  selectedEnvironmentId?: EnvironmentId | undefined;
 };
 
 export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
@@ -116,57 +111,6 @@ export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
         }
       : {}),
   } as Omit<S, "q"> & { readonly q?: string } & PullRequestListPreferences;
-}
-
-type IssuesSearchLike = {
-  involvement?: string | undefined;
-  state?: string | undefined;
-  sort?: string | undefined;
-  q?: string | undefined;
-  repository?: string;
-  number?: number;
-  selectedProjectId?: ProjectId;
-  selectedProvider?: string;
-};
-
-export function issuesSearchForRestore<S extends IssuesSearchLike>(
-  previous: S,
-  selected: RightPanelSurface | null,
-): Omit<S, "q"> & {
-  readonly q?: string;
-  involvement: IssueInvolvement;
-  state: IssueListState;
-  sort?: IssueListSort;
-} {
-  const {
-    repository: _repository,
-    number: _number,
-    selectedProjectId: _projectId,
-    selectedProvider: _provider,
-    q,
-    sort,
-    ...filters
-  } = previous;
-  return {
-    ...filters,
-    ...(q === undefined ? {} : { q }),
-    involvement: isIssueInvolvement(previous.involvement) ? previous.involvement : "all",
-    state: isIssueListState(previous.state) ? previous.state : "open",
-    ...(isIssueListSort(sort) ? { sort } : {}),
-    ...(selected?.kind === "issue"
-      ? {
-          repository: selected.repository,
-          number: selected.number,
-          selectedProjectId: selected.projectId as ProjectId,
-          ...(selected.provider === undefined ? {} : { selectedProvider: selected.provider }),
-        }
-      : {}),
-  } as Omit<S, "q"> & {
-    readonly q?: string;
-    involvement: IssueInvolvement;
-    state: IssueListState;
-    sort?: IssueListSort;
-  };
 }
 
 export async function reopenClosedView(
@@ -243,8 +187,11 @@ export async function reopenClosedView(
     case "pull-request":
       panels.openPullRequest(ref, surface);
       break;
-    case "side-chat":
-      panels.openSideChat(ref, surface.threadId);
+    case "thread":
+      panels.openThread(ref, surface.threadId);
+      break;
+    case "linked-thread":
+      panels.openLinkedThread(ref, surface);
       break;
     default:
       panels.open(ref, surface.kind);

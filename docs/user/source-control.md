@@ -10,6 +10,21 @@ rebases, the files Git brought in are left out. A file stays in the list when th
 committed it, or fixed a conflict in it. Use the branch comparison to review everything that changed
 against your base branch. Restore still returns the complete saved workspace.
 
+In a [project with several repositories](multi-repo-projects.md),
+a turn's changed files are grouped by repository, and the Diff pane shows every repository the
+turn changed. Use the repository picker next to the source picker to narrow the diff to one of
+them. Paths in the diff start at the thread's folder, so the same file name in two repositories
+stays apart. This works when the project folder itself is not a Git repository; the branch
+comparison and uncommitted changes read one repository at a time, chosen from the same picker.
+
+The thread details panel lists each repository the thread has changed, most recent first, with its
+branch and uncommitted changes. Expand one to commit, push, or open a pull request in that
+repository; a pull request opened there, or already open for its branch when a turn ends, is linked
+to the thread. **Other repositories...** adds any other repository of the project to the list until you
+reload. In a worktree thread of a project with several repositories it adds a worktree of that
+repository to the thread instead; see [Worktree threads](multi-repo-projects.md#worktree-threads). A
+worktree thread of a single repository does not offer it.
+
 On web and desktop, open the Diff pane source picker and choose **Commits** to review one local
 commit at a time. The list shows the newest 100 commits in the branch comparison. A merge commit
 shows its changes against its first parent.
@@ -23,7 +38,7 @@ setting in **Settings → Diffs**.
 ## Connect an account
 
 Install Git and configure authentication on the machine running your T3 Code server. For a remote
-environment, do this on the remote machine. After signing in, open **Settings → Source control**
+environment, do this on the remote machine. After signing in, open **Settings → Source control & issues**
 and choose **Rescan**.
 
 ### GitHub
@@ -31,7 +46,7 @@ and choose **Rescan**.
 T3 Code talks to GitHub's API directly and only needs a token. Any of these works, in this
 order of precedence:
 
-1. A token saved in **Settings → Source control → GitHub**. It is kept in the server's secret
+1. A token saved in **Settings → Source control & issues → GitHub**. It is kept in the server's secret
    store, and works without the GitHub CLI.
 2. `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` with `GH_HOST` for GitHub Enterprise Server) in the
    server's environment.
@@ -74,13 +89,13 @@ glab auth login
 
 ### Bitbucket
 
-Open **Settings → Source control**, expand **Bitbucket**, and enter one of:
+Open **Settings → Source control & issues**, expand **Bitbucket**, and enter one of:
 
 - **Access token**: a token created for one repository, project, or workspace. It can only reach
   what it was created for.
 - **Atlassian account email** and **API token**: an Atlassian API token for your account. It can
   reach every repository you can. Give it read/write access to repositories and pull requests, plus
-  user read access (`read:user:bitbucket`).
+  user read access (`read:user:bitbucket`) and workspace read access (`read:workspace:bitbucket`).
 
 A field saves when you leave it, and applies right away. The access token wins when both are saved.
 Credentials are saved on the environment's server, so select a remote environment to configure
@@ -120,7 +135,7 @@ bun install -g @gitcafe/cli
 cafe auth login --host https://git.cafe/api
 ```
 
-Alternatively, open **Settings → Source control**, expand **GitCafe**, and enter a token. It is
+Alternatively, open **Settings → Source control & issues**, expand **GitCafe**, and enter a token. It is
 kept in the server's secret store, applies right away, and is used before `CAFE_TOKEN` and the
 `cafe` login. Or set `CAFE_TOKEN` in the server's environment and restart it. Both tokens are only
 sent to `git.cafe`; `CAFE_TOKEN` follows `CAFE_HOST` if you set it. Repositories on
@@ -128,6 +143,24 @@ sent to `git.cafe`; `CAFE_TOKEN` follows `CAFE_HOST` if you set it. Repositories
 
 Line comments are not available for GitCafe pull requests yet.
 Merging a stack lands it through GitCafe, and updating a branch restacks the layers above it.
+
+### TanStack Source
+
+TanStack Source is in private beta, so the server shows it only when started with
+`T3CODE_TANSTACK_SOURCE=1` in its environment. Install its CLI and sign in:
+
+```sh
+curl -fsSL https://source.tanstack.com/install | sh
+src auth login --web
+```
+
+Alternatively, open **Settings → Source control & issues**, expand **TanStack Source**, and enter a token
+from `https://source.tanstack.com/settings/tokens`. A saved token is used before `SRC_TOKEN`, which is
+used before the `src` login. With several `src` logins, pick the account there too.
+
+Pull requests show the runs of TanStack Source CI with their logs, and update live while open. Issues
+can be listed, filed, edited, commented on and closed. Reactions and picking reviewers or assignees
+from a list are not available yet.
 
 ### Cursor Origin
 
@@ -157,7 +190,7 @@ first commit.
 Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository. Choose a hosting
 provider or paste a Git URL, then choose where to save it. Only GitHub is listed at first. To list
 another provider here and in **Publish Repository**, turn on its switch under
-**Settings → Source control**. A branch or file page copied from GitHub,
+**Settings → Source control & issues**. A branch or file page copied from GitHub,
 GitLab, GitCafe, Codeberg or Bitbucket also works: T3 Code clones that repository's default branch.
 On other hosts, paste the repository's clone URL. The project opens right away while the
 clone runs in the background: you can write your first prompt, and sending waits until the files
@@ -186,7 +219,7 @@ If its badge is missing because several remotes hold that branch, set the branch
 the intended remote with `git branch --set-upstream-to=<remote>/<branch>`.
 
 Choose how commit messages and pull request titles and descriptions are written in
-**Settings → Source control → Commits & pull requests**. **Repository conventions** uses the
+**Settings → Source control & issues → Commits & pull requests**. **Repository conventions** uses the
 project's instructions and recent commit subjects. **Custom instructions** applies your own
 instructions to commits and pull requests.
 
@@ -197,6 +230,12 @@ or merge. You can edit review titles and descriptions and your own comments wher
 Where you can edit a description, you can also tick its checkboxes from the Summary tab
 (the Overview tab on mobile).
 GitLab calls these merge requests.
+
+Save a filter setup with **Views → Save current view** on the Pull Requests page. For example, choose
+**Reviewing** (**Your review** on mobile) and save it as "PRs Requesting My Review". Choose a saved view to restore its search,
+filters, sort order, and server/project scope. After changing filters, use **Update saved view** to
+keep the changes, or save another view. You can also rename or delete views from the same menu.
+Saved views stay in the browser or app where you created them and do not sync across devices.
 
 A link to part of a pull request opens that part: a comment or review is marked in the activity, a
 changed-line link opens the file at those lines, a checks link opens the checks, and a commit link
@@ -211,7 +250,7 @@ Previously loaded lists, review details, guides, and diff pages remain readable 
 without a connection, including after restarting the app. Saved content refreshes when the
 environment reconnects; submitting changes requires a connection.
 
-Enable **Remove agent credits when merging** in Settings → Source control to remove recognized
+Enable **Remove agent credits when merging** in Settings → Source control & issues to remove recognized
 agent co-author and generated-by lines from GitHub merge and squash commit messages. Human
 co-authors stay credited. The setting is off by default and projects can override it. It also
 applies to auto-merge, but not merge queues or native stack merges. Original commits keep their
@@ -228,12 +267,12 @@ Pull request sharing is off by default. In Settings → Environments → Pull re
 request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
 environment you trust to share its source control access.
 Enable both the original environment and the environment answering its requests on this client.
-**Read and act** can use broader GitHub permissions than the original environment's credential;
+**Read and act** can use broader permissions than the original environment's credential;
 only enable it for environments you control and trust. Changing a saved endpoint or removing an
 environment clears its permission.
 
-GitHub review details, linked PR status, and permitted review actions can then use another
-connected environment signed in to the same GitHub account. Each needs a project on that host.
+Review details, linked PR status, and permitted review actions can then use another connected
+environment signed in to the same account on the same host. Each needs a project on that host.
 A connected local environment is preferred for actions and can answer slow or failed reads.
 Browsers and mobile clients need a paired environment to use its GitHub credentials.
 Credentials stay on their machines. Previously verified credentials remain usable for routing
@@ -246,7 +285,7 @@ declined pull request.
 
 ### Review guides
 
-Review guides are in beta. Turn on **Review guides** in Settings → Source control to add the
+Review guides are in beta. Turn on **Review guides** in Settings → Source control & issues to add the
 **Guide** tab to pull requests on that server. On mobile, move between stops with **Next**
 and the back button; a stale guide offers a rewrite and hides excerpts that no longer match
 the current change.
@@ -258,7 +297,7 @@ snapshots are grouped at the end, and every changed file appears somewhere on th
 Conversations already resolved in review are left out. For a pull request in a stack, the guide
 covers that layer only, and may point out what a lower layer introduced or what a higher one uses.
 
-Choose **Write guide** to have the review guide model from Settings → Source control read the
+Choose **Write guide** to have the review guide model from Settings → Source control & issues read the
 change in a temporary checkout; without one set, the source control writer model is used. Nothing
 in the checkout is changed, and a large pull request takes a few minutes; you can go elsewhere in
 the app. On web, you are told when the guide is ready; on mobile, return to the guide to check
@@ -274,7 +313,7 @@ are on. **Finish review** on the last stop opens the review with everything you 
 Agents can write guides too: ask one to prepare guides for a set of pull requests, and it starts
 them for you. Each is read through the project whose checkout has that repository.
 
-To shape guides to your taste, write **Review guide instructions** in Settings → Source control,
+To shape guides to your taste, write **Review guide instructions** in Settings → Source control & issues,
 such as what to show first or what to skip; projects can override them. They change emphasis and
 ordering, not the guide's layout or which files it covers.
 
@@ -295,94 +334,26 @@ and their marks follow the same rules as on web and desktop.
 ## Troubleshooting
 
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,
-  check the credentials saved in Settings → Source control, or confirm the running server received
+  check the credentials saved in Settings → Source control & issues, or confirm the running server received
   the environment variables.
-- **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0, or save a token in Settings → Source control.
+- **GitHub sign-in cannot be verified:** update GitHub CLI to at least 2.81.0, or save a token in Settings → Source control & issues.
 - **Push fails despite a connected account:** check the Git remote's credentials. SSH and HTTPS
   remotes can require separate setup from the hosting provider's API access.
 - **A review cannot load:** open it on the host website while resolving connectivity, permissions,
   or rate limits.
 
-## Track Issues Beside the Work
-
-**Browse every tracker in one place**
-
-- The **Issues** page in web and desktop lists issues from the primary connected environment.
-  Browsing issues across several environments is not yet supported.
-- Filter by state, project, host, or label. Assignment, author, and mention filters depend on the host.
-- Free-text search asks hosts that support search; other results are filtered locally.
-- Supports GitHub Issues, GitLab Issues, Bitbucket Issues, Azure DevOps work items, and Linear.
-  Forgejo issues are not yet supported; open them on the host website.
-- Available actions depend on the host and your permissions.
-
-**Read and act on one without leaving T3 Code**
-
-- Open several issues as tabs in the right panel, beside a thread or on the page
-- Read the description and the conversation, comment, close (with a reason where the host
-  records one), reopen, rename, edit the body, and change labels and assignees
-- File a new issue from the **New issue** button
-- The change requests that reference an issue are listed on it, and the issues a pull request
-  cites or closes are listed on the pull request — either one opens the other beside it
-
-**Connect Linear**
-
-Open **Settings → Source control → Issue Tracking**, then select **Add account** under **Linear
-accounts**. Enter a Linear API key, then choose an account and team for each project. You can add
-several accounts. Keys stay on the connected server.
-
-Linear supports browsing, search, comments, reactions, and agent handoffs. Create issues and change
-their title, description, state, labels, or assignees in Linear. Disconnecting a saved account removes
-its key and project connections.
-
-**Hand one to an agent**
-
-- **Solve** opens a new worktree draft with the issue attached as context. Review the prompt, then send it.
-- **Ask** and **Explain** answer a question about the issue without changing any code
-- **Add to composer** attaches the issue to a thread you are already in, rather than starting a
-  new one
-- Issue content is marked as untrusted context. Review it before sending it to an agent.
-
-Select several issues or pull requests to prepare one task or a parent task with subtasks.
-The draft contains their source links immediately; preparing it does not make a separate model call.
-The agent fetches the details when you send the prompt. **Find matches** uses your configured text
-model to suggest related work or possible duplicates.
-
-Agents can use `link_issue`, `list_thread_issues`, and `unlink_issue` to keep issues with their
-current thread. The thread header's **Linked issues** button opens **Repository → Pull Requests**, which
-lists them below the thread's pull requests. Click an issue to open it, or unlink it from its row menu.
-An issue's **Linked threads** section takes you back to those conversations, where you can follow
-their linked pull requests. These controls are available on web and desktop.
-
-In the **Link** dialog, paste a full issue URL or enter `owner/repo#N` for a repository on the
-current project’s host. GitLab work item URLs are accepted. Check the issue title and state in
-the preview before linking. A pull request cannot be added as an issue.
-
-Linked issue titles and status update after you change them in T3 Code. Changes made on the host
-appear after the next background refresh. When the host limits requests, refresh waits until
-requests are allowed again.
-
-### Link issues and pull requests
-
-Use **Link pull request** in an issue's related work, or **Link issue** in a pull request's related
-work. A saved link appears on both items. Open or unlink it from either side.
-
-These links are saved in T3 Code on the connected environment. They do not change the host's PR
-text or close an issue. Host-reported links remain visible separately. Use **Refresh saved links**
-to pick up changes made by an agent or another client.
-
-Agents can use `link_issue_to_pull_request`, `unlink_issue_from_pull_request`, and
-`list_issue_pull_request_links` for the current thread's project. Agent tools resolve the items
-through the host; the UI can remove a saved link without a host request.
-
 ## Linked pull requests
 
 A thread can hold several pull requests, including reviews from another repository on the same host.
-Use **Link issue or PR** in the command palette or the thread header's right-click menu, **Link**
-in the **Linked items** panel, or right-click an issue or pull request URL in the conversation.
-Use **Link to thread** to attach it, or **Unlink from thread** to remove its saved link.
-Creating a pull request from Git actions links it automatically.
-Creating one with `gh pr create` or `glab mr create` links it automatically. Agents can link their
+Use **Link pull request** in the command palette or **Linked items** panel, or right-click a
+pull request link in the conversation. Creating a pull request from Git actions links it automatically,
+and so does an agent creating one with `gh pr create` or `glab mr create`. Agents can link other
 pull requests with the `link_pull_request` tool.
+
+Agents can also read, open, update, reply on, and merge pull requests in the thread's repository
+through T3 Code's own tools, which use the same sign-in as the Pull requests page. An agent merges
+only the commit it last read: if someone pushed since, the merge is refused. On github.com an
+agent can also land a GitHub stack in one merge, like **Merge stack** below.
 
 Use **Link pull request to thread** in the command palette to keep a pull request with the thread. From a review
 on the Pull requests page, **Link to thread** lets you search for an active thread. The review header
@@ -392,7 +363,7 @@ Thread badges show a stack's layer count or the current review number with a cou
 links. Clicking a badge with more than one review opens the **Linked items** panel. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
 Linking and unlinking are available in the web and desktop clients.
 
-The **Pull Requests** view in **Repository** lists every review and groups stacks, followed by linked issues. Unlink a review from its
+The **Linked items** panel lists every review and groups stacks. Unlink a review from its
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
 closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
 when requested. Settling a thread refreshes its open and closed reviews once; after that they stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
@@ -400,12 +371,13 @@ review is terminal. An open or unsynced link keeps it active.
 
 Ask the agent to watch, monitor, or babysit a pull request and it calls `watch_pull_request`. While
 the thread is active, the server checks the pull request every two minutes and wakes the agent when a
-check fails or waits for a maintainer's approval, the required checks pass, someone else comments or reviews, or the branch starts to
+check fails or waits for a maintainer's approval, the required checks pass, the other checks finish after a failure, someone else comments or reviews, or the branch starts to
 conflict. On github.com it also wakes the agent, with GitHub's reason, when the merge queue drops
 the pull request without merging it. Threads in a project that watch the same pull request share one check. On GitHub, a check
 first asks whether anything changed and reads the pull request only when it did, which keeps
-watching inside GitHub's rate limit. Comments from your own account do not wake it. Watching ends
-when the pull request merges or closes, after 10 wakes in a row that bring only comments, after 8
+watching inside GitHub's rate limit. Comments from your own account do not wake it. When the pull
+request merges or closes, watching ends, and the agent is woken once unless it merged or closed the
+pull request itself with the host's CLI. A reopened pull request needs a new watch. Watching also ends after 10 wakes in a row that bring only comments, after 8
 failed reads in a row, or when you press Stop on the thread. A rate limit only pauses watching.
 Settling or archiving a thread also ends all its watches. Unsettle the thread before starting a new
 watch. Watching a pull request again does not repeat check or conflict news its last
@@ -417,11 +389,50 @@ A watched thread counts as working while the pull request still has checks runni
 the **Working** section, including after the agent pushes a fix. Once every check has finished,
 including review bots that report as checks, the thread returns to your inbox: what happens next is
 up to a person. That includes a workflow waiting for a maintainer to approve it, which runs only
-once someone does. The watch stays on and still wakes the agent on new comments, failed checks or
-conflicts, and a watched thread never auto-settles.
+once someone does. If you ask the agent to act on the pull request itself, such as merging it once
+a teammate approves, the thread stays in **Working** until the pull request merges or closes. The
+watch stays on and still wakes the agent on new comments, failed checks or conflicts, and a watched
+thread never auto-settles.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
+
+## Issues
+
+The Issues page lists the issues of every project whose remote is on GitHub, GitLab, Azure
+DevOps or Forgejo, grouped per tracker account. Open it from the sidebar's utility row or with
+**Open issues** in the command palette. Filter by open or closed, by your involvement
+(assigned, opened by you, mentioning you), and by tracker. Under **Projects**, uncheck the
+projects you do not want to see; the list remembers them, and a project you add later shows.
+The search box asks the tracker itself where it can search. Press **Load more** at the end of a group to read further back.
+The **Views** menu saves and restores a search, filter, and sort setup, as it does for pull
+requests.
+
+To list Linear issues beside a project's, connect Linear with an API key under
+Settings → Source control & issues, then pick one or more teams for that project there. Pick
+another team at any time to add it; uncheck every team to unbind the project. Each team's
+issues appear in the Linear group of the issue list, sorted with the rest by last update, and
+each can be loaded further on its own. Agents file new issues in the first team picked.
+
+Select an issue to open it beside the list: description, comments, state changes, linked pull
+requests, labels, assignees, and reactions. Linked pull requests open in the same panel. You can
+comment, edit the title and description, change labels and assignees, react, and close or
+reopen (with a close reason where the tracker records one) when the tracker and your account
+allow it. An issue read through a project that does not own its repository is shown read-only.
+
+Use **Link pull request** on an issue or **Link issue** on a pull request to save a relationship
+in the connected environment. The link appears on both items and can be removed from either.
+**Find related items** and **Find possible duplicates** ask the environment's text generation
+model for suggestions. A saved link records the relationship in T3 Code without editing the
+tracker or closing the issue.
+
+An issue can be kept with a thread the way a pull request can: open it beside the thread (issue
+links in the conversation open there) and use **Link to this thread** in its header; **Unlink**
+undoes it. Click the issue badge in the thread sidebar to see its issues and pull requests in
+**Linked items**. Select an issue there to open it beside the thread. Agents link the issues they
+work on with the `link_issue` tool.
+
+Writing to a tracker over a remote connection requires the `source-control:write` scope.
 
 ## GitHub stacks
 
@@ -434,9 +445,3 @@ the scope and merge strategy. GitHub rebases the remaining stack after merging.
 It can rewrite history and restart checks. If a layer fails, earlier updates remain; resolve that
 layer before retrying. GitHub may require manual conflict resolution after a lower layer is amended,
 even when its changes look independent. Stack actions require an environment that supports them.
-
-## Repository history and issues
-
-Open **Repository** from a thread panel to browse **History**, **Issues**, and **Pull Requests**. History supports branch and tag selection, commit search, and changed-file diffs. Switching views keeps your history selection and search. Favorite branches are shared across worktrees of the same repository in one environment.
-
-Issue filters are shared with the Issues page for the same environment and project. Search text stays temporary; requests use its first 200 characters after trimming outer spaces.

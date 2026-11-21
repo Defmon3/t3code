@@ -1,12 +1,15 @@
-import { applyPullRequestDraftFilterChange } from "@t3tools/client-runtime/pull-request-query";
+import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { heldPullRequestListEntriesAtom } from "@t3tools/client-runtime/state/pull-requests";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { applyPullRequestDraftFilterChange } from "@t3tools/client-runtime/pull-request-query";
 import { Spinner } from "~/components/ui/spinner";
 import type { PullRequestSpeedActionResult } from "~/components/pullRequest/PullRequestSpeedActions";
 import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
 import { sortProjectsByGroupOrder } from "@t3tools/client-runtime/state/project-grouping";
-import { pullRequestHostOf, resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectId,
@@ -16,12 +19,14 @@ import type {
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListState,
-  SourceControlProviderKind,
   PullRequestSummary,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowDownUpIcon, LayersIcon, Plug2Icon } from "lucide-react";
+import { msg, T, useGT, useMessages } from "gt-react";
+
+import { m } from "~/i18n/messages";
 import { useEffect, useEffectEvent, useRef, useState, type ComponentProps } from "react";
 
 import {
@@ -53,6 +58,8 @@ import {
   type PullRequestListPreferencePatch,
   writePullRequestListPreferences,
 } from "./pullRequestListPreferences";
+import { SavedViewsMenu } from "../SavedViewsMenu";
+import { PULL_REQUEST_SAVED_VIEWS, pullRequestSavedViewPatch } from "./pullRequestSavedViews";
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
@@ -62,8 +69,13 @@ import {
   pullRequestProjectKey,
   type PullRequestFilterOption,
 } from "./PullRequestListFilters";
-import { CompactFilterMenu } from "../sourceControl/ListTitlebarControls";
-import { INVOLVEMENT_TABS, SORT_OPTIONS, STATE_TABS } from "./pullRequestListOptions";
+import { PullRequestCompactFilterMenu } from "./PullRequestCompactFilterMenu";
+import {
+  INVOLVEMENT_TABS,
+  resolveFilterOptions,
+  SORT_OPTIONS,
+  STATE_TABS,
+} from "./pullRequestListOptions";
 import { PullRequestsColumn } from "./PullRequestsColumn";
 import { PullRequestListGroups } from "./PullRequestListGroups";
 import { pullRequestPanelReference } from "./usePullRequestDetail";
@@ -79,8 +91,7 @@ import { PullRequestListEmptyState } from "./PullRequestListEmptyState";
 import { PullRequestListGhost } from "./PullRequestGhosts";
 import { type PullRequestRowTarget } from "./PullRequestRow";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
-import { RightPanelTabs, type IssueTabStatus } from "../RightPanelTabs";
-import { IssueDetailPanel } from "../issue/IssueDetailPanel";
+import { RightPanelTabs } from "../RightPanelTabs";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
 import { isElectron } from "~/env";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
@@ -100,21 +111,13 @@ import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
-  updateIssueTabStatus,
   useRightPanelStore,
-  type RightPanelSurface,
+  type PullRequestSurface,
 } from "~/rightPanelStore";
-import {
-  findProjectForLink,
-  linkedPullRequestTarget,
-  openLinkInBrowser,
-  relatedIssueTarget,
-  repositoryForProjectLink,
-} from "~/lib/openIssueLink";
 import { useSidebarProjectGroups } from "~/hooks/useSidebarProjectGroups";
 import {
   pullRequestEnvironment,
-  usePullRequestList,
+  usePullRequestHostList,
   usePullRequestListStats,
   restoredPullRequestList,
   usePullRequestTurnRefreshes,
@@ -130,6 +133,8 @@ import {
   resetPullRequestHosts,
   type PullRequestHostRead,
 } from "./pullRequestProjectAssignment.logic";
+
+import { changeRequestTermKind } from "./changeRequestTerm";
 
 function getShortcutContext() {
   return {
@@ -157,7 +162,38 @@ const EMPTY_PREVIEW_SESSIONS = {};
 const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
+const heldRowReaders = new WeakMap<
+  EnvironmentPullRequestEntry,
+  Map<string, ReturnType<typeof heldPullRequestListEntriesAtom<EnvironmentPullRequestEntry>>>
+>();
+
+function usePendingListEntries(
+  input: PullRequestListInput,
+  entries: ReadonlyArray<EnvironmentPullRequestEntry> | undefined,
+) {
+  const key = JSON.stringify(input);
+  return useAtomValue(
+    Atom.make((get) =>
+      (entries ?? []).flatMap((entry) => {
+        let readers = heldRowReaders.get(entry);
+        if (readers === undefined) {
+          readers = new Map();
+          heldRowReaders.set(entry, readers);
+        }
+        let reader = readers.get(key);
+        if (reader === undefined) {
+          reader = heldPullRequestListEntriesAtom(entry.environmentId, input, [entry]);
+          readers.set(key, reader);
+        }
+        return AsyncResult.getOrElse(get(reader), () => []);
+      }),
+    ),
+  );
+}
+
 export function PullRequestsPage() {
+  const gt = useGT();
+  const resolve = useMessages();
   const search = useSearch({ from: "/_chat/pull-requests" });
   const sort = search.sort ?? "ready";
   const statsPolicy: PullRequestStatsPolicy =
@@ -196,14 +232,8 @@ export function PullRequestsPage() {
     selectSelectedRightPanelSurface(state.byThreadKey, rightPanelRef),
   );
   const selectedPullRequestSurface =
-    selectedRightPanelSurface?.kind === "pull-request" ||
-    selectedRightPanelSurface?.kind === "issue"
-      ? selectedRightPanelSurface
-      : null;
-  const activePullRequestSurface =
-    rightPanelState.isOpen && selectedPullRequestSurface?.kind === "pull-request"
-      ? selectedPullRequestSurface
-      : null;
+    selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
+  const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const rightPanelPresenceValue = {
@@ -224,16 +254,9 @@ export function PullRequestsPage() {
     (renderedPullRequestSurface?.environmentId as EnvironmentId | undefined) ??
     selectedProject?.environmentId ??
     null;
-  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const activeIssueSurfaceId =
-    renderedPullRequestSurface?.kind === "issue" ? renderedPullRequestSurface.id : undefined;
-  const handleIssueTabStatusChange = (status: IssueTabStatus) => {
-    if (activeIssueSurfaceId === undefined) return;
-    setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
-  };
   const panelSummary = useSharedPullRequestSummary(
     panelEnvironmentId,
-    renderedPullRequestSurface === null || renderedPullRequestSurface.kind === "issue"
+    renderedPullRequestSurface === null
       ? null
       : {
           ...renderedPullRequestSurface,
@@ -364,7 +387,7 @@ export function PullRequestsPage() {
       ];
     });
   const listTargets = listTargetsFor(environmentQueries);
-  const listQuery = usePullRequestList(listTargets);
+  const listQuery = usePullRequestHostList(listTargets);
 
   /**
    * Kept as its own read rather than remembered from an earlier answer because an answer cannot
@@ -385,7 +408,7 @@ export function PullRequestsPage() {
       } satisfies PullRequestListInput,
     }));
   const baselineTargets = baselineTargetsFor(environmentQueries);
-  const baselineQuery = usePullRequestList(baselineTargets);
+  const baselineQuery = usePullRequestHostList(baselineTargets);
   const observedHosts = rememberPullRequestHosts(
     rememberPullRequestHosts(hostReads, baselineQuery.observations),
     listQuery.observations,
@@ -410,7 +433,7 @@ export function PullRequestsPage() {
       } satisfies PullRequestListInput,
     }));
   })();
-  const facetQuery = usePullRequestList(facetTargets);
+  const facetQuery = usePullRequestHostList(facetTargets);
   const filterOptionScope = environmentQueries.map(({ environmentId, projectIds }) => ({
     environmentId,
     input: {
@@ -446,8 +469,8 @@ export function PullRequestsPage() {
       }));
     return { authored: targetsFor("authored"), reviewing: targetsFor("reviewing") };
   })();
-  const authoredQuery = usePullRequestList(partitionTargets.authored);
-  const reviewingQuery = usePullRequestList(partitionTargets.reviewing);
+  const authoredQuery = usePullRequestHostList(partitionTargets.authored);
+  const reviewingQuery = usePullRequestHostList(partitionTargets.reviewing);
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [invalidating, setInvalidating] = useState(false);
@@ -726,6 +749,23 @@ export function PullRequestsPage() {
     search.state,
   );
 
+  const heldEntries = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
+  const overlayInput = { state: search.state, filters };
+  const shownEntries = usePendingListEntries(overlayInput, heldEntries);
+  const shownBaseline = usePendingListEntries(
+    overlayInput,
+    typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
+  );
+  const shownAuthored = usePendingListEntries(
+    overlayInput,
+    partitionsWanted ? authoredQuery.data?.entries : undefined,
+  );
+  const shownReviewing = usePendingListEntries(
+    overlayInput,
+    partitionsWanted ? reviewingQuery.data?.entries : undefined,
+  );
+  const shownHeldAuthored = usePendingListEntries(overlayInput, heldPartitions?.authored);
+  const shownHeldReviewing = usePendingListEntries(overlayInput, heldPartitions?.reviewing);
   const scrollRef = useRef<HTMLDivElement>(null);
   const {
     entries,
@@ -734,9 +774,12 @@ export function PullRequestsPage() {
     entriesByStatsKey,
     heldPullRequestsBySurface,
   } = pullRequestGroups({
-    known: ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []),
+    known: shownEntries,
     // The baseline was read without typed qualifiers, and rows cannot be checked for `checks:`.
-    baseline: typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
+    baseline:
+      typedParsed.filters.checks === undefined && baselineQuery.data !== null
+        ? shownBaseline
+        : undefined,
     providers: baselineQuery.data?.providers ?? listData?.providers ?? [],
     viewers,
     involvement: search.involvement,
@@ -746,11 +789,14 @@ export function PullRequestsPage() {
     answeredLocally: querySettled && !showingCarried,
     baselineEmpty,
     held:
-      loaded !== null && loaded.environmentKey === environmentKey && loaded.scope === scopeKey
-        ? loaded.partitions
-        : undefined,
-    authored: partitionsWanted ? authoredQuery.data?.entries : undefined,
-    reviewing: partitionsWanted ? reviewingQuery.data?.entries : undefined,
+      heldPartitions === undefined
+        ? undefined
+        : {
+            authored: shownHeldAuthored,
+            reviewing: shownHeldReviewing,
+          },
+    authored: partitionsWanted && authoredQuery.data !== null ? shownAuthored : undefined,
+    reviewing: partitionsWanted && reviewingQuery.data !== null ? shownReviewing : undefined,
     partitionsWanted,
   });
 
@@ -1067,7 +1113,7 @@ export function PullRequestsPage() {
       closeSensorRef.current = sensor;
     },
   );
-  const rightPanelAvailable = selectedRightPanelSurface !== null;
+  const rightPanelAvailable = selectedPullRequestSurface !== null;
   const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   const [maximized, setMaximized] = useState(false);
   const rightPanelMaximized = rightPanelState.isOpen && maximized;
@@ -1095,18 +1141,19 @@ export function PullRequestsPage() {
           host:
             activePullRequestSurface.host ??
             (selectedProject?.repositoryIdentity
-              ? pullRequestHostOf(
+              ? sourceControlClients.changeRequestHost(
                   selectedProject.repositoryIdentity,
-                  selectedProject.repositoryIdentity.provider as SourceControlProviderKind,
+                  selectedProject.repositoryIdentity.provider,
                 )
               : undefined),
         }
       : null;
 
-  const selectSurfaceInUrl = (surface: RightPanelSurface | null) =>
+  const selectSurfaceInUrl = (surface: PullRequestSurface | null) =>
     updateSearch(
-      surface?.kind === "pull-request"
-        ? {
+      surface === null
+        ? clearedSelection
+        : {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
@@ -1114,8 +1161,7 @@ export function PullRequestsPage() {
             ...(surface.environmentId === undefined
               ? {}
               : { selectedEnvironmentId: surface.environmentId as EnvironmentId }),
-          }
-        : clearedSelection,
+          },
     );
 
   const toggleRightPanel = () => {
@@ -1125,9 +1171,9 @@ export function PullRequestsPage() {
       updateSearch(clearedSelection);
       return;
     }
-    if (selectedRightPanelSurface === null) return;
+    if (selectedPullRequestSurface === null) return;
     useRightPanelStore.getState().show(rightPanelRef);
-    selectSurfaceInUrl(selectedRightPanelSurface);
+    selectSurfaceInUrl(selectedPullRequestSurface);
   };
 
   const unavailableProjects = new Map(
@@ -1158,6 +1204,8 @@ export function PullRequestsPage() {
   const searchInput = (
     <PullRequestSearchInput
       value={search.q ?? ""}
+      label={gt("Search pull requests")}
+      placeholder={gt("Search pull requests, or label:bug")}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateListScope({ q: query || undefined })}
       onSubmit={submitQuery}
@@ -1177,7 +1225,7 @@ export function PullRequestsPage() {
       rightPanelAvailable={rightPanelAvailable}
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
-      rightPanelUnavailableLabel="Select a pull request first"
+      rightPanelUnavailableLabel={gt("Select a pull request first")}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -1200,7 +1248,7 @@ export function PullRequestsPage() {
     </div>
   );
   const listError = listQuery.error
-    ? `${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message}`
+    ? `${environmentLabels.get(listQuery.error.environmentId) || gt("Environment")}: ${listQuery.error.message}`
     : null;
   const carriedToNothing =
     shownCount === 0 &&
@@ -1209,19 +1257,19 @@ export function PullRequestsPage() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <PullRequestListGhost rows={7} caption="Loading pull requests…" />
+        <PullRequestListGhost rows={7} caption={gt("Loading pull requests…")} />
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
-          title="Pull requests unavailable"
-          error="Update your T3 Code servers to browse pull requests."
+          title={gt("Pull requests unavailable")}
+          error={gt("Update your T3 Code servers to browse pull requests.")}
         />
       ) : firstLoad ? (
-        <PullRequestListGhost rows={7} caption="Loading pull requests…" />
+        <PullRequestListGhost rows={7} caption={gt("Loading pull requests…")} />
       ) : listError && shownCount === 0 ? (
         <PullRequestsUnavailableState
           error={listError}
           refreshing={listQuery.isPending}
-          onRetry={() => listQuery.refresh()}
+          onRetry={listQuery.retry}
         />
       ) : carriedToNothing ? (
         <PullRequestListGhost rows={7} />
@@ -1264,9 +1312,9 @@ export function PullRequestsPage() {
 
       {listError && shownCount > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
-          <span>{listError} Showing the last pull requests loaded.</span>
-          <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
-            Retry
+          <span>{gt("{error} Showing the last pull requests loaded.", { error: listError })}</span>
+          <Button size="xs" variant="outline" onClick={listQuery.retry}>
+            <T>Retry</T>
           </Button>
         </div>
       ) : null}
@@ -1275,7 +1323,7 @@ export function PullRequestsPage() {
           {loadingMore ? (
             <span className="flex items-center gap-2">
               <Spinner aria-hidden size="sm" />
-              {sentCursors === null ? "Updating pull requests" : "Loading more"}
+              {sentCursors === null ? gt("Updating pull requests") : gt("Loading more")}
             </span>
           ) : canContinue || pageSize < MAX_PAGE_SIZE ? (
             <Button
@@ -1284,10 +1332,12 @@ export function PullRequestsPage() {
               onClick={loadMore}
               disabled={listQuery.isPending || showingCarried}
             >
-              Load more pull requests
+              <T>Load more pull requests</T>
             </Button>
           ) : (
-            <span>Narrow your search to find more pull requests.</span>
+            <span>
+              <T>Narrow your search to find more pull requests.</T>
+            </span>
           )}
         </div>
       ) : null}
@@ -1295,7 +1345,7 @@ export function PullRequestsPage() {
   );
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
   const hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
-    { value: "", label: "All", Icon: Plug2Icon },
+    { value: "", label: gt("All", { $context: "all hosts" }), Icon: Plug2Icon },
     ...hostEntries.map((entry) => {
       const summary = hosts.find((host) => host.host === entry.host);
       return {
@@ -1304,12 +1354,12 @@ export function PullRequestsPage() {
         Icon: getSourceControlPresentationForKind(entry.kind).Icon,
         ...(summary === undefined || summary.configured
           ? {}
-          : { unavailable: summary.detail ?? "This host could not be read." }),
+          : { unavailable: summary.detail ?? gt("This host could not be read.") }),
       };
     }),
   ];
   const serverMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
-    { value: "", label: "All servers", Icon: LayersIcon },
+    { value: "", label: gt("All servers"), Icon: LayersIcon },
     ...capableEnvironments.map((environment) => ({
       value: environment.environmentId,
       label: environment.label,
@@ -1317,13 +1367,13 @@ export function PullRequestsPage() {
     })),
   ];
   const sortMenu = (
-    <CompactFilterMenu
-      label="Sort pull requests"
+    <PullRequestCompactFilterMenu
+      label={gt("Sort pull requests")}
       triggerIcon={<ArrowDownUpIcon aria-hidden className="size-4" />}
-      triggerLabel="Sort"
+      triggerLabel={gt("Sort", { $context: "verb, sort a list" })}
       outlined
       value={sort}
-      options={SORT_OPTIONS}
+      options={resolveFilterOptions(SORT_OPTIONS, resolve)}
       onChange={(next) => updateListScope({ sort: next })}
     />
   );
@@ -1331,10 +1381,10 @@ export function PullRequestsPage() {
     <PullRequestFiltersMenuInSidebarOrder
       onOpenChange={setFiltersOpen}
       state={search.state}
-      stateOptions={STATE_TABS}
+      stateOptions={resolveFilterOptions(STATE_TABS, resolve)}
       onState={(state) => updateListScope({ state })}
       involvement={search.involvement}
-      involvementOptions={INVOLVEMENT_TABS}
+      involvementOptions={resolveFilterOptions(INVOLVEMENT_TABS, resolve)}
       onInvolvement={(involvement) => updateListScope({ involvement })}
       filters={
         typedParsed.filters.draft
@@ -1359,6 +1409,9 @@ export function PullRequestsPage() {
       authorOptions={facets.authors}
       labelOptions={facets.labels}
       optionScope={filterOptionScope}
+      host={search.host}
+      hostOptions={hostMenuOptions}
+      onHost={(host) => updateListScope({ host })}
       server={scopedEnvironmentId ?? undefined}
       serverOptions={serverMenuOptions}
       onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
@@ -1385,6 +1438,13 @@ export function PullRequestsPage() {
     searchInput,
     sortMenu,
     filtersMenu,
+    savedViewsMenu: (
+      <SavedViewsMenu
+        kind={PULL_REQUEST_SAVED_VIEWS}
+        preferences={search}
+        onApply={(preferences) => updateListScope(pullRequestSavedViewPatch(preferences))}
+      />
+    ),
     rightPanelControl: !pullRequestsSupported ? null : (
       <span
         aria-hidden
@@ -1420,33 +1480,33 @@ export function PullRequestsPage() {
     scrollRef,
   };
 
-  const activateSurface = (surface: RightPanelSurface) => {
+  const activateSurface = (surface: PullRequestSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().activateSurface(rightPanelRef, surface.id);
     selectSurfaceInUrl(surface);
   };
-  const closeSurface = (surface: RightPanelSurface) => {
+  const closeSurface = (surface: PullRequestSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeSurface(rightPanelRef, surface.id);
     const next = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    selectSurfaceInUrl(next);
+    selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
   };
-  const closeOtherSurfaces = (surface: RightPanelSurface) => {
+  const closeOtherSurfaces = (surface: PullRequestSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeOtherSurfaces(rightPanelRef, surface.id);
     selectSurfaceInUrl(surface);
   };
-  const closeSurfacesToRight = (surface: RightPanelSurface) => {
+  const closeSurfacesToRight = (surface: PullRequestSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeSurfacesToRight(rightPanelRef, surface.id);
     const next = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    selectSurfaceInUrl(next);
+    selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
   };
   const closeAllSurfaces = () => {
     if (rightPanelRef === null) return;
@@ -1460,22 +1520,36 @@ export function PullRequestsPage() {
     event.stopPropagation();
     if (event.repeat) return;
     const url = openPanelPullRequestUrl;
-    const { shortLabel, singular } = (
+    const terminology = (
       sourceControlClients.findByChangeRequestUrl(url) ?? sourceControlClients.get(undefined)
     ).changeRequest;
-    void writeTextToClipboard(url, `${singular} link`).then(undefined, (error) => {
+    void writeTextToClipboard(url, {
+      target: `${terminology.singular} link`,
+      unavailableMessage: msg(
+        "Clipboard API is unavailable while copying {term, select, mr {merge request} cr {change request} other {pull request}} link.",
+        { term: changeRequestTermKind(terminology) },
+      ),
+      failureMessage: msg(
+        "Failed to copy {term, select, mr {merge request} cr {change request} other {pull request}} link to the clipboard.",
+        { term: changeRequestTermKind(terminology) },
+      ),
+    }).then(undefined, (error) => {
       toastManager.add({
         type: "error",
-        title: `Failed to copy ${shortLabel} link`,
-        description: error instanceof Error ? error.message : "An error occurred.",
+        title: m(
+          msg("Failed to copy {term, select, mr {MR} cr {change request} other {PR}} link", {
+            term: changeRequestTermKind(terminology),
+          }),
+        ),
+        description: thrownErrorMessage(error, m) ?? m(msg("An error occurred.")),
       });
     });
   });
   const closeActiveSurfaceFromShortcut = useEffectEvent((event: KeyboardEvent) => {
-    if (!rightPanelState.isOpen || selectedPullRequestSurface === null) return;
+    if (activePullRequestSurface === null) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat) closeSurface(selectedPullRequestSurface);
+    if (!event.repeat) closeSurface(activePullRequestSurface);
   });
   const toggleRightPanelFromShortcut = useEffectEvent((event: KeyboardEvent) => {
     if (!rightPanelAvailable) return;
@@ -1527,10 +1601,18 @@ export function PullRequestsPage() {
             previewSessions={EMPTY_PREVIEW_SESSIONS}
             desktopByTabId={EMPTY_PREVIEW_DESKTOP_STATE}
             terminalLabelsById={EMPTY_TERMINAL_LABELS}
-            onActivate={activateSurface}
-            onCloseSurface={closeSurface}
-            onCloseOtherSurfaces={closeOtherSurfaces}
-            onCloseSurfacesToRight={closeSurfacesToRight}
+            onActivate={(surface) => {
+              if (surface.kind === "pull-request") activateSurface(surface);
+            }}
+            onCloseSurface={(surface) => {
+              if (surface.kind === "pull-request") closeSurface(surface);
+            }}
+            onCloseOtherSurfaces={(surface) => {
+              if (surface.kind === "pull-request") closeOtherSurfaces(surface);
+            }}
+            onCloseSurfacesToRight={(surface) => {
+              if (surface.kind === "pull-request") closeSurfacesToRight(surface);
+            }}
             onCloseAllSurfaces={closeAllSurfaces}
             onMoveSurface={(surfaceId, toIndex) => {
               if (rightPanelRef !== null)
@@ -1551,167 +1633,83 @@ export function PullRequestsPage() {
             pullRequestAvailable={false}
             deviceAvailable={false}
             pullRequestStatusSeeds={listedPullRequestTabStatuses}
-            issueStatuses={issueTabStatuses}
           >
-            {renderedPullRequestSurface.kind === "issue" ? (
-              <IssueDetailPanel
-                key={renderedPullRequestSurface.id}
-                environmentId={panelEnvironmentId}
-                reference={{
-                  projectId: renderedPullRequestSurface.projectId as ProjectId,
-                  ...(renderedPullRequestSurface.provider === undefined
-                    ? {}
-                    : { provider: renderedPullRequestSurface.provider }),
-                  repository: renderedPullRequestSurface.repository,
-                  number: renderedPullRequestSurface.number,
-                }}
-                refreshToken={detailRefreshToken}
-                handoffTarget={{ kind: "new-thread" }}
-                onActed={() => {
-                  void refreshFromHost();
-                }}
-                onStateChange={handleIssueTabStatusChange}
-                onOpenRelatedIssue={(relative) => {
-                  const target = relatedIssueTarget(
-                    projects.filter((candidate) => candidate.environmentId === panelEnvironmentId),
-                    renderedPullRequestSurface,
-                    relative,
-                  );
-                  if (rightPanelRef === null || target === null) {
-                    openLinkInBrowser(relative.url);
-                    return;
+            <PullRequestDetailPanel
+              getShortcutContext={getShortcutContext}
+              shortcutsEnabled={activePullRequestSurface?.id === renderedPullRequestSurface.id}
+              key={renderedPullRequestSurface.id}
+              revealUrl={renderedPullRequestSurface.revealUrl}
+              onRevealSettled={(revealUrl) => {
+                if (rightPanelRef === null) return;
+                useRightPanelStore
+                  .getState()
+                  .settlePullRequestReveal(rightPanelRef, renderedPullRequestSurface.id, revealUrl);
+              }}
+              environmentId={panelEnvironmentId}
+              onGuideShown={onGuideShown}
+              onSelectPullRequest={(reference) => {
+                if (rightPanelRef === null) return;
+                useRightPanelStore.getState().openPullRequest(rightPanelRef, {
+                  projectId: reference.projectId,
+                  repository: reference.repository,
+                  number: reference.number,
+                  ...(reference.host ? { host: reference.host } : {}),
+                  environmentId: panelEnvironmentId,
+                });
+                updateSearch({
+                  repository: reference.repository,
+                  number: reference.number,
+                  selectedHost: reference.host,
+                  selectedProjectId: reference.projectId,
+                  selectedEnvironmentId: panelEnvironmentId,
+                });
+              }}
+              reference={pullRequestPanelReference({
+                ...renderedPullRequestSurface,
+                projectId: renderedPullRequestSurface.projectId as ProjectId,
+              })}
+              listEntry={
+                listedPullRequestsBySurface.get(
+                  pullRequestListEntryId(renderedPullRequestSurface),
+                ) ?? null
+              }
+              refreshToken={detailRefreshToken}
+              tabOnPage
+              onActed={(action, phase = "done", reply) => {
+                // From every row held, not the ones on screen: a pull request closed from an open
+                // list has left the screen, and reopening it has to find it anyway.
+                const acted = heldPullRequestsBySurface.get(
+                  pullRequestListEntryId(renderedPullRequestSurface),
+                );
+                if (reply !== undefined) {
+                  if (acted !== undefined) {
+                    if (action !== undefined) overrideEntry(acted, action, reply);
+                    detailOverrideTokens.current.delete(pullRequestEntryKey(acted));
                   }
-                  useRightPanelStore.getState().openIssue(rightPanelRef, {
-                    environmentId: panelEnvironmentId,
-                    ...target,
-                    ...(renderedPullRequestSurface.provider === undefined
-                      ? {}
-                      : { provider: renderedPullRequestSurface.provider }),
-                  });
-                }}
-                onOpenLinkedPullRequest={(link) => {
-                  const project = findProjectForLink(
-                    projects.filter((candidate) => candidate.environmentId === panelEnvironmentId),
-                    link,
-                  );
-                  if (rightPanelRef === null || project === undefined) {
-                    openLinkInBrowser(link.url);
-                    return;
-                  }
-                  const target = {
-                    environmentId: panelEnvironmentId,
-                    ...linkedPullRequestTarget(project, link),
-                  };
-                  useRightPanelStore.getState().openPullRequest(rightPanelRef, target);
-                  updateSearch({
-                    repository: target.repository,
-                    selectedEnvironmentId: panelEnvironmentId,
-                    number: target.number,
-                    selectedHost: target.host,
-                    selectedProjectId: target.projectId,
-                  });
-                }}
-              />
-            ) : (
-              <PullRequestDetailPanel
-                getShortcutContext={getShortcutContext}
-                shortcutsEnabled={activePullRequestSurface?.id === renderedPullRequestSurface.id}
-                key={renderedPullRequestSurface.id}
-                revealUrl={renderedPullRequestSurface.revealUrl}
-                onRevealSettled={(revealUrl) => {
-                  if (rightPanelRef === null) return;
-                  useRightPanelStore
-                    .getState()
-                    .settlePullRequestReveal(
-                      rightPanelRef,
-                      renderedPullRequestSurface.id,
-                      revealUrl,
-                    );
-                }}
-                environmentId={panelEnvironmentId}
-                onGuideShown={onGuideShown}
-                onSelectPullRequest={(reference) => {
-                  if (rightPanelRef === null) return;
-                  useRightPanelStore.getState().openPullRequest(rightPanelRef, {
-                    projectId: reference.projectId,
-                    repository: reference.repository,
-                    number: reference.number,
-                    ...(reference.host ? { host: reference.host } : {}),
-                    environmentId: panelEnvironmentId,
-                  });
-                  updateSearch({
-                    repository: reference.repository,
-                    number: reference.number,
-                    selectedHost: reference.host,
-                    selectedProjectId: reference.projectId,
-                    selectedEnvironmentId: panelEnvironmentId,
-                  });
-                }}
-                reference={pullRequestPanelReference({
-                  ...renderedPullRequestSurface,
-                  projectId: renderedPullRequestSurface.projectId as ProjectId,
-                })}
-                listEntry={
-                  listedPullRequestsBySurface.get(
-                    pullRequestListEntryId(renderedPullRequestSurface),
-                  ) ?? null
+                  return;
                 }
-                refreshToken={detailRefreshToken}
-                tabOnPage
-                onActed={(action, phase = "done", reply) => {
-                  // From every row held, not the ones on screen: a pull request closed from an open
-                  // list has left the screen, and reopening it has to find it anyway.
-                  const acted = heldPullRequestsBySurface.get(
-                    pullRequestListEntryId(renderedPullRequestSurface),
-                  );
-                  if (reply !== undefined) {
-                    if (acted !== undefined) {
-                      if (action !== undefined) overrideEntry(acted, action, reply);
-                      detailOverrideTokens.current.delete(pullRequestEntryKey(acted));
-                    }
-                    return;
+                const stateOnly =
+                  action !== undefined &&
+                  acted !== undefined &&
+                  pullRequestOverrideAfterAction(acted, action, new Date(), 0) !== null;
+                if (stateOnly) {
+                  const key = pullRequestEntryKey(acted);
+                  if (phase === "sent" && action !== "merge") {
+                    detailOverrideTokens.current.set(key, overrideEntry(acted, action));
                   }
-                  const stateOnly =
-                    action !== undefined &&
-                    acted !== undefined &&
-                    pullRequestOverrideAfterAction(acted, action, new Date(), 0) !== null;
-                  if (stateOnly) {
-                    const key = pullRequestEntryKey(acted);
-                    if (phase === "sent" && action !== "merge") {
-                      detailOverrideTokens.current.set(key, overrideEntry(acted, action));
-                    }
-                    if (phase === "failed" && action !== "merge") {
-                      revertOverride(key, detailOverrideTokens.current.get(key) ?? null);
-                    }
-                    if (phase !== "sent") detailOverrideTokens.current.delete(key);
-                    if (phase === "done" && action === "merge") {
-                      overrideEntry(acted, action);
-                      refreshListAndStats(undefined, panelEnvironmentId);
-                    }
-                    return;
+                  if (phase === "failed" && action !== "merge") {
+                    revertOverride(key, detailOverrideTokens.current.get(key) ?? null);
                   }
-                  if (phase === "done") refreshListAndStats(undefined, panelEnvironmentId);
-                }}
-                onOpenLinkedIssue={(link) => {
-                  const project = findProjectForLink(
-                    projects.filter((candidate) => candidate.environmentId === panelEnvironmentId),
-                    link,
-                  );
-                  if (rightPanelRef === null || project === undefined) {
-                    openLinkInBrowser(link.url);
-                    return;
+                  if (phase !== "sent") detailOverrideTokens.current.delete(key);
+                  if (phase === "done" && action === "merge") {
+                    overrideEntry(acted, action);
+                    refreshListAndStats(undefined, panelEnvironmentId);
                   }
-                  useRightPanelStore.getState().openIssue(rightPanelRef, {
-                    environmentId: panelEnvironmentId,
-                    projectId: project.id,
-                    provider: link.provider,
-                    repository: repositoryForProjectLink(project, link.repository),
-                    number: link.number,
-                  });
-                  selectSurfaceInUrl(null);
-                }}
-              />
-            )}
+                  return;
+                }
+                if (phase === "done") refreshListAndStats(undefined, panelEnvironmentId);
+              }}
+            />
           </RightPanelTabs>
         ) : null}
       </div>

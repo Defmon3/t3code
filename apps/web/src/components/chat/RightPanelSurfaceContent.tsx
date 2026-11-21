@@ -1,6 +1,8 @@
+import { useGT } from "gt-react";
 import type {
   EditorId,
   EnvironmentId,
+  IssueTrackerKind,
   PreviewAnnotationPayload,
   ProjectId,
   ResolvedKeybindingsConfig,
@@ -9,27 +11,23 @@ import type {
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { type ComponentProps, lazy, Suspense } from "react";
-import SideChatPane from "./SideChatPane";
+import { LinkedThreadPane } from "./LinkedThreadPane";
+import SideThreadPane from "./SideThreadPane";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
 import type { ShortcutMatchContext } from "../../keybindings";
-import { openLinkInBrowser, relatedIssueTarget } from "../../lib/openIssueLink";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import { type RightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
 import {
   PersistentThreadTerminalPanel,
   type PersistentThreadTerminalPanelProps,
 } from "../PersistentThreadTerminals";
+import { IssueDetailPanel } from "../issue/IssueDetailPanel";
 import { pullRequestPanelContext } from "../pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
-import { IssueDetailPanel, type IssueHandoffTarget } from "../issue/IssueDetailPanel";
-import { IssuesUnavailableState } from "../issue/IssuesUnavailableState";
-import type { IssueTabStatus } from "../RightPanelTabs";
-import { DetailGhost } from "../sourceControl/ListGhosts";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -59,9 +57,6 @@ interface RightPanelPullRequestProps {
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
   readonly branchPullRequest: ThreadLinkedPullRequest | null | undefined;
   readonly onBack: (() => void) | undefined;
-  readonly onOpenLinkedIssue: NonNullable<
-    ComponentProps<typeof PullRequestDetailPanel>["onOpenLinkedIssue"]
-  >;
 }
 
 export type RightPanelRepositoryProps = Omit<
@@ -69,17 +64,7 @@ export type RightPanelRepositoryProps = Omit<
   "environmentId" | "threadRef" | "view" | "selectedIssue" | "active" | "onViewChange"
 >;
 
-export interface RightPanelIssueProps {
-  readonly capabilityKnown: boolean;
-  readonly supported: boolean;
-  /** Where the issue's hand-off actions write; null while the thread has no project. */
-  readonly handoffTarget: IssueHandoffTarget | null;
-  readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly onStateChange: (status: IssueTabStatus) => void;
-  readonly onOpenLinkedPullRequest: RightPanelRepositoryProps["onOpenLinkedPullRequest"];
-}
-
-interface RightPanelFileProps {
+export interface RightPanelFileProps {
   readonly projectId?: ProjectId | undefined;
   readonly projectName: string | null;
   readonly workspaceRoot: string | undefined;
@@ -99,6 +84,8 @@ export function RightPanelSurfaceContent(props: {
   readonly keybindings: ResolvedKeybindingsConfig;
   readonly configuredPreviewUrls: ReadonlyArray<string>;
   readonly workspaceMutationId: string | null;
+  /** What the diff is read under, as the Changes totals are; see `useWorkspaceRevision`. */
+  readonly workspaceRevision: string | null;
   readonly getShortcutContext: () => ShortcutMatchContext;
   readonly onSendAnnotation: (
     annotation: PreviewAnnotationPayload,
@@ -108,11 +95,12 @@ export function RightPanelSurfaceContent(props: {
   readonly terminal: RightPanelTerminalProps;
   readonly pullRequest: RightPanelPullRequestProps;
   readonly repository: RightPanelRepositoryProps;
-  readonly issue: RightPanelIssueProps;
+  readonly issuesSupported: boolean;
   readonly files: RightPanelFileProps;
   readonly sideChatParentPanel: SideChatParentPanel;
 }) {
   const { surface, threadRef, visible, onCloseSurface } = props;
+  const gt = useGT();
   if (surface === null) return null;
   switch (surface.kind) {
     case "preview":
@@ -144,7 +132,7 @@ export function RightPanelSurfaceContent(props: {
             key={scopedThreadKey(threadRef)}
             mode="embedded"
             composerDraftTarget={props.composerDraftTarget}
-            workspaceMutationId={props.workspaceMutationId}
+            workspaceMutationId={props.workspaceRevision}
             visible={visible}
           />
         </Suspense>
@@ -155,8 +143,8 @@ export function RightPanelSurfaceContent(props: {
       if (!pullRequest.supported) {
         return (
           <PullRequestsUnavailableState
-            title="Pull requests unavailable"
-            error="Update this environment's T3 Code server to browse pull requests."
+            title={gt("Pull requests unavailable")}
+            error={gt("Update this environment's T3 Code server to browse pull requests.")}
           />
         );
       }
@@ -200,7 +188,6 @@ export function RightPanelSurfaceContent(props: {
           )}
           composerDraftTarget={props.composerDraftTarget}
           onBack={pullRequest.onBack}
-          onOpenLinkedIssue={pullRequest.onOpenLinkedIssue}
         />
       );
     }
@@ -226,61 +213,60 @@ export function RightPanelSurfaceContent(props: {
           <ProcessPanelForEnvironment environmentId={threadRef.environmentId} active={visible} />
         </Suspense>
       );
-    case "issue": {
-      const issue = props.issue;
-      if (!issue.capabilityKnown) return <DetailGhost label="Loading issues" />;
-      if (!issue.supported) {
+    case "issue":
+      if (!props.pullRequest.capabilityKnown) return <PullRequestDetailGhost />;
+      if (!props.issuesSupported) {
         return (
-          <IssuesUnavailableState
-            title="Issues unavailable"
-            error="Update this environment's T3 Code server to browse issues."
+          <PullRequestsUnavailableState
+            title={gt("Issues unavailable")}
+            error={gt("Update this environment's T3 Code server to browse issues.")}
           />
         );
       }
-      if (issue.handoffTarget === null) return null;
       return (
         <IssueDetailPanel
-          key={surface.id}
-          environmentId={props.environmentId}
+          key={`${surface.environmentId ?? props.environmentId}:${surface.id}`}
+          environmentId={
+            (surface.environmentId as EnvironmentId | undefined) ?? props.environmentId
+          }
           reference={{
             projectId: surface.projectId as ProjectId,
-            ...(surface.provider === undefined ? {} : { provider: surface.provider }),
-            repository: surface.repository,
-            number: surface.number,
+            tracker: surface.tracker as IssueTrackerKind,
+            ...(surface.host ? { host: surface.host } : {}),
+            scope: surface.scope,
+            key: surface.key,
           }}
-          onOpenRelatedIssue={(relative) => {
-            const target = relatedIssueTarget(
-              issue.projects.filter((candidate) => candidate.environmentId === props.environmentId),
-              surface,
-              relative,
-            );
-            if (target === null) {
-              openLinkInBrowser(relative.url);
-              return;
-            }
-            useRightPanelStore.getState().openIssue(threadRef, {
-              ...target,
-              ...(surface.provider === undefined ? {} : { provider: surface.provider }),
+          threadRef={threadRef}
+          onSelectPullRequest={(reference) => {
+            useRightPanelStore.getState().openPullRequest(threadRef, {
+              projectId: reference.projectId,
+              repository: reference.repository,
+              number: reference.number,
+              ...(reference.host ? { host: reference.host } : {}),
             });
           }}
-          chromeVariant="collapse"
-          handoffTarget={issue.handoffTarget}
-          onStateChange={issue.onStateChange}
-          onOpenLinkedPullRequest={issue.onOpenLinkedPullRequest}
         />
       );
-    }
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
-    case "side-chat":
+    case "thread":
       // Not lazy: revealing a suspended tiptap editor tears down its view and crashes the composer.
       return (
-        <SideChatPane
+        <SideThreadPane
           key={surface.id}
           parentRef={threadRef}
-          threadId={surface.threadId}
+          surface={surface}
           parentPanel={props.sideChatParentPanel}
           onClose={() => onCloseSurface(surface)}
+        />
+      );
+    case "linked-thread":
+      return (
+        <LinkedThreadPane
+          key={surface.id}
+          panelRef={threadRef}
+          surface={surface}
+          visible={visible && props.activeSurfaceId === surface.id}
         />
       );
     case "device":

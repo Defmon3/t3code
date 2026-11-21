@@ -2,32 +2,43 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
+import { AssetCreateUrlResult, AttachmentCreateUploadUrlResult } from "./assets.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
-import {
-  RpcScopeAuthorization,
-  WS_METHODS,
-  WsCoreRpcGroup,
-  WsIssueRpcGroup,
-  WsRpcGroup,
-} from "./rpc.ts";
+import { WS_METHODS, WsRpcGroup } from "./rpc.ts";
 
 describe("WebSocket RPC contracts", () => {
-  it("keeps every method authorized when combining core and issue handlers", () => {
-    const coreMethods = [...WsCoreRpcGroup.requests.keys()];
-    const issueMethods = [...WsIssueRpcGroup.requests.keys()];
-    const methods = [...WsRpcGroup.requests.keys()];
-    const expectedMethods = [
-      ...Object.values(WS_METHODS),
-      ...Object.values(ORCHESTRATION_V2_WS_METHODS),
-    ];
+  it("only accepts asset and upload URLs on their own server routes", () => {
+    const decodeAsset = Schema.decodeUnknownExit(AssetCreateUrlResult);
+    const decodeUpload = Schema.decodeUnknownExit(AttachmentCreateUploadUrlResult);
+    const expiresAt = 10_000;
 
-    expect(new Set([...coreMethods, ...issueMethods]).size).toBe(
-      coreMethods.length + issueMethods.length,
-    );
-    expect(methods.toSorted()).toEqual(expectedMethods.toSorted());
     expect(
-      [...WsRpcGroup.requests.values()].every((rpc) => rpc.middlewares.has(RpcScopeAuthorization)),
+      Exit.isSuccess(
+        decodeAsset({ relativeUrl: "/api/assets/token.sig/my%20file.png", expiresAt }),
+      ),
     ).toBe(true);
+    expect(
+      Exit.isSuccess(
+        decodeUpload({
+          relativeUrl: "/api/attachments/upload/token.sig",
+          expiresAt,
+          attachmentId: "attachment",
+        }),
+      ),
+    ).toBe(true);
+
+    for (const relativeUrl of [
+      "data:text/plain,hello",
+      "file:///tmp/document",
+      "https://other.example/document",
+      "//other.example/document",
+      "/api/assets/token/../../../other",
+    ]) {
+      expect(Exit.isFailure(decodeAsset({ relativeUrl, expiresAt }))).toBe(true);
+      expect(
+        Exit.isFailure(decodeUpload({ relativeUrl, expiresAt, attachmentId: "attachment" })),
+      ).toBe(true);
+    }
   });
 
   it("rejects server-internal commands sent to dispatchCommand", () => {

@@ -7,7 +7,6 @@ import * as Exit from "effect/Exit";
 import * as Hash from "effect/Hash";
 import * as Effect from "effect/Effect";
 import type {
-  IssueLink,
   PullRequestActor,
   PullRequestCapabilities,
   PullRequestCheck,
@@ -31,12 +30,6 @@ import type {
   GitHubViewerAccess,
   GitHubWorkflowRunApproval,
 } from "./gitHubPullRequestJson.ts";
-import {
-  CITED_ISSUE_REFERENCES_MAX,
-  mergeIssueLinks,
-  parseIssueReferences,
-  unlinkedIssueReferences,
-} from "@t3tools/source-control-core/server/issueReferences";
 import { definition } from "../shared/definition.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
@@ -66,13 +59,14 @@ const CAPABILITIES: PullRequestCapabilities = {
   // Statuses and check runs land on the head commit itself and are read whole, so an empty list
   // after a push is CI that never started rather than a read that saw nothing.
   checksAlwaysReport: true,
+  withheldFileDiff: true,
 };
 
 const UNAVAILABLE_REQUIREMENT = {
   missing:
     "No GitHub credential on the server. Set GH_TOKEN, or install the GitHub CLI (https://cli.github.com/) and run `gh auth login`.",
   unauthenticated:
-    "GitHub has no working credential for this host. Run `gh auth login`, or check the account and hosts in Settings → Source Control.",
+    "GitHub has no working credential for this host. Run `gh auth login`, or check the account and hosts in Settings → Source control & issues.",
 };
 
 /**
@@ -150,9 +144,9 @@ function gitHubProviderFailure(
 
 const REPOSITORY_ACCESS_HINTS: Record<Exclude<GitHubCredentialSource, "app">, string> = {
   settings:
-    "Your saved GitHub token can't see it. Give it access, or change it in Settings → Source Control.",
+    "Your saved GitHub token can't see it. Give it access, or change it in Settings → Source control & issues.",
   env: "The server's environment token can't see it. Give it access, or unset it.",
-  gh: "Your gh login can't see it. Give it access, or save a token in Settings → Source Control.",
+  gh: "Your gh login can't see it. Give it access, or save a token in Settings → Source control & issues.",
 };
 
 function withAvatar(
@@ -337,47 +331,12 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
-  const citedIssues = (
-    input: { readonly cwd: string; readonly repository: string; readonly host: string },
-    pullRequest: { readonly title: string; readonly body: string },
-    hostLinks: ReadonlyArray<IssueLink>,
-  ): Effect.Effect<
-    { readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean },
-    GitHubPullRequestApi.GitHubPullRequestApiError
-  > => {
-    const references = unlinkedIssueReferences(
-      parseIssueReferences({
-        kind: "github",
-        host: input.host,
-        repository: input.repository,
-        title: pullRequest.title,
-        body: pullRequest.body,
-      }),
-      hostLinks,
-    );
-    return references.length === 0
-      ? Effect.succeed({ links: [], truncated: false })
-      : cli
-          .listCitedIssues({
-            cwd: input.cwd,
-            host: input.host,
-            references: references.slice(0, CITED_ISSUE_REFERENCES_MAX),
-          })
-          .pipe(
-            Effect.map((links) => ({
-              links,
-              truncated: references.length > CITED_ISSUE_REFERENCES_MAX,
-            })),
-            Effect.catchIf(
-              (error) =>
-                error._tag !== "GitHubApiRateLimitError" &&
-                error._tag !== "SourceControlRateLimitPausedError",
-              () => Effect.succeed({ links: [], truncated: true }),
-            ),
-          );
-  };
-
-  const readChecks = (input: ProviderRepositoryRef & { readonly number: number }) =>
+  const readChecks = (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly includeIssueLinks?: boolean;
+    },
+  ) =>
     cli.getPullRequestDetail(input).pipe(
       Effect.flatMap((pullRequest) =>
         (pullRequest.state !== "open" || pullRequest.isCrossRepository !== true
@@ -475,6 +434,7 @@ export const make = Effect.gen(function* () {
           filters: input.filters,
         })
         .pipe(
+          Effect.mapError(fail("listChangeRequests")),
           Effect.map((page) => ({
             ...page,
             items: page.items.map((item) => ({
@@ -482,7 +442,6 @@ export const make = Effect.gen(function* () {
               author: withAvatar(item.author, new Map<string, string>(), input.host),
             })),
           })),
-          Effect.mapError(fail("listChangeRequests")),
         ),
 
     listChangeRequestsAcross: (input) =>
@@ -552,91 +511,66 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getChangeRequestChecks")),
       ),
 
-    getChangeRequest: (input) => {
-      const linkedIssues = Effect.catchIf(
-        cli.listLinkedIssues(input),
-        (error) =>
-          error._tag !== "GitHubApiRateLimitError" &&
-          error._tag !== "SourceControlRateLimitPausedError",
-        () => Effect.succeed({ links: [], truncated: true }),
-      );
-      return Effect.all(
-        {
-          pullRequest: readChecks(input),
-          linkedIssues,
-        },
-        { concurrency: 2 },
-      ).pipe(
-        Effect.flatMap(({ pullRequest, linkedIssues }) =>
-          citedIssues(input, pullRequest, linkedIssues.links).pipe(
-            Effect.map((cited): ProviderChangeRequestDetail => ({
-              ...pullRequest,
-              author: withAvatar(pullRequest.author, new Map<string, string>(), input.host),
-              reviewers: [
-                ...pullRequest.reviewRequestLogins.map((login) => ({
-                  login,
-                  name: null,
-                  avatarUrl: null,
-                })),
-                ...pullRequest.reviewRequestTeams,
-              ],
-              mergeCapabilities: pullRequest.viewerAccess.mergeCapabilities,
-              viewerPermissions: {
-                ...gitHubViewerPermissions({
-                  ...pullRequest.viewerAccess,
-                  canUpdateBranch: pullRequest.comparison?.viewerCanUpdate === true,
-                }),
-                maintainerEdits: pullRequest.canEditMaintainerEdits,
-              },
-              linkedIssues: mergeIssueLinks(linkedIssues.links, cited.links),
-              linkedIssuesTruncated: linkedIssues.truncated || cited.truncated,
-              baseComparison:
-                pullRequest.comparison === null || pullRequest.comparison.behindBy === null
-                  ? "unknown"
-                  : pullRequest.comparison.behindBy > 0
-                    ? "behind"
-                    : "up-to-date",
-              ...(pullRequest.comparison?.behindBy == null
-                ? {}
-                : { behindBy: pullRequest.comparison.behindBy }),
+    getChangeRequest: (input) =>
+      readChecks({ ...input, includeIssueLinks: true }).pipe(
+        Effect.map((pullRequest): ProviderChangeRequestDetail => ({
+          ...pullRequest,
+          author: withAvatar(pullRequest.author, new Map<string, string>(), input.host),
+          reviewers: [
+            ...pullRequest.reviewRequestLogins.map((login) => ({
+              login,
+              name: null,
+              avatarUrl: null,
             })),
-          ),
-        ),
+            ...pullRequest.reviewRequestTeams,
+          ],
+          mergeCapabilities: pullRequest.viewerAccess.mergeCapabilities,
+          viewerPermissions: {
+            ...gitHubViewerPermissions({
+              ...pullRequest.viewerAccess,
+              canUpdateBranch: pullRequest.comparison?.viewerCanUpdate === true,
+            }),
+            maintainerEdits: pullRequest.canEditMaintainerEdits,
+          },
+          baseComparison:
+            pullRequest.comparison === null || pullRequest.comparison.behindBy === null
+              ? "unknown"
+              : pullRequest.comparison.behindBy > 0
+                ? "behind"
+                : "up-to-date",
+          ...(pullRequest.comparison?.behindBy == null
+            ? {}
+            : { behindBy: pullRequest.comparison.behindBy }),
+        })),
         Effect.mapError(fail("getChangeRequest")),
-      );
-    },
+      ),
 
     getChangeRequestActivity: (input) => {
-      // Line comments live on review threads, which `gh pr view --json` cannot reach. A
-      // GraphQL hiccup degrades to a truncated conversation rather than blanking activity.
-      const reviewThreads = Effect.catchIf(
-        cli.listReviewThreadComments(input),
-        (error) =>
-          error._tag !== "GitHubApiRateLimitError" &&
-          error._tag !== "SourceControlRateLimitPausedError",
-        () =>
-          Effect.succeed({
-            comments: [],
-            dismissalsByReviewId: new Map<string, string>(),
-            reactions: [],
-            reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
-            editedAtById: new Map<string, string>(),
-            reviewThreads: [],
-            commentCount: 0,
-            truncated: true,
-            reviewThreadsTruncated: true,
-            reviewers: [],
-            avatarsByLogin: new Map<string, string>(),
-            botLogins: new Set<string>(),
-            commitStats: new Map<
-              string,
-              { readonly additions: number; readonly deletions: number }
-            >(),
-            commits: [],
-            viewer: { canUpdate: true, didAuthor: false },
-          }),
+      const threadRead = cli.listReviewThreadComments(input).pipe(
+        Effect.catchIf(
+          (error) =>
+            error._tag !== "GitHubApiRateLimitError" &&
+            error._tag !== "SourceControlRateLimitPausedError",
+          () =>
+            Effect.succeed({
+              comments: [],
+              dismissalsByReviewId: new Map<string, string>(),
+              reactions: [],
+              reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
+              editedAtById: new Map<string, string>(),
+              reviewThreads: [],
+              commentCount: 0,
+              truncated: true,
+              reviewThreadsTruncated: true,
+              reviewers: [],
+              avatarsByLogin: new Map<string, string>(),
+              botLogins: new Set<string>(),
+              commits: [],
+              viewer: { canUpdate: true, didAuthor: false },
+            }),
+        ),
       );
-      return Effect.all([cli.getPullRequestActivity(input), reviewThreads], {
+      return Effect.all([cli.getPullRequestActivity(input), threadRead], {
         concurrency: 2,
       }).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
@@ -693,7 +627,7 @@ export const make = Effect.gen(function* () {
               }))
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             commentCount: pullRequest.comments.length + reviewThreads.commentCount,
-            commentsTruncated: reviewThreads.truncated,
+            commentsTruncated: pullRequest.truncated || reviewThreads.truncated,
             reviewThreadsTruncated: reviewThreads.reviewThreadsTruncated,
             reviewThreads: reviewThreads.reviewThreads.map((thread) => ({
               ...thread,
@@ -808,10 +742,16 @@ export const make = Effect.gen(function* () {
           ...(input.expectedStackHeads === undefined
             ? {}
             : { expectedStackHeads: input.expectedStackHeads }),
+          ...(input.expectedHeadSha === undefined
+            ? {}
+            : { expectedHeadSha: input.expectedHeadSha }),
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
           ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),
+
+    getCheckLogs: (input) => cli.readCheckLogs(input).pipe(Effect.mapError(fail("getCheckLogs"))),
+    rerunChecks: (input) => cli.rerunChecks(input).pipe(Effect.mapError(fail("rerunChecks"))),
 
     updateChangeRequest: (input) =>
       cli

@@ -22,8 +22,7 @@ const MAX_LINKS = 100;
 const LinkRow = Schema.Struct({
   issueProvider: Schema.String,
   issueUrl: Schema.String,
-  issueRepository: Schema.String,
-  issueNumber: Schema.Finite,
+  issueDisplayKey: Schema.String,
   issueTitle: Schema.String,
   pullRequestProvider: Schema.String,
   pullRequestUrl: Schema.String,
@@ -36,8 +35,7 @@ const fromRow = (row: typeof LinkRow.Type): WorkItemLink => ({
   issue: {
     provider: row.issueProvider,
     url: row.issueUrl,
-    repository: row.issueRepository,
-    number: row.issueNumber,
+    displayKey: row.issueDisplayKey,
     title: row.issueTitle,
   },
   pullRequest: {
@@ -58,19 +56,15 @@ export class WorkItemLinks extends Context.Service<
     readonly list: (
       input: WorkItemLinksInput,
     ) => Effect.Effect<WorkItemLinksResult, WorkItemLinkError>;
-    readonly link: (
-      input: WorkItemLinkInput,
-    ) => Effect.Effect<
-      WorkItemLink,
-      WorkItemLinkError,
-      IssueService.IssueService | PullRequestService.PullRequestService
-    >;
+    readonly link: (input: WorkItemLinkInput) => Effect.Effect<WorkItemLink, WorkItemLinkError>;
     readonly unlink: (input: WorkItemUnlinkInput) => Effect.Effect<void, WorkItemLinkError>;
   }
 >()("t3/workItems/WorkItemLinks") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const issues = yield* IssueService.IssueService;
+  const pullRequests = yield* PullRequestService.PullRequestService;
 
   const listRows = SqlSchema.findAll({
     Request: WorkItemLinksInput,
@@ -81,8 +75,7 @@ const make = Effect.gen(function* () {
       SELECT
         issue_provider AS "issueProvider",
         issue_url AS "issueUrl",
-        issue_repository AS "issueRepository",
-        issue_number AS "issueNumber",
+        issue_display_key AS "issueDisplayKey",
         issue_title AS "issueTitle",
         pull_request_provider AS "pullRequestProvider",
         pull_request_url AS "pullRequestUrl",
@@ -109,10 +102,21 @@ const make = Effect.gen(function* () {
       ),
     ),
     link: Effect.fn("WorkItemLinks.link")(function* (input) {
-      const issues = yield* IssueService.IssueService;
-      const pullRequests = yield* PullRequestService.PullRequestService;
+      const issueRef = input.issue;
+      const readIssue =
+        "url" in issueRef
+          ? issues
+              .resolveUrl(issueRef.url, issueRef.projectId)
+              .pipe(
+                Effect.flatMap((resolved) =>
+                  resolved.issue === undefined
+                    ? issues.detail(resolved)
+                    : Effect.succeed(resolved.issue),
+                ),
+              )
+          : issues.detail(issueRef);
       const [issue, pullRequest] = yield* Effect.all([
-        issues.detail(input.issue),
+        readIssue,
         pullRequests.withRoutingCredential(
           input.pullRequest,
           pullRequests.detail(input.pullRequest),
@@ -120,9 +124,8 @@ const make = Effect.gen(function* () {
       ]).pipe(Effect.mapError(failure("link", "Could not read both work items.")));
       const link: WorkItemLink = {
         issue: {
-          ...normalizeWorkItemLinkKey({ provider: issue.provider, url: issue.url }),
-          repository: issue.repository,
-          number: issue.number,
+          ...normalizeWorkItemLinkKey({ provider: issue.tracker, url: issue.url }),
+          displayKey: issue.displayKey,
           title: issue.title,
         },
         pullRequest: {
@@ -134,19 +137,18 @@ const make = Effect.gen(function* () {
       };
       yield* sql`
           INSERT INTO work_item_links (
-            issue_provider, issue_url, issue_repository, issue_number, issue_title,
+            issue_provider, issue_url, issue_display_key, issue_title,
             pull_request_provider, pull_request_url, pull_request_repository,
             pull_request_number, pull_request_title
           ) VALUES (
-            ${link.issue.provider}, ${link.issue.url}, ${link.issue.repository},
-            ${link.issue.number}, ${link.issue.title}, ${link.pullRequest.provider},
+            ${link.issue.provider}, ${link.issue.url}, ${link.issue.displayKey},
+            ${link.issue.title}, ${link.pullRequest.provider},
             ${link.pullRequest.url}, ${link.pullRequest.repository},
             ${link.pullRequest.number}, ${link.pullRequest.title}
           )
           ON CONFLICT (issue_provider, issue_url, pull_request_provider, pull_request_url)
           DO UPDATE SET
-            issue_repository = excluded.issue_repository,
-            issue_number = excluded.issue_number,
+            issue_display_key = excluded.issue_display_key,
             issue_title = excluded.issue_title,
             pull_request_repository = excluded.pull_request_repository,
             pull_request_number = excluded.pull_request_number,

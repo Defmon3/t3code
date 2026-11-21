@@ -13,13 +13,14 @@ import {
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { formatInlineContextReference } from "~/lib/composerContextReferences";
+import {
+  formatComposerContextReference,
+  projectComposerContextForProvider,
+} from "@t3tools/shared/composerContextReferences";
 import {
   reviewCommentContextLabel,
-  reviewCommentContextReference,
+  reviewCommentContextRecord,
 } from "~/lib/composerContextRecords";
-import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { writeHandoffToComposer } from "../sourceControl/handoff";
 
 import {
   buildAddSelectionToAgentHandoff,
@@ -28,18 +29,15 @@ import {
   buildResolveConflictsPrompt,
   resolveThreadPanelPullRequestAction,
   buildPullRequestCommentContext,
-  buildPullRequestReferenceContext,
   buildFixFindingHandoff,
   canDeletePullRequestBranch,
   buildFixFindingsHandoff,
-  buildLinkIssuesHandoff,
   groupPullRequestTimelineConversations,
   filterPullRequestConversationItems,
   pagePullRequestConversationItems,
   pullRequestConversationItemComments,
   pullRequestConversationItems,
-  handoffPrompt,
-  handoffReviewComments,
+  appendHandoff,
   isPullRequestVerdictStale,
   isStackedPullRequestBase,
   loadingPullRequestCheckoutCommand,
@@ -909,6 +907,54 @@ describe("one finding handed over on its own", () => {
     ],
   };
 
+  it("keeps the pull request chip free of ask instructions when a fix and an ask share a draft", () => {
+    const metadata = { ...base, state: "open" as const, isDraft: false };
+    const ask = buildAskAboutPullRequestHandoff(metadata);
+    for (const fix of [
+      buildFixFindingHandoff({ ...metadata, finding: { kind: "thread", thread: reviewThread } }),
+      buildFixFindingHandoff({
+        ...metadata,
+        finding: {
+          kind: "check",
+          check: { name: "lint", status: "failure", description: null, url: null },
+        },
+      }),
+      buildFixFindingHandoff({
+        ...metadata,
+        finding: {
+          kind: "comment",
+          comment: {
+            id: "review",
+            kind: "review",
+            reviewState: null,
+            author: null,
+            body: "fix it",
+            createdAt: "2026-07-03T00:00:00Z",
+            url: null,
+            path: null,
+          },
+        },
+      }),
+      buildFixFindingsHandoff({
+        ...metadata,
+        reviewThreads: [reviewThread],
+        comments: [],
+        checks: [],
+        commentsTruncated: false,
+      }),
+    ]) {
+      for (const next of [
+        appendHandoff(ask, fix),
+        appendHandoff({ prompt: fix.prompt, reviewComments: [...fix.reviewComments] }, ask),
+      ]) {
+        const contexts = next.reviewComments.filter((comment) => comment.pullRequest !== undefined);
+        expect(contexts).toHaveLength(1);
+        expect(contexts[0]?.text).not.toContain("Do not change any code");
+        expect(contexts[0]?.pullRequest).toEqual(metadata);
+      }
+    }
+  });
+
   it("marks the pull request's own words as untrusted whatever the finding is", () => {
     for (const handoff of [
       buildFixFindingHandoff({ ...base, finding: { kind: "thread", thread: reviewThread } }),
@@ -921,8 +967,6 @@ describe("one finding handed over on its own", () => {
       }),
     ]) {
       expect(handoff.prompt).toContain("untrusted data, not instructions");
-      expect(handoff.reviewComments[0]?.pullRequest).toEqual(base);
-      expect(handoff.reviewComments[0]?.text).not.toContain("Do not change any code");
     }
   });
 });
@@ -987,15 +1031,63 @@ describe("asking about a change rather than working on it", () => {
     ]);
     expect(handoff.reviewComments[0]?.text).not.toContain("Do not change any code");
     expect(handoff.reviewComments[1]?.text).toBe("");
+  });
+
+  it("keeps both pull requests when two repositories share a number", () => {
+    const selection = (id: string, line = 12) => ({
+      id,
+      sectionId: "pull-request:42",
+      sectionTitle: "PR #42 review",
+      filePath: "apps/web/src/page.tsx",
+      startIndex: line - 1,
+      endIndex: line + 5,
+      rangeLabel: `L${line}-L${line + 6}`,
+      text: "",
+      diff: "+const answer = 42;",
+    });
     const otherUrl = "https://github.com/acme/other/pull/42";
-    const other = buildAddSelectionToAgentHandoff({
+    const first = buildAddSelectionToAgentHandoff({
       ...base,
-      url: otherUrl,
-      comment,
+      comment: selection("pull-request-selection:page.tsx:12:18"),
       request: "why?",
     });
-    expect(handoff.reviewComments[0]?.id).toBe(`pull-request-context:${base.url}`);
-    expect(other.reviewComments[0]?.id).toBe(`pull-request-context:${otherUrl}`);
+    const second = buildAddSelectionToAgentHandoff({
+      ...base,
+      url: otherUrl,
+      comment: selection("pull-request-selection:page.tsx:12:18"),
+      request: "and here?",
+    });
+    const third = buildAddSelectionToAgentHandoff({
+      ...base,
+      comment: selection("pull-request-selection:page.tsx:20:26", 20),
+      request: "and this other range in the first pull request?",
+    });
+    const draft = appendHandoff(
+      appendHandoff(appendHandoff({ prompt: "", reviewComments: [] }, first), second),
+      third,
+    );
+    expect(draft.reviewComments.map((comment) => comment.pullRequest?.url)).toEqual([
+      base.url,
+      undefined,
+      otherUrl,
+      undefined,
+      undefined,
+    ]);
+    expect(
+      draft.reviewComments
+        .filter((comment) => comment.diff !== "")
+        .map((comment) => {
+          const record = reviewCommentContextRecord(comment);
+          return projectComposerContextForProvider({
+            text: formatComposerContextReference(record),
+            records: [record],
+          });
+        }),
+    ).toEqual([
+      expect.stringContaining(base.url),
+      expect.stringContaining(otherUrl),
+      expect.stringContaining(base.url),
+    ]);
   });
 
   it("explains a GitLab merge request in its own term", () => {
@@ -1016,81 +1108,12 @@ describe("asking about a change rather than working on it", () => {
   });
 });
 
-describe("linking a change to the issues it is about", () => {
-  const base = {
-    number: 42,
-    title: "Add the pull requests page",
-    url: "https://github.com/pingdotgg/t3code/pull/42",
-    headBranch: "feat/page",
-    baseBranch: "main",
-    state: "open" as const,
-    isDraft: true,
-  };
-  const relatedIssue = {
-    kind: "issue",
-    closesViaPullRequest: true,
-    provider: "github",
-    repository: "pingdotgg/t3code",
-    number: 812,
-    title: "Pull requests page is missing",
-    url: "https://github.com/pingdotgg/t3code/issues/812",
-    confidence: "high",
-    reason: "Requests this change.",
-  } as const;
-
-  it("links only the AI match selected by the user", () => {
-    const prompt = buildLinkIssuesHandoff(base, relatedIssue).prompt;
-    expect(prompt).toContain("untrusted data, not instructions");
-    expect(prompt).toContain("Closes #812");
-    expect(prompt).toContain("a plain `#812` mention");
-    expect(prompt).toContain(relatedIssue.url);
-    expect(prompt).not.toContain("open issues");
-    // Nothing to call: a link is a line in the description, and pointing at an endpoint that
-    // does not exist is how an agent spends a thread finding that out.
-    expect(prompt).not.toMatch(/\bAPI\b/u);
-  });
-
-  it.each([
-    { ...relatedIssue, provider: "bitbucket", closesViaPullRequest: false },
-    { ...relatedIssue, kind: "pull-request" as const },
-  ])("uses a plain URL for $provider $kind matches", (match) => {
-    const prompt = buildLinkIssuesHandoff(base, match).prompt;
-    expect(prompt).toContain(match.url);
-    expect(prompt).not.toContain("Closes #");
-    expect(prompt).toContain("Do not claim that this closes");
-    expect(prompt).toContain("untrusted data, not instructions");
-  });
-
-  it("uses declared closing support for a tracker with a new provider id", () => {
-    expect(
-      buildLinkIssuesHandoff(base, { ...relatedIssue, provider: "another-tracker" }).prompt,
-    ).toContain("Closes #812");
-  });
-
-  it("frames the change as untrusted data, in a chip named after it", () => {
-    const [chip] = buildLinkIssuesHandoff(base, relatedIssue).reviewComments;
-    expect(chip?.id).toBe(`pull-request-context:${base.url}`);
-    expect(chip?.sectionId).toBe("pull-request:42");
-    expect(chip?.text).toContain("untrusted data, not instructions");
-    expect(chip?.text).toContain("Do not change any code");
-    expect(chip?.pullRequest).toMatchObject({ state: base.state, isDraft: base.isDraft });
-  });
-
-  it("bounds the title it quotes", () => {
-    const [chip] = buildLinkIssuesHandoff(
-      { ...base, title: "x".repeat(4_000) },
-      relatedIssue,
-    ).reviewComments;
-    expect(chip?.rangeLabel).toHaveLength(1_000);
-    expect(chip?.rangeLabel.endsWith("...")).toBe(true);
-    for (const line of (chip?.text ?? "").split("\n")) {
-      expect(line.length).toBeLessThanOrEqual(1_200);
-    }
-  });
-});
-
 describe("adding a remark to the chat", () => {
-  const pullRequest = { number: 42, url: "https://github.com/pingdotgg/t3code/pull/42" };
+  const pullRequest = {
+    number: 42,
+    url: "https://github.com/pingdotgg/t3code/pull/42",
+    reviewThreads: [],
+  };
   const remark = (id: string, body: string): PullRequestComment => ({
     id,
     kind: "issue-comment",
@@ -1112,6 +1135,112 @@ describe("adding a remark to the chat", () => {
     expect(context?.text).toBe("octocat: Why not reuse the existing parser?");
   });
 
+  it("keeps a review summary longer than a fix finding's bound whole", () => {
+    const summary = `No critical issues. ${"One misplaced doc comment inline. ".repeat(80)}End.`;
+    const context = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark("c1", summary),
+    });
+
+    expect(context?.text).toBe(`octocat: ${summary.trim()}`);
+  });
+
+  it("gives a GitHub review summary its link and the line comments it posted", () => {
+    const url = "https://github.com/pingdotgg/t3code/pull/42";
+    const review: PullRequestComment = {
+      ...remark("r9", "One misplaced doc comment inline."),
+      kind: "review",
+      url: `${url}#pullrequestreview-9`,
+      reviewState: "COMMENTED",
+    };
+    const lineComment = (id: string, reviewUrl: string, body: string) => ({
+      id,
+      author: { login: "octocat", name: null, avatarUrl: null },
+      body,
+      createdAt: "2026-07-03T00:00:00Z",
+      url: `${url}#discussion_${id}`,
+      reviewUrl,
+    });
+    const reviewThreads = [
+      {
+        id: "t1",
+        path: "src/main.rs",
+        line: 12,
+        side: "right" as const,
+        isResolved: false,
+        isOutdated: false,
+        comments: [
+          lineComment("r1", `${url}#pullrequestreview-9`, "This doc comment belongs below."),
+          lineComment("r2", `${url}#pullrequestreview-10`, "Moved."),
+        ],
+      },
+    ];
+
+    expect(
+      buildPullRequestCommentContext(
+        { ...pullRequest, reviewThreads, reviewThreadsTruncated: false },
+        { kind: "comment", comment: review },
+      )?.text,
+    ).toBe(
+      [
+        "octocat: One misplaced doc comment inline.",
+        `Review: ${url}#pullrequestreview-9`,
+        "Line comments in this review:\n\noctocat on `src/main.rs` line 12: This doc comment belongs below.",
+      ].join("\n\n"),
+    );
+    expect(
+      buildPullRequestCommentContext(
+        { ...pullRequest, reviewThreadsTruncated: false },
+        { kind: "comment", comment: review },
+      )?.text,
+    ).toBe(
+      [
+        "octocat: One misplaced doc comment inline.",
+        `Review: ${url}#pullrequestreview-9`,
+        "This review posted no line comments.",
+      ].join("\n\n"),
+    );
+    // A failed or partial thread read must not read as a review with no line comments.
+    expect(
+      buildPullRequestCommentContext(
+        { ...pullRequest, reviewThreadsTruncated: true },
+        { kind: "comment", comment: review },
+      )?.text,
+    ).toBe(
+      [
+        "octocat: One misplaced doc comment inline.",
+        `Review: ${url}#pullrequestreview-9`,
+        "No line comments from this review were loaded.",
+        "More may exist; see the review link.",
+      ].join("\n\n"),
+    );
+
+    const beforeContext = buildPullRequestCommentContext(
+      {
+        ...pullRequest,
+        reviewThreads: reviewThreads.map((thread) => ({ ...thread, side: "left" as const })),
+        reviewThreadsTruncated: false,
+      },
+      { kind: "comment", comment: review },
+    )!;
+    const beforeRecord = reviewCommentContextRecord(beforeContext);
+    const beforePrompt = projectComposerContextForProvider({
+      text: formatComposerContextReference(beforeRecord),
+      records: [beforeRecord],
+    });
+    expect(beforePrompt).toContain("`src/main.rs` line 12 (before)");
+
+    const sent = reviewCommentContextRecord(
+      buildPullRequestCommentContext(
+        { ...pullRequest, reviewThreads, reviewThreadsTruncated: false },
+        { kind: "comment", comment: { ...review, body: `Summary ${"x".repeat(15_990)}` } },
+      )!,
+    ).text;
+    expect(sent).toContain(`Review: ${url}#pullrequestreview-9`);
+    expect(sent).toContain("This doc comment belongs below.");
+    expect(sent).toContain("more characters of the review summary are omitted");
+  });
+
   it("keeps every added remark when a later hand-off lands", () => {
     const added = ["c1", "c2"].flatMap(
       (id) =>
@@ -1131,7 +1260,9 @@ describe("adding a remark to the chat", () => {
     });
 
     expect(
-      handoffReviewComments(added, handedOff.reviewComments).map((comment) => comment.id),
+      appendHandoff({ prompt: "", reviewComments: added }, handedOff).reviewComments.map(
+        (comment) => comment.id,
+      ),
     ).toEqual([
       "pr-comment:https://github.com/pingdotgg/t3code/pull/42:comment:c1",
       "pr-comment:https://github.com/pingdotgg/t3code/pull/42:comment:c2",
@@ -1202,7 +1333,7 @@ describe("adding a remark to the chat", () => {
   });
 
   it("keeps remarks from two repositories apart when their host ids match", () => {
-    const other = { number: 42, url: "https://github.com/octocat/fork/pull/42" };
+    const other = { ...pullRequest, url: "https://github.com/octocat/fork/pull/42" };
     const ids = [pullRequest, other].map(
       (target) =>
         buildPullRequestCommentContext(target, { kind: "comment", comment: remark("c1", "why?") })
@@ -1254,7 +1385,7 @@ describe("adding a remark to the chat", () => {
   });
 });
 
-describe("a second ask into the same composer", () => {
+describe("a second handoff into the same composer", () => {
   const chip = (id: string): ReviewCommentContext => ({
     id,
     sectionId: "pull-request:42",
@@ -1266,86 +1397,129 @@ describe("a second ask into the same composer", () => {
     text: "",
     diff: "",
   });
+  const ids = (comments: ReadonlyArray<ReviewCommentContext>) => comments.map((c) => c.id);
 
-  it("keeps one repeated handoff reference and preserves a user reference", () => {
-    const target = DraftId.make("repeated-handoff-reference");
-    const own = chip("file-comment:repeated-handoff");
-    const repeated = chip("pull-request-context:repeated-handoff");
-    const store = useComposerDraftStore.getState();
-    store.setPrompt(target, "Keep my draft.");
-    store.setReviewComments(target, [own]);
-    writeHandoffToComposer(target, { prompt: "First task.", reviewComments: [repeated] });
-    writeHandoffToComposer(target, { prompt: "Second task.", reviewComments: [repeated] });
-
-    const draft = store.getComposerDraft(target)!;
-    expect(draft.prompt).toContain("Keep my draft.");
-    expect(draft.prompt).toContain("Second task.");
-    expect(draft.prompt).not.toContain("First task.");
-    for (const comment of [own, repeated]) {
-      const reference = formatInlineContextReference(reviewCommentContextReference(comment));
-      expect(draft.prompt.split(reference)).toHaveLength(2);
-    }
-    expect(draft.reviewComments?.map(({ id }) => id)).toEqual([own.id, repeated.id]);
-  });
-
-  it("replaces what the last one left, chips included", () => {
-    const next = handoffReviewComments(
-      [chip("pull-request-context:41"), chip("pull-request-selection:page.tsx:1:2")],
-      [chip("pull-request-context:42")],
+  it("keeps the earlier findings and their chips", () => {
+    const next = appendHandoff(
+      {
+        prompt: "Fix the first finding.",
+        reviewComments: [chip("pull-request-finding:t1")],
+      },
+      { prompt: "Fix the second finding.", reviewComments: [chip("pull-request-finding:t2")] },
     );
-    expect(next.map((comment) => comment.id)).toEqual(["pull-request-context:42"]);
-  });
-
-  it("keeps a reader's own pull request reference when a later handoff lands", () => {
-    const own = buildPullRequestReferenceContext({
-      number: 42,
-      title: "Add the pull requests page",
-      url: "https://github.com/pingdotgg/t3code/pull/42",
-      headBranch: "feature",
-      baseBranch: "main",
-      state: "open" as const,
-      isDraft: false,
-    });
-
-    expect(
-      handoffReviewComments([own], [chip("pull-request-context:42")]).map((comment) => comment.id),
-    ).toEqual([own.id, "pull-request-context:42"]);
-  });
-
-  it("keeps an edit the reader made to the sentence they were handed", () => {
-    expect(
-      handoffPrompt(
-        {
-          prompt: "Explain this pull request, the caching especially.",
-          lastHandoffPrompt: "Explain this pull request.",
-        },
-        "",
-      ),
-    ).toBe("Explain this pull request, the caching especially.");
-  });
-
-  it("replaces only its own sentence under text the reader typed", () => {
-    expect(
-      handoffPrompt(
-        {
-          prompt: "check the migration first\n\nExplain this pull request.",
-          lastHandoffPrompt: "Explain this pull request.",
-        },
-        "Why the cache key?",
-      ),
-    ).toBe("check the migration first\n\nWhy the cache key?");
-  });
-
-  it("keeps the lines the reader marked up in the thread themselves", () => {
-    const own = chip("file-comment:3");
-    const next = handoffReviewComments(
-      [own, chip("pull-request-finding:t1")],
-      [chip("pull-request-context:42")],
-    );
-    expect(next.map((comment) => comment.id)).toEqual([
-      "file-comment:3",
-      "pull-request-context:42",
+    expect(next.prompt).toBe("Fix the first finding.\n\nFix the second finding.");
+    expect(ids(next.reviewComments)).toEqual([
+      "pull-request-finding:t1",
+      "pull-request-finding:t2",
     ]);
+  });
+
+  it("keeps earlier diff selections when another is added", () => {
+    const next = appendHandoff(
+      {
+        prompt: "why this?",
+        reviewComments: [
+          chip("pull-request-context:42"),
+          chip("pull-request-selection:page.tsx:1:2"),
+        ],
+      },
+      {
+        prompt: "and this?",
+        reviewComments: [
+          chip("pull-request-context:42"),
+          chip("pull-request-selection:page.tsx:8:9"),
+        ],
+      },
+    );
+    expect(next.prompt).toBe("why this?\n\nand this?");
+    expect(ids(next.reviewComments)).toEqual([
+      "pull-request-context:42",
+      "pull-request-selection:page.tsx:1:2",
+      "pull-request-selection:page.tsx:8:9",
+    ]);
+  });
+
+  it("swaps in the newer copy of a chip it already holds", () => {
+    const stale = { ...chip("pull-request-context:42"), text: "Explain only." };
+    const fresh = { ...chip("pull-request-context:42"), text: "" };
+    const next = appendHandoff(
+      { prompt: "Explain this pull request.", reviewComments: [stale, chip("file-comment:3")] },
+      { prompt: "why this?", reviewComments: [fresh] },
+    );
+    expect(next.reviewComments).toEqual([fresh, chip("file-comment:3")]);
+  });
+
+  it("preserves a multiline request even when its lines already occur in the draft", () => {
+    const prompt = "keep this line\nchange the middle\nkeep this line";
+    const incoming = "keep this line\nnew middle\nkeep this line";
+    expect(appendHandoff({ prompt, reviewComments: [] }, { prompt: incoming }).prompt).toBe(
+      `${prompt}\n\n${incoming}`,
+    );
+    const reordered = "change the middle\nkeep this line";
+    expect(appendHandoff({ prompt, reviewComments: [] }, { prompt: reordered }).prompt).toBe(
+      `${prompt}\n\n${reordered}`,
+    );
+  });
+
+  it("changes nothing when the same handoff lands twice", () => {
+    const handoff = {
+      prompt: "Fix the review finding attached to this message.  \nThe pull request is #42.",
+      reviewComments: [chip("pull-request-finding:t1")],
+    };
+    const once = appendHandoff({ prompt: "", reviewComments: [] }, handoff);
+    expect(appendHandoff(once, handoff)).toEqual(once);
+  });
+
+  it("keeps each finding prompt intact, including its preamble", () => {
+    const preamble = "The pull request is #42.\nIts branch is `feature`.";
+    const next = appendHandoff(
+      {
+        prompt: `Fix the review remark quoted below.\n${preamble}\n> reviewer: rename it`,
+        reviewComments: [],
+      },
+      { prompt: `Fix the review remark quoted below.\n${preamble}\n> reviewer: add a test` },
+    );
+    expect(next.prompt).toBe(
+      `Fix the review remark quoted below.\n${preamble}\n> reviewer: rename it\n\nFix the review remark quoted below.\n${preamble}\n> reviewer: add a test`,
+    );
+  });
+
+  it("keeps a second pull request's failing checks when they share a name", () => {
+    const fixFindings = (number: number) =>
+      buildFixFindingsHandoff({
+        number,
+        title: "Add the pull requests page",
+        url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+        state: "open",
+        isDraft: false,
+        headBranch: `feat/${number}`,
+        baseBranch: "main",
+        reviewThreads: [],
+        comments: [],
+        checks: [{ name: "lint", status: "failure", description: null, url: null }],
+        commentsTruncated: false,
+      });
+    const first = appendHandoff({ prompt: "", reviewComments: [] }, fixFindings(42)).prompt;
+    const both = appendHandoff({ prompt: first, reviewComments: [] }, fixFindings(43)).prompt;
+    expect(both.slice(first.length)).toContain("Failing checks:\n> lint");
+  });
+
+  it("keeps what the reader typed, trailing line breaks aside", () => {
+    expect(
+      appendHandoff(
+        { prompt: "check the migration first\n", reviewComments: [chip("file-comment:3")] },
+        { prompt: "", reviewComments: [chip("pull-request-context:42")] },
+      ),
+    ).toEqual({
+      prompt: "check the migration first\n",
+      reviewComments: [chip("file-comment:3"), chip("pull-request-context:42")],
+    });
+    expect(
+      appendHandoff(
+        { prompt: "check the migration first\n", reviewComments: [] },
+        { prompt: "Explain this pull request.", reviewComments: [] },
+      ).prompt,
+    ).toBe("check the migration first\n\nExplain this pull request.");
   });
 });
 

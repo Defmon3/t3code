@@ -6,22 +6,22 @@ import { WS_METHODS } from "@t3tools/contracts";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
-export const findWorkItemMatches = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:work-items:find-matches",
-  tag: WS_METHODS.workItemsFindMatches,
-});
-
 export const workItemLinks = {
   list: createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
-    label: "environment-data:work-items:list-links",
+    label: "work-items:links",
     tag: WS_METHODS.workItemsListLinks,
+    staleTimeMs: 30_000,
   }),
   link: createEnvironmentRpcCommand(connectionAtomRuntime, {
-    label: "environment-data:work-items:link",
+    label: "work-items:link",
     tag: WS_METHODS.workItemsLink,
   }),
   unlink: createEnvironmentRpcCommand(connectionAtomRuntime, {
-    label: "environment-data:work-items:unlink",
+    label: "work-items:unlink",
     tag: WS_METHODS.workItemsUnlink,
+  }),
+  findMatches: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "work-items:find-matches",
+    tag: WS_METHODS.workItemsFindMatches,
   }),
 };

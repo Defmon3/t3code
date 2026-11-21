@@ -1,20 +1,34 @@
-import type { EnvironmentId, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  continueIssuePage,
+  holdIssuePages,
+  type HeldIssuePage,
+} from "@t3tools/client-runtime/issue-list";
+import { issueEntryKey } from "@t3tools/client-runtime/state/issues";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  type EnvironmentId,
+  type IssueListInput,
+  IssueTrackerKind,
+  ProjectId,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { Activity, lazy, Suspense, useRef, useState, type KeyboardEvent } from "react";
 
 import type { IssueSelection, RepositoryView } from "~/rightPanelStore";
 import type { GitHistoryPanelStore } from "./git-history/GitHistoryPanelState";
 
-import type { IssueHandoffTarget } from "./issue/IssueDetailPanel";
+import { T, useGT } from "gt-react";
+import { useDebouncedValue } from "~/state/queries";
+import { issueEnvironment, useIssueList } from "~/state/issues";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { REPOSITORY_VIEWS as views, useRightPanelStore } from "~/rightPanelStore";
+import { IssueDetailPanel } from "./issue/IssueDetailPanel";
+import { IssueRow } from "./issue/IssueRow";
+import { Input } from "./ui/input";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
-import type { IssueTabStatus } from "./RightPanelTabs";
 import { Button } from "./ui/button";
 
 const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
-const IssuesPanel = lazy(() =>
-  import("./issue/IssuesPanel").then(({ IssuesPanel }) => ({ default: IssuesPanel })),
-);
-
-const views = ["history", "issues", "pull-requests"] as const;
 
 export function repositoryViewFromKey(view: RepositoryView, key: string): RepositoryView | null {
   const index = views.indexOf(view);
@@ -29,7 +43,7 @@ interface RepositoryPanelProps {
   readonly environmentId: EnvironmentId;
   readonly cwd: string | null;
   readonly threadRef: ScopedThreadRef;
-  readonly issueContext: { projectId: ProjectId; handoffTarget: IssueHandoffTarget } | null;
+  readonly projectId: ProjectId | null;
   readonly selectedIssue: IssueSelection | null;
   readonly view: RepositoryView;
   readonly active: boolean;
@@ -39,16 +53,10 @@ interface RepositoryPanelProps {
   readonly gitHistoryPanelStore: GitHistoryPanelStore;
   readonly issuesAvailable: boolean;
   readonly onViewChange: (view: RepositoryView) => void;
-  readonly onSelectIssue: (selected: IssueSelection | null) => void;
-  readonly onIssueStateChange: (status: IssueTabStatus) => void;
-  readonly onOpenLinkedPullRequest: (link: {
-    repository: string;
-    number: number;
-    url: string;
-  }) => void;
 }
 
 export default function RepositoryPanel(props: RepositoryPanelProps) {
+  const gt = useGT();
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
   const [historyActivated, setHistoryActivated] = useState(props.view === "history");
   const [issuesActivated, setIssuesActivated] = useState(props.view === "issues");
@@ -66,12 +74,12 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
   return (
     <section
       className="flex size-full min-h-0 min-w-0 flex-col bg-background"
-      aria-label="Git History"
+      aria-label={gt("Git History")}
     >
       <div
         className="flex shrink-0 gap-1 border-b border-border/70 px-3 py-1.5"
         role="tablist"
-        aria-label="Git History views"
+        aria-label={gt("Git History views")}
       >
         {views.map((view, index) => (
           <Button
@@ -89,7 +97,11 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
             onClick={() => props.onViewChange(view)}
             onKeyDown={(event) => move(event, view)}
           >
-            {view === "history" ? "History" : view === "issues" ? "Issues" : "Pull Requests"}
+            {view === "history"
+              ? gt("History")
+              : view === "issues"
+                ? gt("Issues")
+                : gt("Pull requests")}
           </Button>
         ))}
       </div>
@@ -115,7 +127,7 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
               </Suspense>
             ) : (
               <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                Update the environment server to browse Git History.
+                <T>Update the environment server to browse Git History.</T>
               </div>
             )}
           </div>
@@ -129,23 +141,18 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
             aria-labelledby="repository-tab-issues"
             className="min-h-0 flex-1"
           >
-            {props.issuesAvailable && props.issueContext ? (
-              <Suspense fallback={null}>
-                <IssuesPanel
-                  environmentId={props.environmentId}
-                  projectId={props.issueContext.projectId}
-                  selected={props.selectedIssue}
-                  onSelect={props.onSelectIssue}
-                  handoffTarget={props.issueContext.handoffTarget}
-                  onStateChange={props.onIssueStateChange}
-                  onOpenLinkedPullRequest={props.onOpenLinkedPullRequest}
-                />
-              </Suspense>
+            {props.issuesAvailable && props.projectId ? (
+              <RepositoryIssues
+                environmentId={props.environmentId}
+                projectId={props.projectId}
+                threadRef={props.threadRef}
+                selected={props.selectedIssue}
+              />
             ) : (
               <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
                 {props.issuesAvailable
-                  ? "Open a project thread to browse issues."
-                  : "Update the environment server to browse issues."}
+                  ? gt("Open a project thread to browse issues.")
+                  : gt("Update the environment server to browse issues.")}
               </div>
             )}
           </div>
@@ -162,5 +169,145 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
         </div>
       </Activity>
     </section>
+  );
+}
+
+function RepositoryIssues({
+  environmentId,
+  projectId,
+  threadRef,
+  selected,
+}: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  threadRef: ScopedThreadRef;
+  selected: IssueSelection | null;
+}) {
+  const gt = useGT();
+  const [query, setQuery] = useState("");
+  const search = useDebouncedValue(query.trim(), 300);
+  const select = (issue: IssueSelection | null) =>
+    useRightPanelStore.getState().selectRepositoryIssue(threadRef, issue);
+
+  return (
+    <>
+      <Activity mode={selected === null ? "visible" : "hidden"}>
+        <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+          <Input
+            aria-label={gt("Search issues")}
+            value={query}
+            maxLength={200}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <RepositoryIssueList
+            key={`${environmentId}:${projectId}:${search}`}
+            environmentId={environmentId}
+            input={{
+              projectId,
+              state: search ? "all" : "open",
+              ...(search ? { query: search } : {}),
+            }}
+            onSelect={select}
+          />
+        </div>
+      </Activity>
+      {selected !== null ? (
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="p-2">
+            <Button size="xs" variant="ghost" onClick={() => select(null)}>
+              {gt("Back to issues")}
+            </Button>
+          </div>
+          <IssueDetailPanel
+            key={`${selected.tracker}:${selected.host}:${selected.scope}:${selected.key}`}
+            environmentId={environmentId}
+            reference={{
+              projectId: ProjectId.make(selected.projectId),
+              tracker: IssueTrackerKind.make(selected.tracker),
+              ...(selected.host ? { host: selected.host } : {}),
+              scope: selected.scope,
+              key: selected.key,
+            }}
+            threadRef={threadRef}
+            onSelectPullRequest={({ host, projectId, repository, number }) =>
+              useRightPanelStore.getState().openPullRequest(threadRef, {
+                projectId,
+                repository,
+                number,
+                ...(host === undefined ? {} : { host }),
+              })
+            }
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function RepositoryIssueList({
+  environmentId,
+  input,
+  onSelect,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly input: IssueListInput;
+  readonly onSelect: (issue: IssueSelection) => void;
+}) {
+  const gt = useGT();
+  const list = useIssueList([{ environmentId, input }]);
+  const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
+  const page = holdIssuePages(list.answers, pages).get(environmentId);
+  const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const canLoadMore = page !== undefined && Object.keys(page.nextCursors).length > 0;
+  const loadMore = async () => {
+    if (!page || !canLoadMore || loadingMore) return;
+    setLoadingMore(true);
+    const cursors = page.nextCursors;
+    const result = await loadPage({ environmentId, input: { ...input, cursors } });
+    setLoadingMore(false);
+    const next =
+      result._tag === "Success"
+        ? result.value
+        : { failure: String(squashAtomCommandFailure(result)) };
+    setPages(new Map([[environmentId, continueIssuePage(page, next, cursors)]]));
+  };
+  const errors = [
+    ...(page?.errors.map((error) => error.message) ?? []),
+    ...(list.error ? [list.error] : []),
+    ...(page?.moreFailure ? [page.moreFailure] : []),
+  ];
+  return (
+    <div className="min-h-0 flex-1 overflow-auto">
+      {errors.length > 0 ? (
+        <div role="alert" className="space-y-1 text-sm">
+          {[...new Set(errors)].map((error) => (
+            <p key={error}>{error}</p>
+          ))}
+          <Button size="xs" variant="ghost" onClick={list.retry}>
+            {gt("Retry")}
+          </Button>
+        </div>
+      ) : null}
+      {list.isPending && !page?.entries.length ? <p role="status">{gt("Loading issues")}</p> : null}
+      {!list.isPending && errors.length === 0 && !page?.entries.length ? (
+        <p>{gt("No issues found")}</p>
+      ) : null}
+      {page?.entries.map((entry) => (
+        <IssueRow
+          key={issueEntryKey(entry)}
+          entry={{ ...entry, environmentId }}
+          selected={false}
+          showScope
+          showTracker
+          onSelect={onSelect}
+        />
+      ))}
+      {canLoadMore ? (
+        <Button size="xs" variant="outline" disabled={loadingMore} onClick={() => void loadMore()}>
+          {loadingMore ? gt("Loading issues") : gt("Load more")}
+        </Button>
+      ) : null}
+    </div>
   );
 }

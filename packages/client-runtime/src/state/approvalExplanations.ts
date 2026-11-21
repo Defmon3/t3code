@@ -5,6 +5,8 @@ import {
   EnvironmentId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -87,27 +89,34 @@ export const approvalJudgementLabels = {
 
 export function approvalExplanationView(
   result: AsyncResult.AsyncResult<ApprovalExplanationResult, unknown>,
+  resolve: MFunctionType = mFallback,
 ): ApprovalExplanationView {
   if (AsyncResult.isInitial(result))
-    return { status: "loading", message: "Preparing AI explanation…" };
+    return { status: "loading", message: resolve(msg("Preparing AI explanation…")) };
   if (AsyncResult.isFailure(result))
     return {
       status: "error",
-      message: "AI explanation could not be loaded. You can still review the command and respond.",
+      message: resolve(
+        msg("AI explanation could not be loaded. You can still review the command and respond."),
+      ),
     };
   const value = result.value;
   if (value.status === "ready") return value;
-  if (value.status === "error") return { status: "error", message: value.message };
+  if (value.status === "error") return { status: "error", message: resolve(value.message) };
   if (value.reason === "provider_unsupported")
     return {
       status: "unavailable",
-      message:
-        "This model cannot explain commands without tools. Choose another text-generation model in Settings.",
+      message: resolve(
+        msg(
+          "This model cannot explain commands without tools. Choose another text-generation model in Settings.",
+        ),
+      ),
     };
   return {
     status: "unavailable",
-    message:
-      "AI explanation is unavailable for this request. Review the command before responding.",
+    message: resolve(
+      msg("AI explanation is unavailable for this request. Review the command before responding."),
+    ),
   };
 }
 
@@ -124,17 +133,15 @@ export function createApprovalExplanationAtoms<R, E>(
       if (!get(explain.permissionAtom(target.environmentId, target.input))) {
         return Effect.succeed<ApprovalExplanationResult>({
           status: "error",
-          message:
+          message: msg(
             "This connection cannot request AI explanations. You can still review the command.",
+          ),
         });
       }
-      return Effect.promise(() =>
-        explain.run(get.registry, { environmentId: target.environmentId, input: target.input }),
-      ).pipe(
-        Effect.flatMap((result) =>
-          result._tag === "Success" ? Effect.succeed(result.value) : Effect.failCause(result.cause),
-        ),
-      );
+      return explain.run(get.registry, {
+        environmentId: target.environmentId,
+        input: target.input,
+      });
     }).pipe(Atom.withLabel(`approval-explanation:${key}`));
   });
   return (target: ApprovalExplanationTarget) => family(JSON.stringify(target));

@@ -1,4 +1,8 @@
 import { isCommitSha, normalizeHost } from "@t3tools/source-control-core/server/pullRequestUtils";
+import {
+  diffFileSection,
+  truncateLongDiffLines,
+} from "@t3tools/source-control-core/server/diffFileRevisions";
 import { removeAgentCredits } from "@t3tools/source-control-core/server/mergeMessage";
 import { KnownWorkflowRuns, makeChecksRevalidator } from "./gitHubConditionalChecks.ts";
 import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
@@ -10,7 +14,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { GraphQLClient, GraphQLClientError, GraphQLGroup, GraphQLResolver } from "effect/graphql";
+import {
+  GraphQL,
+  GraphQLClient,
+  GraphQLClientError,
+  GraphQLGroup,
+  GraphQLProtocol,
+  GraphQLResolver,
+} from "effect/graphql";
 import { HttpClient } from "effect/http";
 import * as RequestResolver from "effect/RequestResolver";
 import * as Result from "effect/Result";
@@ -19,7 +30,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
   resolvePullRequestAuthorFilter,
-  type IssueLink,
   PositiveInt,
   TrimmedNonEmptyString,
   type PullRequestAction,
@@ -46,12 +56,17 @@ import {
   type PullRequestPreview,
 } from "@t3tools/contracts";
 
-import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubAppAccess from "./GitHubAppAccess.ts";
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubPullRequestEvents from "./gitHubPullRequestEvents.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
+import {
+  CITED_ISSUE_REFERENCES_MAX,
+  mergeIssueLinks,
+  parseIssueReferences,
+  unlinkedIssueReferences,
+} from "@t3tools/source-control-core/server/issueReferences";
 import { PullRequestBatchesGraphQLGroup } from "./pullRequestBatches.graphql.ts";
 import {
   PullRequestMutationsGraphQLGroup,
@@ -66,12 +81,8 @@ import { PullRequestReviewsGraphQLGroup } from "./pullRequestReviews.graphql.ts"
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
-  buildCitedIssuesGraphQlQuery,
   buildReviewSubmission,
   buildReviewerRequest,
-  decodeCitedIssuesJson,
-  decodeLinkedIssuesJson,
-  type GitHubLinkedIssues,
   decodeCommitFilesJson,
   pullRequestChecksFromContexts,
   decodeWorkflowRunsJson,
@@ -82,6 +93,11 @@ import {
   isSubjectOfPullRequest,
   LenientPullRequestList,
   LenientPullRequestSearch,
+  LINKED_ISSUES_MAX_ROWS,
+  PullRequestLinkedIssues,
+  buildCitedIssuesGraphQlQuery,
+  decodeCitedIssuesJson,
+  decodeLinkedIssuesJson,
   pageRows,
   pullRequestLookup,
   toLabelCandidates,
@@ -113,8 +129,6 @@ import {
   decodePullRequestFilesJson,
   decodePullRequestStacksJson,
   buildLabelRequest,
-  LINKED_ISSUES_GRAPHQL_QUERY,
-  LINKED_ISSUES_MAX_ROWS,
   PULL_REQUEST_SEARCH_MAX_ROWS,
   gitHubReactionContent,
   reviewThreadConversation,
@@ -133,10 +147,15 @@ import {
   type GitHubViewerAccess,
   IMMEDIATELY_MERGEABLE,
 } from "./gitHubPullRequestJson.ts";
-import type { IssueReference } from "@t3tools/source-control-core/server/issueReferences";
-import type {
-  ProviderChangeRequestSummary,
-  ProviderListCursor,
+import {
+  gitHubActionsJobId,
+  tailLogLines,
+  type ProviderAcrossListCursor,
+  type ProviderChangeRequestSummary,
+  type ProviderCheckLog,
+  type ProviderCheckReference,
+  type ProviderCheckRerun,
+  type ProviderListCursor,
 } from "@t3tools/source-control-core/server/PullRequestProvider";
 
 export class GitHubPullRequestReadError extends Schema.TaggedError<GitHubPullRequestReadError>()(
@@ -335,6 +354,11 @@ const isGraphQlClientError = (error: unknown): error is GraphQLClientError.Graph
 
 const { isNotFoundOnly } = GitHubGraphQlClient;
 
+const isGitHubApiResponseError = Schema.is(GitHubRequestPolicy.GitHubApiResponseError);
+
+const isGitHubServerError = (error: unknown): boolean =>
+  isGitHubApiResponseError(error) && error.status >= 500;
+
 const isMissingPullRef = ({ path, type }: GraphQLClientError.GraphQLError): boolean =>
   type === "NOT_FOUND" && path?.join(".") === "repository.pullRequest.baseRef.compare";
 
@@ -386,6 +410,9 @@ const decodePullRequestActionState = Schema.decodeUnknownEffect(PullRequestActio
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const WITHHELD_FILE_DIFF_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+// Withheld files are mostly minified bundles; megabyte lines would freeze the client's layout.
+const WITHHELD_FILE_MAX_LINE_LENGTH = 1_000;
 const DIFF_TIMEOUT = Duration.seconds(60);
 const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
@@ -396,15 +423,50 @@ const LIST_STATES: Record<PullRequestListState, ReadonlyArray<"OPEN" | "CLOSED" 
   merged: ["MERGED"],
 };
 
-interface GitHubPullRequestListPage {
-  readonly items: ReadonlyArray<GitHubPullRequestListItem>;
+interface GitHubPullRequestListPage<Item = GitHubPullRequestListItem> {
+  readonly items: ReadonlyArray<Item>;
   readonly rawCount: number;
   readonly endCursor: string | null;
 }
 
+/**
+ * Pages of up to a hundred until `rows` have arrived or GitHub has no more. Each page asks
+ * for only the rows still missing, so the last one does not overshoot.
+ */
+const collect = Effect.fn("GitHubPullRequestApi.collect")(function* <Item, E>(
+  rows: number,
+  page: (after: string | null, rows: number) => Effect.Effect<GitHubPullRequestListPage<Item>, E>,
+) {
+  const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage<Item>>) =>
+    pages.reduce((total, read) => total + read.rawCount, 0);
+  const pages: GitHubPullRequestListPage<Item>[] = [];
+  const seen = new Set<string>();
+  let after: string | null = null;
+  let truncated = false;
+  while (true) {
+    const read: GitHubPullRequestListPage<Item> = yield* page(after, rows - countRows(pages));
+    pages.push(read);
+    const next = read.endCursor;
+    if (next === null) break;
+    // `truncated` also covers a cursor GitHub repeated before `rows` arrived.
+    if (seen.has(next) || countRows(pages) >= rows) {
+      truncated = true;
+      break;
+    }
+    seen.add(next);
+    after = next;
+  }
+  return {
+    items: pages.flatMap((read) => read.items),
+    rawCount: countRows(pages),
+    truncated,
+  };
+});
+
 const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
 
-const DIFF_FILES_PAGE_SIZE = 100;
+// Larger pages make GitHub drop patches and report those files as 0/0.
+const DIFF_FILES_PAGE_SIZE = 30;
 const FILES_VIEWED_MAX_PAGES = 5;
 const FILES_VIEWED_PER_REQUEST = 100;
 
@@ -444,6 +506,7 @@ export interface GitHubPullRequestDiffSlice {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
+  readonly withheldFilesReadable?: boolean;
 }
 
 export interface GitHubPullRequestFilesViewed {
@@ -501,7 +564,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly viewer: string;
       readonly limit: number;
       readonly query?: string | undefined;
-      readonly cursor?: ProviderListCursor | undefined;
+      readonly cursor?: ProviderAcrossListCursor | undefined;
       readonly filters?: PullRequestListFilters | undefined;
     }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestApiError>;
 
@@ -536,6 +599,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
+      readonly includeIssueLinks?: boolean;
     }) => Effect.Effect<GitHubPullRequestCore, GitHubPullRequestApiError>;
 
     readonly getPullRequestPreview: (input: {
@@ -589,6 +653,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly number: number;
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
+      readonly path?: string | undefined;
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError>;
 
     readonly getPullRequestDiffFileContents: (input: {
@@ -646,23 +711,6 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly threadId: string;
       readonly cursor: string;
     }) => Effect.Effect<PullRequestThreadCommentsResult, GitHubPullRequestApiError>;
-
-    readonly listLinkedIssues: (input: {
-      readonly cwd: string;
-      readonly repository: string;
-      readonly host: string;
-      readonly number: number;
-    }) => Effect.Effect<GitHubLinkedIssues, GitHubPullRequestApiError>;
-
-    /**
-     * The issues a pull request's own words name, looked up so that only ones which exist — and
-     * are issues rather than pull requests — reach the section. One request for the batch.
-     */
-    readonly listCitedIssues: (input: {
-      readonly cwd: string;
-      readonly host: string;
-      readonly references: ReadonlyArray<IssueReference>;
-    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitHubPullRequestApiError>;
 
     readonly getViewerAccess: (input: {
       readonly cwd: string;
@@ -741,6 +789,17 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly applied: boolean;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
+    readonly readCheckLogs: (input: {
+      readonly host: string;
+      readonly repository: string;
+      readonly checks: ReadonlyArray<ProviderCheckReference>;
+      readonly tailLines: number;
+    }) => Effect.Effect<ReadonlyArray<ProviderCheckLog>, GitHubPullRequestApiError>;
+    readonly rerunChecks: (input: {
+      readonly host: string;
+      readonly repository: string;
+      readonly checks: ReadonlyArray<ProviderCheckReference>;
+    }) => Effect.Effect<ReadonlyArray<ProviderCheckRerun>, GitHubPullRequestApiError>;
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -749,6 +808,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly action: PullRequestAction;
       readonly stackNumber?: number;
       readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
+      readonly expectedHeadSha?: string;
       readonly removeAgentCreditsOnMerge?: boolean;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
@@ -819,6 +879,55 @@ export class GitHubPullRequestApi extends Context.Service<
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
   }
 >()("@t3tools/source-control-github/server/GitHubPullRequestApi") {}
+
+const CHECK_LOG_MAX_BYTES = 16 * 1024 * 1024;
+const NOT_A_JOB = "This check is not a GitHub Actions job, so GitHub cannot re-run it.";
+const decodeActionsJob = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ run_id: Schema.Number })),
+);
+const decodeRunJobs = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      total_count: Schema.Number,
+      jobs: Schema.Array(
+        Schema.Struct({ id: Schema.Number, conclusion: Schema.NullOr(Schema.String) }),
+      ),
+    }),
+  ),
+);
+const decodeCheckRun = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      conclusion: Schema.optional(Schema.NullOr(Schema.String)),
+      output: Schema.optional(
+        Schema.Struct({
+          title: Schema.optional(Schema.NullOr(Schema.String)),
+          summary: Schema.optional(Schema.NullOr(Schema.String)),
+        }),
+      ),
+    }),
+  ),
+);
+const decodeCheckRunAnnotations = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        annotation_level: Schema.optional(Schema.NullOr(Schema.String)),
+        message: Schema.String,
+      }),
+    ),
+  ),
+);
+const FAILED_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure"]);
+const ONE_JOB_AT_A_TIME =
+  "GitHub re-runs one job of a run at a time. Re-run this one after the other finishes.";
+
+interface LocatedCheckJob {
+  readonly check: ProviderCheckReference;
+  readonly jobId: string | null;
+  readonly runId: number | null;
+  readonly detail: string | null;
+}
 
 function parseRepositorySelector(value: string): {
   readonly owner: string;
@@ -919,7 +1028,7 @@ function searchQuery(input: {
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
   readonly query?: string | undefined;
-  readonly cursor?: ProviderListCursor | undefined;
+  readonly cursor?: Pick<ProviderListCursor, "updatedBefore"> | undefined;
   readonly filters?: PullRequestListFilters | undefined;
 }): string | null {
   if (input.repositories.length === 0) return null;
@@ -966,7 +1075,7 @@ const GRAPHQL_MERGE_METHODS: Partial<
 
 const PullRequestGraphQLGroup = GraphQLGroup.merge(
   PullRequestBatchesGraphQLGroup,
-  GraphQLGroup.make(LenientPullRequestSearch, LenientPullRequestList),
+  GraphQLGroup.make(LenientPullRequestSearch, LenientPullRequestList, PullRequestLinkedIssues),
   PullRequestReadsGraphQLGroup,
   PullRequestReviewsGraphQLGroup,
   PullRequestMutationsGraphQLGroup,
@@ -989,8 +1098,11 @@ export const make = Effect.gen(function* () {
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
   const fileSystem = yield* FileSystem.FileSystem;
   const revalidateChecks = yield* makeChecksRevalidator;
+  const graphQlContext = yield* Effect.context<
+    GraphQLProtocol.GraphQLProtocol | GitHubGraphQlClient.GitHubGraphQlAuth
+  >().pipe(Effect.provide(GitHubGraphQlClient.layer));
   const client = yield* GraphQLClient.make(PullRequestGraphQLGroup).pipe(
-    Effect.provide(GitHubGraphQlClient.layer),
+    Effect.provideContext(graphQlContext),
   );
   const routingIdentities = new Map<
     string,
@@ -1246,26 +1358,6 @@ export const make = Effect.gen(function* () {
       ? Effect.succeed(decoded.success)
       : Effect.fail(readError(cwd, operation, decoded.failure));
   };
-
-  /** A GraphQL read with no generated document, decoded from its raw answer. */
-  const documentRead = <A>(input: {
-    readonly cwd: string;
-    readonly host: string;
-    readonly operation: string;
-    readonly query: string;
-    readonly variables?: Readonly<Record<string, unknown>>;
-    readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubPullRequestApiError> =>
-    GitHubApi.sendGraphQlDocument({
-      host: input.host,
-      operation: input.operation,
-      query: input.query,
-      ...(input.variables === undefined ? {} : { variables: input.variables }),
-    }).pipe(
-      Effect.provideService(GitHubRequestPolicy.GitHubRequestPolicy, policy),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.flatMap((raw) => decodeWith(input.cwd, input.operation, input.decode, raw)),
-    );
 
   /** A REST read whose JSON answer is decoded the same way. */
   const restRead = <A>(input: RestReadInput<A>): Effect.Effect<A, GitHubPullRequestApiError> =>
@@ -1542,6 +1634,63 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const readIssueLinks = Effect.fn("GitHubPullRequestApi.readIssueLinks")(function* (
+    input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    },
+    core: GitHubPullRequestCore,
+  ) {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    const canKeepPartial = (error: GitHubPullRequestApiError) =>
+      error._tag !== "GitHubApiRateLimitError" &&
+      error._tag !== "SourceControlRateLimitPausedError";
+    const operation = "listLinkedIssues";
+    const native = yield* client
+      .PullRequestLinkedIssues({ owner, name, number: input.number, first: LINKED_ISSUES_MAX_ROWS })
+      .pipe(
+        graphql({ ...input, operation }),
+        Effect.flatMap((data) =>
+          decodeWith(input.cwd, operation, decodeLinkedIssuesJson, JSON.stringify({ data })),
+        ),
+        Effect.catchIf(canKeepPartial, () => Effect.succeed({ links: [], truncated: true })),
+      );
+    const references = unlinkedIssueReferences(
+      parseIssueReferences({
+        kind: "github",
+        host: input.host,
+        repository: input.repository,
+        title: core.title,
+        body: core.body,
+      }),
+      native.links,
+    );
+    const document = buildCitedIssuesGraphQlQuery(references.slice(0, CITED_ISSUE_REFERENCES_MAX));
+    if (document === null) {
+      return { linkedIssues: native.links, linkedIssuesTruncated: native.truncated };
+    }
+    const citedClient = yield* GraphQLClient.make(
+      GraphQLGroup.make(
+        GraphQL.query("PullRequestCitedIssues", { document, result: Schema.Unknown }),
+      ).middleware(GitHubGraphQlClient.GitHubGraphQlAuth),
+    ).pipe(Effect.provideContext(graphQlContext));
+    const citedOperation = "listCitedIssues";
+    const cited = yield* citedClient.PullRequestCitedIssues().pipe(
+      graphql({ ...input, operation: citedOperation }),
+      Effect.flatMap((data) =>
+        decodeWith(input.cwd, citedOperation, decodeCitedIssuesJson, JSON.stringify({ data })),
+      ),
+      Effect.map((links) => ({ links, truncated: references.length > CITED_ISSUE_REFERENCES_MAX })),
+      Effect.catchIf(canKeepPartial, () => Effect.succeed({ links: [], truncated: true })),
+    );
+    return {
+      linkedIssues: mergeIssueLinks(native.links, cited.links),
+      linkedIssuesTruncated: native.truncated || cited.truncated,
+    };
+  });
+
   const getPullRequestDetail: GitHubPullRequestApi["Service"]["getPullRequestDetail"] = (input) => {
     const { owner, name } = parseRepositorySelector(input.repository);
     const operation = "getPullRequestDetail";
@@ -1557,7 +1706,7 @@ export const make = Effect.gen(function* () {
           mergeQueue: input.host.toLowerCase() === "github.com",
         })
         .pipe(toleratingMissingPullRef(decodePullRequestCore));
-    return SourceControlRateLimit.Interactive.pipe(
+    const core = SourceControlRateLimit.Interactive.pipe(
       Effect.flatMap((allowReserve) =>
         readRequestedReviewers(input, 100, read).pipe(
           graphql({ ...input, operation, allowReserve }),
@@ -1583,6 +1732,13 @@ export const make = Effect.gen(function* () {
         ),
       ),
     );
+    return input.includeIssueLinks
+      ? core.pipe(
+          Effect.flatMap((detail) =>
+            readIssueLinks(input, detail).pipe(Effect.map((links) => ({ ...detail, ...links }))),
+          ),
+        )
+      : core;
   };
 
   const workflowApprovalLimit = 1_000;
@@ -1892,46 +2048,15 @@ export const make = Effect.gen(function* () {
         endCursor: page.endCursor,
         pageInfo: { hasNextPage: page.endCursor !== null, endCursor: page.endCursor },
       });
-      /**
-       * Pages of up to a hundred until `rows` have arrived or GitHub has no more. Each page asks
-       * for only the rows still missing, so the last one does not overshoot.
-       */
-      const collect = Effect.fn("GitHubPullRequestApi.collect")(function* (
-        rows: number,
-        page: (
-          after: string | null,
-          rows: number,
-        ) => Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestApiError>,
-      ) {
-        const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage>) =>
-          pages.reduce((total, read) => total + read.rawCount, 0);
-        const pages: GitHubPullRequestListPage[] = [];
-        const seen = new Set<string>();
-        let after: string | null = null;
-        let truncated = false;
-        while (true) {
-          const read: GitHubPullRequestListPage = yield* page(after, rows - countRows(pages));
-          pages.push(read);
-          const next = read.endCursor;
-          if (next === null) break;
-          // `truncated` also covers a cursor GitHub repeated before `rows` arrived.
-          if (seen.has(next) || countRows(pages) >= rows) {
-            truncated = true;
-            break;
-          }
-          seen.add(next);
-          after = next;
-        }
-        return {
-          items: pages.flatMap((read) => read.items),
-          rawCount: countRows(pages),
-          truncated,
-        };
-      });
       const stacks = input.host.toLowerCase() === "github.com";
+      // Search cannot exclude numbers, so the rows already delivered at the boundary come back
+      // first; read past them so they do not use up the limit.
+      const seenAt = new Set(input.cursor?.seenAt ?? []);
+      const isSeen = (item: GitHubPullRequestListItem) =>
+        item.updatedAt === input.cursor?.updatedBefore && seenAt.has(item.number);
       const read = (
         continues: boolean,
-        requestedRows = input.limit + 1,
+        requestedRows = input.limit + 1 + (continues ? seenAt.size : 0),
       ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError> =>
         collect(requestedRows, (after, rows) =>
           (continues
@@ -1964,7 +2089,7 @@ export const make = Effect.gen(function* () {
         ).pipe(
           Effect.flatMap(({ items: rawItems, rawCount, truncated: cutShort }) => {
             const items = continues
-              ? rawItems
+              ? rawItems.filter((item) => !isSeen(item))
               : rawItems.filter((item) => matchesUnsortedListing(item, input));
             if (
               !continues &&
@@ -1981,19 +2106,22 @@ export const make = Effect.gen(function* () {
               truncated:
                 cutShort ||
                 (continues
-                  ? rawCount > input.limit
+                  ? rawCount - (rawItems.length - items.length) > input.limit
                   : items.length > input.limit || rawCount >= requestedRows),
               continues,
             });
           }),
         );
-      // Unindexed repositories silently return no search rows; fall back to the repository listing.
-      const hasQuery = (input.query?.trim().length ?? 0) > 0;
+      // Unindexed repositories silently return no search rows, and search can fail while the
+      // listing answers. The listing cannot apply a text query or an `updated:<=` cursor.
+      const listingServes = input.cursor === undefined && (input.query?.trim().length ?? 0) === 0;
       const listed = read(true).pipe(
-        Effect.filterOrElse(
-          (batch) => batch.items.length > 0 || input.cursor !== undefined || hasQuery,
-          () => read(false),
-        ),
+        Effect.matchEffect({
+          onSuccess: (batch) =>
+            batch.items.length > 0 || !listingServes ? Effect.succeed(batch) : read(false),
+          onFailure: (error) =>
+            listingServes && isGitHubServerError(error) ? read(false) : Effect.fail(error),
+        }),
         Effect.filterOrElse(
           (batch) => !stacks || batch.items.length === 0,
           (batch) =>
@@ -2058,27 +2186,51 @@ export const make = Effect.gen(function* () {
           operation: "searchPullRequests",
         });
       }
-      const rows = Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS);
-      return yield* client
-        .PullRequestSearch({
-          q: query,
-          first: rows,
-          stacks: input.host.toLowerCase() === "github.com",
-          stats: false,
-        })
-        .pipe(
-          graphql({ ...input, operation: "searchPullRequests" }),
-          Effect.map(({ search }) => {
-            const page = toPullRequestRows(search);
-            const items = page.rows.flatMap(({ item, repository }) =>
-              repository === null ? [] : [{ ...item, repository }],
-            );
-            return {
-              items: items.slice(0, input.limit),
-              truncated: page.rawCount > input.limit || page.hasNextPage,
-            };
-          }),
-        );
+      // Search cannot exclude numbers, so the rows already delivered at the boundary come back
+      // first; read past them so they do not use up the limit.
+      const seenAt = new Set(
+        (input.cursor?.seenAt ?? []).map(
+          ({ repository, number }) => `${repository.trim().toLowerCase()}#${number}`,
+        ),
+      );
+      const stacks = input.host.toLowerCase() === "github.com";
+      let endedShort = false;
+      const {
+        items: rawItems,
+        rawCount,
+        truncated,
+      } = yield* collect(
+        Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS) + seenAt.size,
+        (after, rows) =>
+          client
+            .PullRequestSearch({ q: query, first: pageRows(rows), after, stacks, stats: false })
+            .pipe(
+              graphql({ ...input, operation: "searchPullRequests" }),
+              Effect.map(({ search }) => {
+                const page = toPullRequestRows(search);
+                // A short page that says it has more is where this read stops, not a gap to read past.
+                const short = page.endCursor !== null && page.rawCount < pageRows(rows);
+                if (short) endedShort = true;
+                return {
+                  items: page.rows.flatMap(({ item, repository }) =>
+                    repository === null ? [] : [{ ...item, repository }],
+                  ),
+                  rawCount: page.rawCount,
+                  endCursor: short ? null : page.endCursor,
+                };
+              }),
+            ),
+      );
+      const items = rawItems.filter(
+        (item) =>
+          item.updatedAt !== input.cursor?.updatedBefore ||
+          !seenAt.has(`${item.repository.trim().toLowerCase()}#${item.number}`),
+      );
+      return {
+        items: items.slice(0, input.limit),
+        truncated:
+          truncated || endedShort || rawCount - (rawItems.length - items.length) > input.limit,
+      };
     }),
 
     listPullRequestStats: Effect.fn("GitHubPullRequestApi.listPullRequestStats")(
@@ -2245,6 +2397,7 @@ export const make = Effect.gen(function* () {
             left.createdAt.localeCompare(right.createdAt),
           ),
           commits: commits.map((commit) => ({ ...commit, ...commitStats.get(commit.oid) })),
+          truncated: commentsAfter !== null || reviewsAfter !== null,
         } satisfies GitHubPullRequestActivity;
       },
     ),
@@ -2262,36 +2415,76 @@ export const make = Effect.gen(function* () {
       if (input.commit !== undefined && !isCommitSha(input.commit)) {
         return Effect.fail(new GitHubDiffCommitError({ cwd: input.cwd }));
       }
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const fullDiff = (maxResponseBytes: number) =>
+        api.rest({
+          host: input.host,
+          operation: "getPullRequestDiff",
+          path:
+            input.commit === undefined
+              ? `repos/${owner}/${name}/pulls/${input.number}`
+              : `repos/${owner}/${name}/commits/${input.commit}`,
+          accept: "application/vnd.github.diff",
+          maxResponseBytes,
+          timeout: DIFF_TIMEOUT,
+        });
+      // GitHub has no per-file diff, so a withheld file is cut from the whole patch here and
+      // only its section reaches the client.
+      if (input.path !== undefined) {
+        const path = input.path;
+        return fullDiff(WITHHELD_FILE_DIFF_MAX_OUTPUT_BYTES).pipe(
+          Effect.flatMap((response) => {
+            const section = response.truncated ? null : diffFileSection(response.body, path);
+            if (section === null) {
+              return Effect.fail(
+                readError(
+                  input.cwd,
+                  "getPullRequestDiff",
+                  new Error(
+                    response.truncated
+                      ? `The diff for ${path} is too large to load.`
+                      : `GitHub's diff does not include ${path}.`,
+                  ),
+                ),
+              );
+            }
+            return Effect.succeed({
+              patch: truncateLongDiffLines(section, WITHHELD_FILE_MAX_LINE_LENGTH),
+              truncated: false,
+              nextCursor: null,
+            });
+          }),
+        );
+      }
       if (input.cursor !== undefined) {
         const page = diffCursorPage(input.cursor);
         return page === null
           ? Effect.fail(new GitHubDiffCursorError({ cwd: input.cwd }))
           : filesPage(page);
       }
-      if (input.commit !== undefined) {
-        return filesPage(1);
-      }
-      const { owner, name } = parseRepositorySelector(input.repository);
-      return api
-        .rest({
-          host: input.host,
-          operation: "getPullRequestDiff",
-          path: `repos/${owner}/${name}/pulls/${input.number}`,
-          accept: "application/vnd.github.diff",
-          maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
-          timeout: DIFF_TIMEOUT,
-        })
-        .pipe(
-          Effect.flatMap((response) =>
-            response.truncated
-              ? filesPage(1)
-              : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
-          ),
-          // Above 300 changed files, GitHub returns 406; use the paged files API.
-          Effect.catchTags({
-            GitHubApiResponseError: (error) => filesPage(1).pipe(Effect.mapError(() => error)),
-          }),
+      // A withheld file is read from the whole diff, so it is readable unless GitHub refused that.
+      const readableFirstPage = () =>
+        filesPage(1).pipe(
+          Effect.map((slice): GitHubPullRequestDiffSlice => ({
+            ...slice,
+            withheldFilesReadable: true,
+          })),
         );
+      if (input.commit !== undefined) {
+        return readableFirstPage();
+      }
+      return fullDiff(DIFF_MAX_OUTPUT_BYTES).pipe(
+        Effect.flatMap((response) =>
+          response.truncated
+            ? readableFirstPage()
+            : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
+        ),
+        // Above 300 changed files (or about 20,000 lines), GitHub returns 406; use the paged
+        // files API. That refusal also covers a single file's read, so none is offered.
+        Effect.catchTags({
+          GitHubApiResponseError: (error) => filesPage(1).pipe(Effect.mapError(() => error)),
+        }),
+      );
     }),
 
     getPullRequestDiffFileContents,
@@ -2415,30 +2608,6 @@ export const make = Effect.gen(function* () {
       },
     ),
 
-    listLinkedIssues: Effect.fn("GitHubPullRequestApi.listLinkedIssues")((input) => {
-      const { owner, name } = parseRepositorySelector(input.repository);
-      return documentRead({
-        cwd: input.cwd,
-        host: input.host,
-        operation: "listLinkedIssues",
-        variables: { owner, name, number: input.number, first: LINKED_ISSUES_MAX_ROWS },
-        query: LINKED_ISSUES_GRAPHQL_QUERY,
-        decode: decodeLinkedIssuesJson,
-      });
-    }),
-
-    listCitedIssues: Effect.fn("GitHubPullRequestApi.listCitedIssues")((input) => {
-      const query = buildCitedIssuesGraphQlQuery(input.references);
-      return query === null
-        ? Effect.succeed<ReadonlyArray<IssueLink>>([])
-        : documentRead({
-            cwd: input.cwd,
-            host: input.host,
-            operation: "listCitedIssues",
-            query,
-            decode: decodeCitedIssuesJson,
-          });
-    }),
     getViewerAccess: Effect.fn("GitHubPullRequestApi.getViewerAccess")(function (input) {
       const { owner, name } = parseRepositorySelector(input.repository);
       const operation = "getViewerAccess";
@@ -2822,7 +2991,9 @@ export const make = Effect.gen(function* () {
         const merge = {
           pullRequestId: state.id,
           mergeMethod: GRAPHQL_MERGE_METHODS[input.mergeMethod ?? "merge"] ?? "MERGE",
-          ...(expectedHead === undefined ? {} : { expectedHeadOid: expectedHead }),
+          ...((input.expectedHeadSha ?? expectedHead) === undefined
+            ? {}
+            : { expectedHeadOid: input.expectedHeadSha ?? expectedHead }),
           ...(body === undefined ? {} : { commitBody: body }),
         };
         return yield* actionSummary(
@@ -2846,6 +3017,180 @@ export const make = Effect.gen(function* () {
         ),
         Effect.asVoid,
       );
+    }),
+
+    readCheckLogs: Effect.fn("GitHubPullRequestApi.readCheckLogs")(function* (input) {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const readCheckRun = <A, E>(path: string, decode: (body: string) => Effect.Effect<A, E>) =>
+        api
+          .rest({ host: input.host, operation: "readCheckRun", path })
+          .pipe(Effect.flatMap((response) => decode(response.body)));
+      // A job that never started (billing block, skipped) or whose log expired has no log;
+      // its check run (an Actions job id is its check run id) says why.
+      const missingLog = (check: ProviderCheckReference, jobId: string, fallback: string) =>
+        Effect.all(
+          [
+            readCheckRun(`repos/${owner}/${name}/check-runs/${jobId}`, decodeCheckRun),
+            readCheckRun(
+              `repos/${owner}/${name}/check-runs/${jobId}/annotations?per_page=50`,
+              decodeCheckRunAnnotations,
+            ),
+          ],
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map(([run, annotations]) =>
+            [
+              `GitHub returned no log for this job${run.conclusion ? `; it concluded ${run.conclusion}` : ""}.`,
+              run.output?.title,
+              run.output?.summary,
+              ...annotations.map(
+                (annotation) =>
+                  `${annotation.annotation_level ? `${annotation.annotation_level}: ` : ""}${annotation.message}`,
+              ),
+            ]
+              .filter((line) => typeof line === "string" && line.trim() !== "")
+              .join("\n"),
+          ),
+          Effect.catchTags({
+            GitHubApiNotFoundError: () => Effect.succeed(fallback),
+            GitHubApiResponseError: () => Effect.succeed(fallback),
+            SchemaError: () => Effect.succeed(fallback),
+          }),
+          Effect.map((detail) => ({ ...check, log: null, truncated: false, detail })),
+        );
+      return yield* Effect.forEach(
+        input.checks,
+        (check) => {
+          const jobId = gitHubActionsJobId(check.url);
+          if (jobId === null) {
+            return Effect.succeed({
+              ...check,
+              log: null,
+              truncated: false,
+              detail: "This check is not a GitHub Actions job, so GitHub holds no log for it.",
+            });
+          }
+          // The log is a redirect to storage; fetch drops the credential when it leaves GitHub.
+          return api
+            .rest({
+              host: input.host,
+              operation: "readCheckLog",
+              path: `repos/${owner}/${name}/actions/jobs/${jobId}/logs`,
+              maxResponseBytes: CHECK_LOG_MAX_BYTES,
+              timeout: "60 seconds",
+            })
+            .pipe(
+              Effect.map((response) => {
+                const tail = tailLogLines(response.body, input.tailLines);
+                return {
+                  ...check,
+                  log: tail.log,
+                  truncated: tail.truncated || response.truncated,
+                  detail: response.truncated
+                    ? "The log is too large; this is from its start."
+                    : null,
+                };
+              }),
+              // Sign-in and rate-limit failures fail the call; the rest are this check's.
+              Effect.catchTags({
+                GitHubApiNotFoundError: (error) => missingLog(check, jobId, error.message),
+                GitHubApiResponseError: (error) => missingLog(check, jobId, error.message),
+              }),
+            );
+        },
+        { concurrency: 4 },
+      );
+    }),
+
+    rerunChecks: Effect.fn("GitHubPullRequestApi.rerunChecks")(function* (input) {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const root = `repos/${owner}/${name}/actions`;
+      const located = yield* Effect.forEach(
+        input.checks,
+        (check): Effect.Effect<LocatedCheckJob, GitHubPullRequestApiError> => {
+          const jobId = gitHubActionsJobId(check.url);
+          if (jobId === null)
+            return Effect.succeed({ check, jobId, runId: null, detail: NOT_A_JOB });
+          return api
+            .rest({ host: input.host, operation: "readCheckJob", path: `${root}/jobs/${jobId}` })
+            .pipe(
+              Effect.flatMap((response) => decodeActionsJob(response.body)),
+              Effect.map((job) => ({ check, jobId, runId: job.run_id, detail: null })),
+              Effect.catchTags({
+                GitHubApiNotFoundError: (error) =>
+                  Effect.succeed({ check, jobId, runId: null, detail: error.message }),
+                GitHubApiResponseError: (error) =>
+                  Effect.succeed({ check, jobId, runId: null, detail: error.message }),
+                SchemaError: () => Effect.succeed({ check, jobId, runId: null, detail: NOT_A_JOB }),
+              }),
+            );
+        },
+        { concurrency: 4 },
+      );
+      // GitHub refuses a second job re-run while the run re-runs, so a run's jobs go together.
+      const byRun = new Map<number, Array<LocatedCheckJob>>();
+      for (const entry of located) {
+        if (entry.runId === null) continue;
+        byRun.set(entry.runId, [...(byRun.get(entry.runId) ?? []), entry]);
+      }
+      const post = (path: string) =>
+        api.rest({ host: input.host, operation: "rerunChecks", method: "POST", path }).pipe(
+          Effect.as<string | null>(null),
+          Effect.catchTags({
+            GitHubApiNotFoundError: (error) => Effect.succeed(error.message),
+            GitHubApiResponseError: (error) => Effect.succeed(error.message),
+          }),
+        );
+      const failedJobsOf = (runId: number) =>
+        api
+          .rest({
+            host: input.host,
+            operation: "readRunJobs",
+            path: `${root}/runs/${runId}/jobs?filter=latest&per_page=100`,
+          })
+          .pipe(
+            Effect.flatMap((response) => decodeRunJobs(response.body)),
+            // Jobs past the first page are unseen, so such a run counts as unknown.
+            Effect.map(({ total_count, jobs }) =>
+              total_count > jobs.length
+                ? new Set<string>()
+                : new Set(
+                    jobs
+                      .filter((job) => FAILED_CONCLUSIONS.has(job.conclusion ?? ""))
+                      .map((job) => String(job.id)),
+                  ),
+            ),
+            Effect.catchTags({
+              GitHubApiNotFoundError: () => Effect.succeed(new Set<string>()),
+              GitHubApiResponseError: () => Effect.succeed(new Set<string>()),
+              SchemaError: () => Effect.succeed(new Set<string>()),
+            }),
+          );
+      const outcomes = new Map<string | null, string | null>();
+      yield* Effect.forEach(
+        byRun,
+        ([runId, jobs]) =>
+          Effect.gen(function* () {
+            const [first, ...rest] = jobs;
+            if (first === undefined) return;
+            if (rest.length > 0) {
+              // Re-running a run's failed jobs fits only when they are exactly the selection.
+              const failed = yield* failedJobsOf(runId);
+              if (failed.size === jobs.length && jobs.every((job) => failed.has(job.jobId ?? ""))) {
+                const detail = yield* post(`${root}/runs/${runId}/rerun-failed-jobs`);
+                for (const job of jobs) outcomes.set(job.jobId, detail);
+                return;
+              }
+            }
+            outcomes.set(first.jobId, yield* post(`${root}/jobs/${first.jobId}/rerun`));
+            for (const job of rest) outcomes.set(job.jobId, ONE_JOB_AT_A_TIME);
+          }),
+        { concurrency: 2, discard: true },
+      );
+      return located.map(({ check, jobId, runId, detail }) => {
+        const outcome = runId === null ? detail : (outcomes.get(jobId) ?? null);
+        return { name: check.name, rerun: runId !== null && outcome === null, detail: outcome };
+      });
     }),
 
     submitReview: Effect.fn("GitHubPullRequestApi.submitReview")(function (input) {

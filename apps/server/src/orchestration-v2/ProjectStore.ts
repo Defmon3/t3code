@@ -8,6 +8,7 @@ import {
   ProjectScript,
   ProjectSkillShortcuts,
   ProjectSkillShortcutColors,
+  ProjectTrackedFolders,
   ThreadEnvMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -44,6 +45,7 @@ export const ProjectRow = Schema.Struct({
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
+  trackedFolders: ProjectTrackedFolders,
   pinnedAt: Schema.NullOr(IsoDateTime),
   archivedAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
@@ -61,6 +63,7 @@ const ProjectDbRow = Schema.Struct({
   skillShortcuts: Schema.fromJsonString(ProjectSkillShortcuts),
   skillShortcutColors: Schema.fromJsonString(ProjectSkillShortcutColors),
   scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+  trackedFolders: Schema.fromJsonString(ProjectTrackedFolders),
 });
 
 function toShell(row: ProjectRow): OrchestrationProjectShell {
@@ -78,6 +81,7 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     skillShortcuts: row.skillShortcuts ?? [],
     skillShortcutColors: row.skillShortcutColors ?? {},
     scripts: row.scripts,
+    trackedFolders: row.trackedFolders,
     pinnedAt: row.pinnedAt,
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
@@ -138,6 +142,7 @@ export const make = Effect.gen(function* () {
         skill_shortcuts_json AS "skillShortcuts",
         skill_shortcut_colors_json AS "skillShortcutColors",
         scripts_json AS "scripts",
+        tracked_folders_json AS "trackedFolders",
         pinned_at AS "pinnedAt",
         archived_at AS "archivedAt",
         created_at AS "createdAt",
@@ -177,6 +182,7 @@ export const make = Effect.gen(function* () {
             skill_shortcuts_json,
             skill_shortcut_colors_json,
             scripts_json,
+            tracked_folders_json,
             pinned_at,
             archived_at,
             created_at,
@@ -196,6 +202,7 @@ export const make = Effect.gen(function* () {
             ${encoded.skillShortcuts},
             ${encoded.skillShortcutColors},
             ${encoded.scripts},
+            ${encoded.trackedFolders},
             ${encoded.pinnedAt},
             ${encoded.archivedAt},
             ${encoded.createdAt},
@@ -219,6 +226,7 @@ export const make = Effect.gen(function* () {
             skill_shortcuts_json = excluded.skill_shortcuts_json,
             skill_shortcut_colors_json = excluded.skill_shortcut_colors_json,
             scripts_json = excluded.scripts_json,
+            tracked_folders_json = excluded.tracked_folders_json,
             pinned_at = excluded.pinned_at,
             archived_at = excluded.archived_at,
             created_at = excluded.created_at,
@@ -272,6 +280,7 @@ export const make = Effect.gen(function* () {
           skillShortcuts: payload.skillShortcuts ?? [],
           skillShortcutColors: payload.skillShortcutColors ?? {},
           scripts: payload.scripts,
+          trackedFolders: payload.trackedFolders ?? [],
           pinnedAt: null,
           archivedAt: null,
           createdAt: payload.createdAt,
@@ -308,6 +317,7 @@ export const make = Effect.gen(function* () {
           ? {}
           : { skillShortcutColors: payload.skillShortcutColors }),
         ...(payload.scripts === undefined ? {} : { scripts: payload.scripts }),
+        ...(payload.trackedFolders === undefined ? {} : { trackedFolders: payload.trackedFolders }),
         ...(payload.pinnedAt === undefined ? {} : { pinnedAt: payload.pinnedAt }),
         ...(payload.archivedAt === undefined ? {} : { archivedAt: payload.archivedAt }),
         updatedAt: payload.updatedAt,

@@ -89,11 +89,10 @@ export interface WorkItemMatchGenerationInput {
     readonly provider: string;
     readonly referenceStyle?: IssueReferenceStyle;
     readonly repository: string;
-    readonly number: number;
     readonly title: string;
     readonly url: string;
     readonly body: string;
-  };
+  } & ({ readonly number: number } | { readonly displayKey: string });
   candidates: ReadonlyArray<WorkItemMatchGenerationInput["source"]>;
   modelSelection: ModelSelection;
 }

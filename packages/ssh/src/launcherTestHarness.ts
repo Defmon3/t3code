@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeZlib from "node:zlib";
+import * as NodeSqlite from "node:sqlite";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -62,6 +63,12 @@ export const captureLauncherFor = Effect.fn("test.captureLauncher")(function* (
 
 export const captureLauncher = captureLauncherFor({ nodeScriptPath: "/fake/server.ts" });
 
+function holdLock(path: string) {
+  const db = new NodeSqlite.DatabaseSync(path);
+  db.exec("BEGIN EXCLUSIVE;");
+  return { [Symbol.dispose]: () => db.close() };
+}
+
 export function runLauncher(
   script: string,
   options: {
@@ -72,6 +79,9 @@ export function runLauncher(
     readonly clockJump?: number;
     readonly readyAt?: number;
     readonly initialPort?: number;
+    // A boot service between two servers holds the home with no runtime record yet.
+    readonly serviceServing?: boolean;
+    readonly allowFailure?: boolean;
     // The desktop publishes runtime and removes the marker right after the first runtime read.
     readonly publishAfterFirstRuntimeRead?: boolean;
   },
@@ -179,13 +189,15 @@ PATH=/usr/bin:/bin exec ps "$@"`,
       NodeFS.mkdirSync(version, { recursive: true });
       NodeFS.writeFileSync(NodePath.join(version, ".install-complete"), "1.2.3");
       NodeFS.writeFileSync(
-        NodePath.join(home, "helper.ts"),
+        NodePath.join(home, "archive-marker.cjs"),
         `
-import * as Effect from "effect/Effect";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Command } from "effect/cli";
-import { sshHelperCommand } from ${JSON.stringify(NodePath.join(root, "apps/server/src/cli/sshHelper.ts"))};
-await Effect.runPromise(Command.runWith(sshHelperCommand, { version: "1.2.3" })(process.argv.slice(2)).pipe(Effect.provide(NodeServices.layer)));
+const fs = require("node:fs");
+const marker = process.argv[2];
+if (fs.existsSync(marker)) {
+  const { startedAt, expiresAt } = JSON.parse(fs.readFileSync(marker, "utf8"));
+  const now = Date.now();
+  if (startedAt <= now && now < expiresAt) process.stdout.write(String(expiresAt - now));
+}
 `,
       );
       NodeFS.writeFileSync(
@@ -195,7 +207,8 @@ set -eu
 if [ "$1" = --version ]; then printf 1.2.3; exit; fi
 [ "$1" = __ssh-helper ]
 case "$2" in
-  update-remaining) printf 'marker %s\\n' "$(cat "$HOME/clock")" >> "$HOME/events"; exec "$TEST_REAL_NODE" --require "$HOME/clock.cjs" "$HOME/helper.ts" "$2" "$3" ;;
+  update-remaining) printf 'marker %s\\n' "$(cat "$HOME/clock")" >> "$HOME/events"; exec "$TEST_REAL_NODE" --require "$HOME/clock.cjs" "$HOME/archive-marker.cjs" "$3" ;;
+  home-owned) [ "$TEST_SERVICE_SERVING" = 1 ] ;;
   runtime-port | pick-port | wait-ready) exec "$HOME/bin/test-node" - "$3" ;;
   *) exit 1 ;;
 esac
@@ -203,6 +216,9 @@ esac
         { mode: 0o755 },
       );
     }
+    using _serving = options.serviceServing
+      ? holdLock(NodePath.join(runtime, "service-serving.lock"))
+      : undefined;
     const result = NodeChildProcess.spawnSync("/bin/sh", ["-s", "--", "test-target"], {
       input: `kill() {
   if [ "$1" = -0 ]; then command kill "$@"; else
@@ -224,14 +240,17 @@ ${script}`,
         TEST_READY_AT: String(options.readyAt ?? 1_000_000),
         TEST_INITIAL_PORT: options.initialPort === undefined ? "" : String(options.initialPort),
         TEST_PUBLISH_AFTER_FIRST_READ: options.publishAfterFirstRuntimeRead ? "1" : "0",
+        TEST_SERVICE_SERVING: options.serviceServing ? "1" : "0",
       },
     });
-    if (result.error || result.status !== 0)
+    if (result.error || (result.status !== 0 && !options.allowFailure))
       throw new Error(
         `launcher failed: ${result.error ?? result.status}\n${result.stderr}\n${result.stdout}\n${NodeFS.readFileSync(NodePath.join(home, "events"), "utf8")}`,
       );
     return {
-      output: JSON.parse(result.stdout.trim()),
+      status: result.status,
+      stderr: result.stderr,
+      output: result.status === 0 ? JSON.parse(result.stdout.trim()) : undefined,
       events: NodeFS.readFileSync(NodePath.join(home, "events"), "utf8").trim().split("\n"),
       now: Number(NodeFS.readFileSync(NodePath.join(home, "clock"), "utf8")),
       markerExists: NodeFS.existsSync(markerPath),

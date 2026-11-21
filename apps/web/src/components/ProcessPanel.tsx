@@ -4,6 +4,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { T, useGT } from "gt-react";
 import * as Option from "effect/Option";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useRef, useState } from "react";
@@ -20,9 +21,9 @@ import {
 } from "./ProcessPanel.logic";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { namedClipboardTarget, useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
-import { formatDuration } from "~/session-logic";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentQuery } from "~/state/query";
@@ -36,8 +37,11 @@ function formatBytes(bytes: number): string {
 }
 
 function CopyValueButton({ target, value }: { readonly target: string; readonly value: string }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target });
-  const label = isCopied ? `Copied ${target}` : `Copy ${target}`;
+  const gt = useGT();
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: namedClipboardTarget(target),
+  });
+  const label = isCopied ? gt("Copied {target}", { target }) : gt("Copy {target}", { target });
 
   return (
     <Tooltip>
@@ -66,6 +70,7 @@ export function ProcessPanel(input: {
   readonly projects: readonly ProcessPanelProject[];
   readonly threads: readonly ProcessPanelThread[];
 }) {
+  const gt = useGT();
   const query = useEnvironmentQuery(
     serverEnvironment.processDiscovery({
       environmentId: input.environmentId,
@@ -121,7 +126,7 @@ export function ProcessPanel(input: {
 
     try {
       const confirmed = await ensureLocalApi().dialogs.confirm(
-        `Kill test process ${process.pid}? This cannot be handled by the process.`,
+        gt("Kill test process {pid}? This cannot be handled by the process.", { pid: process.pid }),
         { variant: "destructive" },
       );
       if (confirmed) {
@@ -134,19 +139,18 @@ export function ProcessPanel(input: {
             const error = squashAtomCommandFailure(result);
             toastManager.add({
               type: "error",
-              title: "Could not kill test process",
+              title: gt("Could not kill test process"),
               description:
-                error instanceof Error ? error.message : "Failed to kill the test process.",
+                error instanceof Error ? error.message : gt("Failed to kill the test process."),
             });
           }
         } else {
           if (!result.value.signaled) {
             toastManager.add({
               type: "error",
-              title: "Could not kill test process",
-              description: Option.getOrElse(
-                result.value.message,
-                () => "The test process may have already exited.",
+              title: gt("Could not kill test process"),
+              description: Option.getOrElse(result.value.message, () =>
+                gt("The test process may have already exited."),
               ),
             });
           }
@@ -156,23 +160,31 @@ export function ProcessPanel(input: {
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not kill test process",
-        description: error instanceof Error ? error.message : "Failed to kill the test process.",
+        title: gt("Could not kill test process"),
+        description:
+          error instanceof Error ? error.message : gt("Failed to kill the test process."),
       });
     }
     clearSignaling();
   }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-auto" aria-label="Running tests">
+    <section
+      className="flex min-h-0 flex-1 flex-col overflow-auto"
+      aria-label={gt("Running tests")}
+    >
       <header className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
-        <h2 className="font-medium text-sm">Running tests</h2>
+        <h2 className="font-medium text-sm">
+          <T>Running tests</T>
+        </h2>
         <div className="flex items-center gap-2">
           {query.data ? (
             <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-              CPU {query.data.hostCpuPercent.toFixed(1)}% · RAM{" "}
-              {formatBytes(query.data.hostMemoryUsedBytes)}/
-              {formatBytes(query.data.hostMemoryTotalBytes)}
+              {gt("CPU {cpu}% · RAM {used}/{total}", {
+                cpu: query.data.hostCpuPercent.toFixed(1),
+                used: formatBytes(query.data.hostMemoryUsedBytes),
+                total: formatBytes(query.data.hostMemoryTotalBytes),
+              })}
             </span>
           ) : null}
           <span
@@ -215,9 +227,13 @@ export function ProcessPanel(input: {
         </p>
       ) : null}
       {notice?.tone === "error" ? null : query.isPending && !query.data ? (
-        <p className="px-3 py-2 text-muted-foreground text-xs">Loading tests…</p>
+        <p className="px-3 py-2 text-muted-foreground text-xs">
+          <T>Loading tests…</T>
+        </p>
       ) : groups.length === 0 ? (
-        <p className="px-3 py-2 text-muted-foreground text-xs">No tests detected.</p>
+        <p className="px-3 py-2 text-muted-foreground text-xs">
+          <T>No tests detected.</T>
+        </p>
       ) : (
         <div className="py-1">
           {groups.map((group) => (
@@ -236,9 +252,12 @@ export function ProcessPanel(input: {
                   {group.cwd}
                 </span>
                 <span className="ml-auto shrink-0 tabular-nums text-xs text-muted-foreground">
-                  CPU {group.cpuPercent.toFixed(1)}% · {formatDuration(group.cpuTimeMs)} CPU
+                  {gt("CPU {cpu}% · {time} CPU", {
+                    cpu: group.cpuPercent.toFixed(1),
+                    time: formatDuration(group.cpuTimeMs),
+                  })}
                 </span>
-                <CopyValueButton target="working directory" value={group.cwd} />
+                <CopyValueButton target={gt("working directory")} value={group.cwd} />
               </div>
               <div className="border-border/60 border-t">
                 {group.processes.map((process, index) => {
@@ -256,7 +275,7 @@ export function ProcessPanel(input: {
                         <div className="flex min-w-0 flex-wrap items-baseline gap-2">
                           <span className="shrink-0 font-medium text-foreground">{test.label}</span>
                           <span className="shrink-0 font-mono text-muted-foreground">
-                            PID {process.pid}
+                            {gt("PID {pid}", { pid: process.pid })}
                           </span>
                           {test.args.length > 0 ? (
                             <span className="min-w-0 text-muted-foreground">
@@ -264,12 +283,12 @@ export function ProcessPanel(input: {
                             </span>
                           ) : null}
                           <CopyValueButton
-                            target={`PID ${process.pid}`}
+                            target={gt("PID {pid}", { pid: process.pid })}
                             value={String(process.pid)}
                           />
                           {process.signalable && canMaintainEnvironment ? (
                             <Button
-                              aria-label={`Kill test process ${process.pid}`}
+                              aria-label={gt("Kill test process {pid}", { pid: process.pid })}
                               disabled={signalingProcessKeys.has(
                                 `${process.pid}:${process.startTimeMs}`,
                               )}
@@ -279,14 +298,18 @@ export function ProcessPanel(input: {
                               variant="destructive-outline"
                             >
                               {signalingProcessKeys.has(`${process.pid}:${process.startTimeMs}`)
-                                ? "Killing…"
-                                : "Kill"}
+                                ? gt("Killing…")
+                                : gt("Kill")}
                             </Button>
                           ) : null}
                         </div>
                         <div className="mt-0.5 text-muted-foreground">
-                          {process.cpuPercent.toFixed(1)}% CPU · {formatBytes(process.rssBytes)} RSS
-                          · CPU time {formatDuration(process.cpuTimeMs)} · Running {process.elapsed}
+                          {gt("{cpu}% CPU · {memory} RSS · CPU time {time} · Running {elapsed}", {
+                            cpu: process.cpuPercent.toFixed(1),
+                            memory: formatBytes(process.rssBytes),
+                            time: formatDuration(process.cpuTimeMs),
+                            elapsed: process.elapsed,
+                          })}
                         </div>
                       </div>
                     </div>

@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
-import type { IssueLink, PullRequestReaction } from "@t3tools/contracts";
+import { SourceControlProviderKind, type PullRequestReaction } from "@t3tools/contracts";
 
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -281,7 +281,6 @@ describe("gitHubViewerPermissions", () => {
     }).pipe(
       Effect.provide(
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-          listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
           revalidateChecks: (_input, read) => read,
           getPullRequestDetail: () =>
             Effect.succeed({
@@ -375,7 +374,6 @@ describe("gitHubViewerPermissions", () => {
     }).pipe(
       Effect.provide(
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-          listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
           revalidateChecks: (_input, read) => read,
           getPullRequestDetail: () =>
             Effect.succeed({
@@ -473,101 +471,6 @@ const openDetail = {
   commits: [],
 };
 
-it.effect.each([
-  {
-    operation: "listCitedIssues",
-    read: "getChangeRequest",
-    partial: { linkedIssuesTruncated: true },
-  },
-  {
-    operation: "listLinkedIssues",
-    read: "getChangeRequest",
-    partial: { linkedIssuesTruncated: true },
-  },
-  {
-    operation: "listReviewThreadComments",
-    read: "getChangeRequestActivity",
-    partial: { commentsTruncated: true, reviewThreadsTruncated: true },
-  },
-] as const)("preserves quota errors from $operation and keeps ordinary fallback", (test) =>
-  Effect.gen(function* () {
-    for (const error of [
-      new GitHubRequestPolicy.GitHubApiRateLimitError({
-        host: "github.com",
-        operation: test.operation,
-        retryAt: 123_000,
-      }),
-      new SourceControlRateLimit.SourceControlRateLimitPausedError({
-        provider: "github",
-        host: "github.com",
-        retryAt: 123_000,
-      }),
-      new GitHubPullRequestApi.GitHubPullRequestReadError({
-        cwd: "/w",
-        operation: test.operation,
-        cause: "unavailable",
-      }),
-    ]) {
-      const provider = yield* make.pipe(
-        Effect.provide(
-          Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-            getPullRequestDetail: () =>
-              Effect.succeed({ ...openDetail, isCrossRepository: false, body: "Part of #34." }),
-            getPullRequestActivity: () => Effect.succeed(openDetail),
-            listUnfinishedWorkflowRuns: () => Effect.succeed([]),
-            listPullRequests: () =>
-              Effect.succeed({
-                items: [
-                  {
-                    ...openDetail,
-                    author: { login: "octocat", name: null, avatarUrl: null },
-                  },
-                ],
-                truncated: false,
-                continues: true,
-              }),
-            listCitedIssues: () =>
-              test.operation === "listCitedIssues" ? Effect.fail(error) : Effect.succeed([]),
-            listLinkedIssues: () =>
-              test.operation === "listLinkedIssues"
-                ? Effect.fail(error)
-                : Effect.succeed({ links: [], truncated: false }),
-            listReviewThreadComments: () => Effect.fail(error),
-          }),
-        ),
-      );
-      const input = {
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        number: 7,
-        state: "open",
-        involvement: "all",
-        viewer: "viewer",
-        limit: 20,
-      } as const;
-      const result =
-        test.read === "getChangeRequestActivity"
-          ? yield* provider.getChangeRequestActivity(input).pipe(Effect.result)
-          : yield* provider.getChangeRequest(input).pipe(Effect.result);
-      if (error._tag === "GitHubPullRequestReadError") {
-        expect(result).toMatchObject({ _tag: "Success", success: test.partial });
-      } else {
-        expect(result).toMatchObject({
-          _tag: "Failure",
-          failure: {
-            _tag: "PullRequestProviderError",
-            operation: test.read,
-            reason: "rate-limited",
-            retryAt: 123_000,
-            cause: error,
-          },
-        });
-      }
-    }
-  }),
-);
-
 const sameRepositoryChecks = [
   { name: "CodeRabbit", status: "skipped" as const, description: null, url: null },
   {
@@ -601,7 +504,6 @@ it.effect("adds unstarted same-repository workflow runs as pending, not as appro
   }).pipe(
     Effect.provide(
       Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-        listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
         revalidateChecks: (_input, read) => read,
         getPullRequestDetail: () =>
           Effect.succeed({ ...openDetail, isCrossRepository: false, checks: sameRepositoryChecks }),
@@ -650,7 +552,6 @@ it.effect("keeps an unsafe workflow approval scope visible as unknown", () =>
   }).pipe(
     Effect.provide(
       Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-        listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
         revalidateChecks: (_input, read) => read,
         getPullRequestDetail: () => Effect.succeed(openDetail),
         listUnfinishedWorkflowRuns: () => Effect.succeed([]),
@@ -693,7 +594,6 @@ describe("getViewerPermissions", () => {
     onDetail: (allowReserve: boolean) => void = () => {},
   ) =>
     Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-      listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
       revalidateChecks: (_input, read) => read,
       getPullRequestDetail: () =>
         SourceControlRateLimit.Interactive.pipe(
@@ -739,7 +639,6 @@ describe("getViewerPermissions", () => {
     }).pipe(
       Effect.provide(
         Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-          listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
           revalidateChecks: (_input, read) => read,
           getPullRequestDetail: () =>
             Effect.fail(
@@ -838,6 +737,7 @@ describe("getChangeRequest commits", () => {
               authors: [],
             },
           ],
+          truncated: false,
         }),
       listReviewThreadComments: () => Effect.succeed({ ...baseThreadComments, commits }),
     });
@@ -887,7 +787,7 @@ describe("getChangeRequest commits", () => {
   );
 });
 
-describe("getChangeRequestActivity dismissed reviews", () => {
+describe("getChangeRequestActivity", () => {
   const dismissedReview = (body: string) => ({
     id: "PRR_1",
     kind: "review" as const,
@@ -918,7 +818,12 @@ describe("getChangeRequestActivity dismissed reviews", () => {
     Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
       revalidateChecks: (_input, read) => read,
       getPullRequestActivity: () =>
-        Effect.succeed({ author: null, comments: [dismissedReview(body)], commits: [] }),
+        Effect.succeed({
+          author: null,
+          comments: [dismissedReview(body)],
+          commits: [],
+          truncated: false,
+        }),
       listReviewThreadComments: () => Effect.succeed(threadComments),
     });
   const readActivity = Effect.gen(function* () {
@@ -941,6 +846,59 @@ describe("getChangeRequestActivity dismissed reviews", () => {
       Effect.provide(layerFor("<!-- Macroscope (Approvability) review body marker -->")),
     ),
   );
+
+  const failingThreadRead = (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
+    Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+      getPullRequestActivity: () =>
+        Effect.succeed({ author: null, comments: [], commits: [], truncated: false }),
+      listReviewThreadComments: () => Effect.fail(error),
+    });
+  const retryAt = 1_900_000_000_000;
+
+  it.effect.each([
+    {
+      name: "rate limit",
+      error: new GitHubRequestPolicy.GitHubApiRateLimitError({
+        host: "github.com",
+        operation: "listReviewThreadComments",
+        retryAt,
+      }),
+    },
+    {
+      name: "rate-limit pause",
+      error: new SourceControlRateLimit.SourceControlRateLimitPausedError({
+        provider: SourceControlProviderKind.make("github"),
+        host: "github.com",
+        retryAt,
+      }),
+    },
+  ])("fails rate-limited when the review-thread read hits a $name", ({ error }) =>
+    readActivity.pipe(
+      Effect.flip,
+      Effect.map((failure) => expect(failure).toMatchObject({ reason: "rate-limited", retryAt })),
+      Effect.provide(failingThreadRead(error)),
+    ),
+  );
+
+  it.effect(
+    "keeps activity with truncated threads when the review-thread read fails otherwise",
+    () =>
+      readActivity.pipe(
+        Effect.map((activity) => {
+          expect(activity.reviewThreads).toEqual([]);
+          expect(activity.reviewThreadsTruncated).toBe(true);
+        }),
+        Effect.provide(
+          failingThreadRead(
+            new GitHubRequestPolicy.GitHubApiResponseError({
+              host: "github.com",
+              operation: "listReviewThreadComments",
+              status: 500,
+            }),
+          ),
+        ),
+      ),
+  );
 });
 
 describe("loginAvatarUrl", () => {
@@ -949,230 +907,6 @@ describe("loginAvatarUrl", () => {
       expect(loginAvatarUrl(login, "github.com")).toBeNull();
     }
   });
-});
-
-describe("getChangeRequest linked issues", () => {
-  const issue = (number: number, closesIssue: boolean): IssueLink => ({
-    repository: "acme/web",
-    number,
-    title: `Issue ${number}`,
-    url: `https://github.com/acme/web/issues/${number}`,
-    state: "open",
-    closesIssue,
-  });
-
-  const detailWith = (body: string) => ({
-    ...coreFields,
-    authorId: null,
-    number: 7,
-    title: "Open an issue beside a thread",
-    url: "https://github.com/acme/web/pull/7",
-    author: null,
-    headRepositoryOwner: null,
-    headBranch: "feat/page",
-    baseBranch: "main",
-    state: "open" as const,
-    isDraft: false,
-    mergeability: "mergeable" as const,
-    reviewDecision: null,
-    additions: 1,
-    deletions: 1,
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-02T00:00:00Z",
-    reviewRequestLogins: [],
-    hasTeamReviewRequest: false,
-    checksState: null,
-    labels: [],
-    body,
-    changedFiles: 1,
-    mergedAt: null,
-    closedAt: null,
-    checks: [],
-    comments: [],
-    commits: [],
-  });
-
-  const layerWith = (input: {
-    readonly body: string;
-    readonly linked: ReadonlyArray<IssueLink>;
-    readonly listCitedIssues: GitHubPullRequestApi.GitHubPullRequestApi["Service"]["listCitedIssues"];
-  }) =>
-    Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-      getPullRequestDetail: () => Effect.succeed(detailWith(input.body)),
-      listLinkedIssues: () => Effect.succeed({ links: input.linked, truncated: false }),
-      listCitedIssues: input.listCitedIssues,
-    });
-
-  const read = Effect.gen(function* () {
-    const provider = yield* make;
-    return yield* provider.getChangeRequest({
-      cwd: "/w",
-      repository: "acme/web",
-      host: "github.com",
-      number: 7,
-    });
-  });
-
-  it.effect("adds an issue the body only cites, once GitHub confirms it is one", () => {
-    const listCitedIssues = vi.fn<
-      GitHubPullRequestApi.GitHubPullRequestApi["Service"]["listCitedIssues"]
-    >(() => Effect.succeed([issue(34, false)]));
-    return read.pipe(
-      Effect.map((detail) => {
-        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
-          [12, true],
-          [34, false],
-        ]);
-        expect(detail.linkedIssuesTruncated).toBe(false);
-        // The one GitHub already reported is not asked about again.
-        expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual([
-          { repository: "acme/web", number: 34 },
-        ]);
-      }),
-      Effect.provide(
-        layerWith({
-          body: "Closes #12. Part of #34.",
-          linked: [issue(12, true)],
-          listCitedIssues,
-        }),
-      ),
-    );
-  });
-
-  it.effect("fills the detail author's avatar while retaining linked issues", () =>
-    read.pipe(
-      Effect.map((detail) => {
-        expect(detail.author?.avatarUrl).toBe("https://github.com/octocat.png?size=80");
-        expect(detail.linkedIssues).toEqual([issue(12, true)]);
-      }),
-      Effect.provide(
-        Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-          getPullRequestDetail: () =>
-            Effect.succeed({
-              ...detailWith(""),
-              author: { login: "octocat", name: null, avatarUrl: null },
-            }),
-          listLinkedIssues: () => Effect.succeed({ links: [issue(12, true)], truncated: false }),
-        }),
-      ),
-    ),
-  );
-
-  it.effect.each([
-    { count: 10, linkedCount: 0 },
-    { count: 11, linkedCount: 0 },
-    { count: 20, linkedCount: 10 },
-  ])("caps only unlinked citations and reports overflow (%j)", ({ count, linkedCount }) => {
-    const numbers = Array.from({ length: count }, (_, index) => index + 1);
-    const linked = numbers.slice(0, linkedCount).map((number) => issue(number, true));
-    const citedNumbers = numbers.slice(linkedCount, linkedCount + 10);
-    const listCitedIssues = vi.fn<
-      GitHubPullRequestApi.GitHubPullRequestApi["Service"]["listCitedIssues"]
-    >(() => Effect.succeed(citedNumbers.map((number) => issue(number, false))));
-    return read.pipe(
-      Effect.map((detail) => {
-        expect(listCitedIssues).toHaveBeenCalledTimes(1);
-        expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual(
-          citedNumbers.map((number) => ({ repository: "acme/web", number })),
-        );
-        expect(detail.linkedIssues.map((link) => link.number)).toEqual(
-          numbers.slice(0, linkedCount + 10),
-        );
-        expect(detail.linkedIssuesTruncated).toBe(count - linkedCount > 10);
-      }),
-      Effect.provide(
-        layerWith({
-          body: numbers.map((number) => "#" + number).join(" "),
-          linked,
-          listCitedIssues,
-        }),
-      ),
-    );
-  });
-
-  it.effect("asks nothing when more than ten citations are already host links", () => {
-    const linked = Array.from({ length: 11 }, (_, index) => issue(index + 1, true));
-    const listCitedIssues = vi.fn<
-      GitHubPullRequestApi.GitHubPullRequestApi["Service"]["listCitedIssues"]
-    >(() => Effect.succeed([]));
-    return read.pipe(
-      Effect.map((detail) => {
-        expect(listCitedIssues).not.toHaveBeenCalled();
-        expect(detail.linkedIssuesTruncated).toBe(false);
-        // The host's own claim survives: only it can say what merging closes.
-        expect(detail.linkedIssues).toEqual(linked);
-      }),
-      Effect.provide(
-        layerWith({
-          body: linked.map((link) => "#" + link.number).join(" "),
-          linked,
-          listCitedIssues,
-        }),
-      ),
-    );
-  });
-
-  it.effect("drops a reference GitHub answered nothing for", () =>
-    read.pipe(
-      // `#404` is a number in a body and no more than that: a dead row here is worse than
-      // an absent one.
-      Effect.map((detail) => expect(detail.linkedIssues).toEqual([])),
-      Effect.provide(
-        layerWith({
-          body: "Part of #404.",
-          linked: [],
-          listCitedIssues: () => Effect.succeed([]),
-        }),
-      ),
-    ),
-  );
-
-  it.effect("reports host links as incomplete when their read fails", () =>
-    read.pipe(
-      Effect.map((detail) => {
-        expect(detail.linkedIssues).toEqual([]);
-        expect(detail.linkedIssuesTruncated).toBe(true);
-      }),
-      Effect.provide(
-        Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
-          getPullRequestDetail: () => Effect.succeed(detailWith("")),
-          listLinkedIssues: () =>
-            Effect.fail(
-              new GitHubPullRequestApi.GitHubPullRequestReadError({
-                cwd: "/w",
-                operation: "listLinkedIssues",
-                cause: "unavailable",
-              }),
-            ),
-        }),
-      ),
-    ),
-  );
-
-  it.effect.each([[], [issue(12, true)]])(
-    "keeps host links and reports failed cited lookups as incomplete (%j)",
-    (linked) =>
-      read.pipe(
-        Effect.map((detail) => {
-          expect(detail.linkedIssues).toEqual(linked);
-          expect(detail.linkedIssuesTruncated).toBe(true);
-        }),
-        Effect.provide(
-          layerWith({
-            body: "Part of #34.",
-            linked,
-            listCitedIssues: () =>
-              Effect.fail(
-                new GitHubPullRequestApi.GitHubPullRequestReadError({
-                  cwd: "/w",
-                  operation: "listCitedIssues",
-                  cause: new Error("GraphQL: Could not resolve to an issue"),
-                }),
-              ),
-          }),
-        ),
-      ),
-  );
 });
 
 describe("listChangeRequestsAcross", () => {

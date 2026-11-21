@@ -57,8 +57,7 @@ export function buildCodexAdditionalContext(
       value: buildRuntimeInstructions({
         harness: "Codex",
         ...runtime,
-        issueToolsAvailable:
-          typeof toolsAvailable === "boolean" ? toolsAvailable : toolsAvailable.issues === true,
+        issueToolsAvailable: normalizeAvailability(toolsAvailable).issues === true,
       }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),

@@ -4,15 +4,12 @@ import * as Layer from "effect/Layer";
 import * as ModelManifest from "./ModelManifest.ts";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
-import { CommandResolutionCache } from "@t3tools/shared/shell";
 import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
@@ -24,37 +21,15 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexInstallation from "./CodexInstallation.ts";
 
 const archive = Buffer.from(
-  HostProcess.Platform.defaultValue() === "win32"
-    ? "H4sIAAAAAAAC/+3XwW6DIADGcR/FcC4WVGyzB9m1QUus2woGaGuz7N0HLlsaL71ML36/AyoxMZH8Ddad3jbmqIZMDSqZBwt2QozHYHoMxMN5mOesyFmSsmQBF+elDY9P1mlc+wTWqv7tn8aRnuNwMs7/5+fgef/lpP+C5yX6X0Jca1SwXj/t99KftradaQ/wvP980j/nbIf+l2BbNID+e9m8y1Zlb87o5fvnYrr/50WB/hfxST7k3Vz8q7KuM5q8pHyTkuvfFWEZF1XGSZgNL6pVPk4O++pQlbRv6K3TR3Nz9OyuTbxHaW/vven0eF/9+HdJvpAbAAAAAAAAAAAAAADA7L4BHTa57wAoAAA="
-    : "H4sIAAAAAAAC/+3W0W6DIBQGYB/FcD0sKNSkD7J7aom6tmAQtzXL3n3QZM3qdWVt+n8XoCckJp78wLY3q8bu9Ge2HBbUUp7nYD4H8s9zrNdSsCxnWQLT6JULn8ye09K9h/u2/c0/jSM9xqGzo0+bf3Gdf15WQiD/Kdy61/CA+z8dlO9Wrv2387+c5Z9VZY38p7BY0+Gh8t/sVauLt9Ga9Pnnop7ln1e4/6fxRQ7qZCf/qt3YW0M2OX/JyfvljbCCy3XBSaiGH9VqH4tKuaZbC6qG4aDpTrmP3sQV2nh3Gmxvzqsud0vyjaABAAAAAAAAAAAAAAAk8gOq19rvACgAAA==",
+  "H4sIAAAAAAAC/+3W0W6DIBQGYB/FcD0sKNSkD7J7aom6tmAQtzXL3n3QZM3qdWVt+n8XoCckJp78wLY3q8bu9Ge2HBbUUp7nYD4H8s9zrNdSsCxnWQLT6JULn8ye09K9h/u2/c0/jSM9xqGzo0+bf3Gdf15WQiD/Kdy61/CA+z8dlO9Wrv2387+c5Z9VZY38p7BY0+Gh8t/sVauLt9Ga9Pnnop7ln1e4/6fxRQ7qZCf/qt3YW0M2OX/JyfvljbCCy3XBSaiGH9VqH4tKuaZbC6qG4aDpTrmP3sQV2nh3Gmxvzqsud0vyjaABAAAAAAAAAAAAAAAk8gOq19rvACgAAA==",
   "base64",
 );
 const asset = {
   version: "0.156.1",
-  target:
-    HostProcess.Platform.defaultValue() === "win32"
-      ? "x86_64-pc-windows-msvc"
-      : "aarch64-apple-darwin",
+  target: "aarch64-apple-darwin",
   url: "https://github.com/openai/codex/releases/download/test/package.tar.gz",
   archiveBytes: archive.length,
 };
-const writeLocalCli = (
-  directory: string,
-  probeLog: string,
-  local: { version: string; appServerFails?: boolean; versionFails?: boolean },
-) =>
-  writeFakeCli({
-    directory,
-    name: "codex",
-    source: `import { appendFileSync } from "node:fs";
-appendFileSync(${JSON.stringify(probeLog)}, process.argv.slice(2).join(" ") + "\\n");
-if (process.argv[2] === "--version") {
-  ${local.versionFails ? "process.exit(1);" : `console.log(${JSON.stringify(`codex-cli ${local.version}`)});`}
-} else if (process.argv[2] === "app-server") {
-  process.exit(${local.appServerFails ? "1" : "0"});
-}
-`,
-  });
 const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
   input: {
     options?: Partial<CodexInstallation.CodexInstallationOptions>;
@@ -71,21 +46,20 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const environment = yield* HostProcess.Environment;
-  const platform = input.platform ?? HostProcess.Platform.defaultValue();
   const baseDir =
     input.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-install-test-" }));
-  const localDirectory = path.join(baseDir, "local");
-  const probeLog = path.join(baseDir, "local-probes.txt");
-  const local = input.local;
-  const writtenLocalBinaryPath = local
-    ? yield* Effect.sync(() => writeLocalCli(localDirectory, probeLog, local))
-    : path.join(localDirectory, platform === "win32" ? "codex.cmd" : "codex");
-  const localBinaryPath =
-    platform === "win32"
-      ? writtenLocalBinaryPath.replace(/\.cmd$/u, ".CMD")
-      : writtenLocalBinaryPath;
+  const localDirectory = `${baseDir}/local`;
+  const localBinaryPath = `${localDirectory}/codex${input.platform === "win32" ? ".exe" : ""}`;
+  const probeLog = `${baseDir}/local-probes.txt`;
+  // A restarted harness on the same baseDir keeps the existing binary, and with it its fingerprint.
+  if (input.local && !(yield* fs.exists(localBinaryPath))) {
+    yield* fs.makeDirectory(localDirectory, { recursive: true });
+    yield* fs.writeFileString(
+      localBinaryPath,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${probeLog}'\ncase "$1" in\n--version) ${input.local.versionFails ? "exit 1" : `printf '%s\\n' 'codex-cli ${input.local.version}'`};;\napp-server) exit ${input.local.appServerFails ? "1" : "0"};;\nesac\n`,
+      { mode: 0o755 },
+    );
+  }
   let downloads = 0;
   const digest = yield* Digest.Digest;
   const sha256 = Hex.encode(yield* digest.digest(Digest.sha256, archive).pipe(Effect.orDie));
@@ -126,11 +100,11 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
       refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
       refreshInBackground: Effect.void,
     }),
-    Effect.provideService(HostProcess.Platform, platform),
+    Effect.provideService(HostProcess.Platform, input.platform ?? "darwin"),
     Effect.provideService(HostProcess.Architecture, "arm64"),
     Effect.provideService(HostProcess.Environment, {
-      ...environment,
       PATH: input.local ? localDirectory : "",
+      SystemRoot: "C:\\Windows",
     }),
     Effect.provideService(FileSystem.FileSystem, lockingFs),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -159,7 +133,6 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
     installation,
     fs,
     baseDir,
-    path,
     localBinaryPath,
     probeLog,
     failedRenames,
@@ -173,7 +146,7 @@ const terminalState = (installation: CodexInstallation.CodexInstallation["Servic
     Effect.map(Option.getOrThrow),
   );
 
-it.live.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
+it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
   "reuses installed Codex %s without downloading or taking ownership of it",
   (version) =>
     Effect.gen(function* () {
@@ -203,7 +176,7 @@ it.live.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
       expect((yield* h.installation.state).source).toBe("local");
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
-it.live.each([
+it.effect.each([
   { version: "0.128.9" },
   { version: "0.145.0" },
   { version: "0.155.1" },
@@ -231,44 +204,10 @@ const compileNative = Effect.fn("test.compileNative")(function* (
   executablePath: string,
   source: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const windows = HostProcess.Platform.defaultValue() === "win32";
-  let command = "cc";
-  let args = ["-x", "c", "-", "-o", executablePath];
-  if (windows) {
-    const environment = yield* HostProcess.Environment;
-    if (environment.SystemRoot === undefined) {
-      return yield* Effect.die(new Error("The native launcher fixture requires SystemRoot."));
-    }
-    let compilerPath: string | undefined;
-    for (const framework of ["Framework64", "Framework"]) {
-      const candidate = path.join(
-        environment.SystemRoot,
-        "Microsoft.NET",
-        framework,
-        "v4.0.30319",
-        "csc.exe",
-      );
-      if (yield* fs.exists(candidate)) {
-        compilerPath = candidate;
-        break;
-      }
-    }
-    if (compilerPath === undefined) {
-      return yield* Effect.die(
-        new Error("The native launcher fixture requires an installed .NET Framework 4 compiler."),
-      );
-    }
-    command = compilerPath;
-    const sourcePath = `${executablePath}.cs`;
-    yield* fs.writeFileString(sourcePath, source);
-    args = ["/nologo", `/out:${executablePath}`, sourcePath];
-  }
   const compiler = yield* spawner.spawn(
-    ChildProcess.make(command, args, {
-      stdin: windows ? "ignore" : Stream.make(new TextEncoder().encode(source)),
+    ChildProcess.make("cc", ["-x", "c", "-", "-o", executablePath], {
+      stdin: Stream.make(new TextEncoder().encode(source)),
       stdout: "inherit",
       stderr: "inherit",
     }),
@@ -276,14 +215,63 @@ const compileNative = Effect.fn("test.compileNative")(function* (
   expect(yield* compiler.exitCode).toBe(0);
 }, Effect.scoped);
 
-it.live("rechecks compatibility after the local executable is replaced", () =>
+it.effect.each([
+  { layout: "npm bin symlink", persists: true },
+  { layout: "npm shim", persists: true },
+  { layout: "wrapper script", persists: false },
+])(
+  "re-probes a $layout Codex after a restart only when its payload can change",
+  ({ layout, persists }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-install-test-" });
+      const packageDirectory =
+        layout === "npm shim"
+          ? `${baseDir}/local/node_modules/@openai/codex`
+          : `${baseDir}/npm/lib/node_modules/@openai/codex`;
+      const payload =
+        layout === "wrapper script" ? `${baseDir}/payload` : `${packageDirectory}/bin/codex.js`;
+      const install = Effect.fn("test.installPayload")(function* (version: string) {
+        yield* fs.makeDirectory(`${packageDirectory}/bin`, { recursive: true });
+        if (layout !== "wrapper script")
+          yield* fs.writeFileString(
+            `${packageDirectory}/package.json`,
+            JSON.stringify({ name: "@openai/codex", version }),
+          );
+        yield* fs.writeFileString(
+          payload,
+          `#!/bin/sh\nprintf '%s\\n' "$*" >> '${baseDir}/local-probes.txt'\ncase "$1" in --version) printf 'codex-cli ${version}\\n';; esac\n`,
+          { mode: 0o755 },
+        );
+      });
+      yield* install("0.156.1");
+      yield* fs.makeDirectory(`${baseDir}/local`, { recursive: true });
+      if (layout === "npm bin symlink") yield* fs.symlink(payload, `${baseDir}/local/codex`);
+      else
+        yield* fs.writeFileString(`${baseDir}/local/codex`, `#!/bin/sh\nexec '${payload}' "$@"\n`, {
+          mode: 0o755,
+        });
+      const first = yield* makeHarness({ baseDir, local: { version: "0.156.1" } });
+      expect((yield* first.installation.resolve()).source).toBe("local");
+      const restarted = yield* makeHarness({ baseDir, local: { version: "0.156.1" } });
+      expect((yield* restarted.installation.resolve()).source).toBe("local");
+      expect((yield* fs.readFileString(first.probeLog)).trim().split("\n")).toHaveLength(
+        persists ? 2 : 4,
+      );
+      yield* install("0.128.9");
+      const upgraded = yield* makeHarness({ baseDir, local: { version: "0.156.1" } });
+      expect((yield* upgraded.installation.state).installedVersion).toBeNull();
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("rechecks compatibility after the local executable is replaced", () =>
   Effect.gen(function* () {
     const h = yield* makeHarness({ local: { version: "0.156.1" } });
     expect((yield* h.installation.resolve()).source).toBe("local");
     yield* h.fs.remove(h.localBinaryPath);
-    yield* Effect.sync(() =>
-      writeLocalCli(h.path.dirname(h.localBinaryPath), h.probeLog, { version: "0.128.9" }),
-    );
+    yield* h.fs.writeFileString(h.localBinaryPath, "#!/bin/sh\nprintf 'codex-cli 0.128.9\\n'\n", {
+      mode: 0o755,
+    });
     yield* h.installation.start;
     expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
     expect((yield* h.installation.resolve()).source).toBe("managed");
@@ -291,7 +279,7 @@ it.live("rechecks compatibility after the local executable is replaced", () =>
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live("rechecks a cached local executable when the shared manifest policy changes", () =>
+it.effect("rechecks a cached local executable when the shared manifest policy changes", () =>
   Effect.gen(function* () {
     let manifest = ModelManifest.BUNDLED_MODEL_MANIFEST;
     const h = yield* makeHarness({
@@ -323,7 +311,7 @@ it.live("rechecks a cached local executable when the shared manifest policy chan
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live("uses bundled Codex compatibility when the remote manifest omits its policy", () =>
+it.effect("uses bundled Codex compatibility when the remote manifest omits its policy", () =>
   Effect.gen(function* () {
     const h = yield* makeHarness({
       local: { version: "0.156.0" },
@@ -337,7 +325,7 @@ it.live("uses bundled Codex compatibility when the remote manifest omits its pol
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live.each([
+it.effect.each([
   { kind: "script", name: "volta-shim" },
   { kind: "native", name: "volta-shim" },
   { kind: "native", name: "mise" },
@@ -345,44 +333,13 @@ it.live.each([
 ])("preserves the invoked name of $kind $name launcher symlinks", ({ kind, name }) =>
   Effect.gen(function* () {
     const h = yield* makeHarness({ local: { version: "0.156.1" } });
-    const windows = HostProcess.Platform.defaultValue() === "win32";
-    const launcher = h.path.join(
-      h.baseDir,
-      `${name}${windows ? (kind === "native" ? ".exe" : ".cmd") : ""}`,
-    );
-    const invokedPath = h.path.join(
-      h.path.dirname(h.localBinaryPath),
-      `codex${windows ? (kind === "native" ? ".EXE" : ".CMD") : ""}`,
-    );
+    const launcher = `${h.baseDir}/${name}`;
     if (kind === "native") {
-      const payload = h.path.join(h.path.dirname(h.localBinaryPath), "codex.js");
-      if (windows) yield* h.fs.remove(h.localBinaryPath);
-      else yield* h.fs.rename(h.localBinaryPath, payload);
+      const payload = `${h.baseDir}/codex.js`;
+      yield* h.fs.rename(h.localBinaryPath, payload);
       yield* compileNative(
         launcher,
-        windows
-          ? `using System;
-using System.IO;
-using System.Runtime.InteropServices;
-public static class Launcher {
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-  private static extern IntPtr GetCommandLineW();
-  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-  private static extern IntPtr CommandLineToArgvW(IntPtr commandLine, out int count);
-  [DllImport("kernel32.dll")]
-  private static extern IntPtr LocalFree(IntPtr memory);
-  public static int Main(string[] args) {
-    int count;
-    IntPtr argv = CommandLineToArgvW(GetCommandLineW(), out count);
-    string invoked = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv));
-    LocalFree(argv);
-    if (!String.Equals(Path.GetFileName(invoked), "codex.exe", StringComparison.OrdinalIgnoreCase)) return 1;
-    if (args.Length > 0 && args[0] == "--version") Console.WriteLine("codex-cli 0.156.1");
-    return 0;
-  }
-}
-`
-          : `#include <string.h>
+        `#include <string.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
   const char *name = strrchr(argv[0], '/');
@@ -395,48 +352,40 @@ int main(int argc, char **argv) {
     } else {
       yield* h.fs.writeFileString(
         launcher,
-        windows
-          ? '@echo off\r\nif not "%~n0"=="codex" exit /b 1\r\nif "%~1"=="--version" echo codex-cli 0.156.1\r\nexit /b 0\r\n'
-          : '#!/bin/sh\ncase "$0" in */codex) ;; *) exit 1;; esac\ncase "$1" in --version) printf "codex-cli 0.156.1\\n";; app-server) exit 0;; esac\n',
+        '#!/bin/sh\ncase "$0" in */codex) ;; *) exit 1;; esac\ncase "$1" in --version) printf "codex-cli 0.156.1\\n";; app-server) exit 0;; esac\n',
         { mode: 0o755 },
       );
       yield* h.fs.remove(h.localBinaryPath);
     }
-    yield* h.fs.symlink(launcher, invokedPath);
-    // why: Fixture setup can replace the cached .cmd launcher with a native .exe.
-    (yield* CommandResolutionCache).clear();
+    yield* h.fs.symlink(launcher, h.localBinaryPath);
     expect(yield* h.installation.start).toMatchObject({ source: "local", phase: "succeeded" });
-    expect((yield* h.installation.resolve()).executablePath).toBe(invokedPath);
+    expect((yield* h.installation.resolve()).executablePath).toBe(h.localBinaryPath);
     expect(h.downloads()).toBe(0);
+    expect(yield* h.fs.exists(`${h.baseDir}/caches/codex-local-probe.json`)).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live(
+it.effect(
   "installs the complete verified package in tools/codex/version and survives a restart",
   () =>
     Effect.gen(function* () {
-      const { installation, fs, baseDir, path } = yield* makeHarness();
+      const { installation, fs, baseDir } = yield* makeHarness();
       yield* installation.start;
       expect((yield* terminalState(installation)).phase).toBe("succeeded");
       const executable = yield* installation.resolve();
-      const suffix = HostProcess.Platform.defaultValue() === "win32" ? ".exe" : "";
-      expect(executable.executablePath).toBe(
-        path.join(baseDir, "tools", "codex", "0.156.1", "bin", `codex${suffix}`),
-      );
+      expect(executable.executablePath).toBe(`${baseDir}/tools/codex/0.156.1/bin/codex`);
       expect(
-        yield* fs.readFileString(
-          `${executable.managedVersionDirectory}/bin/codex-code-mode-host${suffix}`,
-        ),
+        yield* fs.readFileString(`${executable.managedVersionDirectory}/bin/codex-code-mode-host`),
       ).toBe("host");
-      expect(
-        yield* fs.readFileString(`${executable.managedVersionDirectory}/codex-path/rg${suffix}`),
-      ).toBe("rg");
+      expect(yield* fs.readFileString(`${executable.managedVersionDirectory}/codex-path/rg`)).toBe(
+        "rg",
+      );
       const restarted = yield* makeHarness({ baseDir });
       expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live("requires an update before running an older activated managed installation", () =>
+it.effect("requires an update before running an older activated managed installation", () =>
   Effect.gen(function* () {
     const first = yield* makeHarness();
     yield* first.installation.start;
@@ -466,7 +415,7 @@ it.live("requires an update before running an older activated managed installati
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live("updates an older supported managed installation to the pinned release on startup", () =>
+it.effect("updates an older supported managed installation to the pinned release on startup", () =>
   Effect.gen(function* () {
     const first = yield* makeHarness();
     yield* first.installation.start;
@@ -563,6 +512,68 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
+it.effect.each(["cached update", "reverify"] as const)(
+  "reports a verification timeout during %s and preserves the managed runtime",
+  (operation) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-verify-test-" });
+      const managed = `${baseDir}/tools/codex`;
+      const installedVersion = operation === "cached update" ? "0.156.0" : asset.version;
+      const target = "aarch64-pc-windows-msvc";
+      const checksum = "a".repeat(64);
+      for (const version of new Set([installedVersion, asset.version])) {
+        const directory = `${managed}/${version}`;
+        yield* fs.makeDirectory(`${directory}/bin`, { recursive: true });
+        yield* fs.makeDirectory(`${directory}/codex-path`, { recursive: true });
+        for (const name of ["bin/codex.exe", "bin/codex-code-mode-host.exe", "codex-path/rg.exe"]) {
+          yield* fs.writeFileString(`${directory}/${name}`, "fixture executable");
+        }
+        yield* fs.writeFileString(
+          `${directory}/codex-package.json`,
+          JSON.stringify({ layoutVersion: 1, version, target, entrypoint: "bin/codex.exe" }),
+        );
+        yield* fs.writeFileString(
+          `${directory}/.install-complete.json`,
+          JSON.stringify({ version, target, sha256: checksum }),
+        );
+      }
+      const pointer = JSON.stringify({ version: installedVersion });
+      yield* fs.writeFileString(`${managed}/active.json`, pointer);
+      const entered = yield* Deferred.make<void>();
+      const h = yield* makeHarness({
+        baseDir,
+        platform: "win32",
+        manifestCurrent: Effect.succeed({
+          ...ModelManifest.BUNDLED_MODEL_MANIFEST,
+          compatibility: [
+            {
+              driver: "codex",
+              t3CodeRange: ">=0.0.0",
+              ranges: [{ range: ">=0.156.0", status: "supported" }],
+            },
+          ],
+        }),
+        options: {
+          releaseAsset: operation === "reverify" ? null : { ...asset, target, sha256: checksum },
+          validate: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      });
+      yield* h.installation.start;
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("90 seconds");
+      expect(yield* terminalState(h.installation)).toMatchObject({
+        phase: "failed",
+        installedVersion,
+        message:
+          "Codex runtime verification timed out after 90 seconds. Check this environment's server logs for startup errors, then retry installation.",
+      });
+      expect(yield* fs.readFileString(`${managed}/active.json`)).toBe(pointer);
+      expect((yield* h.installation.resolve()).version).toBe(installedVersion);
+      expect(h.downloads()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
 it.effect("reports a download timeout and cleans the staging directory", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
@@ -601,7 +612,7 @@ it.effect("cancels an in-flight download and cleans the staging directory", () =
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live("protects active process leases and removes the runtime after release", () =>
+it.effect("protects active process leases and removes the runtime after release", () =>
   Effect.gen(function* () {
     const { installation, fs } = yield* makeHarness();
     yield* installation.start;
@@ -617,7 +628,7 @@ it.live("protects active process leases and removes the runtime after release", 
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.live("keeps an activated runtime when a later update fails verification", () =>
+it.effect("keeps an activated runtime when a later update fails verification", () =>
   Effect.gen(function* () {
     const first = yield* makeHarness();
     yield* first.installation.start;
@@ -637,9 +648,7 @@ it.live("keeps an activated runtime when a later update fails verification", () 
 
 const upstreamVersion = "0.163.0";
 const upstreamArchive = Buffer.from(
-  HostProcess.Platform.defaultValue() === "win32"
-    ? "H4sIAOEv9moC/+3Xz26DIADHcR7FcC4W/NdmD7Jro5ZYtxUM0NZm2bsPXLY0XnqZXPx9DqjExETyNdj0atvqoxxTOUqyDO7tynI6evOjVz6c+3nB84yThJMILtbVxj+erNO09gTWqvntn4WRncNw0tb95+fgef/FrP9cZAX6jyGsNSpYr5/2h9qdtqZbaA/wvP9s1r8QfIf+YzAdGkD/Q92+151M36xW8fsX5Xz/L/Ic/UfxST/qu764V2lsrxV9ScQmode/K8pTUeUpp37Wv6hOujA57qtDVbChZbdeHfXNsrO9tuEeqZy5D7pX033N498l/UJuAAAAAAAAAAAAAAAAi/sGYo9Y2gAoAAA="
-    : "H4sIAAAAAAACA+3WzY7CIBQF4D5Kw1oqtNQmPoh7rKStP9BQdMaYefcBE43T9RQ1nm8B7Q1Jk94cYN3peW026juZDvOqsrzO3nj2yofnUK9KwZKUJREcByet/2TymabuPby29S3/NIz0EIbWDC5u/sXf/PO8EAL5j+G/ew1vuP/TXrp2bpunnf/5KP+syCvkP4bJmg5vlf96JxuVbQej4+efi2qUf17g/h/Hhezl2RzdStmhM5osUz5Lyen+RljGF0XGiK/6H9UoF4pS2rpdCCr7fq/oRtqvTocVSjt77k2nr6vud0vyg6ABAAAAAAAAAAAAAABE8gvVbjvaACgAAA==",
+  "H4sIAAAAAAACA+3WzY7CIBQF4D5Kw1oqtNQmPoh7rKStP9BQdMaYefcBE43T9RQ1nm8B7Q1Jk94cYN3peW026juZDvOqsrzO3nj2yofnUK9KwZKUJREcByet/2TymabuPby29S3/NIz0EIbWDC5u/sXf/PO8EAL5j+G/ew1vuP/TXrp2bpunnf/5KP+syCvkP4bJmg5vlf96JxuVbQej4+efi2qUf17g/h/Hhezl2RzdStmhM5osUz5Lyen+RljGF0XGiK/6H9UoF4pS2rpdCCr7fq/oRtqvTocVSjt77k2nr6vud0vyg6ABAAAAAAAAAAAAAABE8gvVbjvaACgAAA==",
   "base64",
 );
 const upstreamReleaseUrl = `https://github.com/openai/codex/releases/download/rust-v${upstreamVersion}`;
@@ -648,9 +657,9 @@ const upstreamResponses = (checksum: string) => ({
     Response.json({ version: upstreamVersion }),
   [`${upstreamReleaseUrl}/codex-package_SHA256SUMS`]: () =>
     new Response(
-      `${"0".repeat(64)}  codex-package-unused.tar.gz\n${checksum}  codex-package-${asset.target}.tar.gz\n`,
+      `${"0".repeat(64)}  codex-package-x86_64-apple-darwin.tar.gz\n${checksum}  codex-package-aarch64-apple-darwin.tar.gz\n`,
     ),
-  [`${upstreamReleaseUrl}/codex-package-${asset.target}.tar.gz`]: () =>
+  [`${upstreamReleaseUrl}/codex-package-aarch64-apple-darwin.tar.gz`]: () =>
     new Response(upstreamArchive),
 });
 
@@ -671,6 +680,8 @@ it.effect("updates a managed install to OpenAI's newest release and never downgr
       version: upstreamVersion,
     });
 
+    const sessionScope = yield* Scope.make();
+    const previous = yield* h.installation.acquire().pipe(Scope.provide(sessionScope));
     yield* h.installation.start;
     expect(yield* terminalState(h.installation)).toMatchObject({
       phase: "succeeded",
@@ -678,9 +689,13 @@ it.effect("updates a managed install to OpenAI's newest release and never downgr
       version: upstreamVersion,
     });
     expect((yield* h.installation.resolve()).version).toBe(upstreamVersion);
+    // The running session keeps its release until the next start prunes it.
+    expect(yield* h.fs.exists(previous.managedVersionDirectory!)).toBe(true);
+    yield* Scope.close(sessionScope, Exit.void);
 
     // Without upstream information the older pin is not offered as a reinstall.
     const restarted = yield* makeHarness({ baseDir: h.baseDir });
+    expect(yield* h.fs.exists(previous.managedVersionDirectory!)).toBe(false);
     expect(yield* restarted.installation.state).toMatchObject({
       installedVersion: upstreamVersion,
       version: upstreamVersion,

@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/approval-explanations";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
+import { useMessages } from "gt-react";
 import { useId, useState } from "react";
 import type { PendingApproval } from "../../session-logic";
 import { approvalExplanationAtom } from "../../state/approvalExplanations";
@@ -34,7 +35,7 @@ export function ComposerCommandApproval({
   const explanationAtom = approvalExplanationAtom(approvalExplanationTarget(threadRef, approval));
   const result = useAtomValue(explanationAtom);
   const refreshExplanation = useAtomRefresh(explanationAtom);
-  const explanation = approvalExplanationView(result);
+  const explanation = approvalExplanationView(result, useMessages());
   return (
     <ComposerBanner.Row layout="approval-stacked" data-chat-composer-collapsed-controls="true">
       <ComposerBanner.Content render={<div />}>

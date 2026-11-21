@@ -65,6 +65,8 @@ const registeredProjectsLayer = Layer.mergeAll(
           Layer.mock(VcsDriver.VcsDriver)({
             checkpoints: {
               captureCheckpoint: () => Effect.die("unused"),
+              resolveCleanHead: () => Effect.die("unused"),
+              captureHeadCheckpoint: () => Effect.die("unused"),
               hasCheckpointRef: () => Effect.die("unused"),
               restoreCheckpoint: () => Effect.die("unused"),
               diffCheckpoints: () => Effect.die("unused"),

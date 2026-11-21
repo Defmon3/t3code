@@ -16,7 +16,6 @@ import {
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
-  ProjectId,
   ThreadId,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -33,8 +32,7 @@ import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
-import { createEnvironmentRpcCommand } from "./runtime.ts";
-import { createIssueEnvironmentAtoms } from "./issues.ts";
+import { createEnvironmentRpcCommand, runAtomCommand } from "./runtime.ts";
 import { AVAILABLE_CONNECTION_STATE, BearerConnectionTarget } from "../connection/model.ts";
 import { createPeerLinkEnvironmentAtoms } from "./peerLinks.ts";
 
@@ -157,6 +155,9 @@ describe("command permissions", () => {
   it.effect.each([
     { method: WS_METHODS.serverRunStorageCleanup, scope: AuthSettingsWriteScope },
     { method: WS_METHODS.serverReclaimDatabaseSpace, scope: AuthEnvironmentMaintainScope },
+    { method: WS_METHODS.workspaceAddTaskFolderRepository, scope: AuthSourceControlWriteScope },
+    { method: WS_METHODS.providerMcpSignInStart, scope: AuthProvidersManageScope },
+    { method: WS_METHODS.providerMcpSignInComplete, scope: AuthProvidersManageScope },
   ])("requires the destination $scope grant for $method", ({ method, scope }) =>
     Effect.gen(function* () {
       const registry = yield* setup;
@@ -196,6 +197,31 @@ describe("command permissions", () => {
         expect(registry.get(check.permissionAtom(env))).toBe(true);
         yield* check.authorize(registry, env);
       }),
+  );
+
+  it.effect("requires the destination settings grant to connect or bind an issue tracker", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const connect = createCommandPermissions(runtime, WS_METHODS.issueTrackersConnect);
+        const bind = createCommandPermissions(runtime, WS_METHODS.issueTrackersBindProject);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(connect.permissionAtom(env))).toBe(false);
+        expect(registry.get(bind.permissionAtom(env))).toBe(false);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthSettingsWriteScope],
+            permissions: [AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(connect.permissionAtom(env))).toBe(true);
+        expect(registry.get(bind.permissionAtom(env))).toBe(true);
+        yield* connect.authorize(registry, env);
+        yield* bind.authorize(registry, env);
+      }),
+    ),
   );
 
   it.effect.each([WS_METHODS.scheduledTasksDelete, ORCHESTRATION_V2_WS_METHODS.stopWorkflow])(
@@ -267,9 +293,10 @@ describe("command permissions", () => {
     });
     const target = { environmentId: env, input: { id: ScheduledTaskId.make("task") } };
     try {
-      const first = command.run(registry, target);
+      const quiet = { reportFailure: false, reportDefect: false };
+      const first = runAtomCommand(registry, command, target, quiet);
       await entered;
-      const second = command.run(registry, target);
+      const second = runAtomCommand(registry, command, target, quiet);
       registry.set(sessions(env), AsyncResult.success(grant(false)));
       release();
       expect((await first)._tag).toBe("Success");
@@ -445,10 +472,10 @@ it.effect(
       setAccess(false);
       expect(yield* readLinks).toEqual({ links: [] });
       const linkInput = { url: peer.urls[0]!, pairingCode: "test-code", access: peer.access };
-      const link = Effect.promise(() =>
+      const link = Effect.exit(
         peerLinks.link.run(registry, { environmentId: env, input: linkInput }),
       );
-      const unlink = Effect.promise(() =>
+      const unlink = Effect.exit(
         peerLinks.unlink.run(registry, {
           environmentId: env,
           input: { environmentId: peer.environmentId },
@@ -568,101 +595,11 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
   }),
 );
 
-const issue = {
-  projectId: ProjectId.make("project"),
-  repository: "acme/repo",
-  number: 1,
-};
-
 it.effect.each([
   {
     tag: WS_METHODS.hookApprovalsRevokeGrant,
     scope: AuthOrchestrationOperateScope,
     input: { grantId: "custom-hook-grant" },
-  },
-  {
-    tag: WS_METHODS.issuesRunAction,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, action: "close" },
-  },
-  {
-    tag: WS_METHODS.issuesComment,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, body: "comment" },
-  },
-  {
-    tag: WS_METHODS.issuesUpdateComment,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, commentId: "comment", body: "edited" },
-  },
-  {
-    tag: WS_METHODS.issuesSetReaction,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, content: "thumbs-up", reacted: true },
-  },
-  {
-    tag: WS_METHODS.issuesCreate,
-    scope: AuthSourceControlWriteScope,
-    input: {
-      projectId: issue.projectId,
-      repository: issue.repository,
-      title: "issue",
-      body: "",
-      labels: [],
-      assignees: [],
-    },
-  },
-  {
-    tag: WS_METHODS.issuesUpdate,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, title: "edited" },
-  },
-  {
-    tag: WS_METHODS.issuesSetLabels,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, labels: ["bug"] },
-  },
-  {
-    tag: WS_METHODS.issuesSetAssignees,
-    scope: AuthSourceControlWriteScope,
-    input: { ...issue, assignees: ["user"] },
-  },
-  {
-    tag: WS_METHODS.issueTrackersConnect,
-    scope: AuthSettingsWriteScope,
-    input: { provider: "linear", token: "fake-test-token" },
-  },
-  {
-    tag: WS_METHODS.issueTrackersDisconnect,
-    scope: AuthSettingsWriteScope,
-    input: { provider: "linear", credentialId: "credential" },
-  },
-  {
-    tag: WS_METHODS.issueTrackersBind,
-    scope: AuthSettingsWriteScope,
-    input: { provider: "linear", projectId: issue.projectId, binding: null },
-  },
-  {
-    tag: WS_METHODS.workItemsFindMatches,
-    scope: AuthOrchestrationOperateScope,
-    input: {
-      projectId: issue.projectId,
-      source: { ...issue, kind: "issue" },
-      relationship: "related",
-    },
-  },
-  {
-    tag: WS_METHODS.workItemsLink,
-    scope: AuthOrchestrationOperateScope,
-    input: { issue, pullRequest: { ...issue, number: 2 } },
-  },
-  {
-    tag: WS_METHODS.workItemsUnlink,
-    scope: AuthOrchestrationOperateScope,
-    input: {
-      issue: { provider: "github", url: "https://github.com/acme/repo/issues/1" },
-      pullRequest: { provider: "github", url: "https://github.com/acme/repo/pull/2" },
-    },
   },
 ] as const)("guards $tag on the origin and actual destination", ({ tag, scope, input }) =>
   Effect.scoped(
@@ -711,74 +648,20 @@ it.effect.each([
       registry.set(sessions(env), AsyncResult.success(denied));
       registry.set(sessions(other), AsyncResult.success(allowed));
       expect(registry.get(command.permissionAtom(env, input))).toBe(false);
-      expect(yield* Effect.promise(() => command.run(registry, target))).toMatchObject({
-        _tag: "Failure",
+      expect(yield* command.run(registry, target).pipe(Effect.flip)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
       });
       expect(rpc).not.toHaveBeenCalled();
       registry.set(sessions(env), AsyncResult.success(allowed));
       registry.set(sessions(other), AsyncResult.success(denied));
       expect(registry.get(command.permissionAtom(env, input))).toBe(true);
-      expect(yield* Effect.promise(() => command.run(registry, target))).toMatchObject({
-        _tag: "Failure",
+      expect(yield* command.run(registry, target).pipe(Effect.flip)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
       });
       expect(rpc).not.toHaveBeenCalled();
       registry.set(sessions(other), AsyncResult.success(allowed));
-      expect((yield* Effect.promise(() => command.run(registry, target)))._tag).toBe("Success");
+      yield* command.run(registry, target);
       expect(rpc).toHaveBeenCalledExactlyOnceWith(input);
-    }),
-  ),
-);
-
-it.effect("rechecks issue write permission after waiting in the issue scheduler", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const registry = yield* setup;
-      registry.set(
-        sessions(env),
-        AsyncResult.success({
-          ...grant(false),
-          scopes: [AuthSourceControlWriteScope],
-          permissions: [AuthSourceControlWriteScope],
-        }),
-      );
-      let release!: () => void;
-      let started!: () => void;
-      const entered = new Promise<void>((resolve) => {
-        started = resolve;
-      });
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      yield* Effect.addFinalizer(() => Effect.sync(release));
-      const rpc = vi.fn(() =>
-        Effect.promise(async () => {
-          started();
-          await gate;
-        }),
-      );
-      const supervisor = {
-        target: { environmentId: env, label: "target" },
-        session: yield* SubscriptionRef.make(
-          Option.some({
-            client: { [WS_METHODS.issuesSetLabels]: rpc },
-          } as unknown as RpcSession),
-        ),
-      } as unknown as EnvironmentSupervisor["Service"];
-      const issueRuntime = Atom.runtime(
-        Layer.succeed(EnvironmentRegistry, {
-          run: (_id, effect) => Effect.provideService(effect, EnvironmentSupervisor, supervisor),
-        } as EnvironmentRegistry["Service"]),
-      );
-      const command = createIssueEnvironmentAtoms(issueRuntime).setLabels;
-      const target = { environmentId: env, input: { ...issue, labels: ["bug"] } };
-      const first = command.run(registry, target);
-      yield* Effect.promise(() => entered);
-      const second = command.run(registry, target);
-      registry.set(sessions(env), AsyncResult.success(grant(false)));
-      release();
-      expect((yield* Effect.promise(() => first))._tag).toBe("Success");
-      expect((yield* Effect.promise(() => second))._tag).toBe("Failure");
-      expect(rpc).toHaveBeenCalledExactlyOnceWith(target.input);
     }),
   ),
 );

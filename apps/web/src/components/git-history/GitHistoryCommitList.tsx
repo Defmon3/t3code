@@ -5,9 +5,10 @@ import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { GitHistoryCommit } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { CheckIcon, CircleDotIcon, CloudIcon, GitBranchIcon, TagIcon } from "lucide-react";
+import { T, useGT } from "gt-react";
 import * as Cause from "effect/Cause";
 
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { namedClipboardTarget, useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import {
   MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW,
   type GitHistoryGraphRow,
@@ -32,34 +33,41 @@ const GRAPH_COLORS = [
   "var(--muted-foreground)",
 ] as const;
 
-export function queryErrorMessage(cause: Cause.Cause<unknown>): string {
+export function queryErrorMessage(
+  cause: Cause.Cause<unknown>,
+  gt: ReturnType<typeof useGT>,
+): string {
   const error = Cause.squash(cause);
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
-    : "Could not load Git history.";
+    : gt("Could not load Git history.");
 }
 
-export function formatCommitDate(value: string, timestampFormat: TimestampFormat): string {
+export function formatCommitDate(
+  value: string,
+  timestampFormat: TimestampFormat,
+  gt: ReturnType<typeof useGT>,
+): string {
   const date = parseTimestampDate(value);
   if (!date) return value;
   const now = new Date();
   const elapsedMs = now.valueOf() - date.valueOf();
   if (elapsedMs >= 0 && elapsedMs < 60 * 60 * 1_000) {
     const minutes = Math.max(1, Math.floor(elapsedMs / 60_000));
-    return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    return minutes === 1 ? gt("1 minute ago") : gt("{minutes} minutes ago", { minutes });
   }
   const time = formatShortTimestamp(value, timestampFormat);
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
-  if (sameDay) return `Today ${time}`;
+  if (sameDay) return gt("Today {time}", { time });
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
   const isYesterday =
     date.getFullYear() === yesterday.getFullYear() &&
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate();
-  if (isYesterday) return `Yesterday ${time}`;
+  if (isYesterday) return gt("Yesterday {time}", { time });
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${time}`;
 }
 
@@ -150,16 +158,14 @@ function CommitSubject({
   subject: string;
   repositoryIdentity?: RepositoryIdentity | null | undefined;
 }) {
-  const parts = subject.split(/(#[0-9]+)/g);
-  let offset = 0;
-  return parts.map((part) => {
-    const start = offset;
-    offset += part.length;
+  const gt = useGT();
+  const parts = Array.from(subject.matchAll(/#[0-9]+|(?:(?!#[0-9]).)+/gs));
+  return parts.map(({ 0: part, index: offset }) => {
     if (!/^#[0-9]+$/.test(part)) return part;
     const className = "font-semibold text-primary hover:text-primary hover:underline";
     const url = commitReferenceUrl(repositoryIdentity, subject, Number(part.slice(1)));
     return url ? (
-      <Tooltip key={`${part}:${start}`}>
+      <Tooltip key={`${part}:${offset}`}>
         <TooltipTrigger
           render={
             <a
@@ -172,10 +178,12 @@ function CommitSubject({
             </a>
           }
         />
-        <TooltipPopup>{`Open ${part} on repository host`}</TooltipPopup>
+        <TooltipPopup>
+          {gt("Open {reference} on repository host", { reference: part })}
+        </TooltipPopup>
       </Tooltip>
     ) : (
-      <span key={`${part}:${start}`} className={className}>
+      <span key={`${part}:${offset}`} className={className}>
         {part}
       </span>
     );
@@ -284,12 +292,18 @@ export function CommitRow(props: {
   const { commit } = props.row;
   const rowHeight = props.rowHeight ?? GIT_HISTORY_ROW_HEIGHT;
   const { copyToClipboard, isCopied } = useCopyToClipboard({
-    target: "commit hash",
+    target: namedClipboardTarget("commit hash"),
     onError: reportCommitHashCopyFailure,
   });
   const pullRequestNumber = pullRequestNumberFromSubject(commit.subject);
   const isMergeCommit = commit.parentHashes.length > 1 || /^Merge\b/i.test(commit.subject);
-  const authoredAtLabel = formatCommitDate(commit.authoredAt, props.timestampFormat);
+  const gt = useGT();
+  const authoredAtLabel = formatCommitDate(commit.authoredAt, props.timestampFormat, gt);
+  const parentLabel = isMergeCommit
+    ? gt("{count}-parent merge commit.", { count: commit.parentHashes.length })
+    : commit.parentHashes.length === 1
+      ? gt("One parent.")
+      : gt("Root commit.");
   return (
     <div
       className={cn(
@@ -304,7 +318,17 @@ export function CommitRow(props: {
         className="absolute inset-0 z-0 outline-none focus-visible:bg-accent/60"
         onClick={() => props.onSelect(commit.hash)}
         aria-pressed={props.selected}
-        aria-label={`${commit.subject || "No subject"}. Author ${commit.authorName}, ${authoredAtLabel}. ${isMergeCommit ? `${commit.parentHashes.length}-parent merge commit.` : commit.parentHashes.length === 1 ? "One parent." : "Root commit."} ${commit.refs.length > 0 ? `Refs: ${commit.refs.join(", ")}.` : ""}`}
+        aria-label={[
+          gt("{subject}. Author {author}, {date}.", {
+            subject: commit.subject || gt("No subject"),
+            author: commit.authorName,
+            date: authoredAtLabel,
+          }),
+          parentLabel,
+          commit.refs.length > 0 ? gt("Refs: {refs}.", { refs: commit.refs.join(", ") }) : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
       />
       <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-stretch">
         <GraphCell
@@ -333,7 +357,7 @@ export function CommitRow(props: {
                           : {})}
                       />
                     ) : (
-                      "(no subject)"
+                      gt("(no subject)")
                     )}
                   </span>
                 }
@@ -351,7 +375,9 @@ export function CommitRow(props: {
                     </span>
                   }
                 />
-                <TooltipPopup>{`Pull request #${pullRequestNumber}`}</TooltipPopup>
+                <TooltipPopup>
+                  {gt("Pull request #{number}", { number: pullRequestNumber })}
+                </TooltipPopup>
               </Tooltip>
             ) : null}
             {commit.refs.slice(0, 3).map((ref) => (
@@ -392,12 +418,12 @@ export function CommitRow(props: {
               type="button"
               className="relative z-20 flex w-20 shrink-0 items-center justify-center gap-1 font-mono text-3xs text-muted-foreground tabular-nums outline-none transition-colors hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
               onClick={() => copyToClipboard(commit.hash, undefined)}
-              aria-label={`Copy commit hash ${commit.hash}`}
+              aria-label={gt("Copy commit hash {hash}", { hash: commit.hash })}
             >
               {isCopied ? (
                 <>
                   <CheckIcon className="size-3 text-success-foreground" />
-                  Copied
+                  <T>Copied</T>
                 </>
               ) : (
                 commit.hash.slice(0, 8)
@@ -406,11 +432,13 @@ export function CommitRow(props: {
           }
         />
         <TooltipPopup>
-          {isCopied ? "Commit hash copied" : `Copy full commit hash ${commit.hash}`}
+          {isCopied
+            ? gt("Commit hash copied")
+            : gt("Copy full commit hash {hash}", { hash: commit.hash })}
         </TooltipPopup>
       </Tooltip>
       <span className="sr-only" aria-live="polite">
-        {isCopied ? `Copied commit hash ${commit.hash}` : ""}
+        {isCopied ? gt("Copied commit hash {hash}", { hash: commit.hash }) : ""}
       </span>
     </div>
   );

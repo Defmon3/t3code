@@ -19,7 +19,7 @@ import {
   ThreadId,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
-  ThreadIssueLinks,
+  type ThreadIssueLink,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -34,6 +34,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../EventSink.ts";
+import { decodeLegacyThreadIssueLinks } from "../../persistence/Migrations/109_CanonicalizeLegacyThreadIssueLinks.ts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 
 const IMPORT_EVENT_PREFIX = "migration:v1";
@@ -125,7 +126,12 @@ export class LegacyV1ThreadImporter extends Context.Service<
 
 const decodeModelSelection = Schema.decodeUnknownOption(ModelSelection);
 const decodeAttachments = Schema.decodeUnknownOption(Schema.Array(ChatAttachment));
-const decodeIssueLinks = Schema.decodeEffect(Schema.fromJsonString(ThreadIssueLinks));
+const decodeIssueLinks = (row: LegacyThreadRow) =>
+  decodeLegacyThreadIssueLinks({
+    issuesJson: row.issue_links_json,
+    projectId: row.project_id,
+    linkedAt: row.updated_at,
+  });
 const decodePullRequests = Schema.decodeUnknownOption(Schema.Array(ThreadPullRequestLink));
 const decodeLinkedPullRequest = Schema.decodeUnknownOption(ThreadLinkedPullRequest);
 const decodeStoredThread = Schema.decodeUnknownOption(
@@ -202,7 +208,7 @@ function nullableDateTime(value: string | null, fallback: DateTime.Utc): DateTim
 function importedThread(
   row: LegacyThreadRow,
   importedAt: DateTime.Utc,
-  issues: typeof ThreadIssueLinks.Type,
+  issues: ReadonlyArray<ThreadIssueLink>,
 ): OrchestrationV2AppThread {
   const createdAt = dateTimeOr(row.created_at, dateTimeOr(row.updated_at, importedAt));
   const updatedAt = dateTimeOr(row.updated_at, createdAt);
@@ -499,7 +505,7 @@ const make = Effect.gen(function* () {
       const decoded = decodeStoredThread(row.payload_json);
       if (Option.isNone(decoded)) continue;
       const current = decoded.value;
-      const legacy = importedThread(row, now, yield* decodeIssueLinks(row.issue_links_json));
+      const legacy = importedThread(row, now, yield* decodeIssueLinks(row));
       const legacyPullRequests = legacy.pullRequests ?? [];
       const repaired: OrchestrationV2AppThread = {
         ...current,
@@ -597,7 +603,7 @@ const make = Effect.gen(function* () {
     let importedThreadCount = repairedThreadCount;
     let importedMessageCount = 0;
     for (const row of rows) {
-      const thread = importedThread(row, now, yield* decodeIssueLinks(row.issue_links_json));
+      const thread = importedThread(row, now, yield* decodeIssueLinks(row));
       const previews = yield* listShellMessages(thread.id);
       const events: Array<OrchestrationV2DomainEvent> = [
         {

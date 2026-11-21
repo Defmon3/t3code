@@ -3,11 +3,12 @@ import type { GitCommitChangedFile, GitCommitDetails } from "@t3tools/contracts"
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { LegendList } from "@legendapp/list/react";
 import { CheckIcon, FileDiffIcon, RefreshCwIcon } from "lucide-react";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { type CSSProperties } from "react";
 
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { namedClipboardTarget, useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { Button } from "../ui/button";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
@@ -26,21 +27,23 @@ const FILE_STATUS_COLORS = {
 } as const;
 
 const FILE_STATUS_LABELS = {
-  A: "Added",
-  M: "Modified",
-  D: "Deleted",
-  R: "Renamed",
-  C: "Copied",
-  T: "Type changed",
-  U: "Unmerged",
-  X: "Unknown",
-  B: "Broken pairing",
+  A: msg("Added"),
+  M: msg("Modified"),
+  D: msg("Deleted"),
+  R: msg("Renamed"),
+  C: msg("Copied"),
+  T: msg("Type changed"),
+  U: msg("Unmerged"),
+  X: msg("Unknown"),
+  B: msg("Broken pairing"),
 } as const;
 
 function CommitFilesTree(props: {
   files: ReadonlyArray<GitCommitChangedFile>;
   onShowDiff: (path: string) => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const { resolvedTheme } = useTheme();
   return (
     <LegendList<GitCommitChangedFile>
@@ -57,10 +60,13 @@ function CommitFilesTree(props: {
               <button
                 type="button"
                 key={file.path}
-                className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-2xs hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded pr-1 text-left text-2xs hover:bg-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
                 onClick={() => props.onShowDiff(file.path)}
 
-                aria-label={`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}
+                aria-label={gt("{status} {path}; show diff", {
+                  status: m(FILE_STATUS_LABELS[file.status]),
+                  path: file.path,
+                })}
               >
                 <span
                   className={cn(
@@ -80,7 +86,12 @@ function CommitFilesTree(props: {
               </button>
             }
           />
-          <TooltipPopup>{`${FILE_STATUS_LABELS[file.status]} ${file.path}; show diff`}</TooltipPopup>
+          <TooltipPopup>
+            {gt("{status} {path}; show diff", {
+              status: m(FILE_STATUS_LABELS[file.status]),
+              path: file.path,
+            })}
+          </TooltipPopup>
         </Tooltip>
       )}
     />
@@ -106,8 +117,9 @@ export function CommitDetailsPane(props: {
   onRetry: () => void;
   onShowDiff: (hash: string, filePath?: string) => void;
 }) {
+  const gt = useGT();
   const { copyToClipboard, isCopied } = useCopyToClipboard({
-    target: "commit hash",
+    target: namedClipboardTarget("commit hash"),
     onError: reportCommitHashCopyFailure,
   });
   if (!props.hasSelection)
@@ -120,7 +132,7 @@ export function CommitDetailsPane(props: {
           props.className,
         )}
       >
-        Select a commit to inspect its files and metadata.
+        <T>Select a commit to inspect its files and metadata.</T>
       </aside>
     );
   if (props.hasError)
@@ -133,9 +145,9 @@ export function CommitDetailsPane(props: {
           props.className,
         )}
       >
-        Could not load commit details.
+        <T>Could not load commit details.</T>
         <Button size="xs" variant="outline" onClick={props.onRetry}>
-          Retry
+          <T>Retry</T>
         </Button>
       </aside>
     );
@@ -149,11 +161,11 @@ export function CommitDetailsPane(props: {
           props.className,
         )}
       >
-        <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading commit…
+        <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> <T>Loading commit…</T>
       </aside>
     );
   const details = props.details;
-  const authoredAtLabel = formatCommitDate(details.authoredAt, props.timestampFormat);
+  const authoredAtLabel = formatCommitDate(details.authoredAt, props.timestampFormat, gt);
   return (
     <aside
       id={props.id}
@@ -173,9 +185,9 @@ export function CommitDetailsPane(props: {
               render={
                 <button
                   type="button"
-                  className="font-mono text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  className="font-mono text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
                   onClick={() => copyToClipboard(details.hash, undefined)}
-                  aria-label={`Copy commit hash ${details.hash}`}
+                  aria-label={gt("Copy commit hash {hash}", { hash: details.hash })}
                 >
                   {isCopied ? (
                     <CheckIcon className="inline size-3 text-success-foreground" />
@@ -186,7 +198,9 @@ export function CommitDetailsPane(props: {
               }
             />
             <TooltipPopup>
-              {isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
+              {isCopied
+                ? gt("Commit hash copied")
+                : gt("Copy full commit hash {hash}", { hash: details.hash })}
             </TooltipPopup>
           </Tooltip>
         </div>
@@ -203,10 +217,12 @@ export function CommitDetailsPane(props: {
       <div className="flex min-h-0 flex-1 flex-col border-b border-border/60">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-2xs font-medium">
           <span>
-            {props.files.length} loaded changed {props.files.length === 1 ? "file" : "files"}
+            {props.files.length === 1
+              ? gt("1 loaded changed file")
+              : gt("{count} loaded changed files", { count: props.files.length })}
           </span>
           <Button size="xs" variant="outline" onClick={() => props.onShowDiff(details.hash)}>
-            <FileDiffIcon className="size-3" /> View all changes
+            <FileDiffIcon className="size-3" /> <T>View all changes</T>
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1">
@@ -216,7 +232,7 @@ export function CommitDetailsPane(props: {
           />
           {props.filesError ? (
             <Button size="xs" variant="outline" onClick={props.onRetryFiles}>
-              Retry loading changed files
+              <T>Retry loading changed files</T>
             </Button>
           ) : null}
           {props.filesHasMore ? (
@@ -226,43 +242,55 @@ export function CommitDetailsPane(props: {
               onClick={props.onLoadMoreFiles}
               disabled={props.filesLoading}
             >
-              {props.filesLoading ? "Loading more…" : "Load more"}
+              {props.filesLoading ? gt("Loading more…") : gt("Load more")}
             </Button>
           ) : null}
           {props.filesCapped ? (
-            <p className="px-2 py-1 text-xs text-muted-foreground">Changed-file list was capped.</p>
+            <p className="px-2 py-1 text-xs text-muted-foreground">
+              <T>Changed-file list was capped.</T>
+            </p>
           ) : null}
         </div>
       </div>
       <div className="max-h-[34%] shrink-0 overflow-y-auto p-3 text-2xs">
         <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-muted-foreground">
-          <dt>Commit</dt>
+          <dt>
+            <T>Commit</T>
+          </dt>
           <dd className="truncate font-mono text-foreground">
             <Tooltip>
               <TooltipTrigger
                 render={
                   <button
                     type="button"
-                    className="max-w-full truncate text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                    className="max-w-full truncate text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
                     onClick={() => copyToClipboard(details.hash, undefined)}
-                    aria-label={`Copy commit hash ${details.hash}`}
+                    aria-label={gt("Copy commit hash {hash}", { hash: details.hash })}
                   >
                     {details.hash}
                   </button>
                 }
               />
               <TooltipPopup>
-                {isCopied ? "Commit hash copied" : `Copy full commit hash ${details.hash}`}
+                {isCopied
+                  ? gt("Commit hash copied")
+                  : gt("Copy full commit hash {hash}", { hash: details.hash })}
               </TooltipPopup>
             </Tooltip>
           </dd>
-          <dt>Email</dt>
+          <dt>
+            <T>Email</T>
+          </dt>
           <dd className="truncate text-foreground">{details.authorEmail}</dd>
-          <dt>Date</dt>
+          <dt>
+            <T>Date</T>
+          </dt>
           <dd className="text-foreground">{authoredAtLabel}</dd>
-          <dt>Parents</dt>
+          <dt>
+            <T>Parents</T>
+          </dt>
           <dd className="truncate font-mono text-foreground">
-            {details.parentHashes.map((hash) => hash.slice(0, 8)).join(", ") || "None"}
+            {details.parentHashes.map((hash) => hash.slice(0, 8)).join(", ") || gt("None")}
           </dd>
         </dl>
         {details.body.trim().length > 0 ? (
@@ -272,7 +300,7 @@ export function CommitDetailsPane(props: {
         ) : null}
       </div>
       <span className="sr-only" aria-live="polite">
-        {isCopied ? `Copied commit hash ${details.hash}` : ""}
+        {isCopied ? gt("Copied commit hash {hash}", { hash: details.hash }) : ""}
       </span>
     </aside>
   );

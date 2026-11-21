@@ -1,12 +1,12 @@
+import { threadIssueKeyOf, type IssueListEntry } from "@t3tools/contracts";
+import { IssueStateGlyph } from "../issue/issuePresentation";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
-import { formatIssueReference } from "@t3tools/contracts";
 import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
 import {
-  type IssueListEntry,
   type EnvironmentId,
   type EnvironmentMachineKind,
   type ProjectEntry,
@@ -26,11 +26,11 @@ import {
   UserRoundIcon,
   type LucideIcon,
 } from "lucide-react";
+import { msg, useGT, useMessages } from "gt-react";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
-import { IssueStateGlyph } from "../issue/issuePresentation";
 import { Badge } from "../ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -41,7 +41,7 @@ import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 
 export function serializeComposerIssueMention(issue: IssueListEntry): string {
-  return `[@${formatIssueReference(issue)}](${issue.url}) `;
+  return `[@${issue.displayKey.startsWith("#") ? issue.scope : ""}${issue.displayKey}](${issue.url}) `;
 }
 
 export type ComposerCommandItem =
@@ -128,11 +128,11 @@ export function buildComposerPathMenuItems(input: {
   if (input.query !== input.settledIssueQuery) return [...input.pathItems];
   return [
     ...input.issues.map((issue) => ({
-      id: `issue:${issue.provider}:${issue.host}:${issue.projectId}:${issue.repository}:${issue.number}`,
+      id: `issue:${encodeURIComponent(threadIssueKeyOf(issue))}`,
       type: "issue" as const,
       issue,
       label: issue.title,
-      description: formatIssueReference(issue),
+      description: issue.displayKey,
     })),
     ...input.pathItems,
   ];
@@ -157,6 +157,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   onHighlightedItemChange: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const listRef = useRef<HTMLDivElement>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the highlighted menu item's DOM node into view
@@ -186,7 +188,9 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         {props.items.length > 0 ? (
           <CommandList
             id={props.listId}
-            aria-label={props.triggerKind ? LISTBOX_LABEL_BY_TRIGGER[props.triggerKind] : undefined}
+            aria-label={
+              props.triggerKind ? m(LISTBOX_LABEL_BY_TRIGGER[props.triggerKind]) : undefined
+            }
             className="max-h-72 min-h-0 scroll-pb-6"
           >
             <CommandGroup>
@@ -209,16 +213,16 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
             <p className="text-secondary-label text-xs">
               {props.isLoading
                 ? props.triggerKind === "skill" || props.triggerKind === "slash-command"
-                  ? "Searching workspace skills..."
+                  ? gt("Searching workspace skills...")
                   : props.triggerKind === "pull-request"
-                    ? "Finding pull request..."
-                    : "Searching workspace..."
+                    ? gt("Finding pull request...")
+                    : gt("Searching workspace files...")
                 : (props.emptyStateText ??
                   (props.triggerKind === "skill"
-                    ? "No skills found. Try / to browse provider commands."
+                    ? gt("No skills found. Try / to browse provider commands.")
                     : props.triggerKind === "path"
-                      ? "No matching files or folders."
-                      : "No matching command."))}
+                      ? gt("No matching issues, files, or folders.")
+                      : gt("No matching command.")))}
             </p>
           </div>
         )}
@@ -236,12 +240,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onHighlight: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
+  const m = useMessages();
   const skillSourceKind =
     props.item.type === "skill" ? resolveProviderSkillSourceKind(props.item.skill) : null;
   const isSlashSkill =
     props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
   const pullRequestPresentation =
-    props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest) : null;
+    props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest, m) : null;
   const descriptionRef = useRef<HTMLSpanElement>(null);
   const [descriptionTruncated, setDescriptionTruncated] = useState(false);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the rendered description so only cut-off text gets a tooltip
@@ -269,18 +274,14 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         props.onSelect(props.item);
       }}
     >
-      {props.item.type === "issue" ? (
-        <IssueStateGlyph
-          state={props.item.issue.state}
-          stateReason={props.item.issue.stateReason}
-        />
-      ) : props.item.type === "path" ? (
+      {props.item.type === "path" ? (
         <PierreEntryIcon
           pathValue={props.item.path}
           kind={props.item.pathKind}
           theme={props.resolvedTheme}
         />
       ) : null}
+      {props.item.type === "issue" ? <IssueStateGlyph state={props.item.issue.state} /> : null}
       {props.item.type === "thread" ? (
         <MessagesSquareIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
       ) : null}
@@ -308,20 +309,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           className={cn("size-4 shrink-0", pullRequestPresentation.toneClassName)}
         />
       ) : null}
-      <span
-        className={cn(
-          "flex min-w-0 flex-1 gap-2",
-          props.item.type === "issue" ? "items-baseline gap-3" : "items-center",
-        )}
-      >
-        <span
-          className={cn(
-            props.item.type === "issue"
-              ? "min-w-0 flex-1 truncate"
-              : "min-w-0 max-w-[45%] shrink-0 truncate",
-            "font-sans text-xs font-medium",
-          )}
-        >
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium">
           {isSlashSkill ? (
             <>
               <span className="text-secondary-label">/skill:</span>
@@ -337,11 +326,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
             render={
               <span
                 ref={descriptionRef}
-                className={cn(
-                  props.item.type === "issue"
-                    ? "text-right text-secondary-label text-xs shrink-0"
-                    : "min-w-0 flex-1 truncate text-left text-secondary-label text-xs",
-                )}
+                className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs"
               />
             }
           >
@@ -366,10 +351,10 @@ export function composerSuggestionOptionId(listId: string, itemId: string): stri
 }
 
 const LISTBOX_LABEL_BY_TRIGGER: Record<ComposerTriggerKind, string> = {
-  path: "Issues, files, and folders",
-  "pull-request": "Pull requests",
-  "slash-command": "Commands",
-  skill: "Skills",
+  path: msg("Files and folders"),
+  "pull-request": msg("Pull requests"),
+  "slash-command": msg("Commands"),
+  skill: msg("Skills"),
 };
 
 const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, LucideIcon> = {
@@ -381,22 +366,44 @@ const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, LucideIcon> = {
   other: PackageIcon,
 };
 
-const SKILL_SOURCE_LABEL_BY_KIND: Record<ProviderSkillSourceKind, string> = {
-  app: "App",
-  repo: "Repo",
-  project: "Project",
-  personal: "Personal",
-  system: "System",
-  other: "Provider",
+const SKILL_SOURCE_LABEL_BY_KIND: Record<
+  ProviderSkillSourceKind,
+  { readonly label: string; readonly skillLabel: string }
+> = {
+  app: {
+    label: msg("App", { $context: "skill source badge" }),
+    skillLabel: msg("App Skill"),
+  },
+  repo: {
+    label: msg("Repo", { $context: "skill source badge" }),
+    skillLabel: msg("Repo Skill"),
+  },
+  project: {
+    label: msg("Project", { $context: "skill source badge" }),
+    skillLabel: msg("Project Skill"),
+  },
+  personal: {
+    label: msg("Personal", { $context: "skill source badge" }),
+    skillLabel: msg("Personal Skill"),
+  },
+  system: {
+    label: msg("System", { $context: "skill source badge" }),
+    skillLabel: msg("System Skill"),
+  },
+  other: {
+    label: msg("Provider", { $context: "skill source badge" }),
+    skillLabel: msg("Provider Skill"),
+  },
 };
 
 function SkillSourceBadge(props: { kind: ProviderSkillSourceKind; showSkillSuffix: boolean }) {
+  const m = useMessages();
   const Icon = SKILL_SOURCE_ICON_BY_KIND[props.kind];
+  const labels = SKILL_SOURCE_LABEL_BY_KIND[props.kind];
   return (
     <Badge className="ms-auto" variant="secondary">
       <Icon aria-hidden="true" className="text-current" />
-      {SKILL_SOURCE_LABEL_BY_KIND[props.kind]}
-      {props.showSkillSuffix ? " Skill" : null}
+      {m(props.showSkillSuffix ? labels.skillLabel : labels.label)}
     </Badge>
   );
 }

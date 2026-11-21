@@ -5,10 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import {
-  IssueProviderKind as IssueProviderKindSchema,
-  type IssueProviderKind,
-} from "@t3tools/contracts";
+import { TrimmedNonEmptyString } from "@t3tools/contracts";
 
 const FALLBACK_COOLDOWN = Duration.minutes(1);
 const MAX_FALLBACK_COOLDOWN = Duration.minutes(15);
@@ -27,7 +24,7 @@ export const Interactive = Context.Reference<boolean>(
 );
 
 interface RateLimitKey {
-  readonly provider: IssueProviderKind;
+  readonly provider: string;
   readonly host: string;
 }
 
@@ -44,7 +41,7 @@ interface RateLimitEntry {
 export class SourceControlRateLimitPausedError extends Schema.TaggedError<SourceControlRateLimitPausedError>()(
   "SourceControlRateLimitPausedError",
   {
-    provider: IssueProviderKindSchema,
+    provider: TrimmedNonEmptyString,
     host: Schema.String,
     retryAt: Schema.Number,
   },

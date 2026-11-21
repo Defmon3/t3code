@@ -1,4 +1,3 @@
-import { type ProviderApprovalOption, type RuntimeRequestId } from "@t3tools/contracts";
 import { hookApprovalDurations } from "@t3tools/client-runtime/state/hook-approvals";
 import type { ApprovalResponder } from "@t3tools/client-runtime/state/thread-requests";
 import {
@@ -8,6 +7,8 @@ import {
 } from "@t3tools/client-runtime/state/approval-explanations";
 import { memo, useId, useState } from "react";
 import { ChevronDownIcon, EllipsisIcon, TriangleAlertIcon } from "lucide-react";
+import { type ProviderApprovalOption, type RuntimeRequestId } from "@t3tools/contracts";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { Button, InlineButton } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -38,10 +39,19 @@ interface ComposerPendingApprovalActionsProps {
 }
 
 const DEFAULT_APPROVAL_OPTIONS = [
-  { decision: "cancel", label: "Cancel" },
-  { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
-  { decision: "accept", label: "Approve" },
+  {
+    decision: "cancel",
+    label: msg("Cancel", { $context: "verb, response to an approval request" }),
+  },
+  {
+    decision: "decline",
+    label: msg("Decline", { $context: "verb, response to an approval request" }),
+  },
+  { decision: "acceptForSession", label: msg("Always allow this session") },
+  {
+    decision: "accept",
+    label: msg("Approve", { $context: "verb, response to an approval request" }),
+  },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
@@ -64,6 +74,9 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   const [draft, setDraft] = useState<ApprovalRejectionDraft>({ status: "untouched" });
   const [feedbackFailed, setFeedbackFailed] = useState(false);
   const reasonId = useId();
+  const gt = useGT();
+  const m = useMessages();
+  // Provider options carry server-authored labels; only the built-in defaults are translated.
   const primaryOptions = options.filter(
     (option) =>
       option.decision === "decline" ||
@@ -96,8 +109,8 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
           <Textarea
             size="sm"
             autoFocus={draft.status === "manual"}
-            aria-label="Reason for rejection"
-            placeholder="Tell the agent what to change"
+            aria-label={gt("Reason for rejection")}
+            placeholder={gt("Tell the agent what to change")}
             value={reason}
             disabled={responseDisabled}
             onChange={(event) => {
@@ -114,7 +127,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
           />
           {feedbackFailed ? (
             <span role="alert" className="text-sm text-destructive">
-              Rejection failed. Your reason is kept. Try again.
+              <T>Rejection failed. Your reason is kept. Try again.</T>
             </span>
           ) : null}
           <span className="flex flex-wrap justify-end gap-2">
@@ -124,14 +137,14 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
               disabled={isResponding}
               onClick={closeReason}
             >
-              Cancel
+              <T>Cancel</T>
             </Button>
             <Button
               size="sm-multiline"
               disabled={responseDisabled || !reason.trim()}
               onClick={() => void rejectWithReason()}
             >
-              {isResponding ? "Rejecting…" : "Reject with reason"}
+              {isResponding ? gt("Rejecting…") : gt("Reject with reason")}
             </Button>
           </span>
         </span>
@@ -144,7 +157,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
           aria-controls={commandExpansion.detailId}
           onClick={commandExpansion.onToggle}
         >
-          {commandExpansion.expanded ? "Collapse" : "Expand"}
+          {commandExpansion.expanded ? gt("Collapse") : gt("Expand")}
         </Button>
       ) : null}
       {primaryOptions.map((option) => {
@@ -165,13 +178,13 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                     );
                 }}
               >
-                {hookApprovalDurations[rememberedDuration].approvalLabel}
+                {m(hookApprovalDurations[rememberedDuration].approvalLabel)}
               </Button>
               <Menu>
                 <MenuTrigger
                   disabled={responseDisabled || !preferencesReady}
                   render={
-                    <Button size="icon-sm" variant="outline" aria-label="Approval duration" />
+                    <Button size="icon-sm" variant="outline" aria-label={gt("Approval duration")} />
                   }
                 >
                   <ChevronDownIcon />
@@ -195,7 +208,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                         }
                       }}
                     >
-                      {choice.label}
+                      {m(choice.label)}
                     </MenuItem>
                   ))}
                 </MenuPopup>
@@ -206,8 +219,12 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         const content = (
           <>
             {option.warning ? <TriangleAlertIcon className="size-3 shrink-0" /> : null}
-            <span className={presentation === "inline" ? "whitespace-normal" : "min-w-0 max-w-40 wrap-anywhere"}>
-              {option.label}
+            <span
+              className={
+                presentation === "inline" ? "whitespace-normal" : "min-w-0 max-w-40 wrap-anywhere"
+              }
+            >
+              {m(option.label)}
             </span>
           </>
         );
@@ -258,7 +275,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
           aria-controls={reasonId}
           onClick={() => setDraft({ status: "manual" })}
         >
-          Reject with reason
+          <T>Reject with reason</T>
         </Button>
       ) : null}
       {moreOptions.length > 0 ? (
@@ -267,13 +284,17 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
             disabled={responseDisabled}
             render={
               presentation === "inline" ? (
-                <InlineButton tone="muted" aria-label="More approval options" />
+                <InlineButton tone="muted" aria-label={gt("More approval options")} />
               ) : (
-                <Button size="icon-xs" variant="outline" aria-label="More approval options" />
+                <Button size="icon-xs" variant="outline" aria-label={gt("More approval options")} />
               )
             }
           >
-            {presentation === "inline" ? "More" : <EllipsisIcon />}
+            {presentation === "inline" ? (
+              gt("More", { $context: "button that opens more approval options" })
+            ) : (
+              <EllipsisIcon />
+            )}
           </MenuTrigger>
           <MenuPopup {...composerFloatingLayerProps} side="top" align="end" width="content">
             {moreOptions.map((option) => {
@@ -287,7 +308,9 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                   }}
                 >
                   {option.warning ? <TriangleAlertIcon className="size-3 text-warning" /> : null}
-                  <span className="min-w-0 whitespace-normal wrap-break-word">{option.label}</span>
+                  <span className="min-w-0 whitespace-normal wrap-break-word">
+                    {m(option.label)}
+                  </span>
                 </MenuItem>
               );
               return option.warning ? (

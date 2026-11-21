@@ -1,5 +1,7 @@
 import { VcsSnapshotExpiredError } from "@t3tools/contracts";
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { useAtomValue } from "@effect/atom-react";
+import { msg } from "gt-react";
 import {
   type CheckpointDiffTarget,
   type ComposerPathSearchTarget,
@@ -14,6 +16,7 @@ import {
   type ThreadSearchScope,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
+  ProjectSearchContentsError,
   PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
 } from "@t3tools/contracts";
@@ -38,6 +41,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
 
+import { m, type MessageResolver } from "../i18n/messages";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useFilesystemReadAccess } from "./filesystem";
 import { orchestrationEnvironment } from "./orchestration";
@@ -51,6 +55,8 @@ const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
 const COMPOSER_PATH_SEARCH_LIMIT = 80;
 const PROJECT_CONTENT_SEARCH_DEBOUNCE_MS = 120;
 const PROJECT_CONTENT_SEARCH_LIMIT = 500;
+const PROJECT_CONTENT_SEARCH_SCAN_RETRY_MS = 30_000;
+const isProjectSearchContentsError = Schema.is(ProjectSearchContentsError);
 const THREAD_SEARCH_DEBOUNCE_MS = 120;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
@@ -61,6 +67,7 @@ const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> =
 const EMPTY_THREAD_SEARCH_ATOM = Atom.make<ThreadSearchResultsState>({
   matches: EMPTY_THREAD_SEARCH_MATCHES,
   isLoading: false,
+  failed: false,
   rows: [],
 }).pipe(Atom.withLabel("web:thread-search:empty"));
 
@@ -115,6 +122,8 @@ export function useThreadSearch(
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   readonly query: string;
   readonly isPending: boolean;
+  /** No environment could run the search for the current query, so an empty result is not "no matches". */
+  readonly failed: boolean;
 } {
   // A pasted wall of text searches by its start rather than failing the request.
   const normalizedQuery = query.trim().slice(0, THREAD_SEARCH_QUERY_MAX_LENGTH).trim();
@@ -133,6 +142,7 @@ export function useThreadSearch(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearch.results(searchKey),
   );
   const isPending = canSearch && (normalizedQuery !== debouncedQuery || result.isLoading);
+  const failed = settledQuery !== null && !result.isLoading && result.failed;
   // What fast environments returned shows without waiting for a slow one;
   // callers keep shown rows in place with `nextShownOrder`.
   const ready =
@@ -168,6 +178,7 @@ export function useThreadSearch(
     matches: visible.matches,
     query: visible.query,
     isPending,
+    failed,
   };
 }
 
@@ -196,7 +207,7 @@ const vcsRefPagesAtom = Atom.family((pagesKey: string) => {
   );
 });
 
-export function usePaginatedBranches(target: VcsRefTarget) {
+export function usePaginatedBranches(target: VcsRefTarget, resolve: MessageResolver = m) {
   // Leave unkeyed; mismatches already reset cursors, and a seeded key would break caching across the hook.
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
@@ -242,9 +253,10 @@ export function usePaginatedBranches(target: VcsRefTarget) {
     failed?._tag === "Failure"
       ? (() => {
           const cause = Cause.squash(failed.cause);
-          return cause instanceof Error && cause.message.trim().length > 0
-            ? cause.message
-            : "Failed to load refs.";
+          return (
+            (cause instanceof Error ? errorDisplayMessage(cause, resolve) : null) ??
+            resolve(msg("Failed to load refs."))
+          );
         })()
       : null;
   const refresh = () => {
@@ -300,6 +312,7 @@ export function useProjectPathSearch(
   target: ProjectPathSearchTarget,
   limit: number,
   options?: { readonly allowEmptyQuery?: boolean },
+  resolve: MessageResolver = m,
 ) {
   const allowEmptyQuery = options?.allowEmptyQuery === true;
   const normalizedTarget = {
@@ -310,7 +323,7 @@ export function useProjectPathSearch(
     imageOnly: target.imageOnly,
   };
   const debouncedTarget = useDebouncedValue(normalizedTarget, PROJECT_PATH_SEARCH_DEBOUNCE_MS);
-  const fileAccess = useFilesystemReadAccess(debouncedTarget.environmentId);
+  const fileAccess = useFilesystemReadAccess(debouncedTarget.environmentId, resolve);
   const { canReadFiles } = fileAccess;
   const searchTarget =
     debouncedTarget.environmentId !== null &&
@@ -330,6 +343,7 @@ export function useProjectPathSearch(
       : null;
   const result = useEnvironmentQuery(
     canReadFiles && searchTarget !== null ? projectEnvironment.searchEntries(searchTarget) : null,
+    resolve,
   );
   const hasTarget = searchTarget !== null;
 
@@ -340,7 +354,7 @@ export function useProjectPathSearch(
         ? null
         : canReadFiles
           ? result.error
-          : (fileAccess.error ?? "This connection cannot search host files."),
+          : (fileAccess.error ?? resolve(msg("This connection cannot search host files."))),
     isPending:
       !areProjectPathSearchTargetsEqual(normalizedTarget, debouncedTarget) ||
       (hasTarget && (fileAccess.isPending || result.isPending)),
@@ -351,8 +365,16 @@ export function useProjectPathSearch(
   };
 }
 
-export function useComposerPathSearch(target: ComposerPathSearchTarget) {
-  return useProjectPathSearch(target, COMPOSER_PATH_SEARCH_LIMIT, { allowEmptyQuery: true });
+export function useComposerPathSearch(
+  target: ComposerPathSearchTarget,
+  resolve: MessageResolver = m,
+) {
+  return useProjectPathSearch(
+    target,
+    COMPOSER_PATH_SEARCH_LIMIT,
+    { allowEmptyQuery: true },
+    resolve,
+  );
 }
 
 interface ProjectContentSearchTarget {
@@ -364,9 +386,12 @@ interface ProjectContentSearchTarget {
   readonly useRegex: boolean;
 }
 
-export function useProjectContentSearch(target: ProjectContentSearchTarget) {
+export function useProjectContentSearch(
+  target: ProjectContentSearchTarget,
+  resolve: MessageResolver = m,
+) {
   const hasTarget = target.environmentId !== null && target.cwd !== null;
-  const fileAccess = useFilesystemReadAccess(target.environmentId);
+  const fileAccess = useFilesystemReadAccess(target.environmentId, resolve);
   const canReadFiles = hasTarget && fileAccess.canReadFiles;
   const isCheckingAccess = hasTarget && fileAccess.isPending;
   // Preserve query whitespace; trim only to detect blank input.
@@ -394,7 +419,24 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
           },
         })
       : null,
+    resolve,
   );
+  // Only once the timeout has come back: a refresh restarts a search still in flight.
+  const settledScanTimeout =
+    !result.isPending &&
+    isProjectSearchContentsError(result.failure) &&
+    result.failure.failure === "search_index_scan_timed_out"
+      ? result.failure
+      : null;
+  const { refresh } = result;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- retry timer: nothing tells the client when the server's first scan ends
+  useEffect(() => {
+    if (settledScanTimeout === null) return;
+    const timer = window.setTimeout(refresh, PROJECT_CONTENT_SEARCH_SCAN_RETRY_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [refresh, settledScanTimeout]);
 
   return {
     canReadFiles,
@@ -404,9 +446,13 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
       !hasTarget || isCheckingAccess
         ? null
         : !canReadFiles
-          ? (fileAccess.error ?? "This connection cannot search host files.")
+          ? (fileAccess.error ?? resolve(msg("This connection cannot search host files.")))
           : queryTooLong
-            ? `Search is limited to ${PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH} characters.`
+            ? resolve(
+                msg("Search is limited to {count} characters.", {
+                  count: PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
+                }),
+              )
             : result.error,
     isPending:
       isCheckingAccess ||
@@ -596,7 +642,7 @@ export function usePaginatedHistoryRefs(
           const cause = Cause.squash(failed.cause);
           return cause instanceof Error && cause.message.trim().length > 0
             ? cause.message
-            : "Failed to load refs.";
+            : m(msg("Failed to load refs."));
         })()
       : null;
   const refresh = () => {

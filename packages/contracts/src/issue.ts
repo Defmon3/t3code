@@ -3,80 +3,57 @@ import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
-  CommandId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import {
-  ChangeRequestState,
-  SourceControlActor,
-  SourceControlLabel,
-  SourceControlListProjectError,
-} from "./sourceControl.ts";
+  PullRequestActor,
+  PullRequestLabel,
+  PullRequestReaction,
+  PullRequestReactionContent,
+  PullRequestState,
+} from "./pullRequest.ts";
 
-/** Stable adapter id carried through the neutral T3 issue format. */
-export const IssueProviderKind = TrimmedNonEmptyString;
-export type IssueProviderKind = typeof IssueProviderKind.Type;
+/**
+ * Which tracker an issue lives in. Git hosts reuse their `SourceControlProviderKind` spelling
+ * (`github`, `gitlab`); standalone trackers get their own (`linear`, `jira`). Branded apart from
+ * the source control kind because the two sets are not the same: Bitbucket is a git host with no
+ * tracker, and Linear is a tracker with no git host.
+ */
+export const IssueTrackerKind = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-z][a-z0-9-]*$/),
+).pipe(Schema.brand("IssueTrackerKind"));
+export type IssueTrackerKind = typeof IssueTrackerKind.Type;
 
-/** Stable identity for one adapter account on one host. */
-export function issueSourceKey(provider: IssueProviderKind, host: string): string {
-  return JSON.stringify([provider, host.toLowerCase()]);
-}
-
-/** Stable viewer identity for one adapter source inside one T3 project. */
-export function issueProjectSourceKey(
-  provider: IssueProviderKind,
-  host: string,
-  projectId: ProjectId,
-): string {
-  return JSON.stringify([provider, host.toLowerCase(), projectId]);
-}
-
-/** Stable identity for one repository inside an adapter account. */
-export function issueRepositoryKey(
-  provider: IssueProviderKind,
-  host: string,
-  repository: string,
-): string {
-  return JSON.stringify([provider, host.toLowerCase(), repository.toLowerCase()]);
-}
-
-export const IssueActor = SourceControlActor;
+export const IssueActor = PullRequestActor;
 export type IssueActor = typeof IssueActor.Type;
 
-export const IssueLabel = SourceControlLabel;
+export const IssueLabel = PullRequestLabel;
 export type IssueLabel = typeof IssueLabel.Type;
 
-export const IssueInvolvement = Schema.Literals(["all", "assigned", "authored", "mentioned"]);
-export type IssueInvolvement = typeof IssueInvolvement.Type;
+/**
+ * Where an issue stands: the tracker's own name for the state ("In Review", "Closed as not
+ * planned"), which is what people read and what a move is asked for by, and the category every
+ * tracker has, which only filters and colours key off. Nothing moves an issue to "open" or
+ * "closed": it moves to one of the states its `IssueDetail.states` lists.
+ */
+export const IssueStateCategory = Schema.Literals(["open", "closed"]);
+export type IssueStateCategory = typeof IssueStateCategory.Type;
 
-export const IssueState = Schema.Literals(["open", "closed"]);
+export const IssueState = Schema.Struct({
+  category: IssueStateCategory,
+  name: TrimmedNonEmptyString,
+  /** How a closed state ended, where the tracker says: `completed`, or its word for not done. */
+  closeReason: Schema.optional(TrimmedNonEmptyString),
+});
 export type IssueState = typeof IssueState.Type;
 
-/** What a listing asks for: either of the two states an issue can be in, or both at once. */
-export const IssueListState = Schema.Literals(["all", "open", "closed"]);
-export type IssueListState = typeof IssueListState.Type;
-
-export const IssueListSort = Schema.Literals([
-  "best-match",
-  "created",
-  "updated",
-  "comments",
-  "reactions",
-  "reactions-thumbs-up",
-  "reactions-thumbs-down",
-  "reactions-rocket",
-  "reactions-hooray",
-  "reactions-eyes",
-  "reactions-heart",
-  "reactions-laugh",
-  "reactions-confused",
-]);
-export type IssueListSort = typeof IssueListSort.Type;
-
+/** What a listing asks for: either category, or both. */
 export const IssueReferenceStyle = Schema.Literals(["hash", "key-number"]);
 export type IssueReferenceStyle = typeof IssueReferenceStyle.Type;
 
@@ -88,38 +65,72 @@ export function formatIssueReference(input: {
   return `${input.repository}${input.referenceStyle === "key-number" ? "-" : "#"}${input.number}`;
 }
 
-export const IssueListOrder = Schema.Literals(["asc", "desc"]);
-export type IssueListOrder = typeof IssueListOrder.Type;
+export const IssueListState = Schema.Literals(["all", "open", "closed"]);
+export type IssueListState = typeof IssueListState.Type;
 
-/**
- * Why an issue was closed, which is the difference between work that got done and work that was
- * dropped. Only GitHub records it; elsewhere a closed issue simply has no reason to report.
- */
-export const IssueCloseReason = Schema.Literals(["completed", "not-planned"]);
-export type IssueCloseReason = typeof IssueCloseReason.Type;
+export const IssueInvolvement = Schema.Literals(["all", "assigned", "authored", "mentioned"]);
+export type IssueInvolvement = typeof IssueInvolvement.Type;
 
-export const IssueAction = Schema.Literals(["close", "reopen"]);
-export type IssueAction = typeof IssueAction.Type;
+/** Newest first by the named date. */
+export const IssueListSort = Schema.Literals(["updated", "created"]);
+export type IssueListSort = typeof IssueListSort.Type;
 
-export const IssueReactionContent = Schema.Literals([
-  "thumbs-up",
-  "thumbs-down",
-  "laugh",
-  "hooray",
-  "confused",
-  "heart",
-  "rocket",
-  "eyes",
-]);
+export const IssueReactionContent = PullRequestReactionContent;
 export type IssueReactionContent = typeof IssueReactionContent.Type;
 
-export const IssueReaction = Schema.Struct({
-  content: IssueReactionContent,
-  count: PositiveInt,
-  actors: Schema.Array(TrimmedNonEmptyString),
-  viewerHasReacted: Schema.Boolean,
-});
+export const IssueReaction = PullRequestReaction;
 export type IssueReaction = typeof IssueReaction.Type;
+
+/**
+ * Addresses one issue: `scope` is the tracker's own container (`owner/repo`, a team key) and
+ * `key` the issue's native id in it. `host` is absent for the kind's public host. `projectId`
+ * names the project whose credentials serve the read, which need not own the issue.
+ */
+export const IssueRef = Schema.Struct({
+  projectId: ProjectId,
+  tracker: IssueTrackerKind,
+  host: Schema.optional(TrimmedNonEmptyString),
+  scope: TrimmedNonEmptyString,
+  key: TrimmedNonEmptyString,
+});
+export type IssueRef = typeof IssueRef.Type;
+
+/** A scope with no issue in it, for reads about the container itself: templates, candidates. */
+export const IssueScopeRef = Schema.Struct({
+  projectId: ProjectId,
+  tracker: IssueTrackerKind,
+  host: Schema.optional(TrimmedNonEmptyString),
+  scope: TrimmedNonEmptyString,
+});
+export type IssueScopeRef = typeof IssueScopeRef.Type;
+
+/** One row of a listing. Carries everything a list needs and nothing a detail needs. */
+export const IssueSummary = Schema.Struct({
+  tracker: IssueTrackerKind,
+  host: TrimmedNonEmptyString,
+  scope: TrimmedNonEmptyString,
+  key: TrimmedNonEmptyString,
+  /** How the tracker writes the key for people: `#123` on a git host, `ENG-123` on Linear. */
+  displayKey: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  author: Schema.NullOr(IssueActor),
+  state: IssueState,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  closedAt: Schema.NullOr(IsoDateTime),
+  assignees: Schema.Array(IssueActor),
+  labels: Schema.Array(IssueLabel),
+  commentCount: NonNegativeInt,
+});
+export type IssueSummary = typeof IssueSummary.Type;
+
+export const IssueListEntry = Schema.Struct({
+  ...IssueSummary.fields,
+  projectId: ProjectId,
+  projectTitle: TrimmedNonEmptyString,
+});
+export type IssueListEntry = typeof IssueListEntry.Type;
 
 export const IssueComment = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -127,14 +138,15 @@ export const IssueComment = Schema.Struct({
   body: Schema.String,
   createdAt: IsoDateTime,
   url: Schema.NullOr(Schema.String),
+  /** Absent from a tracker with no reactions, which differs from none on this comment. */
   reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
 export type IssueComment = typeof IssueComment.Type;
 
 /**
- * Something that happened to an issue that nobody wrote words for — it was closed, labelled,
- * assigned, renamed. Read alongside the comments so the timeline reads as one history rather than
- * as remarks with the state changes between them missing.
+ * Something that happened to an issue that nobody wrote words for: it was closed, labelled,
+ * assigned, renamed. Kinds are the common vocabulary; a tracker drops what it cannot map rather
+ * than guessing.
  */
 export const IssueEventKind = Schema.Literals([
   "closed",
@@ -145,9 +157,7 @@ export const IssueEventKind = Schema.Literals([
   "unassigned",
   "renamed",
   "referenced",
-  "milestoned",
-  "locked",
-  "unlocked",
+  "state-changed",
 ]);
 export type IssueEventKind = typeof IssueEventKind.Type;
 
@@ -156,333 +166,198 @@ export const IssueEvent = Schema.Struct({
   kind: IssueEventKind,
   actor: Schema.NullOr(IssueActor),
   createdAt: IsoDateTime,
-  /** What the event was about, where it has a subject: a label name, an assignee, a title. */
+  /** What the event was about, where it has a subject: a label name, a login, a new title. */
   detail: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type IssueEvent = typeof IssueEvent.Type;
 
-/**
- * A change request that says it closes this issue, or mentions it. Carried on the issue so the
- * work an issue produced is one press away from the issue itself, rather than a search on the host.
- */
+/** A change request the tracker says closes or mentions this issue. */
 export const IssueLinkedPullRequest = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
-  state: ChangeRequestState,
+  state: PullRequestState,
   isDraft: Schema.Boolean,
-  /** The change request declares that merging it closes this issue, rather than only citing it. */
+  /** Merging it closes this issue, rather than only citing it. */
   closesIssue: Schema.Boolean,
 });
 export type IssueLinkedPullRequest = typeof IssueLinkedPullRequest.Type;
 
-export const IssueRelative = Schema.Struct({
-  repository: Schema.optional(TrimmedNonEmptyString),
-  number: PositiveInt,
-  title: TrimmedNonEmptyString,
-  url: TrimmedNonEmptyString,
-  state: IssueState,
-  /** Where the tracker reports them; absent when it was not asked. */
-  linkedPullRequests: Schema.optional(Schema.Array(IssueLinkedPullRequest)),
-});
-export type IssueRelative = typeof IssueRelative.Type;
-
-export interface IssueRelativeNode extends IssueRelative {
-  readonly subIssues: ReadonlyArray<IssueRelativeNode>;
-}
-/** A sub-issue with its own sub-issues, as deep as the tracker read them. */
-export const IssueRelativeNode: Schema.Codec<IssueRelativeNode> = Schema.Struct({
-  ...IssueRelative.fields,
-  subIssues: Schema.Array(Schema.suspend((): Schema.Codec<IssueRelativeNode> => IssueRelativeNode)),
-});
-
 /**
- * The other direction of the same relationship, carried on a change request. Lives here rather
- * than beside the change request schemas so the two link shapes stay in one file and neither
- * contract has to import the other.
- */
-export const IssueLink = Schema.Struct({
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-  title: TrimmedNonEmptyString,
-  url: TrimmedNonEmptyString,
-  state: IssueState,
-  closesIssue: Schema.Boolean,
-});
-export type IssueLink = typeof IssueLink.Type;
-
-/**
- * What a host can do with issues, so a surface hides what is missing rather than offering an
- * action that would fail. Hosts differ widely here: Bitbucket's tracker is switched off per
- * repository, and Azure DevOps has work items instead of issues, with states of its own.
+ * What a tracker can do at all, so a surface never offers an action that would fail. The
+ * service refuses a call outside these before it reaches the driver.
  */
 export const IssueCapabilities = Schema.Struct({
-  sorts: Schema.Array(IssueListSort),
-  referenceStyle: IssueReferenceStyle,
-  closesViaPullRequest: Schema.Boolean,
-  /** A comment can be posted, and the conversation read back. */
-  comment: Schema.Boolean,
-  /** The state changes this host can carry out; anything absent is never offered. */
-  actions: Schema.Array(IssueAction),
-  /** Reasons a close can be given. Empty means closing takes no reason. */
-  closeReasons: Schema.Array(IssueCloseReason),
-  /** A new issue can be filed. */
   create: Schema.Boolean,
-  /**
-   * The starting points this repository offers for a new issue can be read, so filing begins from
-   * what the repository asks for rather than from an empty box.
-   */
-  issueTemplates: Schema.Boolean,
-  /** The title and body of an existing issue can be rewritten. */
+  /** Title and body can be rewritten after filing. */
   edit: Schema.Boolean,
-  /** A posted comment can be rewritten by its author. */
-  editComment: Schema.optional(Schema.Boolean),
-  /** Reactions can be read, added, and removed on the issue and its comments. */
-  reactions: Schema.optional(Schema.Boolean),
+  comment: Schema.Boolean,
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
-  /** The labels a repository has can be listed, so a picker offers them instead of taking text. */
-  listLabelCandidates: Schema.Boolean,
-  /** The people who may be assigned can be listed, for the same reason. */
-  listAssigneeCandidates: Schema.Boolean,
-  /** The host can narrow a listing by free text, rather than the page narrowing what arrives. */
-  search: Schema.Boolean,
-  /** The host reports which change requests reference an issue, so the links are its own. */
+  /** Reactions can be read and written on the issue and its comments. */
+  reactions: Schema.Boolean,
+  /** The scope offers starting points for a new issue. */
+  templates: Schema.Boolean,
+  /** The tracker reports linked change requests of its own accord. */
   linkedPullRequests: Schema.Boolean,
-  /** State changes and labellings are reported, not only comments. */
-  timelineEvents: Schema.Boolean,
+  /** State changes arrive as events beside the comments, not only as comments. */
+  events: Schema.Boolean,
+  /** The tracker narrows a listing by free text itself. */
+  search: Schema.Boolean,
 });
 export type IssueCapabilities = typeof IssueCapabilities.Type;
 
 /**
- * What the signed-in account may do with this issue, which is a different question from
- * `capabilities`: that says what the host can do at all, this says whether this viewer may ask
- * for it. A permission the host reports nothing about is granted rather than withheld, so a
- * refusal comes from the host — which says why — rather than from a control that is not there.
+ * What the signed-in account may do with this issue, which `capabilities` says nothing about.
+ * A permission the tracker reports nothing about is granted, so a refusal comes from the
+ * tracker, which says why, rather than from a missing control.
  */
 export const IssueViewerPermissions = Schema.Struct({
-  actions: Schema.Array(IssueAction),
+  setState: Schema.Boolean,
   comment: Schema.Boolean,
   edit: Schema.Boolean,
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
-  create: Schema.Boolean,
 });
 export type IssueViewerPermissions = typeof IssueViewerPermissions.Type;
 
-export const IssueListEntry = Schema.Struct({
-  referenceStyle: IssueReferenceStyle,
-  provider: IssueProviderKind,
-  /**
-   * The host below which `repository` is addressed, so the same provider kind can serve more than
-   * one account — github.com and a GitHub Enterprise install are different identities.
-   */
-  host: TrimmedNonEmptyString,
+export const IssueDetail = Schema.Struct({
+  ...IssueSummary.fields,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-  title: TrimmedNonEmptyString,
-  url: TrimmedNonEmptyString,
-  author: Schema.NullOr(IssueActor),
-  state: IssueState,
-  stateReason: Schema.NullOr(IssueCloseReason),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-  closedAt: Schema.NullOr(IsoDateTime),
-  assignees: Schema.Array(IssueActor),
-  labels: Schema.Array(IssueLabel),
-  milestone: Schema.NullOr(TrimmedNonEmptyString),
-  /** Present when the host can return reaction totals with the listing. */
+  /** False for an issue outside every project's scope, which is read-only through this server. */
+  writable: Schema.Boolean,
+  capabilities: IssueCapabilities,
+  viewerPermissions: IssueViewerPermissions,
+  /**
+   * Every state this issue can be in, in the tracker's workflow order, its current one included.
+   * Empty means its state cannot be changed from here.
+   */
+  states: Schema.Array(IssueState),
+  /** The signed-in account, so a comment edit is offered only on the viewer's own remarks. */
+  viewer: Schema.NullOr(TrimmedNonEmptyString),
+  body: Schema.String,
   reactions: Schema.optional(Schema.Array(IssueReaction)),
-  commentCount: NonNegativeInt,
+  comments: Schema.Array(IssueComment),
+  /** Where older comments carry on; null once the conversation is whole. */
+  commentsCursor: Schema.NullOr(TrimmedNonEmptyString),
+  events: Schema.Array(IssueEvent),
+  linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
 });
-export type IssueListEntry = typeof IssueListEntry.Type;
+export type IssueDetail = typeof IssueDetail.Type;
 
-export const ISSUE_LIST_CURSOR_MAX_LENGTH = 16_384;
+/** Older comments, one page past a cursor the detail or a previous page handed over. */
+export const IssueCommentsPageInput = Schema.Struct({
+  ...IssueRef.fields,
+  cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+});
+export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
+
+export const IssueCommentsPage = Schema.Struct({
+  comments: Schema.Array(IssueComment),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type IssueCommentsPage = typeof IssueCommentsPage.Type;
+
+/** Where each scope a listing already reached carries on, keyed `"<host> <scope>"`. */
 export const IssueListCursors = Schema.Record(
   TrimmedNonEmptyString,
-  TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_LIST_CURSOR_MAX_LENGTH)),
+  TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
 );
 export type IssueListCursors = typeof IssueListCursors.Type;
+
+export const ISSUE_LIST_MAX_EXCLUDED_PROJECTS = 1_000;
 
 export const IssueListInput = Schema.Struct({
   state: IssueListState,
   involvement: Schema.optional(IssueInvolvement),
   projectId: Schema.optional(ProjectId),
-  /**
-   * Narrows the listing to one host, named as the host itself rather than as its provider kind.
-   * Absent means every host the workspace has.
-   */
+  /** Projects left out of the listing, as the issues page hides them. */
+  excludeProjectIds: Schema.optional(
+    Schema.Array(ProjectId).check(Schema.isMaxLength(ISSUE_LIST_MAX_EXCLUDED_PROJECTS)),
+  ),
+  /** Narrows to one host, named as the host itself. Absent means every host the workspace has. */
   host: Schema.optional(TrimmedNonEmptyString),
-  /** Rows to return per repository, which with a continuation is rows per slice. */
-  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
-  /**
-   * Carry on from an answer already on the page rather than read the listing again. Only the
-   * repositories named here are read, one slice each; a repository the page has enough of is
-   * left out. Absent asks for the listing from the top.
-   */
+  /** Rows per scope, which with a continuation is rows per slice. */
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  /** Carry on from an earlier answer: only the scopes named here are read, one slice each. */
   cursors: Schema.optional(IssueListCursors),
-  /**
-   * Free text the hosts themselves are asked to match, rather than a filter over rows that have
-   * already arrived: a listing only ever holds a page per repository, so a search that never
-   * leaves the client can only find what happened to be loaded. A host with no text filter
-   * answers unnarrowed rather than pretending.
-   */
+  /** An explicit refresh of the first page may also refresh tracker metadata. */
+  refresh: Schema.optional(Schema.Boolean),
+  /** Free text the trackers themselves are asked to match. */
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  /** Label names an issue must carry, every one of them. */
+  labels: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(200))).check(
+      Schema.isMaxLength(20),
+    ),
+  ),
+  /** An assignee's `login`, as an issue of that tracker names them. */
+  assignee: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(320))),
+  /** Absent means `updated`. */
   sort: Schema.optional(IssueListSort),
-  order: Schema.optional(IssueListOrder),
 });
 export type IssueListInput = typeof IssueListInput.Type;
 
-/**
- * One adapter account the workspace has projects on, and whether its issues can be read right
- * now. Two adapters can use the same host without sharing credentials.
- */
-export const IssueProviderSummary = Schema.Struct({
-  sorts: Schema.Array(IssueListSort),
+/** One tracker account the workspace has projects on, and whether it can be read right now. */
+export const IssueTrackerSummary = Schema.Struct({
+  tracker: IssueTrackerKind,
   host: TrimmedNonEmptyString,
-  kind: IssueProviderKind,
-  /** False where a search has to be applied to the rows after they arrive. */
-  searchesOnHost: Schema.Boolean,
   projectCount: PositiveInt,
-  /** False when the provider's CLI or credentials are missing, with `detail` saying which. */
+  capabilities: Schema.NullOr(IssueCapabilities),
+  /** False when the tracker's tool or credentials are missing, with `detail` saying which. */
   configured: Schema.Boolean,
   detail: Schema.NullOr(TrimmedNonEmptyString),
 });
-export type IssueProviderSummary = typeof IssueProviderSummary.Type;
+export type IssueTrackerSummary = typeof IssueTrackerSummary.Type;
 
-export const IssueListProjectError = SourceControlListProjectError;
+export const IssueListProjectError = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+});
 export type IssueListProjectError = typeof IssueListProjectError.Type;
 
 export const IssueListResult = Schema.Struct({
+  /** The signed-in account per host that involvement compared against. Empty for `all`. */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
-  providers: Schema.Array(IssueProviderSummary),
-  /** By update, newest first, across every repository this answer covers. */
+  trackers: Schema.Array(IssueTrackerSummary),
+  /** By update, newest first, across every scope this answer covers. */
   entries: Schema.Array(IssueListEntry),
   errors: Schema.Array(IssueListProjectError),
-  /** At least one repository hit the per-repository listing cap. */
-  truncated: Schema.Boolean,
-  cursorLimitReached: Schema.optional(Schema.Boolean),
-  /** Where each repository carries on, to be sent straight back as `cursors`. */
+  /** Where each scope carries on, sent straight back as `cursors`. Absent once a scope is done. */
   nextCursors: IssueListCursors,
+  /**
+   * Every scope the listing covers, matched or not, with one project that reads it. A Linear team
+   * bound in settings is named nowhere else. Absent from servers that predate it.
+   */
+  scopes: Schema.optional(Schema.Array(IssueScopeRef)),
 });
 export type IssueListResult = typeof IssueListResult.Type;
 
-export const IssueRef = Schema.Struct({
-  projectId: ProjectId,
-  host: Schema.optionalKey(TrimmedNonEmptyString),
-  provider: Schema.optionalKey(IssueProviderKind),
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-});
-export type IssueRef = typeof IssueRef.Type;
-
-/**
- * Forget what the server has cached, so the next read asks the host. With a reference it forgets
- * that one issue; without one it forgets the listings. A separate request rather than a flag on
- * the reads, so an explicit refresh is the only thing that spends host requests.
- */
-export const IssueInvalidateInput = Schema.Struct({
-  reference: Schema.optional(IssueRef),
-});
-export type IssueInvalidateInput = typeof IssueInvalidateInput.Type;
-
-export const IssueDetail = Schema.Struct({
-  repositoryUrl: Schema.optionalKey(TrimmedNonEmptyString),
-  provider: IssueProviderKind,
-  capabilities: IssueCapabilities,
-  /** What this viewer may do, which `capabilities` says nothing about. Both narrow the page. */
-  viewerPermissions: IssueViewerPermissions,
-  projectId: ProjectId,
-  projectTitle: TrimmedNonEmptyString,
-  workspaceRoot: TrimmedNonEmptyString,
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-  title: TrimmedNonEmptyString,
-  body: Schema.String,
-  url: TrimmedNonEmptyString,
-  author: Schema.NullOr(IssueActor),
-  state: IssueState,
-  stateReason: Schema.NullOr(IssueCloseReason),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-  closedAt: Schema.NullOr(IsoDateTime),
-  assignees: Schema.Array(IssueActor),
-  labels: Schema.Array(IssueLabel),
-  milestone: Schema.NullOr(TrimmedNonEmptyString),
-  /** Present when the host can return reaction totals with the listing. */
-  reactions: Schema.optional(Schema.Array(IssueReaction)),
-  /**
-   * Signed-in host account. A comment edit is shown only when this matches its author. Absent
-   * when the host cannot identify the viewer, which offers nothing rather than everything.
-   */
-  viewer: Schema.optional(TrimmedNonEmptyString),
-  commentCount: NonNegativeInt,
-  linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
-  /** Absent when the tracker has no issue hierarchy. */
-  /** Root first, ending with the direct parent. */
-  ancestors: Schema.optional(Schema.Array(IssueRelative)),
-  subIssues: Schema.optional(Schema.Array(IssueRelativeNode)),
-});
-export type IssueDetail = typeof IssueDetail.Type;
-
-/**
- * The conversation-shaped half of an issue, read independently from the core detail so a long
- * history cannot hold the title, body and actions off screen. `author` is an optional enrichment:
- * a host's conversation query may carry an avatar its basic read does not.
- */
-export const IssueActivity = Schema.Struct({
-  author: Schema.optional(Schema.NullOr(IssueActor)),
-  comments: Schema.Array(IssueComment),
-  /**
-   * How many remarks the host itself counts, which is the number a surface showing a count has to
-   * show: `comments` carries what was read. Never less than `comments` holds.
-   */
-  commentCount: NonNegativeInt,
-  /** The read stopped at a bound of its own before the host ran out. */
-  commentsTruncated: Schema.Boolean,
-  nextCommentsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  events: Schema.Array(IssueEvent),
-  /** Reactions on the issue description itself. */
-  reactions: Schema.optional(Schema.Array(IssueReaction)),
-});
-export type IssueActivity = typeof IssueActivity.Type;
-
-export const IssueCommentsPageInput = Schema.Struct({
-  ...IssueRef.fields,
-  cursor: TrimmedNonEmptyString,
-});
-export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
-
-export const IssueCommentsPageResult = Schema.Struct({
-  comments: Schema.Array(IssueComment),
-  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
-});
-export type IssueCommentsPageResult = typeof IssueCommentsPageResult.Type;
-
-/** The complete detail shape after the independently loaded activity has been applied. */
-export const IssueDetailView = Schema.Struct({
-  ...IssueDetail.fields,
-  ...IssueActivity.fields,
-  // A composed view always has the core identity field, even where the activity did not enrich it.
-  author: Schema.NullOr(IssueActor),
-});
-export type IssueDetailView = typeof IssueDetailView.Type;
-
-export const IssueActionInput = Schema.Struct({
-  ...IssueRef.fields,
-  action: IssueAction,
-  /** Only sent for a close, and only where the host declared it takes one. */
-  reason: Schema.optional(IssueCloseReason),
-});
-export type IssueActionInput = typeof IssueActionInput.Type;
-
-// Not trimmed: a body is markdown, where leading spaces open a code block and two trailing spaces
-// are a line break. The bound keeps oversized payloads off the wire and out of subprocess
-// plumbing; the service rejects a body that is only whitespace.
+const IssueTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
+// Not trimmed: a body is markdown, where leading spaces open a code block. The bound keeps
+// oversized payloads off the wire; the service rejects a comment that is only whitespace.
+const IssueBody = Schema.String.check(Schema.isMaxLength(65_536));
 const CommentBody = Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536));
+
+export const IssueCreateInput = Schema.Struct({
+  ...IssueScopeRef.fields,
+  title: IssueTitle,
+  /** May be empty: an issue with a title and nothing else is a legitimate one. */
+  body: IssueBody,
+  labels: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50)),
+  assignees: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25)),
+});
+export type IssueCreateInput = typeof IssueCreateInput.Type;
+
+export const IssueCreateResult = Schema.Struct({
+  key: TrimmedNonEmptyString,
+  displayKey: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+});
+export type IssueCreateResult = typeof IssueCreateResult.Type;
 
 export const IssueCommentInput = Schema.Struct({
   ...IssueRef.fields,
@@ -490,413 +365,106 @@ export const IssueCommentInput = Schema.Struct({
 });
 export type IssueCommentInput = typeof IssueCommentInput.Type;
 
-export const IssueCommentUpdateInput = Schema.Struct({
+/**
+ * Rewrites the issue's own fields. Every field is optional and only the present ones are
+ * written; `labels` and `assignees` are the whole set, which is how every tracker writes them.
+ * The service refuses a request with nothing present.
+ */
+export const IssueUpdateInput = Schema.Struct({
   ...IssueRef.fields,
-  commentId: TrimmedNonEmptyString,
-  body: CommentBody,
+  title: Schema.optional(IssueTitle),
+  body: Schema.optional(IssueBody),
+  labels: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50))),
+  assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25))),
 });
-export type IssueCommentUpdateInput = typeof IssueCommentUpdateInput.Type;
+export type IssueUpdateInput = typeof IssueUpdateInput.Type;
+
+/** Moves the issue to one of the states the tracker declared in `capabilities.states`. */
+export const IssueSetStateInput = Schema.Struct({
+  ...IssueRef.fields,
+  /** The name of one of the issue's `states`. */
+  state: TrimmedNonEmptyString,
+});
+export type IssueSetStateInput = typeof IssueSetStateInput.Type;
 
 export const IssueReactionInput = Schema.Struct({
   ...IssueRef.fields,
-  /** Absent reacts to the issue body; present names a comment. */
+  /** Absent reacts to the issue itself; present names a comment id as the detail carried it. */
   subjectId: Schema.optional(TrimmedNonEmptyString),
   content: IssueReactionContent,
   reacted: Schema.Boolean,
 });
 export type IssueReactionInput = typeof IssueReactionInput.Type;
 
-const IssueTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
-
-/** A repository with no issue in it, which is what a read about the repository itself takes. */
-export const IssueRepositoryRef = Schema.Struct({
-  projectId: ProjectId,
-  repository: TrimmedNonEmptyString,
-});
-export type IssueRepositoryRef = typeof IssueRepositoryRef.Type;
-
-export const IssueCreateInput = Schema.Struct({
-  ...IssueRepositoryRef.fields,
-  title: IssueTitle,
-  /** May be empty: an issue with a title and nothing else is a legitimate one. */
-  body: Schema.String.check(Schema.isMaxLength(65_536)),
-  labels: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50)),
-  assignees: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25)),
-});
-export type IssueCreateInput = typeof IssueCreateInput.Type;
-
-export const IssueCreateResult = Schema.Struct({
-  number: PositiveInt,
-  url: TrimmedNonEmptyString,
-});
-export type IssueCreateResult = typeof IssueCreateResult.Type;
-
-/** Everything a question carries whatever it asks for. Prose carries none of it: it asks nothing. */
-const IssueTemplateFieldBase = {
-  /** How the form addresses this question, which is what an answer to it is filed under. */
-  id: TrimmedNonEmptyString,
-  /** The heading the answer is filed under, which is also what the control is labelled with. */
-  label: Schema.String,
-  /** Shown under the label. Empty where the form wrote none. */
-  description: Schema.String,
-} as const;
-
-/** Prose the form shows and never submits — an introduction, a warning, a link to read first. */
-export const IssueTemplateMarkdownField = Schema.Struct({
-  kind: Schema.Literal("markdown"),
-  value: Schema.String,
-});
-export type IssueTemplateMarkdownField = typeof IssueTemplateMarkdownField.Type;
-
-export const IssueTemplateInputField = Schema.Struct({
-  ...IssueTemplateFieldBase,
-  kind: Schema.Literal("input"),
-  placeholder: Schema.String,
-  /** What the control starts filled with, which the reader is free to replace. */
-  value: Schema.String,
-  required: Schema.Boolean,
-});
-export type IssueTemplateInputField = typeof IssueTemplateInputField.Type;
-
-export const IssueTemplateTextareaField = Schema.Struct({
-  ...IssueTemplateFieldBase,
-  kind: Schema.Literal("textarea"),
-  placeholder: Schema.String,
-  value: Schema.String,
-  /**
-   * The language an answer is fenced with, so log output and stack traces travel as a code block
-   * rather than as markdown that eats them. Null for an answer submitted as written.
-   */
-  render: Schema.NullOr(TrimmedNonEmptyString),
-  required: Schema.Boolean,
-});
-export type IssueTemplateTextareaField = typeof IssueTemplateTextareaField.Type;
-
-export const IssueTemplateDropdownField = Schema.Struct({
-  ...IssueTemplateFieldBase,
-  kind: Schema.Literal("dropdown"),
-  options: Schema.Array(TrimmedNonEmptyString),
-  multiple: Schema.Boolean,
-  required: Schema.Boolean,
-});
-export type IssueTemplateDropdownField = typeof IssueTemplateDropdownField.Type;
-
-/** Each box answers for itself, so a form can demand one agreement and leave the rest free. */
-export const IssueTemplateCheckboxOption = Schema.Struct({
-  label: Schema.String,
-  required: Schema.Boolean,
-});
-export type IssueTemplateCheckboxOption = typeof IssueTemplateCheckboxOption.Type;
-
-export const IssueTemplateCheckboxesField = Schema.Struct({
-  ...IssueTemplateFieldBase,
-  kind: Schema.Literal("checkboxes"),
-  options: Schema.Array(IssueTemplateCheckboxOption),
-});
-export type IssueTemplateCheckboxesField = typeof IssueTemplateCheckboxesField.Type;
-
 /**
- * One thing an issue form puts in front of somebody filing an issue. Only GitHub has these: its
- * issue forms are a typed list of questions rather than a body to overwrite, and a composer that
- * showed them as one text box would file something the repository never asked for.
- */
-export const IssueTemplateField = Schema.Union([
-  IssueTemplateMarkdownField,
-  IssueTemplateInputField,
-  IssueTemplateTextareaField,
-  IssueTemplateDropdownField,
-  IssueTemplateCheckboxesField,
-]);
-export type IssueTemplateField = typeof IssueTemplateField.Type;
-
-/** Everything a form asks an answer for, which is every kind but the prose one. */
-export type IssueTemplateQuestion = Exclude<IssueTemplateField, IssueTemplateMarkdownField>;
-
-/**
- * One of the starting points a repository offers for a new issue: a bug report with its own
- * headings, a feature request with the questions it wants answered. Hosts carry different amounts
- * of it — a GitLab template is a body and nothing else — so a field the host has nothing for comes
- * back empty rather than absent, and a chooser can show every host's templates the same way.
+ * One starting point a scope offers for a new issue. Only the body-shaped kind travels here:
+ * GitHub's typed issue forms are flattened to a body by the driver, so a composer on any
+ * tracker is one text box with a draft in it.
  */
 export const IssueTemplate = Schema.Struct({
-  /** How the host addresses this template, which is what the chooser sends back. */
   key: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
-  /** What it is for, shown under the name so the chooser is more than a list of words. */
   about: Schema.String,
   title: Schema.String,
-  /** The whole draft a markdown template supplies, for the reader to write over. */
   body: Schema.String,
-  /**
-   * The questions a form asks, in the order it asks them. A template supplies either these or
-   * `body`, never both: a form has no draft to write over, and a markdown template asks nothing.
-   * Absent on every host but GitHub, which is the only one with forms.
-   */
-  fields: Schema.optional(Schema.Array(IssueTemplateField)),
   labels: Schema.Array(TrimmedNonEmptyString),
   assignees: Schema.Array(TrimmedNonEmptyString),
 });
 export type IssueTemplate = typeof IssueTemplate.Type;
 
-/**
- * What a reader answered one question with: text for the two kinds that take words, the options
- * taken for the two that pick from a list.
- */
-export type IssueTemplateFieldAnswer = string | ReadonlyArray<string>;
-
-/** Answers by field id, which is how a form's controls and its questions find each other. */
-export type IssueTemplateAnswers = Readonly<Record<string, IssueTemplateFieldAnswer>>;
-
-export function issueTemplateAnswerText(answer: IssueTemplateFieldAnswer | undefined): string {
-  return typeof answer === "string" ? answer : "";
-}
-
-/** A lone string counts as one option taken, so an answer written either way reads the same. */
-export function issueTemplateAnswerOptions(
-  answer: IssueTemplateFieldAnswer | undefined,
-): ReadonlyArray<string> {
-  if (answer === undefined) return [];
-  return typeof answer === "string" ? (answer.length === 0 ? [] : [answer]) : answer;
-}
-
-/** What GitHub writes where an optional question was left alone, rather than nothing at all. */
-const NO_RESPONSE = "_No response_";
-
-function answerBlock(field: IssueTemplateQuestion, answer: IssueTemplateFieldAnswer | undefined) {
-  switch (field.kind) {
-    case "input": {
-      const text = issueTemplateAnswerText(answer).trim();
-      return text.length === 0 ? NO_RESPONSE : text;
-    }
-    case "textarea": {
-      const written = issueTemplateAnswerText(answer);
-      if (written.trim().length === 0) return NO_RESPONSE;
-      // Only the whitespace at the end of the answer goes, because the blocks are joined with a
-      // blank line and a fence closes on a line of its own: whatever follows the last word would
-      // file as an empty line nobody wrote. Everything before the first word is the answer — four
-      // spaces are a code block, and dropping them files prose where the reader wrote code.
-      const text = written.trimEnd();
-      return field.render === null ? text : `\`\`\`${field.render}\n${text}\n\`\`\``;
-    }
-    case "dropdown": {
-      const taken = new Set(issueTemplateAnswerOptions(answer));
-      // In the form's own order rather than the order they were taken in, which is what the host
-      // files — and which drops an option the form no longer offers along the way.
-      const chosen = field.options.filter((option) => taken.has(option));
-      return chosen.length === 0 ? NO_RESPONSE : chosen.join(", ");
-    }
-    case "checkboxes": {
-      // Every box, ticked or not: which ones were left alone is half of what the answer says.
-      const ticked = new Set(issueTemplateAnswerOptions(answer));
-      return field.options
-        .map((option) => `- [${ticked.has(option.label) ? "x" : " "}] ${option.label}`)
-        .join("\n");
-    }
-  }
-}
-
-/**
- * A filled-in form as the markdown it is filed as, built exactly the way GitHub builds it for a
- * form filled in on the host: an issue filed from here has to read like one filed there, because
- * the same maintainers, searches and automations read both.
- */
-export function buildIssueTemplateBody(
-  fields: ReadonlyArray<IssueTemplateField>,
-  answers: IssueTemplateAnswers,
-): string {
-  return fields
-    .flatMap((field) =>
-      field.kind === "markdown"
-        ? []
-        : [`### ${field.label}\n\n${answerBlock(field, answers[field.id])}`],
-    )
-    .join("\n\n");
-}
-
-/** Whether every question the form insists on has been answered, which is what filing waits for. */
-export function issueTemplateAnswersComplete(
-  fields: ReadonlyArray<IssueTemplateField>,
-  answers: IssueTemplateAnswers,
-): boolean {
-  return fields.every((field) => {
-    switch (field.kind) {
-      case "markdown":
-        return true;
-      case "input":
-      case "textarea":
-        return !field.required || issueTemplateAnswerText(answers[field.id]).trim().length > 0;
-      case "dropdown":
-        return !field.required || issueTemplateAnswerOptions(answers[field.id]).length > 0;
-      case "checkboxes": {
-        const ticked = new Set(issueTemplateAnswerOptions(answers[field.id]));
-        return field.options.every((option) => !option.required || ticked.has(option.label));
-      }
-    }
-  });
-}
-
-/**
- * Somewhere the repository would rather a question went than into its tracker — a forum, a
- * security address, a chat room. Offered beside the templates and opened on the host, because
- * that is where the conversation it points at happens.
- */
-export const IssueContactLink = Schema.Struct({
+/** A starting point only the tracker's own site can render: Linear's form and rich templates. */
+export const IssueExternalTemplate = Schema.Struct({
   name: TrimmedNonEmptyString,
   about: Schema.String,
+  /** Opens the exact template on the tracker, ready to fill in. */
   url: TrimmedNonEmptyString,
 });
-export type IssueContactLink = typeof IssueContactLink.Type;
+export type IssueExternalTemplate = typeof IssueExternalTemplate.Type;
 
 export const IssueTemplateList = Schema.Struct({
-  /**
-   * What the host can do with issues at all, which a composer has no other way to learn: every
-   * other answer carrying `IssueCapabilities` is about an issue that already exists, and the one
-   * question asked before filing is this one. A host that takes no new issue, or no labels on one,
-   * has to be known before the form is drawn rather than after the host refuses it.
-   *
-   * Optional because it arrives on the wire: a client talking to a server from before this was
-   * carried reads nothing here rather than failing to decode the offer at all.
-   */
-  capabilities: Schema.optional(IssueCapabilities),
   templates: Schema.Array(IssueTemplate),
-  contactLinks: Schema.Array(IssueContactLink),
-  /**
-   * Where this repository writes down how it wants to be contributed to, pointed at beside the
-   * form the way the host points at it. Absent where the repository keeps none: a link composed
-   * from a path nobody checked is a 404 with a book icon next to it.
-   */
-  contributingGuidelinesUrl: Schema.optional(TrimmedNonEmptyString),
-  /**
-   * Whether an issue may be filed without taking a template. False only where the repository
-   * asked for that; one that said nothing allows it, which is every host's own default.
-   */
+  /** Absent from a tracker whose every template is body-shaped. */
+  externalTemplates: Schema.optional(Schema.Array(IssueExternalTemplate)),
+  /** False where the scope's config forbids an issue filed from nothing. */
   blankIssuesEnabled: Schema.Boolean,
 });
 export type IssueTemplateList = typeof IssueTemplateList.Type;
 
-/** Both fields are optional so a rename does not have to resend a body nobody edited. */
-export const IssueUpdateInput = Schema.Struct({
-  ...IssueRef.fields,
-  title: Schema.optional(IssueTitle),
-  body: Schema.optional(Schema.String.check(Schema.isMaxLength(65_536))),
-});
-export type IssueUpdateInput = typeof IssueUpdateInput.Type;
-
-/** The whole set, not a change to it: every host writes labels by replacing what is there. */
-export const IssueLabelsInput = Schema.Struct({
-  ...IssueRef.fields,
-  labels: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50)),
-});
-export type IssueLabelsInput = typeof IssueLabelsInput.Type;
-
-export const IssueAssigneesInput = Schema.Struct({
-  ...IssueRef.fields,
-  /** Who, as the candidate list named them: a host addresses people by its own identifier. */
-  assignees: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25)),
-});
-export type IssueAssigneesInput = typeof IssueAssigneesInput.Type;
-
-export const IssueAssigneeCandidate = Schema.Struct({
-  ...IssueActor.fields,
-  /** How the host addresses this person when an assignment is written, which is not always the
-   * handle it shows: GitHub takes a login, GitLab a numeric user id. Opaque to the page. */
-  id: TrimmedNonEmptyString,
-  isAssigned: Schema.Boolean,
-});
-export type IssueAssigneeCandidate = typeof IssueAssigneeCandidate.Type;
-
-export const IssueAssigneeCandidateList = Schema.Struct({
-  candidates: Schema.Array(IssueAssigneeCandidate),
-  /** The host has more people with access than the read asked for; nothing is wrong with the
-   * list, it is simply not all of it. */
-  truncated: Schema.Boolean,
-});
-export type IssueAssigneeCandidateList = typeof IssueAssigneeCandidateList.Type;
-
 export const IssueLabelCandidate = Schema.Struct({
   ...IssueLabel.fields,
   description: Schema.NullOr(Schema.String),
-  isApplied: Schema.Boolean,
 });
 export type IssueLabelCandidate = typeof IssueLabelCandidate.Type;
 
-export const IssueLabelCandidateList = Schema.Struct({
-  candidates: Schema.Array(IssueLabelCandidate),
+export const IssueAssigneeCandidate = Schema.Struct({
+  ...IssueActor.fields,
+  /** How the tracker addresses this person on a write, which is not always the login. */
+  id: TrimmedNonEmptyString,
+});
+export type IssueAssigneeCandidate = typeof IssueAssigneeCandidate.Type;
+
+/** The labels and people a scope offers, read when a picker opens rather than with every issue. */
+export const IssueCandidates = Schema.Struct({
+  labels: Schema.Array(IssueLabelCandidate),
+  assignees: Schema.Array(IssueAssigneeCandidate),
+  /** The tracker has more than were read, so somebody missing is not necessarily ineligible. */
   truncated: Schema.Boolean,
 });
-export type IssueLabelCandidateList = typeof IssueLabelCandidateList.Type;
+export type IssueCandidates = typeof IssueCandidates.Type;
 
 export const IssueUnavailableReason = Schema.Literals([
-  "cli-missing",
-  "cli-unauthenticated",
-  "provider-unsupported",
-  "tracker-disabled",
+  "tool-missing",
+  "unauthenticated",
+  "tracker-unsupported",
 ]);
 export type IssueUnavailableReason = typeof IssueUnavailableReason.Type;
 
-/**
- * What each host needs before its issues can be read, so a failure names the fix rather than the
- * symptom. Bitbucket is credentials on the server rather than a signed-in CLI, which is why these
- * are whole sentences instead of a tool name to interpolate.
- */
-const PROVIDER_REQUIREMENT: Partial<
-  Record<IssueProviderKind, { readonly missing: string; readonly unauthenticated: string }>
-> = {
-  github: {
-    missing:
-      "No GitHub credential on the server. Save a token in Settings → Source Control → GitHub, set GH_TOKEN, or sign in with `gh auth login`.",
-    unauthenticated:
-      "GitHub is not authenticated. Save a token in Settings → Source Control → GitHub, set GH_TOKEN, or sign in with `gh auth login`.",
-  },
-  gitlab: {
-    missing:
-      "GitLab CLI (`glab`) is required to browse issues on this host. Install it from https://gitlab.com/gitlab-org/cli and reload.",
-    unauthenticated: "GitLab CLI is not authenticated. Run `glab auth login` and retry.",
-  },
-  "azure-devops": {
-    missing:
-      "Azure CLI (`az`) with the Azure DevOps extension is required. Install `az`, then run `az extension add --name azure-devops`.",
-    unauthenticated: "Azure CLI is not signed in. Run `az login` and retry.",
-  },
-  bitbucket: {
-    missing:
-      "Bitbucket needs API credentials on the server. Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
-    unauthenticated:
-      "Bitbucket rejected the configured credentials. Check T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN.",
-  },
-};
-
-/**
- * What a host needs before its issues can be read, as a sentence to show wherever that host is
- * reported as unusable. Null when the reason is not about setting a host up.
- */
-export function issueProviderRequirement(
-  provider: IssueProviderKind,
-  reason: IssueUnavailableReason,
-): string | null {
-  const requirement = PROVIDER_REQUIREMENT[provider];
-  if (requirement === undefined) return null;
-  switch (reason) {
-    case "cli-missing":
-      return requirement.missing;
-    case "cli-unauthenticated":
-      return requirement.unauthenticated;
-    case "provider-unsupported":
-    case "tracker-disabled":
-      return null;
-  }
-}
-
-/**
- * Issues are switched off for this host or repository. The message is derived from `reason` and
- * the provider rather than from whatever the CLI printed, so it stays a stable sentence the UI
- * can show as-is; the underlying failure travels in `cause`.
- */
+/** The tracker cannot be read at all for this project, as opposed to one request failing. */
 export class IssueUnavailableError extends Schema.TaggedError<IssueUnavailableError>()(
   "IssueUnavailableError",
   {
     reason: IssueUnavailableReason,
-    provider: Schema.optional(IssueProviderKind),
+    tracker: Schema.optional(IssueTrackerKind),
     cause: Schema.optional(Schema.Defect()),
   },
   { httpApiStatus: 503 },
@@ -906,19 +474,13 @@ export class IssueUnavailableError extends Schema.TaggedError<IssueUnavailableEr
   }
 
   override get message(): string {
-    const requirement =
-      this.provider === undefined ? undefined : PROVIDER_REQUIREMENT[this.provider];
     switch (this.reason) {
-      case "cli-missing":
-        return (
-          requirement?.missing ?? "The tool this host is read through is not installed or set up."
-        );
-      case "cli-unauthenticated":
-        return requirement?.unauthenticated ?? "This host has no working credentials.";
-      case "provider-unsupported":
-        return "Issues cannot be browsed for this project's host yet.";
-      case "tracker-disabled":
-        return "This repository has its issue tracker switched off.";
+      case "tool-missing":
+        return "The tool this tracker is read through is not installed or set up.";
+      case "unauthenticated":
+        return "This tracker has no working credentials.";
+      case "tracker-unsupported":
+        return "Issues cannot be browsed for this project yet.";
     }
   }
 }
@@ -928,6 +490,8 @@ export class IssueOperationError extends Schema.TaggedError<IssueOperationError>
   {
     operation: Schema.String,
     detail: TrimmedNonEmptyString,
+    reason: Schema.optional(Schema.Literals(["not-found", "read-only", "rate-limited"])),
+    retryAt: Schema.optional(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
   { httpApiStatus: 502 },
@@ -941,25 +505,171 @@ export class IssueOperationError extends Schema.TaggedError<IssueOperationError>
   }
 }
 
+export type IssueError = IssueUnavailableError | IssueOperationError;
+
+/** Who created a thread ↔ issue link. */
+export const ThreadIssueLinkSource = Schema.Literals(["manual", "agent"]);
+export type ThreadIssueLinkSource = typeof ThreadIssueLinkSource.Type;
+
+/**
+ * Identity of an issue as a thread link sees it: tracker-level, so the same issue linked through
+ * two projects compares equal. `host` is always written here, unlike `IssueRef`, because a link
+ * outlives the project whose binding supplied the default.
+ */
 export const ThreadIssueKey = Schema.Struct({
-  provider: IssueProviderKind,
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-  url: Schema.optionalKey(TrimmedNonEmptyString),
+  tracker: IssueTrackerKind,
+  host: TrimmedNonEmptyString,
+  scope: TrimmedNonEmptyString,
+  key: TrimmedNonEmptyString,
 });
 export type ThreadIssueKey = typeof ThreadIssueKey.Type;
 
+/**
+ * An issue linked to a thread. `projectId` is the project the issue is read through, which the
+ * detail panel needs; `url` is what the agent or user handed over.
+ */
 export const ThreadIssueLink = Schema.Struct({
   ...ThreadIssueKey.fields,
-  projectId: Schema.optionalKey(ProjectId),
+  projectId: ProjectId,
   url: TrimmedNonEmptyString,
+  source: ThreadIssueLinkSource,
+  linkedAt: IsoDateTime,
+  /** As the tracker named the issue when it was linked; opening it reads the live state. */
+  displayKey: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
-  state: Schema.optionalKey(IssueState),
-  linkId: Schema.optionalKey(CommandId),
 });
 export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 
-export const MAX_THREAD_ISSUES = 100;
-export const ThreadIssueLinks = Schema.Array(ThreadIssueLink).check(
-  Schema.isMaxLength(MAX_THREAD_ISSUES),
-);
+export function threadIssueKeyOf(key: ThreadIssueKey): string {
+  return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${key.scope.trim().toLowerCase()}\u0000${key.key.trim()}`;
+}
+
+export function threadIssueKeysEqual(left: ThreadIssueKey, right: ThreadIssueKey): boolean {
+  return threadIssueKeyOf(left) === threadIssueKeyOf(right);
+}
+
+/** The threads an issue is linked to, most recently active first. */
+export const IssueLinkedThreadsResult = Schema.Struct({
+  threads: Schema.Array(
+    Schema.Struct({
+      id: ThreadId,
+      projectId: ProjectId,
+      title: Schema.String,
+      archivedAt: Schema.NullOr(IsoDateTime),
+      settled: Schema.Boolean,
+    }),
+  ),
+});
+export type IssueLinkedThreadsResult = typeof IssueLinkedThreadsResult.Type;
+
+/**
+ * A tracker that is not a git host: it is reached with its own credential rather than a
+ * checkout's, and a project opts into it by binding one of the tracker's scopes. Everything a
+ * client needs to draw the connect flow for any such tracker without knowing which one it is.
+ */
+export const StandaloneIssueTrackerDescriptor = Schema.Struct({
+  tracker: IssueTrackerKind,
+  displayName: TrimmedNonEmptyString,
+  /** Where the tracker is served from; what `IssueRef.host` carries for its issues. */
+  host: TrimmedNonEmptyString,
+  /** What the tracker calls its container, in the singular: "team" on Linear, "project" on Jira. */
+  scopeNoun: TrimmedNonEmptyString,
+  credential: Schema.Struct({
+    /** What the tracker calls the credential: "Personal API key", "API token". */
+    label: TrimmedNonEmptyString,
+    /** Where to mint one, or null when the tracker has no stable page for it. */
+    helpUrl: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+});
+export type StandaloneIssueTrackerDescriptor = typeof StandaloneIssueTrackerDescriptor.Type;
+
+export const MAX_ISSUE_TRACKER_ADDITIONAL_SCOPES = 250;
+
+/**
+ * Which standalone tracker scopes a project's issues come from, beside its git host's own.
+ * `scope` is where agents file new issues; `additionalScopes` are listed and written too.
+ */
+export const IssueTrackerProjectBinding = Schema.Struct({
+  tracker: IssueTrackerKind,
+  scope: TrimmedNonEmptyString,
+  additionalScopes: Schema.optionalKey(
+    Schema.Array(TrimmedNonEmptyString).check(
+      Schema.isMaxLength(MAX_ISSUE_TRACKER_ADDITIONAL_SCOPES),
+    ),
+  ),
+});
+export type IssueTrackerProjectBinding = typeof IssueTrackerProjectBinding.Type;
+
+export const issueTrackerBindingScopes = (binding: IssueTrackerProjectBinding) => [
+  binding.scope,
+  ...(binding.additionalScopes ?? []),
+];
+
+/** One container the connected account can read, offered when a project is bound. */
+export const IssueTrackerScope = Schema.Struct({
+  key: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+});
+export type IssueTrackerScope = typeof IssueTrackerScope.Type;
+
+/**
+ * A standalone tracker as the settings page sees it: the descriptor, whether a credential is
+ * stored and still works, and the scopes it can reach. `scopes` is empty until connected.
+ */
+export const IssueTrackerConnection = Schema.Struct({
+  ...StandaloneIssueTrackerDescriptor.fields,
+  /** A credential is stored. It may still be rejected, which `account` being null reports. */
+  connected: Schema.Boolean,
+  /** Who the credential signs in as, or null when there is none or it was refused. */
+  account: Schema.NullOr(TrimmedNonEmptyString),
+  /** Why a stored credential did not work, when it did not. */
+  detail: Schema.NullOr(TrimmedNonEmptyString),
+  /** The workspace the credential reaches, as its issue URLs name it; links elsewhere are foreign. */
+  workspace: Schema.optional(TrimmedNonEmptyString),
+  scopes: Schema.Array(IssueTrackerScope),
+});
+export type IssueTrackerConnection = typeof IssueTrackerConnection.Type;
+
+export const IssueTrackerConnectionList = Schema.Struct({
+  trackers: Schema.Array(IssueTrackerConnection),
+  /** Which standalone tracker scopes each bound project reads; a project absent here reads none. */
+  bindings: Schema.Record(ProjectId, IssueTrackerProjectBinding),
+});
+export type IssueTrackerConnectionList = typeof IssueTrackerConnectionList.Type;
+
+/** A credential for one standalone tracker; `null` disconnects it and unbinds its projects. */
+export const IssueTrackerConnectInput = Schema.Struct({
+  tracker: IssueTrackerKind,
+  token: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+});
+export type IssueTrackerConnectInput = typeof IssueTrackerConnectInput.Type;
+
+export const IssueTrackerBindProjectInput = Schema.Struct({
+  projectId: ProjectId,
+  /** Null unbinds. */
+  binding: Schema.NullOr(IssueTrackerProjectBinding),
+});
+export type IssueTrackerBindProjectInput = typeof IssueTrackerBindProjectInput.Type;
+
+/**
+ * A standalone tracker the connect flow could not reach or that refused the credential, or a
+ * binding that could not be saved.
+ */
+export class IssueTrackerConnectionError extends Schema.TaggedError<IssueTrackerConnectionError>()(
+  "IssueTrackerConnectionError",
+  {
+    tracker: IssueTrackerKind,
+    reason: Schema.Literals(["unknown-tracker", "rejected", "failed"]),
+    detail: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+  { httpApiStatus: 502 },
+) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(IssueTrackerConnectionError)(this, { status: 502 });
+  }
+
+  override get message(): string {
+    return `${this.tracker} connection failed: ${this.detail}`;
+  }
+}

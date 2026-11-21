@@ -18,6 +18,7 @@ import {
   ProjectSkillShortcuts,
   ProjectSkillShortcutColors,
   ProjectScript,
+  ProjectTrackedFolders,
   StoredProjectIcon,
 } from "./project.ts";
 
@@ -50,6 +51,7 @@ export const ApplicationProjectCreatedPayload = Schema.Struct({
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.Array(ProjectScript),
+  trackedFolders: Schema.optional(ProjectTrackedFolders),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -69,6 +71,7 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   skillShortcuts: Schema.optional(ProjectSkillShortcuts),
   skillShortcutColors: Schema.optional(ProjectSkillShortcutColors),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  trackedFolders: Schema.optional(ProjectTrackedFolders),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   updatedAt: IsoDateTime,

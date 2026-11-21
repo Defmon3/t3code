@@ -22,7 +22,6 @@ import {
   type SecretReference,
   withIdleCompaction,
 } from "@t3tools/contracts";
-import * as NodeUtil from "node:util";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -58,6 +57,7 @@ import {
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
+import { watchDirectoryReplacements } from "./watchDirectoryReplacements.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
@@ -67,6 +67,7 @@ import {
   mapSettingsSecrets,
   mapSettingsSecretValues,
   withoutRemovedSecretProviderReferences,
+  withoutRedirectedSimlockTokens,
   SECRET_REDACTED,
   type SettingsSecret,
 } from "./settingsSecrets.ts";
@@ -129,13 +130,7 @@ const normalizeServerSettings = (
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
     Effect.map((next) => withIdleCompaction(next, globalIdleCompaction(next))),
-    Effect.map((next) => ({
-      ...next,
-      ...deriveLegacyProjectOverrides(next),
-      issueTracking: NodeUtil.isDeepStrictEqual(next.issueTracking, settings.issueTracking)
-        ? settings.issueTracking
-        : next.issueTracking,
-    })),
+    Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -272,9 +267,6 @@ export class ServerSettingsService extends Context.Service<
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
-    readonly modifySettings: (
-      patch: (current: ServerSettings) => ServerSettingsPatch | undefined,
-    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
     readonly updateProviderInstance: (
       mutation: ProviderInstanceMutation,
@@ -322,13 +314,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     writeSemaphore.withPermits(1)(
       Ref.get(currentSettingsRef).pipe(
-        Effect.flatMap((current) =>
-          update(current).pipe(
-            Effect.flatMap((next) =>
-              next === current ? Effect.succeed(current) : normalizeServerSettings(next),
-            ),
-          ),
-        ),
+        Effect.flatMap(update),
+        Effect.flatMap(normalizeServerSettings),
         Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
         Effect.map(resolveTextGenerationProvider),
       ),
@@ -343,13 +330,6 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       updateTestSettings((currentSettings) =>
         Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
       ),
-    modifySettings: (patchOf) =>
-      updateTestSettings((current) => {
-        const patch = patchOf(current);
-        return Effect.succeed(
-          patch === undefined ? current : applyServerSettingsPatch(current, patch),
-        );
-      }),
     updateProviderInstance: (mutation, patch = {}) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
@@ -718,10 +698,9 @@ const make = Effect.gen(function* () {
     PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
 
   const readRawConfig = fs.readFileString(settingsPath).pipe(
-    Effect.asSome,
     Effect.catchIf(
       (cause) => cause.reason._tag === "NotFound",
-      () => Effect.succeedNone,
+      () => Effect.undefined,
     ),
     Effect.mapError(
       (cause) =>
@@ -736,8 +715,8 @@ const make = Effect.gen(function* () {
   // The file before this write, parsed; only read when policy defaults need it.
   const readStoredSettings = Effect.gen(function* () {
     const raw = yield* readRawConfig;
-    if (Option.isNone(raw)) return undefined;
-    const parsed = decodeSettingsFileJsonExit(raw.value);
+    if (raw === undefined) return undefined;
+    const parsed = decodeSettingsFileJsonExit(raw);
     return Exit.isSuccess(parsed) ? parsed.value : undefined;
   });
 
@@ -807,12 +786,12 @@ const make = Effect.gen(function* () {
     let parseFailure = Option.none<unknown>();
 
     const raw = yield* readRawConfig;
-    if (Option.isSome(raw)) {
-      const parsed = decodeSettingsFileJsonExit(raw.value);
+    if (raw !== undefined) {
+      const parsed = decodeSettingsFileJsonExit(raw);
       const decoded = Exit.isFailure(parsed)
         ? parsed
         : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
-      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw.value);
+      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;
         legacySourceControl = {
@@ -823,7 +802,11 @@ const make = Effect.gen(function* () {
       if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
         const failure = decoded._tag === "Failure" ? decoded : legacySettings;
         // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...managed.defaults, continueThreadsAfterServerUpdate: false };
+        settings = {
+          ...managed.defaults,
+          continueThreadsAfterServerUpdate: false,
+          usageHistoryRetentionDays: "unlimited",
+        };
         if (failure._tag === "Failure") {
           parseFailure = Option.some(Cause.squash(failure.cause));
           yield* Effect.logWarning("failed to parse settings.json, using defaults", {
@@ -951,20 +934,9 @@ const make = Effect.gen(function* () {
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey).pipe(
     Effect.map((loaded) => loaded.settings),
   );
-  const reloadSettings = Effect.gen(function* () {
-    const current = yield* getSettingsFromCache;
-    yield* Cache.invalidate(settingsCache, cacheKey);
-    const loaded = yield* Cache.get(settingsCache, cacheKey);
-    if (!NodeUtil.isDeepStrictEqual(current.issueTracking, loaded.settings.issueTracking)) {
-      return loaded;
-    }
-    const retained = {
-      ...loaded,
-      settings: { ...loaded.settings, issueTracking: current.issueTracking },
-    };
-    yield* Cache.set(settingsCache, cacheKey, retained);
-    return retained;
-  });
+  const reloadSettings = Cache.invalidate(settingsCache, cacheKey).pipe(
+    Effect.andThen(Cache.get(settingsCache, cacheKey)),
+  );
 
   const materializeSettingsSecrets = Effect.fn("serverSettings.materializeSettingsSecrets")(
     function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {
@@ -1212,16 +1184,8 @@ const make = Effect.gen(function* () {
   };
 
   const updateAndPersistSettings = (
-    patchOrModify:
-      | ServerSettingsPatch
-      | ((current: ServerSettings) => ServerSettingsPatch | undefined),
-    update: (
-      current: ServerSettings,
-      patch: ServerSettingsPatch,
-    ) => Effect.Effect<ServerSettings, ServerSettingsError> = (current, patch) =>
-      ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
-        Effect.as(applyServerSettingsPatch(current, patch)),
-      ),
+    patch: ServerSettingsPatch,
+    update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
@@ -1233,15 +1197,12 @@ const make = Effect.gen(function* () {
             cause: parseFailure.value,
           });
         }
-        const patch = typeof patchOrModify === "function" ? patchOrModify(current) : patchOrModify;
-        if (patch === undefined) {
-          return yield* materializeSettingsSecrets(current).pipe(Effect.map(toEffective));
-        }
-        const patched = yield* update(current, patch);
-        if (patched === current) {
-          return yield* materializeSettingsSecrets(current).pipe(Effect.map(toEffective));
-        }
-        const updated = withEchoedSecretReferences(current, patched);
+        // An older client echoes a reference as the redacted marker; restore it before vetting so
+        // a removed provider's reference is cleared below rather than restored by persistence.
+        const updated = withoutRedirectedSimlockTokens(
+          current,
+          withEchoedSecretReferences(current, yield* update(current)),
+        );
         // Vet before secrets: a variable the policy hides from clients is not one they removed.
         const vetted = managed.vetWrite(current, yield* normalizeServerSettings(updated), patch);
         if (vetted._tag === "Locked") {
@@ -1306,47 +1267,50 @@ const make = Effect.gen(function* () {
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
-      const current = yield* getSettingsFromCache;
-      const reloaded = yield* reloadSettings;
-      let settings = reloaded.settings;
-      const currentLinear = current.issueTracking.connections.linear;
-      const reloadedLinear = settings.issueTracking.connections.linear;
-      if (
-        currentLinear !== undefined &&
-        reloadedLinear !== undefined &&
-        NodeUtil.isDeepStrictEqual(currentLinear.projectBindings, reloadedLinear.projectBindings)
-      ) {
-        settings = {
-          ...settings,
-          issueTracking: {
-            ...settings.issueTracking,
-            connections: {
-              ...settings.issueTracking.connections,
-              linear: { ...reloadedLinear, projectBindings: currentLinear.projectBindings },
-            },
-          },
-        };
-        yield* Cache.set(settingsCache, cacheKey, { ...reloaded, settings });
-      }
+      const { settings } = yield* reloadSettings;
       yield* emitChange(settings);
     }),
   );
 
-  const watchFileChanges = (filePath: string) => {
+  // `ready` completes once the watch is registered, or once it fails to be.
+  const watchFileChanges = (filePath: string, ready: Deferred.Deferred<void>) => {
     const directory = pathService.dirname(filePath);
     const fileName = pathService.basename(filePath);
     const resolvedFilePath = pathService.resolve(filePath);
-    return fs
-      .watch(directory)
-      .pipe(
-        Stream.filter(
-          (event) =>
-            event.path === fileName ||
-            event.path === filePath ||
-            pathService.resolve(directory, event.path) === resolvedFilePath,
-        ),
-      );
+    const markReady = () => Deferred.doneUnsafe(ready, Exit.void);
+    return fs.watch(directory, { onReady: markReady }).pipe(
+      Stream.filter(
+        (event) =>
+          event.path === fileName ||
+          event.path === filePath ||
+          pathService.resolve(directory, event.path) === resolvedFilePath,
+      ),
+      Stream.as(undefined),
+      Stream.ensuring(Effect.sync(markReady)),
+    );
   };
+
+  // A directory watch follows the directory's inode, so when the target's
+  // directory is renamed away and another takes its path, watch the new one.
+  const watchLinkTargetChanges = (linkTargetPath: string, ready: Deferred.Deferred<void>) =>
+    watchDirectoryReplacements(
+      (parentReady) => watchFileChanges(pathService.dirname(linkTargetPath), parentReady),
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const registered = yield* Deferred.make<void>();
+          return Stream.merge(
+            watchFileChanges(linkTargetPath, registered).pipe(Stream.ignoreCause({ log: true })),
+            // Startup reloads once ready. Later watches trigger their own reload.
+            Stream.fromEffect(
+              Deferred.await(registered).pipe(Effect.andThen(Deferred.succeed(ready, undefined))),
+            ).pipe(
+              Stream.filter((completedStartup) => !completedStartup),
+              Stream.as(undefined),
+            ),
+          );
+        }),
+      ),
+    );
 
   const startWatcher = Effect.gen(function* () {
     const settingsDir = pathService.dirname(settingsPath);
@@ -1379,30 +1343,44 @@ const make = Effect.gen(function* () {
       return Option.some(linkTargetPath);
     }).pipe(Effect.orElseSucceed(() => Option.none<string>()));
 
-    const initialLinkTarget = yield* watchLinkTarget;
-    const linkTargetEvents = Stream.make(initialLinkTarget).pipe(
-      Stream.concat(watchFileChanges(settingsPath).pipe(Stream.mapEffect(() => watchLinkTarget))),
-      Stream.changes,
-      Stream.switchMap(
-        Option.match({
-          onNone: () => Stream.empty,
-          onSome: (linkTargetPath) =>
-            watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true })),
-        }),
-      ),
-    );
+    const settingsReady = yield* Deferred.make<void>();
+    const linkTargetReady = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const [settingsEvents, resolveEvents] = yield* watchFileChanges(
+        settingsPath,
+        settingsReady,
+      ).pipe(
+        Stream.ignoreCause({ log: true }),
+        Stream.broadcastN({ n: 2, capacity: 1, strategy: "sliding" }),
+      );
+      // Buffer settings path changes while resolving the first target.
+      const linkTargetEvents = Stream.fromEffect(
+        Deferred.await(settingsReady).pipe(Effect.andThen(watchLinkTarget)),
+      ).pipe(
+        Stream.concat(resolveEvents.pipe(Stream.mapEffect(() => watchLinkTarget))),
+        Stream.changes,
+        Stream.switchMap(
+          Option.match({
+            onNone: () =>
+              Stream.fromEffect(Deferred.succeed(linkTargetReady, undefined)).pipe(Stream.drain),
+            onSome: (linkTargetPath) => watchLinkTargetChanges(linkTargetPath, linkTargetReady),
+          }),
+        ),
+      );
 
-    // Saves emit multiple events; fs.watch may fire before content is flushed.
-    const debouncedSettingsEvents = Stream.merge(
-      watchFileChanges(settingsPath),
-      linkTargetEvents,
-    ).pipe(Stream.debounce(Duration.millis(100)));
-
-    yield* Stream.runForEach(debouncedSettingsEvents, () => revalidateAndEmitSafely).pipe(
+      // Saves emit multiple events; fs.watch may fire before content is flushed.
+      yield* Stream.merge(settingsEvents, linkTargetEvents).pipe(
+        Stream.debounce(Duration.millis(100)),
+        Stream.runForEach(() => revalidateAndEmitSafely),
+      );
+    }).pipe(
+      Effect.scoped,
       Effect.ignoreCause({ log: true }),
+      Effect.ensuring(Deferred.succeed(linkTargetReady, undefined)),
       Effect.forkIn(watcherScope),
-      Effect.asVoid,
     );
+    // Edits made once `start` returns must reach a registered watch.
+    yield* Deferred.await(linkTargetReady);
   });
 
   const start = Effect.gen(function* () {
@@ -1430,8 +1408,12 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getMaterializedSettings,
-    updateSettings: (patch) => updateAndPersistSettings(patch),
-    modifySettings: (patchOf) => updateAndPersistSettings(patchOf),
+    updateSettings: (patch) =>
+      updateAndPersistSettings(patch, (current) =>
+        ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
+          Effect.as(applyServerSettingsPatch(current, patch)),
+        ),
+      ),
     updateProviderInstance: (mutation, patch = {}) =>
       updateAndPersistSettings(patch, (current) =>
         Effect.gen(function* () {

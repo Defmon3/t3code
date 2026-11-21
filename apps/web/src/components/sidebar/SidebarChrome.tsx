@@ -1,5 +1,6 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, CircleDotIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { T, useGT } from "gt-react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -9,6 +10,7 @@ import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
+  CUSTOM_RELEASE_CHANNEL,
   resolveEnvironmentIdentificationPillLabel,
   formatBuildIdentityLabel,
   resolveSidebarStageBackdropVariant,
@@ -26,6 +28,8 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { readIssueListPreferences } from "../issue/issueListPreferences";
+import { IssueGlyph } from "../issue/issuePresentation";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -40,6 +44,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const gt = useGT();
   const backdropVariant = resolveSidebarStageBackdropVariant(
     stageLabel,
     environmentIdentificationMode,
@@ -50,7 +55,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       : null;
   const customBuildLabel = APP_IS_CUSTOM_BUILD
     ? formatBuildIdentityLabel({
-        stageLabel: "Custom",
+        stageLabel: CUSTOM_RELEASE_CHANNEL,
         commitHash: APP_COMMIT_HASH,
         buildTime: APP_BUILD_TIME,
       })
@@ -68,7 +73,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         <SidebarTrigger
           variant={backdropVariant ? "media-navigation" : "ghost"}
           className="relative top-auto translate-y-0"
-          aria-label="Toggle main sidebar"
+          aria-label={gt("Toggle main sidebar")}
         />
       </div>
       <div className="relative z-10 flex min-w-0 flex-1 flex-col items-start justify-center gap-0.5 py-1">
@@ -92,9 +97,13 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
             />
             <TooltipPopup variant="code" className="max-w-none whitespace-pre-line" side="bottom">
               {customBuildLabel ?? pillLabel}
-              {APP_IS_CUSTOM_BUILD ? `\nVersion ${APP_VERSION}` : ""}
-              {APP_IS_CUSTOM_BUILD && APP_BUILD_TIME ? `\nBuilt ${APP_BUILD_TIME}` : ""}
-              {APP_IS_CUSTOM_BUILD && APP_COMMIT_HASH ? `\nCommit ${APP_COMMIT_HASH}` : ""}
+              {APP_IS_CUSTOM_BUILD ? "\n" + gt("Version {version}", { version: APP_VERSION }) : ""}
+              {APP_IS_CUSTOM_BUILD && APP_BUILD_TIME
+                ? "\n" + gt("Built {time}", { time: APP_BUILD_TIME })
+                : ""}
+              {APP_IS_CUSTOM_BUILD && APP_COMMIT_HASH
+                ? "\n" + gt("Commit {hash}", { hash: APP_COMMIT_HASH })
+                : ""}
             </TooltipPopup>
           </Tooltip>
         ) : null}
@@ -128,9 +137,10 @@ export function SidebarBrandWidthProbe({
 }
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+  const gt = useGT();
   return (
     <Link
-      aria-label="Go to threads"
+      aria-label={gt("Go to threads")}
       className={cn(
         "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset md:flex",
         onBackdrop ? "text-white" : "text-foreground",
@@ -152,7 +162,8 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        Code
+        {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product wordmark */}
+        {"Code"}
       </span>
     </span>
   );
@@ -186,6 +197,7 @@ function SidebarUtilityItem({
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
+  const gt = useGT();
   const { isMobile, setOpenMobile } = useSidebar();
   const isOnUtilityPage = useLocation({
     select: (location) => isSidebarUtilityPage(location.pathname),
@@ -206,7 +218,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const handleIssuesClick = () => {
     closeMobileSidebar();
-    void navigate({ to: "/issues", search: { involvement: "all", state: "open" } });
+    void navigate({ to: "/issues", search: readIssueListPreferences() });
   };
   const handleSettingsClick = () => {
     closeMobileSidebar();
@@ -231,33 +243,35 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
             <ArrowLeftIcon />
-            <span>Back</span>
+            <span>
+              <T>Back</T>
+            </span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       ) : (
         <>
           <SidebarUtilityItem
             icon={<SettingsIcon />}
-            label="Settings"
+            label={gt("Settings")}
             onClick={handleSettingsClick}
           />
           {pullRequestsSupported ? (
             <SidebarUtilityItem
               icon={<PullRequestGlyph.pullRequest />}
-              label="Pull requests"
+              label={gt("Pull requests")}
               onClick={handlePullRequestsClick}
             />
           ) : null}
           {issuesSupported ? (
             <SidebarUtilityItem
-              icon={<CircleDotIcon />}
-              label="Issues"
+              icon={<IssueGlyph.issue />}
+              label={gt("Issues", { $context: "sidebar link to the list of issues" })}
               onClick={handleIssuesClick}
             />
           ) : null}
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
+            label={gt("Usage")}
             onClick={handleUsageClick}
           />
         </>

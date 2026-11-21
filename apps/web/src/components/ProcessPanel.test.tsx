@@ -4,6 +4,17 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+vi.mock("gt-react", async (importOriginal) => {
+  const gt = await importOriginal<typeof import("gt-react")>();
+  return {
+    ...gt,
+    useGT:
+      () =>
+      (text: string, values = {}) =>
+        gt.gtFallback(text, { ...values, $locale: "en" }),
+    T: ({ children }: { readonly children: ReactNode }) => children,
+  };
+});
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn<(message: string, options: { variant: "destructive" }) => Promise<boolean>>(),
   refresh: vi.fn(),
@@ -34,7 +45,8 @@ vi.mock("./ui/tooltip", () => ({
   TooltipPopup: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ render }: { readonly render: ReactNode }) => <>{render}</>,
 }));
-vi.mock("~/hooks/useCopyToClipboard", () => ({
+vi.mock("~/hooks/useCopyToClipboard", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/hooks/useCopyToClipboard")>()),
   useCopyToClipboard: () => ({ copyToClipboard: vi.fn(), isCopied: false }),
 }));
 vi.mock("~/localApi", () => ({

@@ -25,7 +25,7 @@ export function normalizeWorkItemLinkKey(input: WorkItemLinkKey): WorkItemLinkKe
   }
 }
 
-const WorkItemLinkedItem = Schema.Struct({
+const WorkItemLinkedPullRequest = Schema.Struct({
   ...WorkItemLinkKey.fields,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
@@ -33,8 +33,12 @@ const WorkItemLinkedItem = Schema.Struct({
 });
 
 export const WorkItemLink = Schema.Struct({
-  issue: WorkItemLinkedItem,
-  pullRequest: WorkItemLinkedItem,
+  issue: Schema.Struct({
+    ...WorkItemLinkKey.fields,
+    displayKey: TrimmedNonEmptyString,
+    title: TrimmedNonEmptyString,
+  }),
+  pullRequest: WorkItemLinkedPullRequest,
 });
 export type WorkItemLink = typeof WorkItemLink.Type;
 
@@ -48,7 +52,10 @@ export const WorkItemLinksResult = Schema.Struct({
 export type WorkItemLinksResult = typeof WorkItemLinksResult.Type;
 
 export const WorkItemLinkInput = Schema.Struct({
-  issue: IssueRef,
+  issue: Schema.Union([
+    IssueRef,
+    Schema.Struct({ projectId: ProjectId, url: TrimmedNonEmptyString }),
+  ]),
   pullRequest: PullRequestRef,
 });
 export type WorkItemLinkInput = typeof WorkItemLinkInput.Type;
@@ -72,30 +79,25 @@ export class WorkItemLinkError extends Schema.TaggedError<WorkItemLinkError>()(
   }
 }
 
-export const WorkItemTaskSourceRef = Schema.Struct({
-  kind: Schema.Literals(["issue", "pull-request"]),
-  provider: Schema.optionalKey(TrimmedNonEmptyString),
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-});
+export const WorkItemTaskSourceRef = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("issue"), reference: IssueRef }),
+  Schema.Struct({ kind: Schema.Literal("pull-request"), reference: PullRequestRef }),
+]);
 export type WorkItemTaskSourceRef = typeof WorkItemTaskSourceRef.Type;
 
 export const WorkItemMatchRelationship = Schema.Literals(["related", "duplicate"]);
 export type WorkItemMatchRelationship = typeof WorkItemMatchRelationship.Type;
 
 export const WorkItemMatchInput = Schema.Struct({
-  projectId: ProjectId,
   relationship: WorkItemMatchRelationship,
   source: WorkItemTaskSourceRef,
 });
 export type WorkItemMatchInput = typeof WorkItemMatchInput.Type;
 
 export const WorkItemMatch = Schema.Struct({
-  closesViaPullRequest: Schema.optionalKey(Schema.Boolean),
-  kind: Schema.Literals(["issue", "pull-request"]),
+  source: WorkItemTaskSourceRef,
   provider: TrimmedNonEmptyString,
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
+  displayKey: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
   confidence: Schema.Literals(["high", "medium"]),

@@ -1,1110 +1,902 @@
-import { useAtomValue } from "@effect/atom-react";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { issueEventSentence, issueWriteAccess } from "@t3tools/client-runtime/issue-presentation";
+import { createIssueCommentPager } from "@t3tools/client-runtime/state/issues";
+import {
+  issueAssigneeHeld,
+  issueAssigneesAfterPicks,
+  issueLabelsAfterPicks,
+  issuePicksAfterFailedWrite,
+  issuePicksFor,
+  issueWriteAfterPicks,
+  noIssuePicks,
+} from "@t3tools/client-runtime/issue-selection";
+import { isSelected, toggleSelection } from "@t3tools/client-runtime/pull-request-selection";
+import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
-  IssueAction,
-  IssueCloseReason,
+  IssueAssigneeCandidate,
   IssueComment,
+  IssueDetail,
+  IssueEvent,
+  IssueLabelCandidate,
   IssueLinkedPullRequest,
-  IssueProviderKind,
+  IssueListEntry,
+  IssueReaction,
   IssueRef,
-  IssueState,
-  ScopedProjectRef,
+  PullRequestRef,
   ScopedThreadRef,
-  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
-  ArrowDownUpIcon,
-  ArrowUpRightIcon,
-  BookOpenIcon,
-  CircleCheckIcon,
-  CircleDotIcon,
-  CircleSlashIcon,
+  CheckIcon,
+  ChevronDownIcon,
   ExternalLinkIcon,
-  HammerIcon,
-  LinkIcon,
-  MessageCircleQuestionIcon,
-  MessageSquareIcon,
-  MoreHorizontalIcon,
-  PaperclipIcon,
+  TagIcon,
+  UserPlusIcon,
+  UsersIcon,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
+import { useContext, useState, type ReactNode } from "react";
 
-import type { DraftId } from "~/composerDraftStore";
-import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
-import { useLiveRefresh } from "~/hooks/useLiveRefresh";
-import { cn } from "~/lib/utils";
-import { openLinkInBrowser } from "~/lib/openIssueLink";
-import { issueEnvironment } from "~/state/issues";
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { m } from "~/i18n/messages";
+import { issueEnvironment, refreshIssueLists } from "~/state/issues";
+import { useProjects } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
-import { CommentComposer } from "../sourceControl/CommentComposer";
-import { PULL_REQUEST_STATE_PRESENTATION } from "../pullRequest/pullRequestIcons";
-import { PullRequestMarkdownContext } from "../pullRequest/PullRequestMarkdown";
-import { PullRequestActorLabel, PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
-import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
-import { readableFailure, writeHandoffToComposer } from "../sourceControl/handoff";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
-import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
-import { RefreshIcon } from "../ui/refresh-icon";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Button, InlineButton } from "../ui/button";
+import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { cn } from "~/lib/utils";
+import { PullRequestMetaRow, PullRequestSection } from "../pullRequest/PullRequestSummaryTab";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { PullRequestCandidatePicker } from "../pullRequest/PullRequestCandidatePicker";
+import { PullRequestCommentBody } from "../pullRequest/PullRequestCommentBody";
+import { PullRequestDetailTitleRow } from "../pullRequest/PullRequestDetailLayout";
+import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import {
-  buildAskAboutIssueHandoff,
-  buildAttachIssueContext,
-  buildExplainIssueHandoff,
-  buildLinkPullRequestsHandoff,
-  buildSolveIssueHandoff,
-  sameProjectIssueNumber,
-  LINK_PULL_REQUESTS_HANDOFF_KIND,
-  mergeIssueComments,
-  shouldRefreshIssueActivity,
-  type IssueHandoff,
-  type IssueHandoffSource,
-} from "./issueDetail.logic";
-import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
-import { IssueEditor, IssueSummaryTab } from "./IssueSummaryTab";
-import { IssuesUnavailableState } from "./IssuesUnavailableState";
-import { IssueTimelineTab } from "./IssueTimelineTab";
-import { getIssueProviderPresentation, resolveIssueState } from "./issuePresentation";
+  PullRequestMarkdown,
+  PullRequestMarkdownPanelContext,
+} from "../pullRequest/PullRequestMarkdown";
+import { PullRequestMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
+import { WorkItemRelations } from "../sourceControl/WorkItemRelations";
+import { readableFailure } from "../pullRequest/pullRequestDetail.logic";
+import { pullRequestLabelColor } from "../pullRequest/pullRequestList.logic";
+import {
+  PullRequestActorLabel,
+  PullRequestLabelChip,
+  PullRequestMetaLine,
+  PullRequestStateGlyph,
+} from "../pullRequest/pullRequestPresentation";
+import { IssueCommentComposer } from "./IssueCommentComposer";
+import { IssueDetailGhost } from "./IssueDetailGhost";
+import { IssueThreadLinks } from "./IssueThreadLinks";
+import { ReactionBar } from "../pullRequest/PullRequestReactions";
+import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
+import { issueTrackerPresentation, issueStatePresentation } from "./issuePresentation";
 
-/** An issue has no patch to read, so there is no third tab here as there is on a change request. */
-type DetailTab = "summary" | "timeline";
+function IssueReactionBar({
+  reactions,
+  canReact,
+  subjectId,
+  environmentId,
+  reference,
+}: {
+  reactions: ReadonlyArray<IssueReaction>;
+  canReact: boolean;
+  subjectId?: string | undefined;
+  environmentId: EnvironmentId;
+  reference: IssueRef;
+}) {
+  const react = useAtomCommand(issueEnvironment.react, { reportFailure: false });
+  return (
+    <ReactionBar
+      reactions={reactions}
+      canReact={canReact}
+      onReact={async (content, reacted) => {
+        const result = await react({
+          environmentId,
+          input: {
+            ...reference,
+            ...(subjectId === undefined ? {} : { subjectId }),
+            content,
+            reacted,
+          },
+        });
+        return result._tag !== "Failure";
+      }}
+    />
+  );
+}
 
-const ACTION_SUCCESS_LABELS: Record<IssueAction, string> = {
-  close: "Issue closed",
-  reopen: "Issue reopened",
-};
+function IssueLabelPicker({
+  environmentId,
+  reference,
+  detail,
+  allowed,
+  disabledReason,
+}: {
+  environmentId: EnvironmentId;
+  reference: IssueRef;
+  detail: IssueDetail;
+  allowed: boolean;
+  disabledReason: string;
+}) {
+  const gt = useGT();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [picks, setPicks] = useState(noIssuePicks<IssueLabelCandidate>);
+  const current = issuePicksFor(picks, detail, open);
+  const draft = current.draft;
+  const candidatesQuery = useEnvironmentQuery(
+    open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
+  );
+  const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
+  const applied = new Set(detail.labels.map((label) => label.name));
+  const needle = query.toLowerCase();
+  const candidates = (candidatesQuery.data?.labels ?? []).filter(
+    (label) =>
+      needle.length === 0 ||
+      label.name.toLowerCase().includes(needle) ||
+      (label.description ?? "").toLowerCase().includes(needle),
+  );
+  const onOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (nextOpen) {
+      // Picks made against an older read are not this picker's any more.
+      setPicks(issuePicksFor(picks, detail, false));
+      return;
+    }
+    const labels = issueWriteAfterPicks(
+      issueLabelsAfterPicks(detail, draft),
+      detail.labels.map((label) => label.name),
+      current.written,
+    );
+    if (labels === null) return;
+    const sent = { ...current, written: labels };
+    setPicks(sent);
+    void update({ environmentId, input: { ...reference, labels } }).then((result) => {
+      if (result._tag !== "Failure") {
+        refreshIssueLists(environmentId);
+        return;
+      }
+      setPicks((latest) => issuePicksAfterFailedWrite(latest, sent));
+      toastManager.add({
+        type: "error",
+        title: m(msg("Could not change labels")),
+        description: readableFailure(
+          squashAtomCommandFailure(result),
+          m(msg("The tracker refused it.")),
+        ),
+      });
+    });
+  };
+  return (
+    <PullRequestCandidatePicker
+      icon={<TagIcon className="size-3.5" />}
+      label={gt("Change labels")}
+      allowed={allowed}
+      disabledReason={disabledReason}
+      open={open}
+      onOpenChange={onOpenChange}
+      query={query}
+      onQueryChange={setQuery}
+      searchLabel={gt("Search labels")}
+      isPending={candidatesQuery.isPending && candidatesQuery.data === null}
+      error={candidatesQuery.data === null ? candidatesQuery.error : null}
+      candidates={candidates}
+      emptyLabel={gt("This tracker has no labels.")}
+      noMatchLabel={gt("No label matches that.")}
+      errorLabel={gt("The labels could not be read.")}
+      truncated={candidatesQuery.data?.truncated === true}
+      truncatedLabel={gt("More labels exist than are listed here.")}
+      candidateKey={(candidate) => candidate.name}
+      onSelect={(candidate) =>
+        setPicks({
+          ...current,
+          draft: toggleSelection(draft, candidate.name, candidate, applied.has(candidate.name)),
+        })
+      }
+    >
+      {(candidate) => {
+        const dot = pullRequestLabelColor(candidate.color);
+        return (
+          <>
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-full bg-muted-foreground"
+              {...(dot ? { style: { backgroundColor: dot } } : {})}
+            />
+            <span className="min-w-0 flex-1 truncate">
+              {candidate.name}
+              {candidate.description ? (
+                <span className="text-muted-foreground"> · {candidate.description}</span>
+              ) : null}
+            </span>
+            {isSelected(draft, candidate.name, applied.has(candidate.name)) ? (
+              <CheckIcon
+                aria-label={gt("Applied", { $context: "label is applied to the issue" })}
+                className="size-3.5 shrink-0"
+              />
+            ) : null}
+          </>
+        );
+      }}
+    </PullRequestCandidatePicker>
+  );
+}
 
-/** Said as the thing that did not happen, rather than as the operation that returned an error. */
-const ACTION_FAILURE_LABELS: Record<IssueAction, string> = {
-  close: "Could not close this issue",
-  reopen: "Could not reopen this issue",
-};
+function IssueAssigneePicker({
+  environmentId,
+  reference,
+  detail,
+  allowed,
+  disabledReason,
+}: {
+  environmentId: EnvironmentId;
+  reference: IssueRef;
+  detail: IssueDetail;
+  allowed: boolean;
+  disabledReason: string;
+}) {
+  const gt = useGT();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [picks, setPicks] = useState(noIssuePicks<IssueAssigneeCandidate>);
+  const current = issuePicksFor(picks, detail, open);
+  const draft = current.draft;
+  const candidatesQuery = useEnvironmentQuery(
+    open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
+  );
+  const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
+  const needle = query.toLowerCase();
+  const candidates = (candidatesQuery.data?.assignees ?? []).filter(
+    (candidate) =>
+      needle.length === 0 ||
+      candidate.login.toLowerCase().includes(needle) ||
+      (candidate.name ?? "").toLowerCase().includes(needle),
+  );
+  const onOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (nextOpen) {
+      // Picks made against an older read are not this picker's any more.
+      setPicks(issuePicksFor(picks, detail, false));
+      return;
+    }
+    const assignees = issueWriteAfterPicks(
+      issueAssigneesAfterPicks(detail, draft),
+      detail.assignees.map((actor) => actor.login),
+      current.written,
+    );
+    if (assignees === null) return;
+    const sent = { ...current, written: assignees };
+    setPicks(sent);
+    void update({ environmentId, input: { ...reference, assignees } }).then((result) => {
+      if (result._tag !== "Failure") {
+        refreshIssueLists(environmentId);
+        return;
+      }
+      setPicks((latest) => issuePicksAfterFailedWrite(latest, sent));
+      toastManager.add({
+        type: "error",
+        title: m(msg("Could not change assignees")),
+        description: readableFailure(
+          squashAtomCommandFailure(result),
+          m(msg("The tracker refused it.")),
+        ),
+      });
+    });
+  };
+  return (
+    <PullRequestCandidatePicker
+      icon={<UserPlusIcon className="size-3.5" />}
+      label={gt("Change assignees")}
+      allowed={allowed}
+      disabledReason={disabledReason}
+      open={open}
+      onOpenChange={onOpenChange}
+      query={query}
+      onQueryChange={setQuery}
+      searchLabel={gt("Search people")}
+      isPending={candidatesQuery.isPending && candidatesQuery.data === null}
+      error={candidatesQuery.data === null ? candidatesQuery.error : null}
+      candidates={candidates}
+      emptyLabel={gt("Nobody can be assigned here.")}
+      noMatchLabel={gt("Nobody matches that.")}
+      errorLabel={gt("The people could not be read.")}
+      truncated={candidatesQuery.data?.truncated === true}
+      truncatedLabel={gt("More people exist than are listed here.")}
+      candidateKey={(candidate) => candidate.id}
+      onSelect={(candidate) =>
+        setPicks({
+          ...current,
+          draft: toggleSelection(
+            draft,
+            candidate.id,
+            candidate,
+            issueAssigneeHeld(detail, candidate),
+          ),
+        })
+      }
+    >
+      {(candidate) => (
+        <>
+          <PullRequestActorLabel actor={candidate} tooltip={false} className="min-w-0 flex-1" />
+          {isSelected(draft, candidate.id, issueAssigneeHeld(detail, candidate)) ? (
+            <CheckIcon
+              aria-label={gt("Assigned", { $context: "person is assigned to the issue" })}
+              className="size-3.5 shrink-0"
+            />
+          ) : null}
+        </>
+      )}
+    </PullRequestCandidatePicker>
+  );
+}
 
-/** What to try, for the times the host says only that it refused. */
-const ACTION_FAILURE_HINTS: Record<IssueAction, string> = {
-  close: "The host refused it. Check that you have write access, or that you opened it.",
-  reopen:
-    "The host refused it. Check that you have write access, or that you opened it, and that the tracker is still on.",
-};
+type TimelineItem =
+  | { kind: "comment"; at: string; comment: IssueComment }
+  | { kind: "event"; at: string; event: IssueEvent };
 
-/** The choice reads as the whole action, because that is what pressing it does. */
-const CLOSE_REASON_LABELS: Record<IssueCloseReason, string> = {
-  completed: "Close as completed",
-  "not-planned": "Close as not planned",
-};
-
-/** The same reason inside the confirmation's sentence, where the verb is already said. */
-const CLOSE_REASON_PHRASES: Record<IssueCloseReason, string> = {
-  completed: " as completed",
-  "not-planned": " as not planned",
-};
-
-const openOnIssueLabel = (provider: IssueProviderKind): string =>
-  `Open on ${getIssueProviderPresentation(provider).providerName}`;
-
-/** Names no hand-off, which is the point: it holds the controls shut without claiming one is running. */
-const HANDOFF_WAITING_KIND = "waiting-for-activity";
-
-const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
-  { value: "summary", label: "Summary" },
-  { value: "timeline", label: "Timeline" },
-];
-
-export type IssueHandoffTarget =
-  | { readonly kind: "new-thread" }
-  | {
-      readonly kind: "existing-thread";
-      /** Which project the thread is standing in, which is not always the issue's own. */
-      readonly projectRef: ScopedProjectRef;
-      /** The composer to write into: a live thread, or the draft one that has yet to become one. */
-      readonly draftId: ScopedThreadRef | DraftId;
-    };
+function LinkedPullRequestRow({
+  link,
+  scope,
+  onSelect,
+}: {
+  link: IssueLinkedPullRequest;
+  /** The issue's own repository, left off a pull request that lives in it. */
+  scope: string;
+  onSelect: (() => void) | null;
+}) {
+  const body = (
+    <>
+      <PullRequestStateGlyph state={link.state} isDraft={link.isDraft} />
+      <span className="min-w-0 flex-1 truncate text-sm">{link.title}</span>
+      <PullRequestMetaLine className="shrink-0 text-xs text-muted-foreground">
+        {link.closesIssue ? (
+          <span>
+            <T>Closes this issue</T>
+          </span>
+        ) : null}
+        <span className="tabular-nums">
+          {link.repository.toLowerCase() === scope.toLowerCase() ? "" : link.repository}#
+          {link.number}
+        </span>
+      </PullRequestMetaLine>
+    </>
+  );
+  const className =
+    "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent";
+  return onSelect ? (
+    <button type="button" className={className} onClick={onSelect}>
+      {body}
+    </button>
+  ) : (
+    <a href={link.url} target="_blank" rel="noopener noreferrer" className={className}>
+      {body}
+    </a>
+  );
+}
 
 export function IssueDetailPanel({
   environmentId,
-  panelRef = null,
   reference,
-  handoffTarget,
-  refreshToken: forcedRefreshToken = 0,
-  onActed,
-  onStateChange,
-  onOpenLinkedPullRequest,
-  onOpenRelatedIssue,
-  chromeVariant = "full",
+  threadRef = null,
+  listEntry = null,
+  onSelectPullRequest,
 }: {
   environmentId: EnvironmentId;
-  panelRef?: ScopedThreadRef | null;
   reference: IssueRef;
-  /** Where "Solve", "Ask" and the rest put what they write. */
-  handoffTarget: IssueHandoffTarget;
-
-  refreshToken?: number;
-  /**
-   * An action changed this issue on the host, so a list showing it is now out of date. Told
-   * rather than assumed: only the page knows whether it is showing one.
-   */
-  onActed?: () => void;
-  /** Keeps compact chrome, such as the right-panel tab, in step with refreshed host state. */
-  onStateChange?: (status: {
-    projectId: string;
-    repository: string;
-    number: number;
-    state: IssueState;
-    stateReason: IssueCloseReason | null;
-  }) => void;
-
-  onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
-  /** Opens another issue of this tracker project in place; without it, on the tracker. */
-  onOpenRelatedIssue?: (issue: {
-    readonly repository?: string | undefined;
-    readonly number: number;
-    readonly url: string;
-  }) => void;
-
-  chromeVariant?: "full" | "collapse";
+  /** The list row this issue was opened from, shown until the detail arrives. */
+  listEntry?: IssueListEntry | null;
+  threadRef?: ScopedThreadRef | null;
+  /** Opens a linked change request beside this one; absent, the link goes to the host. */
+  onSelectPullRequest?: ((reference: PullRequestRef) => void) | undefined;
 }) {
-  const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
-  const [tab, setTab] = useState<DetailTab>("summary");
-  const [timelineOrder, setTimelineOrder] = useState<"oldest" | "newest">("newest");
-  const [editing, setEditing] = useState<"title" | "description" | null>(null);
-  const [openPicker, setOpenPicker] = useState<"labels" | "assignees" | null>(null);
-  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
-    () => new Set<DetailTab>([tab]),
-  );
-  const [chromeCondensed, setChromeCondensed] = useState(false);
+  const gt = useGT();
+  const messages = useMessages();
+  const listPanelRef = useContext(PullRequestMarkdownPanelContext);
+  const detailAtom = issueEnvironment.detail({ environmentId, input: reference });
+  const detailQuery = useEnvironmentQuery(detailAtom);
+  const registry = useContext(RegistryContext);
+  const [pager] = useState(() => createIssueCommentPager(detailAtom));
+  const { comments, nextCursor, loadingOlder, canLoadOlder } = useAtomValue(pager.view);
+  const detail = detailQuery.data;
+  const canWrite = useAtomValue(issueEnvironment.comment.permissionAtom(environmentId));
+  const projects = useProjects();
+  const cwd =
+    projects.find((p) => p.environmentId === environmentId && p.id === reference.projectId)
+      ?.workspaceRoot ?? "";
 
-  const chromeStateByTab = useRef<Partial<Record<DetailTab, boolean>>>({});
-  const selectTab = (next: DetailTab) => {
-    setTab(next);
-    setMountedTabs((previous) => (previous.has(next) ? previous : new Set(previous).add(next)));
-    setChromeCondensed(chromeStateByTab.current[next] ?? false);
-  };
-  const condensed = chromeVariant === "collapse" && chromeCondensed;
+  const loadComments = useAtomCommand(issueEnvironment.comments, { reportFailure: false });
+  const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
+  const setState = useAtomCommand(issueEnvironment.setState, { reportFailure: false });
+  const [editing, setEditing] = useState<"title" | "body" | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [changingState, setChangingState] = useState(false);
 
-  const scrollerRef = useRef<HTMLElement | null>(null);
-  const foldRef = useRef<HTMLDivElement | null>(null);
-  // The condensed chrome's second row opens as the fold closes, so the height the scrollport
-  // gains is the fold's minus this row's. Measured the same way the fold is: `scrollHeight`
-  // through a zero track reads its natural height in either state.
-  const condensedRowRef = useRef<HTMLDivElement | null>(null);
-  const compensationRef = useRef<number | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- compensates DOM scroll position before paint when the issue header folds
-  useLayoutEffect(() => {
-    if (compensationRef.current === null) return;
-    const scroller = scrollerRef.current;
-    const delta = compensationRef.current;
-    compensationRef.current = null;
-    if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
-  });
-  // The issue the dialog was opened over travels with the question, because the panel shows a
-  // different issue every time it is opened and the dialog outlives that swap: without it, a
-  // confirmation asked about one issue closes whichever one the panel has moved on to.
-  const [confirmClose, setConfirmClose] = useState<{
-    reference: IssueRef;
-    reason: IssueCloseReason | null;
-  } | null>(null);
-  const [actionPending, setActionPending] = useState(false);
-  /** Which hand-off is under way, so only the item that was pressed says it is working. */
-  const [handoff, setHandoff] = useState<string | null>(null);
-  const [loadedComments, setLoadedComments] = useState<{
-    readonly key: string;
-    readonly comments: ReadonlyArray<IssueComment>;
-    readonly nextCursor: string | null;
-  } | null>(null);
-  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
-  const readCommentsPage = useAtomCommand(issueEnvironment.commentsPage, { reportFailure: false });
-
-  const detailQuery = useEnvironmentQuery(
-    issueEnvironment.detail({ environmentId, input: reference }),
-  );
-  // Read apart from the detail so an issue with two hundred comments still shows its title,
-  // its state and its actions while the conversation is still on its way.
-  const activityQuery = useEnvironmentQuery(
-    issueEnvironment.activity({ environmentId, input: reference }),
-  );
-  const coreDetail = detailQuery.data;
-  const activity = activityQuery.data;
-  const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
-  const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
-  const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
-  const detail =
-    coreDetail === null
-      ? null
-      : {
-          ...coreDetail,
-          ...(canWrite
-            ? {}
-            : {
-                capabilities: {
-                  ...coreDetail.capabilities,
-                  reactions: false,
-                  editComment: false,
-                },
-                viewerPermissions: {
-                  actions: [],
-                  comment: false,
-                  edit: false,
-                  labels: false,
-                  assignees: false,
-                  create: false,
-                },
-              }),
-          author: activity?.author ?? coreDetail.author,
-          comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
-          // The host's own count, which the core read already carries: the conversation being
-          // unread is not the same as there being nothing in it.
-          commentCount: activity?.commentCount ?? coreDetail.commentCount,
-          commentsTruncated:
-            loadedPage === null
-              ? (activity?.commentsTruncated ?? false)
-              : loadedPage.nextCursor !== null,
-          nextCommentsCursor:
-            loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
-          events: activity?.events ?? [],
-          ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
-        };
-  const activityPending = activityQuery.isPending && activity === null;
-  const activityError = activity === null ? activityQuery.error : null;
-  const refreshDetail = () => {
-    detailQuery.refresh();
-    activityQuery.refresh();
-  };
-  const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
-    null,
-  );
-  const loadMoreComments = async () => {
-    const cursor = detail?.nextCommentsCursor;
-    if (cursor == null || loadingMoreComments) return;
-    setLoadingMoreComments(true);
-    const result = await readCommentsPage({
-      environmentId,
-      input: { ...reference, cursor },
-    });
-    setLoadingMoreComments(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not load more comments" });
-      return;
+  if (detail === null) {
+    if (detailQuery.error !== null && !detailQuery.isPending) {
+      return (
+        <PullRequestsUnavailableState
+          title={gt("Could not load this issue")}
+          error={detailQuery.error}
+          onRetry={detailQuery.refresh}
+        />
+      );
     }
-    setLoadedComments((previous) => {
-      const comments = previous?.key === commentsKey ? previous.comments : [];
-      return {
-        key: commentsKey,
-        comments: mergeIssueComments(comments, result.value.comments),
-        nextCursor: result.value.nextCursor,
-      };
-    });
-  };
+    return <IssueDetailGhost seed={listEntry} />;
+  }
 
-  const refreshActivity = activityQuery.refresh;
-  const activityUpdatedAt = coreDetail?.updatedAt;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refreshes the external activity query when the host issue revision changes
-  useEffect(() => {
-    if (activityUpdatedAt === undefined) return;
-    const next = { key: issueKey, updatedAt: activityUpdatedAt };
-    if (shouldRefreshIssueActivity(activityRevision.current, next)) refreshActivity();
-    activityRevision.current = next;
-  }, [activityUpdatedAt, issueKey, refreshActivity]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes host issue status to the external panel tab registry
-  useEffect(() => {
-    if (!detail) return;
-    onStateChange?.({
-      projectId: detail.projectId,
-      repository: detail.repository,
-      number: detail.number,
-      state: detail.state,
-      stateReason: detail.stateReason,
-    });
-  }, [detail, onStateChange]);
-  // Core detail is cheap enough to re-read while this stays open. Activity is heavier, so the
-  // revision effect above reads it only after this same issue reports a change.
-  useLiveRefresh(detailQuery.refresh, {
-    key: `issue:${environmentId}:${issueKey}`,
-  });
-  // The button, on the other hand, goes around the server's cache rather than through it: it is
-  // the answer for a reader who can see that what they are looking at is behind. The
-  // invalidation goes first so the re-reads miss that cache; if it fails, the reads still run
-  // and at worst answer from it.
-  const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
-  const [isInvalidating, setIsInvalidating] = useState(false);
-  const refreshing = isInvalidating || detailQuery.isPending;
-  const refreshFromHost = async () => {
-    setIsInvalidating(true);
-    await invalidate({ environmentId, input: { reference } });
-    refreshDetail();
-    setIsInvalidating(false);
-  };
-  // A refresh asked for by the page, rather than by the menu item below.
-  const appliedForcedToken = useRef(forcedRefreshToken);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- invalidates external host queries when the owning page requests a refresh
-  useEffect(() => {
-    if (appliedForcedToken.current === forcedRefreshToken) return;
-    appliedForcedToken.current = forcedRefreshToken;
-    void refreshFromHost();
-  }, [forcedRefreshToken, refreshFromHost]);
-  const runAction = useAtomCommand(issueEnvironment.runAction, { reportFailure: false });
-  const newThread = useNewThreadHandler();
-  const postComment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
+  const timeline: ReadonlyArray<TimelineItem> = [
+    ...comments.map((c): TimelineItem => ({ kind: "comment", at: c.createdAt, comment: c })),
+    ...detail.events.map((e): TimelineItem => ({ kind: "event", at: e.createdAt, event: e })),
+  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
-  const perform = async (
-    action: IssueAction,
-    target: IssueRef,
-    reason?: IssueCloseReason,
-    body?: string,
-  ) => {
-    if (actionPending || !canWrite) return { commentPosted: false };
-    setActionPending(true);
-    if (body !== undefined) {
-      const commentResult = await postComment({ environmentId, input: { ...target, body } });
-      if (commentResult._tag === "Failure") {
-        setActionPending(false);
-        toastManager.add({ type: "error", title: "Could not post the comment" });
-        return { commentPosted: false };
-      }
+  const access = issueWriteAccess(detail, canWrite, messages);
+  const { blocked } = access;
+  const canComment = access.comment;
+  const canEdit = access.edit;
+  const canLabel = access.labels;
+  const canAssign = access.assignees;
+  const canReact = access.react;
+  const otherStates = access.states;
+  const tracker = issueTrackerPresentation(detail.tracker);
+  const currentState = issueStatePresentation(detail.state);
+
+  const loadOlder = async () => {
+    const failure = await pager.loadOlder(registry, (cursor) =>
+      loadComments({ environmentId, input: { ...reference, cursor } }),
+    );
+    if (failure) {
+      toastManager.add({ type: "error", title: m(msg("Older comments could not be read")) });
     }
-    const result = await runAction({
-      environmentId,
-      input: { ...target, action, ...(reason ? { reason } : {}) },
-    });
-    setActionPending(false);
+  };
+
+  const save = async (patch: { title?: string; body?: string }) => {
+    setSaving(true);
+    const result = await update({ environmentId, input: { ...reference, ...patch } });
+    setSaving(false);
     if (result._tag === "Failure") {
-      // The host's own sentence, because it is the only thing that says why: a repository whose
-      // tracker was switched off between opening this panel and pressing the button refuses with
-      // a reason no page could have guessed.
       toastManager.add({
         type: "error",
-        title: ACTION_FAILURE_LABELS[action],
+        title: m(msg("The issue could not be updated")),
         description: readableFailure(
           squashAtomCommandFailure(result),
-          ACTION_FAILURE_HINTS[action],
+          m(msg("The tracker refused it.")),
         ),
       });
-      if (body !== undefined) refreshDetail();
-      return { commentPosted: body !== undefined };
-    }
-    toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
-    refreshDetail();
-    onActed?.();
-    return { commentPosted: body !== undefined };
-  };
-
-  const inPlaceDraft =
-    handoffTarget.kind === "existing-thread" &&
-    handoffTarget.projectRef.environmentId === environmentId &&
-    handoffTarget.projectRef.projectId === detail?.projectId
-      ? handoffTarget.draftId
-      : null;
-
-  const startHandoff = async (
-    kind: string,
-    build: (source: IssueHandoffSource) => IssueHandoff,
-  ) => {
-    if (!detail || handoff !== null || activityPending) return;
-    const task = build({
-      provider: detail.provider,
-      closesViaPullRequest: detail.capabilities.closesViaPullRequest,
-      number: detail.number,
-      repository: detail.repository,
-      title: detail.title,
-      url: detail.url,
-      body: detail.body,
-      comments: detail.comments,
-      ...(detail.ancestors?.length ? { parent: detail.ancestors.at(-1)! } : {}),
-    });
-    // "Ask" and "Add to composer" leave the composer empty on purpose, so saying the question is
-    // in it would send the reader looking for something that is not there. The chips are what
-    // landed.
-    const description =
-      task.prompt.length > 0
-        ? "The task is in the composer: read it over, then send."
-        : "The issue is in the composer: type your message, then send.";
-    if (kind !== "solve" && inPlaceDraft !== null) {
-      writeHandoffToComposer(inPlaceDraft, task);
-      toastManager.add({ type: "success", title: "Added to this thread", description });
       return;
     }
-    setHandoff(kind);
-    const opened = await newThread(
-      scopeProjectRef(environmentId, detail.projectId),
-      kind === "solve" ? { envMode: "worktree", branch: null, worktreePath: null } : undefined,
-    ).then(
-      (session) => session,
-      () => null,
-    );
-    setHandoff(null);
-    if (opened === null) {
+    refreshIssueLists(environmentId);
+    setEditing(null);
+  };
+
+  const moveTo = async (state: string) => {
+    if (changingState) return;
+    setChangingState(true);
+    const result = await setState({
+      environmentId,
+      input: { ...reference, state },
+    });
+    setChangingState(false);
+    if (result._tag === "Failure") {
       toastManager.add({
         type: "error",
-        title: "Could not open a thread",
-        description: "Try again from the project, or open a thread first.",
+        title: m(msg("The state could not be changed")),
+        description: readableFailure(
+          squashAtomCommandFailure(result),
+          m(msg("The tracker refused it.")),
+        ),
       });
       return;
     }
-    writeHandoffToComposer(opened.draftId, task);
-    toastManager.add({ type: "success", title: "Opened in a thread", description });
+    refreshIssueLists(environmentId);
   };
 
-  // Two questions, both of which have to say yes: whether this host can do it at all, and
-  // whether this account may. A reader with read access on someone else's project sees the issue
-  // and none of the buttons that would only ever be refused.
-  const can = (action: IssueAction) =>
-    detail?.capabilities.actions.includes(action) === true &&
-    detail.viewerPermissions.actions.includes(action);
-  const canEdit = detail?.capabilities.edit === true && detail.viewerPermissions.edit;
-  const closeReasons = detail?.capabilities.closeReasons ?? [];
-  const statePresentation = detail
-    ? resolveIssueState({ state: detail.state, stateReason: detail.stateReason })
-    : null;
-
-  const handoffDisabled = handoff !== null || activityPending;
-  const handoffLabel = (kind: string, label: string) =>
-    handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
-  const solveDescription = activityPending
-    ? "Waiting for the issue's comments, which go with the task"
-    : "Opens a thread for this issue in a worktree";
-
-  const markdownThreadRef =
-    handoffTarget.kind === "existing-thread" && typeof handoffTarget.draftId !== "string"
-      ? handoffTarget.draftId
-      : null;
-  const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
-  const markdownReferenceAutolinks = sourceControlClients.get(detail?.provider).referenceAutolinks;
-  const openRelatedIssue = (issue: {
-    readonly repository?: string | undefined;
-    readonly number: number;
-    readonly url: string;
-  }) =>
-    onOpenRelatedIssue === undefined ? openLinkInBrowser(issue.url) : onOpenRelatedIssue(issue);
-  const issueUrl = detail?.url ?? null;
-  const issueRepository = detail?.repository ?? null;
-  const markdownContext = {
-    autolinks:
-      markdownRepositoryUrl === null || markdownReferenceAutolinks === undefined
-        ? null
-        : (text: string) => markdownReferenceAutolinks(text, markdownRepositoryUrl),
-    threadRef: markdownThreadRef,
-    panelRef,
-    onOpenUrl: (url: string) => {
-      if (onOpenRelatedIssue === undefined || issueUrl === null || issueRepository === null) {
-        return false;
-      }
-      const number = sameProjectIssueNumber(issueUrl, issueRepository, url);
-      if (number === null) return false;
-      onOpenRelatedIssue({ number, url });
-      return true;
-    },
-  };
+  const currentStateIcon = (
+    <currentState.Icon
+      aria-hidden
+      className={cn("size-3.5 shrink-0", currentState.toneClassName)}
+    />
+  );
+  const stateControl: ReactNode =
+    otherStates.length > 0 ? (
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label={gt("Issue state, {state}", { state: currentState.label })}
+              disabled={changingState}
+            />
+          }
+        >
+          {currentStateIcon}
+          {currentState.label}
+          <ChevronDownIcon aria-hidden className="size-3" />
+        </MenuTrigger>
+        <MenuPopup align="end">
+          {otherStates.map((state) => {
+            const presentation = issueStatePresentation(state);
+            return (
+              <MenuItem key={state.name} onClick={() => void moveTo(state.name)}>
+                <presentation.Icon
+                  aria-hidden
+                  className={cn("size-3.5 shrink-0", presentation.toneClassName)}
+                />
+                {state.name}
+              </MenuItem>
+            );
+          })}
+        </MenuPopup>
+      </Menu>
+    ) : (
+      <span className="flex shrink-0 items-center gap-1 font-medium">
+        {currentStateIcon}
+        {currentState.label}
+      </span>
+    );
 
   return (
-    <div className="relative flex h-full min-h-0 w-full flex-col bg-background">
-      {/* The top row's geometry never changes: both of its states occupy the same stacked
-          cell and crossfade, so the actions on the right have one home whatever the chrome
-          is doing below. The fold and this fade share one 200ms clock. */}
-      <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
-        {/* The fixed height lives on the two top-row cells: not the grid, whose later rows
-            are the fold: so the actions have one immovable home in both states. */}
-        <div className="ml-4 grid h-7 min-w-0 items-center">
-          <div
-            aria-hidden={condensed}
-            inert={condensed}
-            className={cn(
-              "col-start-1 row-start-1 flex min-w-0 items-center gap-1 text-sm text-muted-foreground transition-[opacity,transform] ease-out motion-reduce:transform-none motion-reduce:transition-none sm:text-xs",
-              // Sequenced, not simultaneous: the leaving layer clears quickly before the
-              // arriving one lands, so no frame shows both texts superimposed at half opacity.
-              condensed
-                ? "pointer-events-none -translate-y-1 opacity-0 duration-100"
-                : "translate-y-0 opacity-100 delay-50 duration-150",
-            )}
-          >
-            {detail && statePresentation ? (
-              <>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={<span className="min-w-0 truncate font-medium text-muted-foreground" />}
-                  >
-                    {detail.repository}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{detail.repository}</TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        onClick={() => openLinkInBrowser(detail.url)}
-                        className={cn(
-                          "inline-flex shrink-0 items-center gap-0.5 font-medium underline-offset-2 hover:underline",
-                          statePresentation.toneClassName,
-                        )}
-                        aria-label={openOnIssueLabel(detail.provider)}
-                      />
-                    }
-                  >
-                    #{detail.number}
-                    <ExternalLinkIcon aria-hidden className="size-2.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
-                </Tooltip>
-              </>
-            ) : null}
-          </div>
-          <div
-            aria-hidden={!condensed}
-            inert={!condensed}
-            className={cn(
-              "col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 text-sm transition-[opacity,transform] ease-out motion-reduce:transform-none motion-reduce:transition-none sm:text-xs",
-              condensed
-                ? "translate-y-0 opacity-100 delay-50 duration-150"
-                : "pointer-events-none translate-y-1 opacity-0 duration-100",
-            )}
-          >
-            {detail && statePresentation ? (
-              <>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        tabIndex={condensed ? 0 : -1}
-                        onClick={() => openLinkInBrowser(detail.url)}
-                        className={cn(
-                          "inline-flex shrink-0 items-center gap-0.5 font-medium underline-offset-2 hover:underline",
-                          statePresentation.toneClassName,
-                        )}
-                        aria-label={openOnIssueLabel(detail.provider)}
-                      />
-                    }
-                  >
-                    #{detail.number}
-                    <ExternalLinkIcon aria-hidden className="size-2.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={<span className="min-w-0 truncate font-medium text-foreground" />}
-                  >
-                    {detail.title}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{detail.title}</TooltipPopup>
-                </Tooltip>
-                <statePresentation.Icon
-                  role="img"
-                  aria-label={statePresentation.label}
-                  className={cn("size-3.5 shrink-0", statePresentation.toneClassName)}
-                />
-              </>
-            ) : null}
-          </div>
-        </div>
-        <div className="mr-4 flex h-7 min-w-0 flex-nowrap items-center justify-end gap-1">
-          {detail ? (
-            <>
-              <Menu>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <MenuTrigger
-                        render={
-                          <Button
-                            aria-label={refreshing ? "Refreshing issue" : "More issue actions"}
-                            size="icon-xs"
-                            variant="ghost-muted"
-                          />
-                        }
-                      >
-                        {refreshing ? (
-                          <RefreshIcon refreshing size="md" />
-                        ) : (
-                          <MoreHorizontalIcon className="size-4" />
-                        )}
-                      </MenuTrigger>
-                    }
-                  />
-                  <TooltipPopup>
-                    {refreshing ? "Refreshing issue" : "More issue actions"}
-                  </TooltipPopup>
-                </Tooltip>
-                <MenuPopup align="end" side="bottom">
-                  <MenuItem disabled={refreshing} onClick={() => void refreshFromHost()}>
-                    <RefreshIcon size="sm" refreshing={refreshing} />
-                    Refresh
-                  </MenuItem>
-                  <MenuItem
-                    disabled={handoffDisabled}
-                    onClick={() => void startHandoff("ask", buildAskAboutIssueHandoff)}
-                  >
-                    <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{handoffLabel("ask", "Ask a question")}</span>
-                      <span className="text-xs text-muted-foreground">
-                        Leaves the issue in the composer for a question of your own.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem
-                    disabled={handoffDisabled}
-                    onClick={() => void startHandoff("explain", buildExplainIssueHandoff)}
-                  >
-                    <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{handoffLabel("explain", "Explain this issue")}</span>
-                      <span className="text-xs text-muted-foreground">
-                        A read of what is being asked for, and what it concerns here.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  {/* Only where there is a conversation to add it to: everything else here opens
-                      one, and "add to the thread you are in" would be that same thread. */}
-                  {inPlaceDraft === null ? null : (
-                    <MenuItem
-                      disabled={handoffDisabled}
-                      onClick={() => void startHandoff("attach", buildAttachIssueContext)}
-                    >
-                      <PaperclipIcon className="size-3.5" />
-                      {handoffLabel("attach", "Add to composer")}
-                    </MenuItem>
-                  )}
-                  <MenuSeparator />
-                  <MenuItem onClick={() => openLinkInBrowser(detail.url)}>
-                    <ArrowUpRightIcon className="size-3.5" />
-                    {openOnIssueLabel(detail.provider)}
-                  </MenuItem>
-                  {/* A clipboard that is switched off or refuses says nothing on its own, and a
-                      reader who has been handed nothing goes and pastes whatever was there
-                      before. The refusal is the host's own sentence, because it is the only
-                      thing that says which of the two happened. */}
-                  <MenuItem
-                    onClick={() =>
-                      void writeTextToClipboard(detail.url, "issue link").catch(
-                        (error: unknown) => {
-                          toastManager.add({
-                            type: "error",
-                            title: "Could not copy the link",
-                            description:
-                              error instanceof Error
-                                ? error.message
-                                : "The clipboard refused it. Open the issue on the host instead.",
-                          });
-                        },
-                      )
-                    }
-                  >
-                    <LinkIcon className="size-3.5" />
-                    Copy link
-                  </MenuItem>
-                  {detail.state === "open" && can("close") ? (
-                    <>
-                      <MenuSeparator />
-                      {closeReasons.length > 0 ? (
-                        closeReasons.map((reason) => (
-                          <MenuItem
-                            key={reason}
-                            disabled={actionPending}
-                            onClick={() => setConfirmClose({ reference, reason })}
-                          >
-                            {reason === "completed" ? (
-                              <CircleCheckIcon
-                                className={cn(
-                                  "size-3.5",
-                                  PULL_REQUEST_STATE_PRESENTATION.merged.toneClassName,
-                                )}
-                              />
-                            ) : (
-                              <CircleSlashIcon
-                                className={cn(
-                                  "size-3.5",
-                                  PULL_REQUEST_STATE_PRESENTATION.draft.toneClassName,
-                                )}
-                              />
-                            )}
-                            {CLOSE_REASON_LABELS[reason]}
-                          </MenuItem>
-                        ))
-                      ) : (
-                        <MenuItem
-                          disabled={actionPending}
-                          onClick={() => setConfirmClose({ reference, reason: null })}
-                        >
-                          <CircleCheckIcon className="size-3.5" />
-                          Close issue
-                        </MenuItem>
-                      )}
-                    </>
-                  ) : detail.state === "closed" && can("reopen") ? (
-                    <>
-                      <MenuSeparator />
-                      <MenuItem
-                        disabled={actionPending}
-                        onClick={() => void perform("reopen", reference)}
-                      >
-                        <CircleDotIcon className="size-3.5" />
-                        Reopen issue
-                      </MenuItem>
-                    </>
-                  ) : null}
-                </MenuPopup>
-              </Menu>
-              {/* Handing the issue to an agent is the reason to open one at all, so it is a
-                  button of its own wherever the panel is: beside a thread as much as on the
-                  page. */}
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={handoffDisabled}
-                      onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-                    />
-                  }
-                >
-                  {handoff === "solve" ? (
-                    "Opening..."
-                  ) : activityPending ? (
-                    "Loading..."
-                  ) : (
-                    <>
-                      <HammerIcon className="size-3" />
-                      <span>Solve</span>
-                    </>
-                  )}
-                </TooltipTrigger>
-                <TooltipPopup side="top">{solveDescription}</TooltipPopup>
-              </Tooltip>
-            </>
-          ) : null}
-        </div>
-
-        <div
-          className={cn(
-            "col-span-2 grid",
-            condensed
-              ? "grid-rows-[1fr]"
-              : "grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
-          )}
-        >
-          <div
-            ref={condensedRowRef}
-            className={cn(
-              "min-h-0 overflow-hidden transition-[opacity,transform] duration-150 ease-out motion-reduce:transform-none motion-reduce:transition-none",
-              condensed
-                ? "translate-y-0 opacity-100 delay-50"
-                : "translate-y-1 opacity-0 duration-100",
-            )}
-            inert={!condensed}
-          >
-            {detail && statePresentation ? (
-              <div className="col-span-2 min-w-0 px-4 pb-2 pt-1">
-                <PullRequestMetaLine className="min-w-0 text-xs text-muted-foreground">
-                  <PullRequestActorLabel actor={detail.author} className="font-medium" />
-                  {detail.assignees.length > 0 ? (
-                    <span className="truncate">
-                      Assigned to {detail.assignees.map((assignee) => assignee.login).join(", ")}
-                    </span>
-                  ) : null}
-                  <span className="shrink-0">
-                    updated {formatRelativeTimeLabel(detail.updatedAt)}
-                  </span>
-                </PullRequestMetaLine>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Folding is a grid track going to zero: the rows below stay mounted, the track
-            animates closed over them, and `inert` takes the hidden controls out of the tab
-            order for as long as the chrome is condensed. */}
-        <div
-          className={cn(
-            "col-span-2 grid",
-            condensed
-              ? "grid-rows-[0fr]"
-              : "grid-rows-[1fr] transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
-          )}
-        >
-          <div
-            ref={foldRef}
-            className={cn(
-              "min-h-0 overflow-hidden transition-[opacity,transform] duration-150 ease-out motion-reduce:transform-none motion-reduce:transition-none",
-              condensed
-                ? "-translate-y-1 opacity-0 duration-100"
-                : "translate-y-0 opacity-100 delay-50",
-            )}
-            inert={condensed}
-          >
-            {detail && statePresentation ? (
-              <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
-                <div className="group flex items-start gap-1">
-                  {editing === "title" ? (
-                    <IssueEditor
-                      key={detail.url}
-                      field="title"
-                      environmentId={environmentId}
-                      detail={detail}
-                      onDone={() => setEditing(null)}
-                      onSaved={refreshDetail}
-                    />
-                  ) : (
-                    <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
-                      {detail.title}
-                    </h1>
-                  )}
-                  {canEdit && editing !== "title" ? (
-                    <PullRequestEditButton
-                      aria-label="Edit issue title"
-                      onClick={() => setEditing("title")}
-                    />
-                  ) : null}
-                </div>
-                <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
-                  <Badge size="control" variant="outline">
-                    <span
-                      className={cn("flex items-center gap-1", statePresentation.toneClassName)}
-                    >
-                      <statePresentation.Icon aria-hidden className="size-3" />
-                      {statePresentation.label}
-                    </span>
-                  </Badge>
-                  <PullRequestActorLabel actor={detail.author} className="font-medium" />
-                  <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
-                </PullRequestMetaLine>
-              </div>
-            ) : null}
-          </div>
-        </div>
-        {detail ? (
-          <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={selectTab}>
-            {tab === "timeline" ? (
-              <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1 whitespace-nowrap text-2xs transition-opacity",
-                    (activityPending || activityError) && "opacity-35",
-                  )}
-                  aria-label={
-                    activityError
-                      ? "Comments unavailable"
-                      : `${detail.commentCount.toLocaleString()} ${
-                          detail.commentCount === 1 ? "comment" : "comments"
-                        }`
-                  }
-                >
-                  <MessageSquareIcon aria-hidden className="size-3" />
-                  {activityError
-                    ? "-"
-                    : activityPending
-                      ? "…"
-                      : detail.commentCount.toLocaleString()}
-                </span>
-                <Button
-                  size="xs"
-                  variant="ghost-muted"
-                  aria-label={
-                    timelineOrder === "oldest"
-                      ? "Show newest activity first"
-                      : "Show oldest activity first"
-                  }
-                  onClick={() =>
-                    setTimelineOrder((value) => (value === "oldest" ? "newest" : "oldest"))
-                  }
-                >
-                  <ArrowDownUpIcon aria-hidden className="size-3" />
-                  {timelineOrder === "oldest" ? "Oldest first" : "Newest first"}
-                </Button>
-              </div>
-            ) : null}
-          </DetailTabStrip>
-        ) : null}
-      </div>
-
+    <div className="relative flex h-full min-h-0 flex-col">
       <div
-        className="relative min-h-0 flex-1 overflow-hidden"
-        // Scroll does not bubble, but it captures: one listener hears every tab's own scroll
-        // container. Collapse past two line-heights, expand only back at the very top, so the
-        // boundary row cannot flap the chrome open and shut.
-        onScrollCapture={(event) => {
-          const scroller = event.target as HTMLElement;
-          if (chromeVariant !== "collapse") return;
-
-          if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
-          scrollerRef.current = scroller;
-          const top = scroller.scrollTop;
-          setChromeCondensed((previous) => {
-            let next = previous;
-            // `scrollHeight` reads the fold's natural height whichever state the track is in.
-            const foldHeight = foldRef.current?.scrollHeight ?? 0;
-            // The chrome trades the fold for the condensed second row, so the height the
-            // scrollport actually gains is the difference between the two.
-            const chromeDelta = foldHeight - (condensedRowRef.current?.scrollHeight ?? 0);
-            if (previous) {
-              // The hard top reopens the chrome. The refund puts the reader a fold's height
-              // from the top, pinned to the same pixels: the metadata is scrolled up to,
-              // not thrown at them.
-              if (top < 4 && foldHeight > 0) {
-                compensationRef.current = chromeDelta;
-                next = false;
-              }
-            } else if (foldHeight > 0 && top > foldHeight + 32) {
-              compensationRef.current = -chromeDelta;
-              next = true;
-            }
-            chromeStateByTab.current[tab] = next;
-            return next;
-          });
-        }}
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto",
+          // Room for the floating composer, so the last comment can scroll clear of it.
+          detail.capabilities.comment && "pb-32",
+        )}
+        data-pull-request-summary-scroll
       >
-        {detailQuery.isPending && !detail ? (
-          // The ghost wears the shape of the tab being waited on, so switching tabs mid-load
-          // does not flash a summary outline under a timeline heading.
-          tab === "timeline" ? (
-            <TimelineGhost />
+        <div className="px-4 pb-1">
+          <PullRequestDetailTitleRow className="h-7 gap-1 text-sm sm:text-xs">
+            <span className="min-w-0 truncate font-medium text-muted-foreground">
+              {detail.scope}
+            </span>
+            <InlineButton
+              className={cn("shrink-0 font-medium", currentState.toneClassName)}
+              aria-label={gt("Open {issue} on {provider}", {
+                issue: detail.displayKey,
+                provider: tracker.providerName,
+              })}
+              render={<a href={detail.url} target="_blank" rel="noopener noreferrer" />}
+            >
+              {detail.displayKey}
+              <ExternalLinkIcon aria-hidden className="size-2.5" />
+            </InlineButton>
+            <span className="flex-1" />
+            {stateControl}
+            <IssueThreadLinks
+              key={`${environmentId}:${detail.url}`}
+              environmentId={environmentId}
+              reference={{ ...reference, host: reference.host ?? detail.host }}
+              issue={detail}
+              threadRef={threadRef}
+            />
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={gt("Refresh issue")}
+              disabled={detailQuery.isPending}
+              onClick={() =>
+                void pager.refresh(registry, () =>
+                  executeAtomQuery(registry, detailAtom, { refresh: true, reportFailure: false }),
+                )
+              }
+            >
+              <RefreshIcon size="sm" refreshing={detailQuery.isPending} />
+            </Button>
+          </PullRequestDetailTitleRow>
+
+          {detailQuery.error !== null && !detailQuery.isPending ? (
+            <div className="mt-2">
+              <Alert variant="error">
+                <AlertTitle>{gt("Could not refresh this issue")}</AlertTitle>
+                <AlertDescription>{detailQuery.error}</AlertDescription>
+              </Alert>
+            </div>
+          ) : null}
+
+          {editing === "title" ? (
+            <form
+              className="mt-1 flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const next = titleDraft.trim();
+                if (next.length > 0 && next !== detail.title) void save({ title: next });
+                else setEditing(null);
+              }}
+            >
+              <Input
+                autoFocus
+                aria-label={gt("Issue title")}
+                value={titleDraft}
+                disabled={saving}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setEditing(null);
+                }}
+              />
+              <Button type="submit" size="sm" disabled={saving}>
+                <T>Save</T>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={saving}
+                onClick={() => setEditing(null)}
+              >
+                <T>Cancel</T>
+              </Button>
+            </form>
           ) : (
-            <DetailGhost label="Loading issue" />
-          )
-        ) : detailQuery.error && !detail ? (
-          <IssuesUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
-        ) : detail ? (
-          <PullRequestMarkdownContext value={markdownContext}>
-            {mountedTabs.has("summary") ? (
-              <div
-                data-tab-scroller
-                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
-              >
-                <IssueSummaryTab
-                  environmentId={environmentId}
-                  reference={reference}
-                  detail={detail}
-                  onLoadMoreComments={() => void loadMoreComments()}
-                  loadingMoreComments={loadingMoreComments}
-                  activityPending={activityPending}
-                  activityError={activityError}
-                  editing={editing === "description"}
-                  onEditingChange={(value) => setEditing(value ? "description" : null)}
-                  openPicker={openPicker}
-                  onOpenPickerChange={setOpenPicker}
-                  // The section's own button knows only about a hand-off already under way, so
-                  // "cannot go yet" is said to it in the one word it understands.
-                  pendingHandoff={handoff ?? (activityPending ? HANDOFF_WAITING_KIND : null)}
-                  onLinkPullRequests={(match: WorkItemMatch) =>
-                    void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, (source) =>
-                      buildLinkPullRequestsHandoff(source, match),
-                    )
-                  }
-                  onOpenLinkedPullRequest={(link) =>
-                    onOpenLinkedPullRequest === undefined
-                      ? openLinkInBrowser(link.url)
-                      : onOpenLinkedPullRequest(link)
-                  }
-                  onOpenRelatedIssue={openRelatedIssue}
-                  onOpenAiMatch={(match) => openLinkInBrowser(match.url)}
-                  onRefresh={refreshDetail}
+            <PullRequestDetailTitleRow className="group mt-1 gap-1">
+              <h2 className="min-w-0 flex-1 text-base font-semibold leading-snug">
+                {detail.title}
+              </h2>
+              {canEdit ? (
+                <PullRequestEditButton
+                  aria-label={gt("Edit title")}
+                  onClick={() => {
+                    setTitleDraft(detail.title);
+                    setEditing("title");
+                  }}
                 />
-              </div>
+              ) : null}
+            </PullRequestDetailTitleRow>
+          )}
+
+          <PullRequestMetaLine className="mt-2 min-h-5 text-xs text-muted-foreground">
+            <PullRequestActorLabel actor={detail.author} />
+            <span>
+              <T>
+                opened <Var>{formatRelativeTimeLabel(detail.createdAt, undefined, messages)}</Var>
+              </T>
+            </span>
+            {detail.closedAt ? (
+              <span>
+                <T>
+                  closed <Var>{formatRelativeTimeLabel(detail.closedAt, undefined, messages)}</Var>
+                </T>
+              </span>
             ) : null}
-            {mountedTabs.has("timeline") ? (
-              <div
-                data-tab-scroller
-                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
-              >
-                {activityPending ? (
-                  <TimelineGhost />
-                ) : activityError ? (
-                  <ActivityUnavailableState
-                    title="Could not load issue activity"
-                    error={activityError}
-                    onRetry={activityQuery.refresh}
-                  />
+            {detail.writable ? null : (
+              <span>
+                <T>Read-only</T>
+              </span>
+            )}
+          </PullRequestMetaLine>
+
+          <div className="mt-4 space-y-2">
+            <PullRequestMetaRow icon={<TagIcon className="size-3.5" />} label={gt("Labels")}>
+              <span className="flex min-w-0 flex-wrap items-center gap-1">
+                {detail.labels.length === 0 ? (
+                  <span className="text-muted-foreground">
+                    <T context="no labels">None</T>
+                  </span>
                 ) : (
-                  <IssueTimelineTab
+                  detail.labels.map((label) => (
+                    <PullRequestLabelChip
+                      key={label.name}
+                      label={label}
+                      size="default"
+                      className="max-w-48"
+                    />
+                  ))
+                )}
+                {detail.capabilities.labels ? (
+                  <IssueLabelPicker
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}
-                    onLoadMoreComments={() => void loadMoreComments()}
-                    loadingMoreComments={loadingMoreComments}
-                    order={timelineOrder}
-                    onRefresh={refreshDetail}
+                    allowed={canLabel}
+                    disabledReason={
+                      blocked ?? gt("Changing labels needs triage access on this tracker.")
+                    }
                   />
+                ) : null}
+              </span>
+            </PullRequestMetaRow>
+            <PullRequestMetaRow icon={<UsersIcon className="size-3.5" />} label={gt("Assignees")}>
+              <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {detail.assignees.length === 0 ? (
+                  <span className="text-muted-foreground">
+                    <T context="no assignees">None</T>
+                  </span>
+                ) : (
+                  detail.assignees.map((actor) => (
+                    <PullRequestActorLabel key={actor.login} actor={actor} />
+                  ))
                 )}
-              </div>
+                {detail.capabilities.assignees ? (
+                  <IssueAssigneePicker
+                    environmentId={environmentId}
+                    reference={reference}
+                    detail={detail}
+                    allowed={canAssign}
+                    disabledReason={
+                      blocked ?? gt("Changing assignees needs triage access on this tracker.")
+                    }
+                  />
+                ) : null}
+              </span>
+            </PullRequestMetaRow>
+          </div>
+        </div>
+
+        <PullRequestSection
+          key={`description:${detail.url}`}
+          title={gt("Description")}
+          keepMounted
+          actions={
+            canEdit && editing !== "body" ? (
+              <PullRequestEditButton
+                aria-label={gt("Edit description")}
+                onClick={() => setEditing("body")}
+              />
+            ) : null
+          }
+        >
+          <div className="flex flex-col gap-2">
+            {editing === "body" ? (
+              <PullRequestMarkdownEditor
+                value={detail.body}
+                cwd={cwd}
+                environmentId={environmentId}
+                threadRef={threadRef}
+                label={gt("Description")}
+                completionScope={null}
+                saving={saving}
+                allowEmpty
+                onSave={(next) => void save({ body: next })}
+                onCancel={() => setEditing(null)}
+              />
+            ) : (
+              <PullRequestMarkdown
+                text={
+                  detail.body.trim().length > 0 ? detail.body : gt("_No description provided._")
+                }
+                cwd={cwd}
+                environmentId={environmentId}
+                threadRef={threadRef}
+              />
+            )}
+            {detail.reactions !== undefined ? (
+              <IssueReactionBar
+                reactions={detail.reactions}
+                canReact={canReact}
+                environmentId={environmentId}
+                reference={reference}
+              />
             ) : null}
-          </PullRequestMarkdownContext>
+          </div>
+        </PullRequestSection>
+
+        {detail.linkedPullRequests.length > 0 ? (
+          <PullRequestSection key={`linked:${detail.url}`} title={gt("Linked pull requests")}>
+            <div className="flex flex-col gap-1">
+              {detail.linkedPullRequests.map((link) => (
+                <LinkedPullRequestRow
+                  key={`${link.repository}#${link.number}`}
+                  link={link}
+                  scope={detail.scope}
+                  onSelect={
+                    onSelectPullRequest
+                      ? () =>
+                          onSelectPullRequest({
+                            projectId: reference.projectId,
+                            ...(reference.host === undefined ? {} : { host: reference.host }),
+                            repository: link.repository,
+                            number: link.number,
+                          })
+                      : null
+                  }
+                />
+              ))}
+            </div>
+          </PullRequestSection>
         ) : null}
+
+        <WorkItemRelations
+          environmentId={environmentId}
+          panelRef={threadRef ?? listPanelRef}
+          item={{ provider: detail.tracker, url: detail.url }}
+          source={{ kind: "issue", reference }}
+        />
+
+        <PullRequestSection
+          key={`activity:${detail.url}`}
+          title={
+            detail.commentCount > 0
+              ? gt("Activity ({count})", { count: detail.commentCount })
+              : gt("Activity")
+          }
+        >
+          <div className="flex flex-col gap-3">
+            {nextCursor !== null ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="self-start"
+                disabled={!canLoadOlder}
+                onClick={() => void loadOlder()}
+              >
+                {loadingOlder ? <T>Loading…</T> : <T>Load older comments</T>}
+              </Button>
+            ) : null}
+            {timeline.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                <T>Nothing has happened here yet.</T>
+              </p>
+            ) : null}
+            {timeline.map((item) =>
+              item.kind === "comment" ? (
+                <article
+                  key={`c:${item.comment.id}`}
+                  className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+                >
+                  <h3>
+                    <PullRequestMetaLine className="text-xs text-muted-foreground">
+                      <PullRequestActorLabel actor={item.comment.author} />
+                      {item.comment.url ? (
+                        <InlineButton
+                          tone="muted"
+                          render={
+                            <a href={item.comment.url} target="_blank" rel="noopener noreferrer" />
+                          }
+                        >
+                          {formatRelativeTimeLabel(item.comment.createdAt, undefined, messages)}
+                        </InlineButton>
+                      ) : (
+                        <span>
+                          {formatRelativeTimeLabel(item.comment.createdAt, undefined, messages)}
+                        </span>
+                      )}
+                    </PullRequestMetaLine>
+                  </h3>
+                  <PullRequestCommentBody
+                    text={item.comment.body}
+                    cwd={cwd}
+                    environmentId={environmentId}
+                    threadRef={threadRef}
+                  />
+                  {item.comment.reactions !== undefined ? (
+                    <IssueReactionBar
+                      reactions={item.comment.reactions}
+                      canReact={canReact}
+                      subjectId={item.comment.id}
+                      environmentId={environmentId}
+                      reference={reference}
+                    />
+                  ) : null}
+                </article>
+              ) : (
+                <PullRequestMetaLine
+                  key={`e:${item.event.id}`}
+                  className="px-1 text-xs text-muted-foreground"
+                >
+                  <PullRequestActorLabel actor={item.event.actor} />
+                  <span>{issueEventSentence(item.event, messages)}</span>
+                  <span>{formatRelativeTimeLabel(item.event.createdAt, undefined, messages)}</span>
+                </PullRequestMetaLine>
+              ),
+            )}
+          </div>
+        </PullRequestSection>
       </div>
 
-      {detail && coreDetail?.capabilities.comment && coreDetail.viewerPermissions.comment ? (
-        <div className="absolute right-4 bottom-3 z-20">
-          <CommentComposer
-            key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
-            environmentId={environmentId}
-            detail={detail}
-            label="Comment on this issue"
-            command={issueEnvironment.comment}
-            actionPending={actionPending || !canWrite}
-            followUpAction={
-              detail.state === "open" && can("close")
-                ? "close"
-                : detail.state === "closed" && can("reopen")
-                  ? "reopen"
-                  : null
-            }
-            onCommentAction={(body, action) => perform(action, reference, undefined, body)}
-            onCommented={refreshDetail}
-          />
-        </div>
+      {detail.capabilities.comment ? (
+        <IssueCommentComposer
+          environmentId={environmentId}
+          reference={reference}
+          blocked={canComment ? null : (blocked ?? gt("You cannot comment here."))}
+        />
       ) : null}
-
-      <AlertDialog
-        open={confirmClose !== null}
-        onOpenChange={(open) => !open && setConfirmClose(null)}
-      >
-        <AlertDialogPopup>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Close issue?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {`This closes #${confirmClose?.reference.number ?? reference.number}${
-                confirmClose?.reason ? CLOSE_REASON_PHRASES[confirmClose.reason] : ""
-              } on the host. You can reopen it afterwards.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
-            </AlertDialogClose>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={actionPending || !canWrite}
-              onClick={() => {
-                const pending = confirmClose;
-                if (!pending || !canWrite) return;
-                setConfirmClose(null);
-                void perform("close", pending.reference, pending.reason ?? undefined);
-              }}
-            >
-              {confirmClose?.reason ? CLOSE_REASON_LABELS[confirmClose.reason] : "Close issue"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogPopup>
-      </AlertDialog>
     </div>
   );
 }

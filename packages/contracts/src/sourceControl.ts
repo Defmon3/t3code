@@ -45,27 +45,6 @@ export const SourceControlListProjectError = Schema.Struct({
 });
 export type SourceControlListProjectError = typeof SourceControlListProjectError.Type;
 
-export function sourceControlHostOf(
-  identity:
-    | {
-        readonly canonicalKey?: string | undefined;
-        readonly locator?: { readonly remoteUrl: string } | undefined;
-      }
-    | null
-    | undefined,
-  kind: SourceControlProviderKind,
-): string {
-  if (kind === "forgejo") {
-    try {
-      const remote = new URL(identity?.locator?.remoteUrl ?? "");
-      if (remote.protocol === "http:" || remote.protocol === "https:")
-        return remote.host.toLowerCase();
-    } catch {}
-  }
-  const host = identity?.canonicalKey?.split("/")[0]?.trim();
-  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
-}
-
 export const SourceControlProviderInfo = Schema.Struct({
   kind: SourceControlProviderKind,
   name: TrimmedNonEmptyString,

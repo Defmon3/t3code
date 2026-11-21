@@ -1,6 +1,7 @@
 import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS, type WsRpcGroup } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as References from "effect/References";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -43,6 +44,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.providerAuthStart]: "provider",
   [WS_METHODS.providerConsumeResetCredit]: "provider",
   [WS_METHODS.providerAuthComplete]: "provider",
+  [WS_METHODS.providerMcpSignInStart]: "provider",
+  [WS_METHODS.providerMcpSignInComplete]: "provider",
   [WS_METHODS.chatGptReconnectProfile]: "provider",
   [WS_METHODS.chatGptImportProfile]: "provider",
   [WS_METHODS.chatGptHandoffSubscribe]: "provider",
@@ -65,9 +68,16 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetDatabaseStorage]: "server",
   [WS_METHODS.serverReclaimDatabaseSpace]: "server",
   [WS_METHODS.peerLinksList]: "peerLinks",
+  [WS_METHODS.peerLinksNames]: "peerLinks",
   [WS_METHODS.peerLinksLink]: "peerLinks",
   [WS_METHODS.peerLinksUnlink]: "peerLinks",
   [WS_METHODS.peerLinksAnswerRequest]: "peerLinks",
+  [WS_METHODS.peerLinksSubscribeThread]: "peerLinks",
+  [WS_METHODS.peerLinksThreadHistoryPage]: "peerLinks",
+  [WS_METHODS.peerLinksThreadItem]: "peerLinks",
+  [WS_METHODS.peerLinksPairClient]: "peerLinks",
+  [WS_METHODS.peerLinksPairLink]: "peerLinks",
+  [WS_METHODS.serverGetSettings]: "server",
   [WS_METHODS.serverUpdateSettings]: "server",
   [WS_METHODS.serverSearchAcpRegistry]: "server",
   [WS_METHODS.serverPrepareAcpRegistryAgent]: "server",
@@ -143,29 +153,23 @@ const RPC_AGGREGATES = {
   [WS_METHODS.pullRequestsLabelCandidates]: "pull-requests",
   [WS_METHODS.pullRequestsSetLabels]: "pull-requests",
   [WS_METHODS.issuesList]: "issues",
-  [WS_METHODS.issuesDetail]: "issues",
-  [WS_METHODS.issuesActivity]: "issues",
-  [WS_METHODS.issuesCommentsPage]: "issues",
-  [WS_METHODS.issuesRunAction]: "issues",
-  [WS_METHODS.issuesComment]: "issues",
-  [WS_METHODS.issuesUpdateComment]: "issues",
-  [WS_METHODS.issuesSetReaction]: "issues",
-  [WS_METHODS.issuesCreate]: "issues",
-  [WS_METHODS.issuesUpdate]: "issues",
-  [WS_METHODS.issuesSetLabels]: "issues",
-  [WS_METHODS.issuesSetAssignees]: "issues",
-  [WS_METHODS.issuesLabelCandidates]: "issues",
-  [WS_METHODS.issuesAssigneeCandidates]: "issues",
-  [WS_METHODS.issuesTemplates]: "issues",
-  [WS_METHODS.issuesInvalidate]: "issues",
-  [WS_METHODS.issueTrackersStatus]: "issues",
-  [WS_METHODS.issueTrackersConnect]: "issues",
-  [WS_METHODS.issueTrackersDisconnect]: "issues",
-  [WS_METHODS.issueTrackersBind]: "issues",
-  [WS_METHODS.workItemsFindMatches]: "issues",
   [WS_METHODS.workItemsListLinks]: "issues",
   [WS_METHODS.workItemsLink]: "issues",
   [WS_METHODS.workItemsUnlink]: "issues",
+  [WS_METHODS.workItemsFindMatches]: "issues",
+  [WS_METHODS.issuesDetail]: "issues",
+  [WS_METHODS.issuesComments]: "issues",
+  [WS_METHODS.issuesTemplates]: "issues",
+  [WS_METHODS.issuesCandidates]: "issues",
+  [WS_METHODS.issuesLinkedThreads]: "issues",
+  [WS_METHODS.issuesCreate]: "issues",
+  [WS_METHODS.issuesComment]: "issues",
+  [WS_METHODS.issuesUpdate]: "issues",
+  [WS_METHODS.issuesSetState]: "issues",
+  [WS_METHODS.issuesReact]: "issues",
+  [WS_METHODS.issueTrackersList]: "issues",
+  [WS_METHODS.issueTrackersConnect]: "issues",
+  [WS_METHODS.issueTrackersBindProject]: "issues",
   [WS_METHODS.sourceControlLookupRepository]: "source-control",
   [WS_METHODS.sourceControlCloneRepository]: "source-control",
   [WS_METHODS.sourceControlPublishRepository]: "source-control",
@@ -190,6 +194,10 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectsCreateFromThread]: "orchestration",
   [WS_METHODS.shellOpenInEditor]: "workspace",
   [WS_METHODS.filesystemBrowse]: "workspace",
+  [WS_METHODS.workspaceListFolders]: "workspace",
+  [WS_METHODS.workspaceScanFolders]: "workspace",
+  [WS_METHODS.workspaceTaskFolder]: "workspace",
+  [WS_METHODS.workspaceAddTaskFolderRepository]: "workspace",
   [WS_METHODS.filesystemGetMetadata]: "workspace",
   [WS_METHODS.agentSessionsScan]: "workspace",
   [WS_METHODS.agentSessionsImport]: "workspace",
@@ -295,13 +303,25 @@ export const rpcInstrumentationLayer = Layer.succeed(RpcInstrumentation)((effect
   if (RPC_METHODS_WITH_TRACING_DISABLED.has(method)) {
     return measured.pipe(Effect.provideService(References.TracerEnabled, false));
   }
-  return measured.pipe(
-    Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
-      attributes: {
-        ...DEFAULT_RPC_SPAN_ATTRIBUTES,
-        "rpc.method": method,
-        "rpc.aggregate": RPC_AGGREGATES[method as WsRpcMethod],
-      },
-    }),
+  // The ambient span is the socket's `GET /ws` request, open for the whole connection. Parenting
+  // every call to it grows one trace past the collector's per-trace limit, which then drops it.
+  return Effect.currentParentSpan.pipe(
+    Effect.option,
+    Effect.flatMap((connection) =>
+      measured.pipe(
+        Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
+          root: true,
+          links: Option.match(connection, {
+            onNone: () => [],
+            onSome: (span) => [{ span, attributes: {} }],
+          }),
+          attributes: {
+            ...DEFAULT_RPC_SPAN_ATTRIBUTES,
+            "rpc.method": method,
+            "rpc.aggregate": RPC_AGGREGATES[method as WsRpcMethod],
+          },
+        }),
+      ),
+    ),
   );
 });

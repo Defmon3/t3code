@@ -21,13 +21,21 @@ import {
 } from "./mcpApps.ts";
 import {
   PeerLink,
+  PeerLinkClientPairingInput,
+  PeerLinkLinkPairingInput,
+  PeerLinkClientPairingResult,
   PeerLinkCreateInput,
   PeerLinkError,
+  PeerLinkName,
   PeerLinkRemoveInput,
   PeerLinkRemoveResult,
   PeerLinkRequestAnswerInput,
   PeerLinkRequestError,
   PeerLinkSummary,
+  PeerLinkThreadHistoryInput,
+  PeerLinkThreadInput,
+  PeerLinkThreadItemInput,
+  PeerLinkThreadReadError,
 } from "./peerLink.ts";
 import {
   ChatGptReconnectProfileInput,
@@ -103,6 +111,18 @@ import {
   FilesystemBrowseResult,
   FilesystemBrowseError,
 } from "./filesystem.ts";
+import {
+  WorkspaceFoldersError,
+  TaskFolder,
+  TaskFolderError,
+  WorkspaceAddTaskFolderRepositoryInput,
+  WorkspaceListFoldersInput,
+  WorkspaceListFoldersResult,
+  WorkspaceScanFoldersInput,
+  WorkspaceScanFoldersResult,
+  WorkspaceTaskFolderInput,
+  WorkspaceTaskFolderResult,
+} from "./workspaceFolders.ts";
 import {
   AgentSessionImportInput,
   AgentSessionImportProjectChangedError,
@@ -188,55 +208,53 @@ import {
 import { KeybindingsConfigError } from "./keybindings.ts";
 import { OrchestrationSearchThreadsError } from "./threadSearch.ts";
 import {
-  IssueActionInput,
-  IssueActivity,
-  IssueAssigneeCandidateList,
-  IssueAssigneesInput,
+  ProviderMcpSignInCompleteInput,
+  ProviderMcpSignInCompleteResult,
+  ProviderMcpSignInError,
+  ProviderMcpSignInStartInput,
+  ProviderMcpSignInStartResult,
+  ProviderUploadFeedbackError,
+  ProviderUploadFeedbackInput,
+  ProviderUploadFeedbackResult,
+} from "./provider.ts";
+import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
+import {
+  IssueCandidates,
   IssueCommentInput,
+  IssueCommentsPage,
   IssueCommentsPageInput,
-  IssueCommentsPageResult,
-  IssueCommentUpdateInput,
   IssueCreateInput,
   IssueCreateResult,
   IssueDetail,
-  IssueInvalidateInput,
-  IssueLabelCandidateList,
-  IssueLabelsInput,
+  IssueLinkedThreadsResult,
   IssueListInput,
   IssueListResult,
   IssueOperationError,
   IssueReactionInput,
   IssueRef,
-  IssueRepositoryRef,
+  IssueScopeRef,
+  IssueSetStateInput,
   IssueTemplateList,
-  IssueUnavailableError,
-  IssueUpdateInput,
-} from "./issue.ts";
-import {
-  IssueTrackingError,
-  IssueTrackerStatusInput,
+  IssueTrackerBindProjectInput,
   IssueTrackerConnectInput,
   IssueTrackerConnection,
-  IssueTrackerDisconnectInput,
-  IssueTrackerBindInput,
-} from "./issueTracking.ts";
+  IssueTrackerConnectionError,
+  IssueTrackerConnectionList,
+  IssueUnavailableError,
+  IssueUpdateInput,
+  ThreadIssueKey,
+} from "./issue.ts";
 import {
   WorkItemLink,
   WorkItemLinkError,
   WorkItemLinkInput,
   WorkItemLinksInput,
   WorkItemLinksResult,
-  WorkItemUnlinkInput,
   WorkItemMatchError,
   WorkItemMatchInput,
   WorkItemMatchResult,
+  WorkItemUnlinkInput,
 } from "./workItem.ts";
-import {
-  ProviderUploadFeedbackError,
-  ProviderUploadFeedbackInput,
-  ProviderUploadFeedbackResult,
-} from "./provider.ts";
-import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
   GuestShareCreateError,
   GuestShareCreateInput,
@@ -302,6 +320,7 @@ import {
   OrchestrationV2CommandOutputError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
+  OrchestrationV2ThreadHistoryPage,
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
@@ -497,6 +516,10 @@ export const WS_METHODS = {
   shellOpenInEditor: "shell.openInEditor",
 
   filesystemBrowse: "filesystem.browse",
+  workspaceListFolders: "workspace.listFolders",
+  workspaceScanFolders: "workspace.scanFolders",
+  workspaceTaskFolder: "workspace.taskFolder",
+  workspaceAddTaskFolderRepository: "workspace.addTaskFolderRepository",
   filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
@@ -511,6 +534,8 @@ export const WS_METHODS = {
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
   providerUploadFeedback: "provider.uploadFeedback",
+  providerMcpSignInStart: "provider.mcpSignIn.start",
+  providerMcpSignInComplete: "provider.mcpSignIn.complete",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
   providerAuthComplete: "provider.auth.complete",
@@ -594,9 +619,16 @@ export const WS_METHODS = {
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverReclaimDatabaseSpace: "server.reclaimDatabaseSpace",
   peerLinksList: "peerLinks.list",
+  peerLinksNames: "peerLinks.names",
   peerLinksLink: "peerLinks.link",
   peerLinksUnlink: "peerLinks.unlink",
   peerLinksAnswerRequest: "peerLinks.answerRequest",
+  peerLinksSubscribeThread: "peerLinks.subscribeThread",
+  peerLinksThreadHistoryPage: "peerLinks.threadHistoryPage",
+  peerLinksThreadItem: "peerLinks.threadItem",
+  peerLinksPairClient: "peerLinks.pairClient",
+  peerLinksPairLink: "peerLinks.pairLink",
+  serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverCheckSecretSource: "server.checkSecretSource",
@@ -681,31 +713,25 @@ export const WS_METHODS = {
   pullRequestsLabelCandidates: "pullRequests.labelCandidates",
   pullRequestsSetLabels: "pullRequests.setLabels",
 
+  // Issue tracking methods
   issuesList: "issues.list",
   issuesDetail: "issues.detail",
-  issuesActivity: "issues.activity",
-  issuesCommentsPage: "issues.commentsPage",
-  issuesRunAction: "issues.runAction",
-  issuesComment: "issues.comment",
-  issuesUpdateComment: "issues.updateComment",
-  issuesSetReaction: "issues.setReaction",
-  issuesCreate: "issues.create",
-  issuesUpdate: "issues.update",
-  issuesSetLabels: "issues.setLabels",
-  issuesSetAssignees: "issues.setAssignees",
-  issuesLabelCandidates: "issues.labelCandidates",
-  issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesComments: "issues.comments",
   issuesTemplates: "issues.templates",
-  issuesInvalidate: "issues.invalidate",
-
-  issueTrackersStatus: "issueTrackers.status",
+  issuesCandidates: "issues.candidates",
+  issuesCreate: "issues.create",
+  issuesComment: "issues.comment",
+  issuesUpdate: "issues.update",
+  issuesSetState: "issues.setState",
+  issuesReact: "issues.react",
+  issuesLinkedThreads: "issues.linkedThreads",
+  issueTrackersList: "issueTrackers.list",
   issueTrackersConnect: "issueTrackers.connect",
-  issueTrackersDisconnect: "issueTrackers.disconnect",
-  issueTrackersBind: "issueTrackers.bind",
-  workItemsFindMatches: "workItems.findMatches",
+  issueTrackersBindProject: "issueTrackers.bindProject",
   workItemsListLinks: "workItems.listLinks",
   workItemsLink: "workItems.link",
   workItemsUnlink: "workItems.unlink",
+  workItemsFindMatches: "workItems.findMatches",
 
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
@@ -953,6 +979,13 @@ const WsPeerLinksListRpc = Rpc.make(WS_METHODS.peerLinksList, {
   error: Schema.Union([PeerLinkError, EnvironmentAuthorizationError]),
 });
 
+/** The unexpired links' names, readable with thread read access. */
+const WsPeerLinksNamesRpc = Rpc.make(WS_METHODS.peerLinksNames, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ links: Schema.Array(PeerLinkName) }),
+  error: Schema.Union([PeerLinkError, EnvironmentAuthorizationError]),
+});
+
 const WsPeerLinksLinkRpc = Rpc.make(WS_METHODS.peerLinksLink, {
   payload: PeerLinkCreateInput,
   success: PeerLink,
@@ -965,9 +998,48 @@ const WsPeerLinksUnlinkRpc = Rpc.make(WS_METHODS.peerLinksUnlink, {
   error: Schema.Union([PeerLinkError, EnvironmentAuthorizationError]),
 });
 
+/** A linked environment's thread, as its own thread subscription streams it. */
+const WsPeerLinksSubscribeThreadRpc = Rpc.make(WS_METHODS.peerLinksSubscribeThread, {
+  payload: PeerLinkThreadInput,
+  success: OrchestrationV2RpcSchemas.subscribeThread.output,
+  error: Schema.Union([PeerLinkThreadReadError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsPeerLinksThreadHistoryPageRpc = Rpc.make(WS_METHODS.peerLinksThreadHistoryPage, {
+  payload: PeerLinkThreadHistoryInput,
+  success: OrchestrationV2ThreadHistoryPage,
+  error: Schema.Union([PeerLinkThreadReadError, EnvironmentAuthorizationError]),
+});
+
+const WsPeerLinksThreadItemRpc = Rpc.make(WS_METHODS.peerLinksThreadItem, {
+  payload: PeerLinkThreadItemInput,
+  success: OrchestrationV2RpcSchemas.getTurnItem.output,
+  error: Schema.Union([PeerLinkThreadReadError, EnvironmentAuthorizationError]),
+});
+
+const WsPeerLinksPairClientRpc = Rpc.make(WS_METHODS.peerLinksPairClient, {
+  payload: PeerLinkClientPairingInput,
+  success: PeerLinkClientPairingResult,
+  error: Schema.Union([PeerLinkError, EnvironmentAuthorizationError]),
+});
+
+const WsPeerLinksPairLinkRpc = Rpc.make(WS_METHODS.peerLinksPairLink, {
+  payload: PeerLinkLinkPairingInput,
+  success: PeerLinkClientPairingResult,
+  error: Schema.Union([PeerLinkError, EnvironmentAuthorizationError]),
+});
+
 const WsPeerLinksAnswerRequestRpc = Rpc.make(WS_METHODS.peerLinksAnswerRequest, {
   payload: PeerLinkRequestAnswerInput,
   error: Schema.Union([PeerLinkRequestError, EnvironmentAuthorizationError]),
+});
+
+// No in-tree caller; installed Swift TestFlight builds still request it.
+const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
+  payload: Schema.Struct({}),
+  success: ServerSettings,
+  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
 const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
@@ -1369,6 +1441,18 @@ const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequestsReques
   error: PullRequestRpcError,
 });
 
+const WsPullRequestsLabelCandidatesRpc = Rpc.make(WS_METHODS.pullRequestsLabelCandidates, {
+  payload: PullRequestRef,
+  success: PullRequestLabelCandidateList,
+  error: PullRequestRpcError,
+});
+
+const WsPullRequestsSetLabelsRpc = Rpc.make(WS_METHODS.pullRequestsSetLabels, {
+  payload: PullRequestLabelChangeInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
 const IssueRpcError = Schema.Union([
   IssueUnavailableError,
   IssueOperationError,
@@ -1387,39 +1471,29 @@ const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
   error: IssueRpcError,
 });
 
-const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
-  payload: IssueRef,
-  success: IssueActivity,
+/** Older comments, one page at a time, past the cursor the detail handed over. */
+const WsIssuesLinkedThreadsRpc = Rpc.make(WS_METHODS.issuesLinkedThreads, {
+  payload: ThreadIssueKey,
+  success: IssueLinkedThreadsResult,
   error: IssueRpcError,
 });
 
-const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+const WsIssuesCommentsRpc = Rpc.make(WS_METHODS.issuesComments, {
   payload: IssueCommentsPageInput,
-  success: IssueCommentsPageResult,
+  success: IssueCommentsPage,
   error: IssueRpcError,
 });
 
-const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
-  payload: IssueActionInput,
-  success: Schema.Void,
+const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
+  payload: IssueScopeRef,
+  success: IssueTemplateList,
   error: IssueRpcError,
 });
 
-const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
-  payload: IssueCommentInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
-  payload: IssueCommentUpdateInput,
-  success: Schema.Void,
-  error: IssueRpcError,
-});
-
-const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
-  payload: IssueReactionInput,
-  success: Schema.Void,
+/** Read when a label or assignee picker opens, not with every issue. */
+const WsIssuesCandidatesRpc = Rpc.make(WS_METHODS.issuesCandidates, {
+  payload: IssueScopeRef,
+  success: IssueCandidates,
   error: IssueRpcError,
 });
 
@@ -1429,116 +1503,77 @@ const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
   error: IssueRpcError,
 });
 
+const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
+  payload: IssueCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
 const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
   payload: IssueUpdateInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
-  payload: IssueLabelsInput,
+const WsIssuesSetStateRpc = Rpc.make(WS_METHODS.issuesSetState, {
+  payload: IssueSetStateInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
-  payload: IssueAssigneesInput,
+const WsIssuesReactRpc = Rpc.make(WS_METHODS.issuesReact, {
+  payload: IssueReactionInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-/**
- * Read on their own rather than as part of the detail: a repository's labels and the people who
- * may be assigned are only wanted once somebody opens the menu, and reading them with every issue
- * would spend a request per host on a list nobody looked at.
- */
-const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
-  payload: IssueRef,
-  success: IssueLabelCandidateList,
-  error: IssueRpcError,
-});
+const IssueTrackerRpcError = Schema.Union([
+  IssueTrackerConnectionError,
+  EnvironmentAuthorizationError,
+]);
 
-const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
-  payload: IssueRef,
-  success: IssueAssigneeCandidateList,
-  error: IssueRpcError,
+/** Every standalone tracker this server ships, each with its connection probed afresh. */
+const WsWorkItemsListLinksRpc = Rpc.make(WS_METHODS.workItemsListLinks, {
+  payload: WorkItemLinksInput,
+  success: WorkItemLinksResult,
+  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
 });
-
-/**
- * What this repository offers as a starting point for a new issue, read when somebody opens the
- * composer rather than with the listing: it is about the repository and not about any issue in it,
- * which is why it takes a repository rather than a reference.
- */
-const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
-  payload: IssueRepositoryRef,
-  success: IssueTemplateList,
-  error: IssueRpcError,
+const WsWorkItemsLinkRpc = Rpc.make(WS_METHODS.workItemsLink, {
+  payload: WorkItemLinkInput,
+  success: WorkItemLink,
+  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
 });
-
-const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
-  payload: IssueInvalidateInput,
+const WsWorkItemsUnlinkRpc = Rpc.make(WS_METHODS.workItemsUnlink, {
+  payload: WorkItemUnlinkInput,
   success: Schema.Void,
-  error: IssueRpcError,
+  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
 });
-
-const WsIssueTrackersStatusRpc = Rpc.make(WS_METHODS.issueTrackersStatus, {
-  payload: IssueTrackerStatusInput,
-  success: IssueTrackerConnection,
-  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
-});
-
-const WsIssueTrackersConnectRpc = Rpc.make(WS_METHODS.issueTrackersConnect, {
-  payload: IssueTrackerConnectInput,
-  success: IssueTrackerConnection,
-  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
-});
-
-const WsIssueTrackersDisconnectRpc = Rpc.make(WS_METHODS.issueTrackersDisconnect, {
-  payload: IssueTrackerDisconnectInput,
-  success: IssueTrackerConnection,
-  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
-});
-
-const WsIssueTrackersBindRpc = Rpc.make(WS_METHODS.issueTrackersBind, {
-  payload: IssueTrackerBindInput,
-  success: Schema.Void,
-  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
-});
-
 const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
   payload: WorkItemMatchInput,
   success: WorkItemMatchResult,
   error: Schema.Union([WorkItemMatchError, EnvironmentAuthorizationError]),
 });
 
-const WsWorkItemsListLinksRpc = Rpc.make(WS_METHODS.workItemsListLinks, {
-  payload: WorkItemLinksInput,
-  success: WorkItemLinksResult,
-  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
+const WsIssueTrackersListRpc = Rpc.make(WS_METHODS.issueTrackersList, {
+  payload: Schema.Struct({}),
+  success: IssueTrackerConnectionList,
+  error: IssueTrackerRpcError,
 });
 
-const WsWorkItemsLinkRpc = Rpc.make(WS_METHODS.workItemsLink, {
-  payload: WorkItemLinkInput,
-  success: WorkItemLink,
-  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
+/**
+ * Verifies the credential against the tracker before storing it; the result is the new status.
+ * A null token disconnects, which also unbinds every project that pointed at the tracker.
+ */
+const WsIssueTrackersConnectRpc = Rpc.make(WS_METHODS.issueTrackersConnect, {
+  payload: IssueTrackerConnectInput,
+  success: IssueTrackerConnection,
+  error: IssueTrackerRpcError,
 });
 
-const WsWorkItemsUnlinkRpc = Rpc.make(WS_METHODS.workItemsUnlink, {
-  payload: WorkItemUnlinkInput,
+const WsIssueTrackersBindProjectRpc = Rpc.make(WS_METHODS.issueTrackersBindProject, {
+  payload: IssueTrackerBindProjectInput,
   success: Schema.Void,
-  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
-});
-
-const WsPullRequestsLabelCandidatesRpc = Rpc.make(WS_METHODS.pullRequestsLabelCandidates, {
-  payload: PullRequestRef,
-  success: PullRequestLabelCandidateList,
-  error: PullRequestRpcError,
-});
-
-const WsPullRequestsSetLabelsRpc = Rpc.make(WS_METHODS.pullRequestsSetLabels, {
-  payload: PullRequestLabelChangeInput,
-  success: Schema.Void,
-  error: PullRequestRpcError,
+  error: IssueTrackerRpcError,
 });
 
 const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLookupRepository, {
@@ -1707,6 +1742,33 @@ const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   error: Schema.Union([FilesystemBrowseError, EnvironmentAuthorizationError]),
 });
 
+const WsWorkspaceListFoldersRpc = Rpc.make(WS_METHODS.workspaceListFolders, {
+  payload: WorkspaceListFoldersInput,
+  success: WorkspaceListFoldersResult,
+  error: Schema.Union([WorkspaceFoldersError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceScanFoldersRpc = Rpc.make(WS_METHODS.workspaceScanFolders, {
+  payload: WorkspaceScanFoldersInput,
+  success: WorkspaceScanFoldersResult,
+  error: Schema.Union([WorkspaceFoldersError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceTaskFolderRpc = Rpc.make(WS_METHODS.workspaceTaskFolder, {
+  payload: WorkspaceTaskFolderInput,
+  success: WorkspaceTaskFolderResult,
+  error: Schema.Union([TaskFolderError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceAddTaskFolderRepositoryRpc = Rpc.make(
+  WS_METHODS.workspaceAddTaskFolderRepository,
+  {
+    payload: WorkspaceAddTaskFolderRepositoryInput,
+    success: TaskFolder,
+    error: Schema.Union([TaskFolderError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsAgentSessionsScanRpc = Rpc.make(WS_METHODS.agentSessionsScan, {
   payload: AgentSessionScanInput,
   success: AgentSessionScanResult,
@@ -1774,6 +1836,18 @@ const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, 
   payload: ProviderUploadFeedbackInput,
   success: ProviderUploadFeedbackResult,
   error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
+});
+
+const WsProviderMcpSignInStartRpc = Rpc.make(WS_METHODS.providerMcpSignInStart, {
+  payload: ProviderMcpSignInStartInput,
+  success: ProviderMcpSignInStartResult,
+  error: Schema.Union([ProviderMcpSignInError, EnvironmentAuthorizationError]),
+});
+
+const WsProviderMcpSignInCompleteRpc = Rpc.make(WS_METHODS.providerMcpSignInComplete, {
+  payload: ProviderMcpSignInCompleteInput,
+  success: ProviderMcpSignInCompleteResult,
+  error: Schema.Union([ProviderMcpSignInError, EnvironmentAuthorizationError]),
 });
 
 const WsSubscribeVcsBranchRpc = Rpc.make(WS_METHODS.subscribeVcsBranch, {
@@ -2437,34 +2511,25 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
-export const WsIssueRpcGroup = RpcGroup.make(
+export const WsRpcGroup = RpcGroup.make(
   WsIssuesListRpc,
   WsIssuesDetailRpc,
-  WsIssuesActivityRpc,
-  WsIssuesRunActionRpc,
-  WsIssuesCommentsPageRpc,
-  WsIssuesCommentRpc,
-  WsIssuesUpdateCommentRpc,
-  WsIssuesSetReactionRpc,
-  WsIssuesCreateRpc,
-  WsIssuesUpdateRpc,
-  WsIssuesSetLabelsRpc,
-  WsIssuesSetAssigneesRpc,
-  WsIssuesLabelCandidatesRpc,
-  WsIssuesAssigneeCandidatesRpc,
+  WsIssuesCommentsRpc,
   WsIssuesTemplatesRpc,
-  WsIssuesInvalidateRpc,
-  WsIssueTrackersStatusRpc,
+  WsIssuesCandidatesRpc,
+  WsIssuesLinkedThreadsRpc,
+  WsIssuesCreateRpc,
+  WsIssuesCommentRpc,
+  WsIssuesUpdateRpc,
+  WsIssuesSetStateRpc,
+  WsIssuesReactRpc,
+  WsIssueTrackersListRpc,
   WsIssueTrackersConnectRpc,
-  WsIssueTrackersDisconnectRpc,
-  WsIssueTrackersBindRpc,
-  WsWorkItemsFindMatchesRpc,
+  WsIssueTrackersBindProjectRpc,
   WsWorkItemsListLinksRpc,
   WsWorkItemsLinkRpc,
   WsWorkItemsUnlinkRpc,
-).middleware(RpcScopeAuthorization);
-
-export const WsCoreRpcGroup = RpcGroup.make(
+  WsWorkItemsFindMatchesRpc,
   WsGuestShareCreateRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2494,12 +2559,19 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsServerRunStorageCleanupRpc,
   WsServerGetStorageCleanupReportRpc,
   WsServerGetDatabaseStorageRpc,
+  WsServerGetSettingsRpc,
   WsServerReclaimDatabaseSpaceRpc,
   WsServerUpdateSettingsRpc,
   WsPeerLinksListRpc,
+  WsPeerLinksNamesRpc,
   WsPeerLinksLinkRpc,
   WsPeerLinksUnlinkRpc,
   WsPeerLinksAnswerRequestRpc,
+  WsPeerLinksSubscribeThreadRpc,
+  WsPeerLinksThreadHistoryPageRpc,
+  WsPeerLinksThreadItemRpc,
+  WsPeerLinksPairClientRpc,
+  WsPeerLinksPairLinkRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerCheckSecretSourceRpc,
   WsServerSearchAcpRegistryRpc,
@@ -2603,6 +2675,10 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
+  WsWorkspaceListFoldersRpc,
+  WsWorkspaceScanFoldersRpc,
+  WsWorkspaceTaskFolderRpc,
+  WsWorkspaceAddTaskFolderRepositoryRpc,
   WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
@@ -2615,6 +2691,8 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsMcpAppsReadResourceRpc,
   WsMcpAppsUpdateModelContextRpc,
   WsProviderUploadFeedbackRpc,
+  WsProviderMcpSignInStartRpc,
+  WsProviderMcpSignInCompleteRpc,
   WsSubscribeVcsStatusRpc,
   WsSubscribeVcsBranchRpc,
   WsVcsRefreshBranchRpc,
@@ -2698,5 +2776,3 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
 ).middleware(RpcScopeAuthorization);
-
-export const WsRpcGroup = WsCoreRpcGroup.merge(WsIssueRpcGroup);
