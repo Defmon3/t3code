@@ -33,7 +33,8 @@ The `$build-custom-desktop` skill derives a valid, increasing custom version fro
 `X.Y.Z-nightly.YYYYMMDD.N` use the nightly feed.
 
 The project skill `$build-custom-desktop` reads the latest `custom-main` checkout, derives the next
-custom version from its package version, and builds the full application on this machine.
+custom version from its package version, and builds the full application on Windows and in
+Docker on one of our Linux hosts.
 It never triggers GitHub Actions. Invoke it without a version:
 
 ```text

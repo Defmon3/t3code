@@ -300,12 +300,27 @@ const bundleLinuxLibatomic = Effect.fn("bundleLinuxLibatomic")(function* (input:
   if (!pkg || !version || !sourcePackage || !sourceVersion) {
     return yield* new CliArchiveInputMissingError({
       inputPath: `dpkg package for ${source}`,
-      hint: "The archive copies libatomic's license and source reference from its Ubuntu package.",
+      hint: "The archive records the libatomic package's license and source reference.",
+    });
+  }
+  const vendor = (yield* spawner.string(
+    ChildProcess.make("dpkg-vendor", ["--query", "Vendor"]),
+  )).trim();
+  const sourceUrl =
+    vendor === "Ubuntu"
+      ? `https://launchpad.net/ubuntu/+source/${sourcePackage}/${sourceVersion}`
+      : vendor === "Debian"
+        ? `https://snapshot.debian.org/package/${sourcePackage}/${sourceVersion}/`
+        : undefined;
+  if (!sourceUrl) {
+    return yield* new CliArchiveInputMissingError({
+      inputPath: `source package for ${source}`,
+      hint: `Unsupported package vendor '${vendor}'.`,
     });
   }
   const header = [
-    `libatomic.so.1 is copied from the Ubuntu package ${pkg} ${version}.`,
-    `Source: https://launchpad.net/ubuntu/+source/${sourcePackage}/${sourceVersion}`,
+    `libatomic.so.1 is copied from the ${vendor} package ${pkg} ${version}.`,
+    `Source: ${sourceUrl}`,
   ].join("\n");
   // Vendored because CI runner images strip /usr/share/doc.
   const license = yield* fs.readFileString(

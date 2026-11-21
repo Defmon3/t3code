@@ -47,7 +47,7 @@ const runExecutable = Effect.fn("runExecutable")(function* (
     ChildProcess.make(executable, args, {
       cwd,
       // Isolate system Node and inherited launcher context from the archive smoke check.
-      env: { PATH: "", HOME: cwd, USERPROFILE: cwd, TMPDIR: cwd, TEMP: cwd },
+      env: { PATH: "", HOME: cwd, USERPROFILE: cwd, TMPDIR: cwd, TEMP: cwd, NO_COLOR: "1" },
       extendEnv: false,
     }),
   );
@@ -61,6 +61,7 @@ const runExecutable = Effect.fn("runExecutable")(function* (
 const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   readonly archive: string;
   readonly expectVersion: string;
+  readonly versionOnly: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -128,11 +129,15 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   }
 
   const version = yield* runExecutable(executable, ["--version"], contentDir);
-  if (version.exitCode !== 0 || !version.stdout.includes(input.expectVersion)) {
+  if (version.exitCode !== 0 || version.stdout.trim() !== `t3 v${input.expectVersion}`) {
     return yield* new CliArchiveSmokeError({
       step: "running --version",
       detail: `exit ${String(version.exitCode)}\n${version.stdout}${version.stderr}`,
     });
+  }
+  if (input.versionOnly) {
+    yield* Effect.log(`[cli-smoke] ${root}: --version reported ${version.stdout.trim()}.`);
+    return;
   }
 
   // The service launcher loads outside the embedded CLI; without T3CODE_HOME it exits right away.
@@ -210,6 +215,7 @@ const command = Command.make(
   {
     archive: Flag.String("archive"),
     expectVersion: Flag.String("expect-version"),
+    versionOnly: Flag.Boolean("version-only"),
   },
   (input) => smokeCliArchive(input).pipe(Effect.scoped),
 ).pipe(Command.withDescription("Extract a CLI archive and run its executable."));
