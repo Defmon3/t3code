@@ -1042,6 +1042,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           readonly agent: string;
           readonly orchestration: boolean;
           readonly device: boolean;
+          readonly project: string | undefined;
         } | null>(null);
         // Cursor drops a cancelled run from the conversation, so the next message carries its prompt.
         const interruptedPrompt = yield* Ref.make<{
@@ -2434,7 +2435,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           mcpServers: Record<string, McpServerConfig> | undefined,
           hasDeviceTools: boolean,
-          delivered: { readonly orchestration: boolean; readonly device: boolean },
+          delivered: {
+            readonly orchestration: boolean;
+            readonly device: boolean;
+            readonly project: string | undefined;
+          },
           interrupted: string | undefined,
         ) {
           const rawText = turnInput.message.text;
@@ -2455,6 +2460,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             hasDeviceTools,
             orchestrationDelivered: delivered.orchestration,
             deviceInstructionsDelivered: delivered.device,
+            ...(turnInput.projectInstructions === undefined ||
+            turnInput.projectInstructions === delivered.project
+              ? {}
+              : { projectInstructions: turnInput.projectInstructions }),
           });
           const userText =
             interrupted === undefined
@@ -2535,7 +2544,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const delivered =
               known?.agent === agent.nativeThreadId
                 ? known
-                : { orchestration: turnInput.runOrdinal > 1, device: false };
+                : {
+                    orchestration: turnInput.runOrdinal > 1,
+                    device: false,
+                    project: turnInput.runOrdinal > 1 ? turnInput.projectInstructions : undefined,
+                  };
             const interrupted = yield* Ref.get(interruptedPrompt);
             const { message, prompt } = yield* resolveUserMessage(
               turnInput,
@@ -2581,6 +2594,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               agent: agent.nativeThreadId,
               orchestration: !compacted && (delivered.orchestration || mcpServers !== undefined),
               device: !compacted && hasDeviceTools,
+              project: compacted ? undefined : turnInput.projectInstructions,
             });
             if (!compacted) {
               yield* Ref.set(interruptedPrompt, null);

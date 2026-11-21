@@ -597,6 +597,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly projectInstructions?: string;
 }
 
 type RunBaselineInput = Pick<
@@ -1948,6 +1949,9 @@ export const layer: Layer.Layer<
           modelSelection: input.modelSelection,
           runtimePolicy: input.runtimePolicy,
           ...(appContext.length === 0 ? {} : { appContext }),
+          ...(input.projectInstructions === undefined
+            ? {}
+            : { projectInstructions: input.projectInstructions }),
         };
         // Check after the context read: ingestion can settle the run while
         // it awaits. A failed ownership read fails the start below.

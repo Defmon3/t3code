@@ -64,3 +64,34 @@ export function buildCodexAdditionalContext(
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
   };
 }
+
+const splitByUtf8Bytes = (text: string, maxBytes: number): ReadonlyArray<string> => {
+  const chunks: Array<string> = [];
+  let chunk = "";
+  let chunkBytes = 0;
+  for (const character of text) {
+    const bytes = Buffer.byteLength(character);
+    if (chunkBytes + bytes > maxBytes) {
+      chunks.push(chunk);
+      chunk = "";
+      chunkBytes = 0;
+    }
+    chunk += character;
+    chunkBytes += bytes;
+  }
+  return chunk === "" ? chunks : [...chunks, chunk];
+};
+
+/** The project's system prompt, numbered so Codex emits the pieces in order. */
+export function buildCodexProjectContext(
+  projectInstructions: string,
+): Record<string, V2TurnStartParams__AdditionalContextEntry> {
+  const chunks = splitByUtf8Bytes(projectInstructions, CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES);
+  const width = Math.max(2, String(chunks.length).length);
+  return Object.fromEntries(
+    chunks.map((chunk, index) => [
+      `t3_project_${String(index + 1).padStart(width, "0")}`,
+      { kind: "application" as const, value: chunk },
+    ]),
+  );
+}

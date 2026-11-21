@@ -53,6 +53,7 @@ import {
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { projectInstructionsForRepository } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { unsentManualContinuationSource } from "./manualContinuation.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -648,6 +649,21 @@ export const layer: Layer.Layer<
         return;
       }
       const resolvedRuntimePolicy = resolvedPolicy.success;
+      const projectResult = yield* Effect.result(
+        projects.getById(projection.thread.projectId, { includeDeleted: true }),
+      );
+      if (projectResult._tag === "Failure") {
+        if (input.willRetry === true) return yield* projectResult.failure;
+        yield* settleStartFailure({
+          signal: "project-read-failure",
+          title: "Couldn't read the project",
+          error: projectResult.failure,
+        });
+        return;
+      }
+      const projectInstructions = projectInstructionsForRepository(
+        Option.getOrUndefined(projectResult.success)?.repositoryIdentity?.canonicalKey,
+      );
       if (!(yield* isCurrentAttemptInStatus("starting"))) return;
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
@@ -1809,6 +1825,7 @@ export const layer: Layer.Layer<
         },
         modelSelection: run.modelSelection,
         runtimePolicy: resolvedRuntimePolicy,
+        ...(projectInstructions === undefined ? {} : { projectInstructions }),
       });
     });
 

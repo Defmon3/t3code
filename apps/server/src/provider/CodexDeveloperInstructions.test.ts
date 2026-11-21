@@ -5,6 +5,7 @@ import { describe, it } from "vite-plus/test";
 
 import {
   buildCodexAdditionalContext,
+  buildCodexProjectContext,
   CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
 } from "./CodexDeveloperInstructions.ts";
 
@@ -96,6 +97,29 @@ describe("Codex device context", () => {
     NodeAssert.ok(tools(true).includes(T3_CODE_DEVICE_TOOL_INSTRUCTIONS));
     NodeAssert.ok(!tools(true).includes("ToolSearch"));
     NodeAssert.ok(!tools(false).includes("## T3 Code devices"));
+  });
+});
+
+describe("buildCodexProjectContext", () => {
+  it("splits a long project prompt into ordered entries under Codex's per-entry cap", () => {
+    const text = "Project rule 🦊.\n".repeat(600);
+    const context = buildCodexProjectContext(text);
+    const keys = Object.keys(context);
+
+    NodeAssert.deepEqual(keys, ["t3_project_01", "t3_project_02", "t3_project_03"]);
+    NodeAssert.equal(keys.map((key) => context[key]!.value).join(""), text);
+    for (const entry of Object.values(context)) {
+      NodeAssert.equal(entry.kind, "application");
+      NodeAssert.ok(
+        Buffer.byteLength(entry.value, "utf8") <= CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
+      );
+    }
+  });
+
+  it("keeps a short project prompt in one entry", () => {
+    NodeAssert.deepEqual(buildCodexProjectContext("Use tabs."), {
+      t3_project_01: { kind: "application", value: "Use tabs." },
+    });
   });
 });
 

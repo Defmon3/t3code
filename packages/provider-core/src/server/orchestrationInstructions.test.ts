@@ -82,4 +82,47 @@ describe("T3 device instructions", () => {
     );
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## T3 Code devices");
   });
+
+  it("carry project instructions to ACP agents without T3 tools, again when they change", () => {
+    const state = {
+      interactionMode: "default",
+      hasT3Mcp: false,
+      hasDeviceTools: false,
+      projectInstructions: "Answer in French.",
+    } as const;
+    const first = t3AcpPromptWithInstructions({ prompt: "Hi.", state });
+    assert.include(first, "Answer in French.\n</t3_code_instructions>");
+    assert.equal(
+      t3AcpPromptWithInstructions({ prompt: "Again.", state, previousState: state }),
+      "Again.",
+    );
+    assert.include(
+      t3AcpPromptWithInstructions({
+        prompt: "Again.",
+        state: { ...state, projectInstructions: "Answer in German." },
+        previousState: state,
+      }),
+      "Answer in German.",
+    );
+  });
+
+  it("give Cursor project instructions it has not been told, after T3's", () => {
+    const prompt = (orchestrationDelivered: boolean) =>
+      t3OrchestrationPrompt({
+        prompt: "Check the login screen.",
+        hasT3Mcp: true,
+        hasDeviceTools: false,
+        orchestrationDelivered,
+        deviceInstructionsDelivered: false,
+        projectInstructions: "Answer in French.",
+      });
+    assert.include(
+      prompt(false),
+      `${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}\n\nAnswer in French.</t3_code_orchestration_instructions>`,
+    );
+    assert.equal(
+      prompt(true),
+      "<t3_code_orchestration_instructions>Answer in French.</t3_code_orchestration_instructions>\n\n<user_request>\nCheck the login screen.\n</user_request>",
+    );
+  });
 });

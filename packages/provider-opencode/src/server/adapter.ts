@@ -291,6 +291,7 @@ interface ActiveOpenCodeTurn {
   readonly appThread: OrchestrationV2AppThread;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly projectInstructions: string | undefined;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly providerThreadId: OrchestrationV2ProviderTurn["providerThreadId"];
   readonly runOrdinal: number;
@@ -2425,6 +2426,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             appThread: state.appThread,
             modelSelection: state.appThread.modelSelection,
             runtimePolicy: state.parentSubagent.parentTurn.runtimePolicy,
+            projectInstructions: state.parentSubagent.parentTurn.projectInstructions,
             providerTurnId,
             providerThreadId: providerTurn.providerThreadId,
             runOrdinal: state.parentSubagent.parentTurn.runOrdinal,
@@ -3195,6 +3197,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 issueToolsAvailable: hasT3Mcp && (mcpSession?.capabilities?.has("issues") ?? false),
                 model: turn.modelSelection.model,
               }),
+              turn.projectInstructions,
             ]
               .filter(Boolean)
               .join("\n\n"),
@@ -3471,6 +3474,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 appThread: turnInput.appThread,
                 modelSelection: turnInput.modelSelection,
                 runtimePolicy: turnInput.runtimePolicy,
+                projectInstructions: turnInput.projectInstructions,
                 providerTurnId,
                 providerThreadId: turnInput.providerThread.id,
                 runOrdinal: turnInput.runOrdinal,

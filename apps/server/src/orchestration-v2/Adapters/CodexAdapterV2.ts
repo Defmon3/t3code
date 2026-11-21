@@ -111,7 +111,10 @@ import * as PortScanner from "../../preview/PortScanner.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
-import { buildCodexAdditionalContext } from "../../provider/CodexDeveloperInstructions.ts";
+import {
+  buildCodexAdditionalContext,
+  buildCodexProjectContext,
+} from "../../provider/CodexDeveloperInstructions.ts";
 import {
   describeMcpElicitation,
   toMcpElicitationResponse,
@@ -791,6 +794,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+    readonly projectInstructions?: string;
     /** Set only for a model that offers Cyber Access; custom models never do. */
     readonly cyberAccess?: { readonly defaultProgram: string | undefined } | undefined;
     /** The user's `model_reasoning_summary` from the Codex config, when set. */
@@ -840,10 +844,12 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
             },
           )
         : undefined;
-    const additionalContext =
-      t3Context === undefined && Object.keys(appContext).length === 0
-        ? undefined
-        : { ...t3Context, ...appContext };
+    const projectContext =
+      input.projectInstructions === undefined
+        ? {}
+        : buildCodexProjectContext(input.projectInstructions);
+    const merged = { ...t3Context, ...projectContext, ...appContext };
+    const additionalContext = Object.keys(merged).length === 0 ? undefined : merged;
     return yield* decodeCodexTurnStartParams({
       threadId: input.nativeThreadId,
       input: input.codexInput,
@@ -7442,6 +7448,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               issueToolsAvailable: mcpSession?.capabilities?.has("issues") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
+              ...(turnInput.projectInstructions === undefined
+                ? {}
+                : { projectInstructions: turnInput.projectInstructions }),
               ...(configuredReasoningSummary === undefined ? {} : { configuredReasoningSummary }),
             });
             yield* Ref.update(pendingRootTurns, (current) => {

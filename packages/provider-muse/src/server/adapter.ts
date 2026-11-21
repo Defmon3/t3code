@@ -2188,15 +2188,20 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 input: [
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({
-                      harness: "Muse Code",
-                      issueToolsAvailable:
-                        (yield* mcpSessions.read(turnInput.threadId))?.capabilities?.has(
-                          "issues",
-                        ) ?? false,
-                      model: session.model ?? undefined,
-                      reasoningEffort: effort,
-                    }),
+                    text: [
+                      buildRuntimeInstructions({
+                        harness: "Muse Code",
+                        issueToolsAvailable:
+                          (yield* mcpSessions.read(turnInput.threadId))?.capabilities?.has(
+                            "issues",
+                          ) ?? false,
+                        model: session.model ?? undefined,
+                        reasoningEffort: effort,
+                      }),
+                      ...(turnInput.projectInstructions === undefined
+                        ? []
+                        : [turnInput.projectInstructions]),
+                    ].join("\n\n"),
                   },
                   ...parts,
                 ],

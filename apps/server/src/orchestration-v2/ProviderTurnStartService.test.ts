@@ -381,6 +381,7 @@ function makeLocalCommandHarness(input: {
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
   readonly workspaceRoot?: string;
+  readonly repositoryIdentity?: { readonly canonicalKey: string } | null;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
   readonly fileSystem?: FileSystem.FileSystem;
   readonly path?: Path.Path;
@@ -1174,6 +1175,7 @@ function makeLocalCommandHarness(input: {
           getById: () =>
             Effect.succeedSome({
               workspaceRoot: input.workspaceRoot ?? "/tmp/native-account-project",
+              repositoryIdentity: input.repositoryIdentity ?? null,
             } as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
@@ -1431,6 +1433,45 @@ effectIt.effect("leaves a managed worktree folder without .git that holds user f
     yield* harness.start;
     expect(harness.createWorktree).not.toHaveBeenCalled();
     expect(yield* fileSystem.readFileString(path.join(worktreePath, "notes.md"))).toBe("keep me");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+effectIt.effect.each([
+  {
+    label: "the Argus project",
+    repositoryIdentity: { canonicalKey: "github.com/vladscoffeapp1/argus" },
+    hasInstructions: true,
+  },
+  {
+    label: "another project",
+    repositoryIdentity: { canonicalKey: "github.com/example/other" },
+    hasInstructions: false,
+  },
+  { label: "a project without a repository", repositoryIdentity: null, hasInstructions: false },
+])("gives a worktree thread of $label the matching project instructions", (input) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-project-instructions-" });
+    const workspaceRoot = path.join(root, "project");
+    const worktreesDir = path.join(root, "worktrees");
+    const worktreePath = path.join(worktreesDir, "project", "restore");
+    yield* fileSystem.makeDirectory(workspaceRoot, { recursive: true });
+    yield* fileSystem.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      worktreePath,
+      worktreesDir,
+      workspaceRoot,
+      repositoryIdentity: input.repositoryIdentity,
+      fileSystem,
+      path,
+      failReadsAfterRunning: true,
+    });
+    yield* harness.start;
+    const projectInstructions = harness.startRootRun.mock.calls[0]?.[0].projectInstructions;
+    if (input.hasInstructions) expect(projectInstructions).toMatch(/^## Argus\n/);
+    else expect(projectInstructions).toBeUndefined();
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 

@@ -319,9 +319,13 @@ describe("CodexAdapterV2 runtime policy", () => {
       }),
   );
 
-  it.effect("sends MCP app model context as untrusted Codex context", () =>
+  it.effect("sends app context as untrusted, project text as application", () =>
     Effect.gen(function* () {
-      const policy = { runtimeMode: "full-access", interactionMode: "default", cwd: null } as const;
+      const policy = {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: null,
+      } as const;
       const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
       const appContext = [{ key: "mcp_app_todos_list_todos_item-1", text: "Filtered to overdue" }];
       const alone = yield* CodexAdapterV2.buildCodexTurnStartParams({
@@ -347,6 +351,16 @@ describe("CodexAdapterV2 runtime policy", () => {
         value: "Filtered to overdue",
       });
       assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
+      const withProject = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-app-context",
+        codexInput: [{ type: "text", text: "what's on my list?" }],
+        runtimePolicy: policy,
+        modelSelection,
+        projectInstructions: "Answer in French.",
+      });
+      assert.deepEqual(withProject.additionalContext, {
+        t3_project_01: { kind: "application", value: "Answer in French." },
+      });
     }),
   );
 });
