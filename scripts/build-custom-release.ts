@@ -478,18 +478,23 @@ async function buildOverSsh(
   const snapshot = NodePath.join(directory, "tmp_snapshot");
   const source = NodePath.join(directory, "tmp_source.tar");
   await step("linux-source", async (run) => {
-    await run("git", [
-      "clone",
-      "--no-local",
-      "--no-checkout",
-      "--depth=1",
-      "--single-branch",
-      "--branch",
-      sourceBranch,
-      "--no-tags",
-      root,
-      snapshot,
-    ]);
+    await run(
+      "git",
+      [
+        "clone",
+        "--no-local",
+        "--no-checkout",
+        "--depth=1",
+        "--single-branch",
+        "--branch",
+        sourceBranch,
+        "--no-tags",
+        root,
+        snapshot,
+      ],
+      // why: git refuses to clone a repo whose config sets core.hooksPath; the source is this checkout.
+      { env: { ...process.env, GIT_CLONE_PROTECTION_ACTIVE: "false" } },
+    );
     if ((await run("git", ["-C", snapshot, "rev-parse", "HEAD"], { capture: true })) !== commit) {
       throw new Error("custom-main moved before the Linux snapshot was created");
     }
