@@ -7,12 +7,26 @@ import * as NodeZlib from "node:zlib";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { launchOrReuseRemoteServer, type RemoteT3RunnerOptions } from "./tunnel.ts";
+
+export const windowsHost = HostProcess.Platform.defaultValue() === "win32";
+export const fixtureShell = windowsHost
+  ? `${process.env.ProgramFiles}/Git/bin/bash.exe`
+  : "/bin/sh";
+
+export function shellPath(path: string): string {
+  return windowsHost
+    ? path
+        .replaceAll("\\", "/")
+        .replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)
+    : path;
+}
 
 export function transportedScript(command: ChildProcess.Command): string {
   if (command._tag !== "StandardCommand") throw new Error("SSH command must be a standard command");
@@ -86,6 +100,7 @@ export function runLauncher(
     readonly publishAfterFirstRuntimeRead?: boolean;
   },
 ) {
+  const stateKey = "test-target";
   const root = NodeURL.fileURLToPath(new URL("../../../", import.meta.url));
   const home = NodeFS.mkdtempSync(NodePath.join(root, "packages/ssh/.ssh-launcher-test-"));
   try {
@@ -99,7 +114,7 @@ export function runLauncher(
         markerPath,
         typeof options.marker === "string" ? options.marker : JSON.stringify(options.marker),
       );
-    NodeFS.writeFileSync(NodePath.join(home, "clock"), "0");
+    NodeFS.writeFileSync(NodePath.join(home, "clock"), "0\n");
     NodeFS.writeFileSync(NodePath.join(home, "events"), "");
     const executable = (name: string, body: string) =>
       NodeFS.writeFileSync(NodePath.join(bin, name), `#!/bin/sh\nset -eu\n${body}\n`, {
@@ -117,17 +132,14 @@ Date.now = () => Number(fs.readFileSync(process.env.HOME + '/clock', 'utf8'));
       `
 case "\${2:-}" in
   */server-runtime.json)
-    # A started server publishes its runtime record, which the launch waits for.
-    # The fake nohup runs in the background, so wait for it instead of racing it.
     if [ -e "$HOME/picked-port" ]; then
-      while [ ! -e "$HOME/started-server" ]; do /bin/sleep 0.01; done
-    fi
-    if [ -e "$HOME/started-server" ]; then
-      printf 'record %s\\n' "$(cat "$HOME/clock")" >> "$HOME/events"
-      printf '%s 5999' "$(cat "$HOME/started-server")"
+      read -r PID < "$HOME/.t3/ssh-launch/${stateKey}/pid"
+      read -r NOW < "$HOME/clock"
+      printf 'record %s\\n' "$NOW" >> "$HOME/events"
+      printf '%s 5999' "$PID"
       exit 0
     fi
-    NOW="$(cat "$HOME/clock")"
+    read -r NOW < "$HOME/clock"
     printf 'runtime %s\\n' "$NOW" >> "$HOME/events"
     if [ "$NOW" -ge "$TEST_READY_AT" ] || [ -e "$2" ]; then printf '%s %s' "$TEST_SERVER_PID" 4888
     elif [ "$TEST_PUBLISH_AFTER_FIRST_READ" = 1 ]; then
@@ -138,43 +150,30 @@ case "\${2:-}" in
     elif [ -n "$TEST_INITIAL_PORT" ]; then printf '%s %s' "$TEST_SERVER_PID" "$TEST_INITIAL_PORT"
     else exit 1; fi ;;
   */port)
-    printf 'start %s\\n' "$(cat "$HOME/clock")" >> "$HOME/events"
-    touch "$HOME/picked-port"
+    : > "$HOME/picked-port"
     printf 5999 ;;
   [0-9]*)
-    NOW="$(cat "$HOME/clock")"
+    read -r NOW < "$HOME/clock"
     printf 'probe %s %s\\n' "$2" "$NOW" >> "$HOME/events"
     [ "$2" = 5999 ] || { [ "$2" = 4888 ] && { [ "$NOW" -ge "$TEST_READY_AT" ] || [ -e "$HOME/.t3/userdata/server-runtime.json" ]; }; } ;;
   */desktop-update-in-progress)
-    printf 'marker %s\\n' "$(cat "$HOME/clock")" >> "$HOME/events"
+    read -r NOW < "$HOME/clock"
+    printf 'marker %s\\n' "$NOW" >> "$HOME/events"
     exec "$TEST_REAL_NODE" --require "$HOME/clock.cjs" "$@" ;;
   *) exec "$TEST_REAL_NODE" --require "$HOME/clock.cjs" "$@" ;;
 esac`,
     );
-    executable(
-      "sleep",
-      `awk -v seconds="$1" '{ printf "%.0f", $1 + seconds * 1000 }' "$HOME/clock" > "$HOME/clock.next"
-mv "$HOME/clock.next" "$HOME/clock"
-if [ "$TEST_CLEAR_MARKER" = 1 ] && [ "$(cat "$HOME/clock")" -ge "$TEST_READY_AT" ]; then
-  rm -f "$HOME/.t3/runtime/desktop-update-in-progress"
-fi
-if [ -n "$TEST_CLOCK_JUMP" ] && [ ! -e "$HOME/jumped" ]; then
-  printf '%s' "$TEST_CLOCK_JUMP" > "$HOME/clock"
-  touch "$HOME/jumped"
-fi`,
-    );
-    executable("nohup", 'printf "%s" "$$" > "$HOME/started-server"');
     // The test process stands in for a recorded server; report the serve command it would run.
     executable(
       "ps",
       `if [ "$*" = "-ww -o args= -p $TEST_SERVER_PID" ]; then
-  printf '/bin/sh %s/.t3/ssh-launch/test-target/run-t3.sh serve --host 127.0.0.1 --port 5999\\n' "$HOME"
+  printf '/bin/sh %s/.t3/ssh-launch/${stateKey}/run-t3.sh serve --host 127.0.0.1 --port 5999\\n' "$HOME"
   exit 0
 fi
 PATH=/usr/bin:/bin exec ps "$@"`,
     );
     if (options.recordedKind) {
-      const state = NodePath.join(home, ".t3/ssh-launch/test-target");
+      const state = NodePath.join(home, ".t3/ssh-launch", stateKey);
       NodeFS.mkdirSync(state, { recursive: true });
       NodeFS.writeFileSync(NodePath.join(state, "pid"), String(process.pid));
       NodeFS.writeFileSync(NodePath.join(state, "port"), "5999");
@@ -207,7 +206,10 @@ set -eu
 if [ "$1" = --version ]; then printf 1.2.3; exit; fi
 [ "$1" = __ssh-helper ]
 case "$2" in
-  update-remaining) printf 'marker %s\\n' "$(cat "$HOME/clock")" >> "$HOME/events"; exec "$TEST_REAL_NODE" --require "$HOME/clock.cjs" "$HOME/archive-marker.cjs" "$3" ;;
+  update-remaining)
+    read -r NOW < "$HOME/clock"
+    printf 'marker %s\\n' "$NOW" >> "$HOME/events"
+    exec "$TEST_REAL_NODE" --require "$HOME/clock.cjs" "$HOME/archive-marker.cjs" "$3" ;;
   home-owned) [ "$TEST_SERVICE_SERVING" = 1 ] ;;
   runtime-port | pick-port | wait-ready) exec "$HOME/bin/test-node" - "$3" ;;
   *) exit 1 ;;
@@ -219,21 +221,55 @@ esac
     using _serving = options.serviceServing
       ? holdLock(NodePath.join(runtime, "service-serving.lock"))
       : undefined;
-    const result = NodeChildProcess.spawnSync("/bin/sh", ["-s", "--", "test-target"], {
-      input: `kill() {
-  if [ "$1" = -0 ]; then command kill "$@"; else
+    // why: Git Bash prepends system tools to the inherited PATH during startup.
+    const result = NodeChildProcess.spawnSync(fixtureShell, ["-s", "--", stateKey], {
+      input: `PATH="$HOME/bin:/usr/bin:/bin"
+export PATH
+sleep() {
+  case "$1" in
+    0.1) DELAY_MS=100 ;;
+    1) DELAY_MS=1000 ;;
+    *) printf 'Unexpected fixture sleep: %s\\n' "$1" >&2; return 1 ;;
+  esac
+  read -r CLOCK_MS < "$HOME/clock"
+  CLOCK_MS=$((CLOCK_MS + DELAY_MS))
+  if [ "$TEST_CLEAR_MARKER" = 1 ] && [ "$CLOCK_MS" -ge "$TEST_READY_AT" ]; then
+    rm -f "$HOME/.t3/runtime/desktop-update-in-progress"
+  fi
+  if [ -n "$TEST_CLOCK_JUMP" ] && [ ! -e "$HOME/jumped" ]; then
+    CLOCK_MS="$TEST_CLOCK_JUMP"
+    : > "$HOME/jumped"
+  fi
+  printf '%s\\n' "$CLOCK_MS" > "$HOME/clock"
+}
+date() {
+  if [ "$1" != +%s ]; then
+    printf 'Unexpected fixture date format: %s\\n' "$1" >&2
+    return 1
+  fi
+  read -r CLOCK_MS < "$HOME/clock"
+  printf '%s\\n' "$((CLOCK_MS / 1000))"
+}
+kill() {
+  if [ "$1" = -0 ]; then
+    [ "$2" = "$TEST_SERVER_PID" ] || command kill "$@"
+  else
     printf 'kill %s\\n' "$*" >> "$HOME/events"
     return 1
   fi
 }
-${script}`,
+nohup() {
+  read -r CLOCK_MS < "$HOME/clock"
+  printf 'start %s\\n' "$CLOCK_MS" >> "$HOME/events"
+}
+${script}
+wait`,
       encoding: "utf8",
       timeout: 30_000,
       env: {
         ...process.env,
-        HOME: home,
-        PATH: `${bin}:/usr/bin:/bin`,
-        TEST_REAL_NODE: process.execPath,
+        HOME: home.replaceAll("\\", "/"),
+        TEST_REAL_NODE: shellPath(process.execPath),
         TEST_CLEAR_MARKER: options.clearMarkerOnReady ? "1" : "0",
         TEST_CLOCK_JUMP: options.clockJump === undefined ? "" : String(options.clockJump),
         TEST_SERVER_PID: String(process.pid),

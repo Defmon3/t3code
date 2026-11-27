@@ -1,10 +1,11 @@
+import type { AgentFeedbackMode } from "@t3tools/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
-  T3_CODE_ORCHESTRATION_SECTIONS,
+  t3CodeOrchestrationSections,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
@@ -14,6 +15,7 @@ export interface T3CodeToolAvailability {
   readonly browser: boolean;
   readonly device: boolean;
   readonly issues?: boolean;
+  readonly nativeSubagents?: boolean;
 }
 
 const normalizeAvailability = (
@@ -22,17 +24,16 @@ const normalizeAvailability = (
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
 /** Instructions for unavailable tools would steer the model away from its remaining automation. */
-const toolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
-  const tools = normalizeAvailability(availability);
-  return [
+const toolInstructions = (tools: T3CodeToolAvailability): string =>
+  [
     tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "",
     tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : "",
   ]
     .filter(Boolean)
     .join("\n\n");
-};
 
 export interface CodexRuntimeInfo {
+  readonly agentFeedback?: AgentFeedbackMode;
   readonly model: string;
   readonly modelName?: string | undefined;
   readonly reasoningEffort?: string | undefined;
@@ -43,11 +44,12 @@ export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | T3CodeToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
-  const tools = toolInstructions(toolsAvailable);
+  const availability = normalizeAvailability(toolsAvailable);
+  const tools = toolInstructions(availability);
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...Object.fromEntries(
-      T3_CODE_ORCHESTRATION_SECTIONS.map((section, index) => [
+      t3CodeOrchestrationSections(availability.nativeSubagents).map((section, index) => [
         `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),
@@ -57,7 +59,7 @@ export function buildCodexAdditionalContext(
       value: buildRuntimeInstructions({
         harness: "Codex",
         ...runtime,
-        issueToolsAvailable: normalizeAvailability(toolsAvailable).issues === true,
+        issueToolsAvailable: availability.issues === true,
       }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),

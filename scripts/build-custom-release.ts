@@ -23,7 +23,7 @@ const nodeVersion = workspace.engines.node;
 const hostPlatform = Effect.runSync(HostProcess.Platform);
 const hostArch = Effect.runSync(HostProcess.Architecture);
 const linuxImage =
-  "node:26.12.1-bookworm@sha256:3b764117159bda01d2396391e7789b6a9106af9729cfd001ef55e98557868310";
+  "node:26.13.1-bookworm@sha256:893ea48106e988a5f91e69629d6472600daa9d0494adf7db87eb0b886ce82255";
 const publicKeys = [
   "T3CODE_CLERK_PUBLISHABLE_KEY",
   "T3CODE_CLERK_JWT_TEMPLATE",

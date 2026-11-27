@@ -6,13 +6,17 @@ import {
 } from "@t3tools/client-runtime/state/hook-approvals";
 import { Menu } from "../../components/ui/Menu";
 import {
+  type ApprovalTextPart,
+  approvalTextParts,
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
+  PUSH_HOOKS_APPROVAL_QUESTION,
+  pushHooksApprovalRows,
   sendApprovalFeedback,
   type ApprovalResponder,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { T, useGT, useMessages } from "gt-react-native";
-import { useState } from "react";
+import { type ComponentRef, type ReactNode, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -90,7 +94,7 @@ function PendingApprovalCardContent(
     ? (preferences.value.rememberedHookApprovalDuration ??
       DEFAULT_CLIENT_SETTINGS.rememberedHookApprovalDuration)
     : DEFAULT_CLIENT_SETTINGS.rememberedHookApprovalDuration;
-  const bypass = props.approval.bypass;
+  const { bypass, pushHooks } = props.approval;
   const options: ReadonlyArray<ProviderApprovalOption> = props.approval.options ?? [
     { decision: "accept", label: gt("Allow once") },
     { decision: "acceptForSession", label: gt("Allow session") },
@@ -108,6 +112,10 @@ function PendingApprovalCardContent(
   const [draft, setDraft] = useState<ApprovalRejectionDraft>({ status: "untouched" });
   const [feedbackFailed, setFeedbackFailed] = useState(false);
   const isCommand = props.approval.requestKind === "command";
+  const commandScrollClassName = cn(
+    "rounded-lg border border-border bg-card",
+    commandExpanded ? "max-h-96" : "max-h-24",
+  );
   const responseDisabled = disabled || !props.canOperateThread;
   const canRejectWithReason =
     props.approval.supportsFeedback && options.some((option) => option.decision === "decline");
@@ -151,7 +159,9 @@ function PendingApprovalCardContent(
         </Text>
       )}
       <Text className="font-t3-bold text-lg text-foreground">
-        {props.approval.appName ?? props.approval.requestKind}
+        {pushHooks
+          ? m(PUSH_HOOKS_APPROVAL_QUESTION)
+          : (props.approval.appName ?? props.approval.requestKind)}
       </Text>
       {bypass ? (
         <View className="gap-1">
@@ -169,49 +179,61 @@ function PendingApprovalCardContent(
           </Text>
         </View>
       ) : null}
-      {isCommand ? (
+      {pushHooks ? (
+        <View className="gap-1.5">
+          {pushHooksApprovalRows(pushHooks, m).map((row, index) => (
+            // oxlint-disable-next-line react/no-array-index-key -- rows never reorder and two hooks may read alike
+            <View key={index} className="gap-0.5">
+              <Text className="font-sans text-xs text-foreground-muted">{row.label}</Text>
+              <Text selectable className="font-sans text-sm leading-normal text-foreground">
+                {row.name ? `${row.name}  ` : null}
+                <Text className="font-mono text-sm text-foreground">{row.code}</Text>
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : isCommand && bypass ? (
         <ScrollView
-          className={
-            commandExpanded
-              ? "max-h-96 rounded-lg border border-border bg-card"
-              : "max-h-24 rounded-lg border border-border bg-card"
-          }
+          className={commandScrollClassName}
           nestedScrollEnabled
           accessibilityLabel={gt("Command")}
           showsVerticalScrollIndicator
         >
-          {bypass ? (
-            <View className="gap-1 p-3">
-              {hookApprovalBypassSteps(bypass).map((step, index) => (
-                <Text
-                  key={step.key}
-                  selectable
-                  className={cn(
-                    "font-mono text-base leading-normal",
-                    step.triggered
-                      ? "bg-danger font-t3-bold text-danger-foreground"
-                      : "text-foreground",
-                  )}
-                >
-                  {step.triggered
+          <View className="gap-1 p-3">
+            {hookApprovalBypassSteps(bypass).map((step, index) => (
+              <ApprovalDetail
+                key={step.key}
+                selectable
+                textClassName={cn(
+                  "font-mono text-base leading-normal",
+                  step.triggered
+                    ? "bg-danger font-t3-bold text-danger-foreground"
+                    : "text-foreground",
+                )}
+                text={
+                  step.triggered
                     ? gt("Step {step} · TRIGGERED: {command}", {
                         step: index + 1,
                         command: step.command,
                       })
-                    : gt("Step {step}: {command}", { step: index + 1, command: step.command })}
-                </Text>
-              ))}
-            </View>
-          ) : (
-            <Text selectable className="p-3 font-mono text-base leading-normal text-foreground">
-              {props.approval.command ?? props.approval.detail ?? gt("Command details unavailable")}
-            </Text>
-          )}
+                    : gt("Step {step}: {command}", { step: index + 1, command: step.command })
+                }
+              />
+            ))}
+          </View>
         </ScrollView>
+      ) : isCommand ? (
+        <ApprovalDetail
+          selectable
+          text={
+            props.approval.command ?? props.approval.detail ?? gt("Command details unavailable")
+          }
+          textClassName="p-3 font-mono text-base leading-normal text-foreground"
+          scrollClassName={commandScrollClassName}
+          accessibilityLabel={gt("Command")}
+        />
       ) : props.approval.detail ? (
-        <Text className="font-sans text-sm leading-normal text-foreground-secondary">
-          {props.approval.detail}
-        </Text>
+        <ApprovalDetail text={props.approval.detail} />
       ) : null}
       {bypass ? (
         <View className="gap-1">
@@ -512,5 +534,92 @@ function CommandApprovalExplanation({
         />
       ) : null}
     </View>
+  );
+}
+
+function ApprovalDetail({
+  text,
+  textClassName = "font-sans text-sm leading-normal text-foreground-secondary",
+  scrollClassName,
+  accessibilityLabel,
+  selectable,
+}: {
+  readonly text: string;
+  readonly textClassName?: string;
+  readonly scrollClassName?: string;
+  readonly accessibilityLabel?: string;
+  readonly selectable?: boolean;
+}) {
+  const gt = useGT();
+  const { parts, tail, hiddenLength } = approvalTextParts(text);
+  const content = (
+    <ApprovalTextParts parts={parts} className={textClassName} selectable={selectable} />
+  );
+  if (!scrollClassName && hiddenLength === 0) return content;
+
+  return (
+    <>
+      <ApprovalTextScroll className={scrollClassName} accessibilityLabel={accessibilityLabel}>
+        {content}
+      </ApprovalTextScroll>
+      {hiddenLength > 0 ? (
+        <>
+          <Text className="font-sans text-xs leading-normal text-warning-foreground">
+            {gt(
+              "{count, plural, one {… {hidden} character in the middle is not shown.} other {… {hidden} characters in the middle are not shown.}} The text ends with:",
+              { count: hiddenLength, hidden: hiddenLength.toLocaleString() },
+            )}
+          </Text>
+          <ApprovalTextScroll className={scrollClassName} fromEnd>
+            <ApprovalTextParts parts={tail} className={textClassName} selectable={selectable} />
+          </ApprovalTextScroll>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function ApprovalTextScroll(props: {
+  readonly children: ReactNode;
+  readonly className?: string;
+  readonly accessibilityLabel?: string;
+  readonly fromEnd?: boolean;
+}) {
+  const box = useRef<ComponentRef<typeof ScrollView>>(null);
+  return (
+    <ScrollView
+      ref={box}
+      className={props.className ?? "max-h-40"}
+      accessibilityLabel={props.accessibilityLabel}
+      nestedScrollEnabled
+      onContentSizeChange={
+        props.fromEnd ? () => box.current?.scrollToEnd({ animated: false }) : undefined
+      }
+    >
+      {props.children}
+    </ScrollView>
+  );
+}
+
+function ApprovalTextParts(props: {
+  readonly parts: ReadonlyArray<ApprovalTextPart>;
+  readonly className: string;
+  readonly selectable?: boolean;
+}) {
+  return (
+    <Text className={props.className} selectable={props.selectable}>
+      {props.parts.map((part, index) =>
+        part.named ? (
+          // why: A second font inside wrapped lines makes Android lay the text out shorter
+          // than it draws, which cuts off its last lines.
+          // oxlint-disable-next-line react/no-array-index-key -- parts never reorder and two may read alike
+          <Text key={index} className="text-warning-foreground">
+            {part.text}
+          </Text>
+        ) : (
+          part.text
+        ),
+      )}
+    </Text>
   );
 }

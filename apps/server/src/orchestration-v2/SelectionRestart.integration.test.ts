@@ -856,6 +856,22 @@ it.live.each(["pooled", "exclusive"] as const)(
             Stream.runDrain,
             Effect.forkScoped,
           );
+        // The continuation starts from an async run.updated reaction, which drain alone does not await.
+        const continuationRunning = yield* eventSink
+          .stream({
+            threadId,
+            afterSequence: yield* eventSink.latestSequence({ threadId }),
+          })
+          .pipe(
+            Stream.map((stored) => stored.event),
+            Stream.filter(
+              (event) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
         // What t3_worktree_handoff dispatches while the calling turn is still running.
         const bound = yield* orchestrator.dispatch({
           type: "thread.metadata.update",
@@ -876,6 +892,7 @@ it.live.each(["pooled", "exclusive"] as const)(
           ["queued"],
         );
         yield* Fiber.join(completed);
+        yield* Fiber.join(continuationRunning);
         yield* worker.drain();
         return yield* orchestrator.getThreadProjection(threadId);
       }).pipe(

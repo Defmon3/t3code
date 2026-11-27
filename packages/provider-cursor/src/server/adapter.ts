@@ -309,6 +309,17 @@ const CURSOR_AGENT_SETTING_SOURCES = [
   "plugins",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+/** Whether the checkout's own Cursor config (settings, hooks, MCP servers) may load: only unrestricted turns. */
+function cursorLoadsProjectConfig(
+  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  platform: NodeJS.Platform,
+): boolean {
+  const policy = cursorRuntimeAgentPolicy(runtimePolicy, platform);
+  return (
+    runtimePolicy.runtimeMode === "full-access" && !policy.autoReview && !policy.sandboxEnabled
+  );
+}
+
 export function makeCursorAgentOptions(input: {
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
@@ -332,12 +343,9 @@ export function makeCursorAgentOptions(input: {
         ? {}
         : { dirs: [...input.runtimePolicy.workspace.extraRoots] }),
       autoReview: policy.autoReview,
-      settingSources:
-        input.runtimePolicy.runtimeMode === "full-access" &&
-        !policy.autoReview &&
-        !policy.sandboxEnabled
-          ? [...CURSOR_AGENT_SETTING_SOURCES]
-          : CURSOR_AGENT_SETTING_SOURCES.filter((source) => source !== "project"),
+      settingSources: cursorLoadsProjectConfig(input.runtimePolicy, input.platform)
+        ? [...CURSOR_AGENT_SETTING_SOURCES]
+        : CURSOR_AGENT_SETTING_SOURCES.filter((source) => source !== "project"),
       sandboxOptions: {
         enabled: policy.sandboxEnabled,
       },
@@ -928,9 +936,11 @@ interface CursorProjectionTarget {
 const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
 // After a turn ends, a retryable stream error can make Cursor's SDK resume from
 // an older checkpoint inside the same run. When those resumes save nothing, it
-// ends the run with this error even though the answer was already delivered.
-const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
-  "Agent turn stopped after repeated resume attempts made no progress";
+// ends with either retry limit even though the answer was already delivered.
+const CURSOR_POST_TURN_RETRY_ERRORS = new Set([
+  "Agent turn stopped after repeated resume attempts made no progress",
+  "Connection failed repeatedly",
+]);
 
 interface ActiveCursorToolCall {
   readonly callId: string;
@@ -1150,6 +1160,23 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ]
               : [],
           ),
+        });
+
+        let startupPhase: string | undefined;
+        const emitStartupPhase = Effect.fn("CursorAdapterV2.emitStartupPhase")(function* (
+          phase: string | undefined,
+        ) {
+          if (phase === startupPhase) return;
+          startupPhase = phase;
+          yield* emitProviderEvent({
+            type: "provider_session.updated",
+            driver: CursorAgentSdk.CURSOR_PROVIDER,
+            providerSession: {
+              ...session,
+              ...(phase === undefined ? {} : { startupPhase: phase }),
+              updatedAt: yield* DateTime.now,
+            },
+          });
         });
 
         const emitProviderThread = Effect.fn("CursorAdapterV2.emitProviderThread")(function* (
@@ -2469,8 +2496,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 );
               }
               return;
+            case "shell-tool-call-delta":
             case "shell-output-delta": {
-              const toolCallId = update.event.toolCallId;
+              const toolCallId =
+                update.type === "shell-tool-call-delta" ? update.callId : update.event.toolCallId;
               const shell =
                 typeof toolCallId === "string"
                   ? context.tools.get(toolCallId)
@@ -2480,7 +2509,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               if (shell?.toolCall.type !== "shell") {
                 return;
               }
-              const chunk = shellOutputText(update.event);
+              const chunk =
+                update.type === "shell-tool-call-delta"
+                  ? update.content
+                  : shellOutputText(update.event);
               if (chunk.length === 0) return;
               // Persist output once; live hub deltas avoid quadratic event-store growth.
               shell.streamedOutput += chunk;
@@ -2512,6 +2544,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           readonly status: OrchestrationV2ProviderTurn["status"];
           readonly completedAt: DateTime.Utc | null;
           readonly tokenUsage?: OrchestrationV2ProviderTurn["tokenUsage"];
+          readonly promptDropped?: true;
         }): OrchestrationV2ProviderTurn => ({
           id: input.context.providerTurnId,
           providerThreadId: input.context.input.providerThread.id,
@@ -2527,6 +2560,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           startedAt: input.context.startedAt,
           completedAt: input.completedAt,
           ...(input.tokenUsage === undefined ? {} : { tokenUsage: input.tokenUsage }),
+          ...(input.promptDropped === true ? { promptDropped: true as const } : {}),
           ...(input.completedAt === null || input.context.usage === undefined
             ? {}
             : {
@@ -2592,6 +2626,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               }).pipe(Effect.as(undefined)),
             ),
           );
+          // Cursor only keeps a run in conversation history once it saves its first checkpoint.
+          const promptDropped =
+            (input.status === "failed" || input.status === "cancelled") &&
+            !input.context.compacted &&
+            input.context.prompt !== undefined &&
+            !(yield* (
+              input.context.session.runCheckpointed?.(input.context.run.runId) ??
+              Effect.succeed(false)
+            ).pipe(Effect.orElseSucceed(() => false)));
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver: CursorAgentSdk.CURSOR_PROVIDER,
@@ -2599,6 +2642,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               context: input.context,
               status: input.status,
               completedAt,
+              ...(promptDropped ? { promptDropped: true as const } : {}),
               ...(contextUsage === undefined
                 ? {}
                 : {
@@ -2635,6 +2679,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   status: input.status,
                   failure: input.failure ?? makeProviderFailure({ class: "provider_error" }),
                   threadDisposition,
+                  ...(promptDropped ? { promptDropped: true as const } : {}),
                 }
               : {
                   type: "turn.terminal",
@@ -2645,6 +2690,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   status: input.status,
                   failure: null,
                   threadDisposition,
+                  ...(promptDropped ? { promptDropped: true as const } : {}),
                 },
           );
           if (input.context.runtimeInstructions !== undefined) {
@@ -2678,7 +2724,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         const isResumeFailureAfterTurnEnded = (context: ActiveCursorTurn, result: RunResult) =>
           context.turnEnded &&
           result.status === "error" &&
-          result.error?.message === CURSOR_RESUME_NO_PROGRESS_MESSAGE;
+          CURSOR_POST_TURN_RETRY_ERRORS.has(result.error?.message ?? "");
 
         const terminalStatus = (
           context: ActiveCursorTurn,
@@ -2700,10 +2746,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
         };
 
-        const resolveWorkspaceMcpServers = (cwd: string | null) =>
-          cwd === null
+        const resolveWorkspaceMcpServers = (
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+        ) => {
+          const { cwd } = runtimePolicy;
+          return cwd === null
             ? Effect.succeed({})
-            : cursorWorkspaceMcpServers(cwd, adapterOptions.environment).pipe(
+            : cursorWorkspaceMcpServers(cwd, adapterOptions.environment, {
+                includeProject: cursorLoadsProjectConfig(runtimePolicy, platform),
+              }).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -2715,6 +2766,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   }).pipe(Effect.as({})),
                 ),
               );
+        };
 
         const openAgent = Effect.fnUntraced(function* (openInput: {
           readonly operation: "create" | "resume";
@@ -2896,11 +2948,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             });
           }
           const runtimeInstructions = buildRuntimeInstructions({
+            agentFeedback: mcpServers === undefined ? "off" : (turnInput.agentFeedback ?? "off"),
             harness: "Cursor",
             model: turnInput.modelSelection.model,
             runtimePolicy: turnInput.runtimePolicy,
           });
-          // Resend only on a new/compacted/rewound conversation or when the model changes.
+          // Resend only on a new/compacted/rewound conversation or when the instructions change.
           const sendRuntimeInstructions = delivered.runtime !== runtimeInstructions;
           const text = sendRuntimeInstructions
             ? userText.length === 0
@@ -3004,9 +3057,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             // A send-time set replaces the create-time set, so the workspace servers go only here and are
             // read again each turn from mcp.json and mcp-disabled.json; both merge with settingSources.
             const turnMcpServers = {
-              ...(yield* resolveWorkspaceMcpServers(turnInput.runtimePolicy.cwd)),
+              ...(yield* resolveWorkspaceMcpServers(turnInput.runtimePolicy)),
               ...mcpServers,
             };
+            let starting = true;
             const sdkRun = yield* agent.session
               .send({
                 message,
@@ -3032,8 +3086,17 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   return handleInteractionUpdate(context, update);
                 },
                 onBackgroundShell: (shell) => onBackgroundShell(turnInput, shell),
+                onStartupPhase: (phase) => (starting ? emitStartupPhase(phase) : Effect.void),
               })
-              .pipe(Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)));
+              .pipe(
+                Effect.ensuring(
+                  Effect.suspend(() => {
+                    starting = false;
+                    return emitStartupPhase(undefined);
+                  }),
+                ),
+                Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)),
+              );
             // A resume sends no new instructions, and a native one still continues the stopped request.
             if (resume === undefined) {
               yield* Ref.set(told, {
@@ -3318,6 +3381,41 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ),
               ),
           ),
+          nativeTurnKept: Effect.fn("CursorAdapterV2.nativeTurnKept")(
+            function* (keptInput: {
+              readonly providerThread: OrchestrationV2ProviderThread;
+              readonly nativeTurnId: string;
+            }) {
+              // This session still holds the stopped request and replays it on the next turn itself.
+              const interrupted = yield* Ref.get(interruptedPrompt);
+              if (
+                interrupted?.runId === keptInput.nativeTurnId &&
+                interrupted.agent === nativeThreadId(keptInput.providerThread)
+              )
+                return true;
+              const agent = yield* openAgent({
+                operation: "resume",
+                agentId: nativeThreadId(keptInput.providerThread),
+                storeCwd: keptInput.providerThread.nativeMetadata?.cursorStoreCwd,
+                threadId: keptInput.providerThread.appThreadId ?? input.threadId,
+                modelSelection: input.modelSelection,
+                runtimePolicy: input.runtimePolicy,
+              });
+              if (agent.session.runCheckpointed === undefined) return true;
+              return yield* agent.session.runCheckpointed(keptInput.nativeTurnId);
+            },
+            (effect, keptInput) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
+                      driver: CursorAgentSdk.CURSOR_PROVIDER,
+                      providerThreadId: keptInput.providerThread.id,
+                      cause,
+                    }),
+                ),
+              ),
+          ),
           startTurn,
           resumeTurn: (input) => startTurn(ProviderAdapter.resumeTurnInput(input)),
           compactThread: (turnInput) =>
@@ -3513,7 +3611,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   status: "idle" as const,
                   updatedAt: now,
                 },
-                providerTurns: [],
                 messages: projectedMessages,
                 runtimeRequests: [],
                 providerPayload: {
@@ -3595,7 +3692,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                     status: "idle" as const,
                     updatedAt: now,
                   },
-                  providerTurns: [],
                   messages: [],
                   runtimeRequests: [],
                 };
@@ -3625,7 +3721,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   status: "idle" as const,
                   updatedAt: now,
                 },
-                providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
               };

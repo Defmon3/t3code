@@ -68,6 +68,7 @@ const registeredProjectsLayer = Layer.mergeAll(
               resolveCleanHead: () => Effect.die("unused"),
               captureHeadCheckpoint: () => Effect.die("unused"),
               hasCheckpointRef: () => Effect.die("unused"),
+              copyCheckpointRef: () => Effect.die("unused"),
               restoreCheckpoint: () => Effect.die("unused"),
               diffCheckpoints: () => Effect.die("unused"),
               listAuthoredPaths: () => Effect.die("unused"),

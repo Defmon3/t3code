@@ -3,17 +3,31 @@ import * as Schema from "effect/Schema";
 
 import {
   GitCommandError,
+  GitCommitDetails,
+  GitHistoryCommit,
+  GitPreparePullRequestThreadResult,
+  GitRunStackedActionInput,
+  VcsCreateWorktreeInput,
   VcsGetCommitDetailsInput,
+  VcsGetHistoryInput,
+  VcsHistoryRef,
+  VcsHistorySyncInput,
+  VcsHistorySyncResult,
   VcsListHistoryRefsInput,
   VcsListHistoryRefsResult,
   VcsListRefsInput,
   VcsListRefsResult,
-  GitPreparePullRequestThreadResult,
-  GitRunStackedActionInput,
+  VcsRef,
 } from "./git.ts";
 import { PullRequestDiffFileContentsInput } from "./pullRequest.ts";
 import { ReviewDiffFileContentsInput } from "./review.ts";
+import { WorktreeMcpHandoffInput } from "./worktreeMcp.ts";
 
+const encodeVcsRef = Schema.encodeUnknownSync(VcsRef);
+const decodeVcsRef = Schema.decodeUnknownSync(VcsRef);
+const encodeCreateWorktreeInput = Schema.encodeUnknownSync(VcsCreateWorktreeInput);
+const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
+const decodeWorktreeHandoffInput = Schema.decodeUnknownSync(WorktreeMcpHandoffInput);
 const decodeGitCommandError = Schema.decodeUnknownSync(Schema.toCodecJson(GitCommandError));
 const decodePreparePullRequestThreadResult = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadResult,
@@ -28,6 +42,13 @@ const decodePullRequestDiffFileContentsInput = Schema.decodeUnknownSync(
 const encodePullRequestDiffFileContentsInput = Schema.encodeUnknownSync(
   PullRequestDiffFileContentsInput,
 );
+const encodeVcsHistoryRef = Schema.encodeSync(VcsHistoryRef);
+const decodeVcsHistoryRef = Schema.decodeUnknownSync(VcsHistoryRef);
+const decodeVcsHistorySyncInput = Schema.decodeUnknownSync(VcsHistorySyncInput);
+const decodeVcsHistorySyncResult = Schema.decodeUnknownSync(VcsHistorySyncResult);
+const decodeVcsGetHistoryInput = Schema.decodeUnknownSync(VcsGetHistoryInput);
+const decodeGitHistoryCommit = Schema.decodeUnknownSync(GitHistoryCommit);
+const decodeGitCommitDetails = Schema.decodeUnknownSync(GitCommitDetails);
 
 describe("GitCommandError", () => {
   it("decodes an unknown failure reason as absent", () => {
@@ -202,5 +223,66 @@ describe("Git commit hashes", () => {
   it("accepts SHA-1 and SHA-256 object hashes", () => {
     expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "a".repeat(40) }).hash).toHaveLength(40);
     expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "b".repeat(64) }).hash).toHaveLength(64);
+  });
+});
+
+describe("Git ref names", () => {
+  const namesWithUnicodeWhitespace = ["origin/release/v2\u3000", "\u00a0release", "\u3000"];
+
+  it.each(namesWithUnicodeWhitespace)(
+    "keeps Unicode whitespace at the edges of %j across the wire",
+    (name) => {
+      const ref = { name, upstreamRef: `refs/remotes/${name}`, current: false, isDefault: false };
+      const wireRef = encodeVcsRef({ ...ref, worktreePath: null });
+      expect(decodeVcsRef(wireRef)).toMatchObject(ref);
+
+      const input = { cwd: "/repo", refName: name, newRefName: name, baseRefName: name };
+      const wireInput = encodeCreateWorktreeInput({ ...input, path: null });
+      expect(decodeCreateWorktreeInput(wireInput)).toMatchObject(input);
+
+      const handoff = { branch: name, baseRef: name, startFromOrigin: true };
+      expect(decodeWorktreeHandoffInput(handoff)).toEqual(handoff);
+    },
+  );
+
+  it.each(namesWithUnicodeWhitespace)(
+    "preserves %j in history queries, refs, and commit labels",
+    (name) => {
+      const historyRef = {
+        name,
+        remoteName: name,
+        upstreamName: `origin/${name}`,
+        current: false,
+        isDefault: false,
+        worktreePath: null,
+      };
+      const sync = { action: "fetch", refName: name };
+      const query = { cwd: "/repo", revision: `refs/heads/${name}` };
+      const commit = {
+        hash: "a".repeat(40),
+        parentHashes: [],
+        subject: "Initial commit",
+        authorName: "Author",
+        authorEmail: "author@example.com",
+        authoredAt: "2026-04-20T00:00:00.000Z",
+        refs: [`HEAD -> ${name}`, name],
+      };
+
+      expect(decodeVcsHistoryRef(encodeVcsHistoryRef(historyRef))).toEqual(historyRef);
+      expect(decodeVcsHistorySyncInput({ ...sync, cwd: "/repo", namespace: "local" }).refName).toBe(
+        name,
+      );
+      expect(decodeVcsHistorySyncResult(sync)).toEqual(sync);
+      expect(decodeVcsGetHistoryInput(query)).toEqual(query);
+      expect(decodeGitHistoryCommit(commit).refs).toEqual(commit.refs);
+      expect(decodeGitCommitDetails({ ...commit, body: "" }).refs).toEqual(commit.refs);
+    },
+  );
+
+  it("still trims ASCII whitespace and rejects a blank name", () => {
+    expect(
+      decodeCreateWorktreeInput({ cwd: "/repo", refName: " \tmain\n", path: null }).refName,
+    ).toBe("main");
+    expect(() => decodeCreateWorktreeInput({ cwd: "/repo", refName: " \t", path: null })).toThrow();
   });
 });

@@ -306,6 +306,12 @@ export function readProjects(): ReadonlyArray<EnvironmentProject> {
   return appAtomRegistry.get(environmentProjects.projectsAtom);
 }
 
+export function subscribeProjects(
+  listener: (projects: ReadonlyArray<EnvironmentProject>) => void,
+): () => void {
+  return appAtomRegistry.subscribe(environmentProjects.projectsAtom, listener);
+}
+
 export function waitForProject(
   ref: ScopedProjectRef,
   timeoutMs = 10_000,
@@ -418,7 +424,10 @@ export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId):
 export function readEnvironmentSupportsWorkItemLinking(environmentId: EnvironmentId): boolean {
   const capabilities = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)
     ?.environment.capabilities;
-  return threadPullRequestLinkMode(capabilities) !== "unsupported" || capabilities?.issues === true;
+  return (
+    threadPullRequestLinkMode(capabilities) !== "unsupported" ||
+    capabilities?.issueLinkedThreads === true
+  );
 }
 
 export function readEnvironmentSupportsSnooze(environmentId: EnvironmentId): boolean {

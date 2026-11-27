@@ -148,6 +148,7 @@ it.effect("keeps work item matching available when review investigations are uns
       yield* service
         .generateReviewGuide({
           cwd: input.cwd,
+          projectCwd: input.cwd,
           number: source.number,
           title: source.title,
           description: source.body,

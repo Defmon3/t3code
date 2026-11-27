@@ -7,6 +7,8 @@ import AutoSettleDisabledAt from "./Migrations/054_ProjectionThreadsAutoSettleDi
 import ProjectSkillShortcuts from "./Migrations/061_ProjectSkillShortcuts.ts";
 import ProjectionThreadIssues from "./Migrations/062_ProjectionThreadIssues.ts";
 import WorkItemLinks from "./Migrations/063_WorkItemLinks.ts";
+import CanonicalizeLegacyThreadIssueLinks from "./Migrations/109_CanonicalizeLegacyThreadIssueLinks.ts";
+import WorkItemLinkDisplayKeys from "./Migrations/110_WorkItemLinkDisplayKeys.ts";
 
 type MigrationRow = { readonly id: number; readonly name: string };
 
@@ -42,7 +44,43 @@ const NIGHTLY_MIGRATION_REBASE: ReadonlyArray<readonly [number, number, string]>
   [89, 92, "ShellThreadReadIndexes"],
   [90, 93, "AuthConnectDevices"],
   [91, 94, "AuthConnectDeniedRequests"],
+  [92, 95, "QueuedTurnInputIndexJsonValid"],
+  [93, 96, "ProviderTurnAttemptIndex"],
+  [94, 97, "TurnItemMessageOrdinalIndex"],
+  [95, 98, "TurnItemInlineWorkOutput"],
+  [96, 99, "RepairStaleTitleRegeneration"],
+  [97, 100, "IssueTrackerBindings"],
+  [98, 101, "ActiveShellIndexIndexes"],
+  [99, 102, "BackgroundRecoveryIndexes"],
+  [100, 103, "TurnStartReadIndexes"],
+  [101, 104, "DelegatedTaskReadIndexes"],
+  [102, 105, "ThreadItemCounts"],
+  [103, 106, "IssueTrackerAdditionalScopes"],
+  [104, 107, "ProjectionProjectsTrackedFolders"],
+  [105, 108, "TaskFolders"],
+  [106, 111, "WorktreePathKeyIndex"],
+  [107, 112, "DeferredSlashCommandIndex"],
+  [108, 113, "AgentFeedback"],
+  [109, 114, "IssueTrackerAccounts"],
+  [110, 115, "Workflows"],
+  [111, 116, "SupersededRunAttemptIndex"],
+  [112, 117, "LayoutCommandApprovals"],
+  [113, 118, "WorkflowSkippedRuns"],
+  [114, 119, "WorkflowRunIndexes"],
+  [115, 120, "WorkflowRunTags"],
+  [116, 121, "ForkHistoryMembership"],
+  [117, 122, "WorkflowMailSender"],
+  [118, 123, "WorkflowPools"],
+  [119, 124, "WorkflowRunSubject"],
 ];
+
+const CUSTOM_MIGRATIONS = [
+  [61, "ProjectSkillShortcuts", ProjectSkillShortcuts],
+  [62, "ProjectionThreadIssues", ProjectionThreadIssues],
+  [63, "WorkItemLinks", WorkItemLinks],
+  [109, "CanonicalizeLegacyThreadIssueLinks", CanonicalizeLegacyThreadIssueLinks],
+  [110, "WorkItemLinkDisplayKeys", WorkItemLinkDisplayKeys],
+] as const;
 
 function nightlyMigrationPrefix(history: ReadonlyArray<MigrationRow>) {
   const nightly = history.filter((row) => row.id >= 61);
@@ -77,25 +115,31 @@ const rebaseNightlyMigrationSequence = Effect.fn("rebaseNightlyMigrationSequence
     return [] as const;
   }
   const prefixEnd = 60 + prefix.length;
+  const rebasedEnd = prefix.at(-1)![1];
   yield* sql`UPDATE effect_sql_migrations SET migration_id = migration_id + 100
     WHERE migration_id BETWEEN 61 AND ${prefixEnd}`;
-  yield* ProjectSkillShortcuts;
-  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (61, 'ProjectSkillShortcuts')`;
-  yield* ProjectionThreadIssues;
-  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (62, 'ProjectionThreadIssues')`;
-  yield* WorkItemLinks;
-  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (63, 'WorkItemLinks')`;
+  const executed: Array<readonly [number, string]> = [];
+  for (const [id, name, migration] of CUSTOM_MIGRATIONS) {
+    if (id > rebasedEnd) break;
+    yield* Effect.mapError(
+      migration,
+      (cause) =>
+        new Migrator.MigrationError({
+          cause,
+          kind: "Failed",
+          message: `Migration "${id}_${name}" failed`,
+        }),
+    );
+    yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+    executed.push([id, name]);
+  }
   for (const [fromId, toId, name] of prefix) {
     yield* sql`
       UPDATE effect_sql_migrations SET migration_id = ${toId}, name = ${name}
       WHERE migration_id = ${fromId + 100} AND name = ${name}
     `;
   }
-  return [
-    [61, "ProjectSkillShortcuts"],
-    [62, "ProjectionThreadIssues"],
-    [63, "WorkItemLinks"],
-  ] as const;
+  return executed;
 });
 
 // Previews used V2 ids 53/54; preserve their schema and import progress while reserving main's ids.
@@ -121,14 +165,16 @@ export function reconciledV2PreviewHistory(
 ): ReadonlyArray<MigrationRow> | null {
   const prefix = nightlyMigrationPrefix(history);
   if (prefix.length === 1) return history.filter((row) => row.id < 61);
-  if (prefix.length > 1) {
+  const lastRebased = prefix.at(-1);
+  if (lastRebased !== undefined) {
     return [
       ...history.filter((row) => row.id < 61),
-      { id: 61, name: "ProjectSkillShortcuts" },
-      { id: 62, name: "ProjectionThreadIssues" },
-      { id: 63, name: "WorkItemLinks" },
+      ...CUSTOM_MIGRATIONS.filter(([id]) => id <= lastRebased[1]).map(([id, name]) => ({
+        id,
+        name,
+      })),
       ...prefix.map(([, id, name]) => ({ id, name })),
-    ];
+    ].sort((left, right) => left.id - right.id);
   }
   const issuePreview = history.find(
     (row) => row.name === "ProjectionThreadIssues" && [54, 57, 59, 60, 61].includes(row.id),

@@ -113,6 +113,24 @@ export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
   } as Omit<S, "q"> & { readonly q?: string } & PullRequestListPreferences;
 }
 
+export function issuesSearchForRestore<S extends object>(
+  preferences: S,
+  selected: RightPanelSurface | null,
+) {
+  if (selected?.kind !== "issue") return preferences;
+  return {
+    ...preferences,
+    ...(selected.environmentId === undefined
+      ? {}
+      : { selectedEnvironmentId: selected.environmentId as EnvironmentId }),
+    selectedProjectId: selected.projectId as ProjectId,
+    ...(selected.host === undefined ? {} : { selectedHost: selected.host }),
+    tracker: selected.tracker,
+    scope: selected.scope,
+    key: selected.key,
+  };
+}
+
 export async function reopenClosedView(
   view: ClosedView,
   options: {

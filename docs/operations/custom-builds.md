@@ -1,8 +1,7 @@
 # Custom desktop builds
 
-This page is for maintainers of the custom `Defmon3/t3code` distribution. The upstream release
-runbook in `docs/operations/release.md` describes `pingdotgg/t3code`; use this page when the
-desktop build must update from our repository instead.
+This page is for maintainers of the custom `Defmon3/t3code` distribution. See the
+[release runbook](./03_release.md) for release checks shared with local desktop builds.
 
 ## What the updater supports
 

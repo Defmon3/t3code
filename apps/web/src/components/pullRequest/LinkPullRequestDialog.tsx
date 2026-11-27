@@ -11,7 +11,7 @@ import { msg, T, useGT } from "gt-react";
 import { useRef, useState } from "react";
 import { m } from "~/i18n/messages";
 
-import { useProjects, useThreadShell } from "~/state/entities";
+import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { useIssueLinking } from "~/hooks/useIssueLinking";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -49,7 +49,11 @@ export function LinkPullRequestDialogHost() {
   const threadRef = useAtomValue(linkPullRequestDialogThreadAtom);
   const thread = useThreadShell(threadRef);
   const linking = usePullRequestLinking(threadRef?.environmentId);
-  if (threadRef === null || linking.mode === "unsupported") return null;
+  const configs = useServerConfigs();
+  if (threadRef === null) return null;
+  const supportsIssueLinks =
+    configs.get(threadRef.environmentId)?.environment.capabilities.issueLinkedThreads === true;
+  if (linking.mode === "unsupported" && !supportsIssueLinks) return null;
   return (
     <LinkPullRequestDialog
       open
@@ -70,6 +74,7 @@ function LinkPullRequestDialog({
 }: LinkPullRequestDialogProps) {
   const gt = useGT();
   const inputRef = useRef<HTMLInputElement>(null);
+  const submittingRef = useRef(false);
   const [reference, setReference] = useState("");
   const [dirty, setDirty] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -105,15 +110,19 @@ function LinkPullRequestDialog({
   const canLinkIssue = issueLinking.canLink(threadRef, issueUrl);
 
   const submit = async () => {
+    if (submittingRef.current) return;
     setDirty(true);
-    if (!canLinkIssue && (resolved === null || "error" in resolved)) return;
+    const submitLink = canLinkIssue
+      ? () => issueLinking.changeLink(threadRef, issueUrl, true)
+      : resolved !== null && "link" in resolved
+        ? () => linking.changeLink(threadRef, resolved.link.url, true)
+        : null;
+    if (submitLink === null) return;
+    submittingRef.current = true;
     setSubmitError(null);
     setPending(true);
-    const result = await settlePromise(() => {
-      if (canLinkIssue) return issueLinking.changeLink(threadRef, issueUrl, true);
-      if (resolved === null || "error" in resolved) throw new Error(gt("Enter a valid link."));
-      return linking.changeLink(threadRef, resolved.link.url, true);
-    });
+    const result = await settlePromise(submitLink);
+    submittingRef.current = false;
     setPending(false);
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);
@@ -153,12 +162,20 @@ function LinkPullRequestDialog({
             ref={inputRef}
             placeholder={gt("Issue or pull request URL")}
             value={reference}
+            readOnly={pending}
             onChange={(event) => {
               setDirty(true);
               setReference(event.target.value);
             }}
             onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
+              if (
+                event.key !== "Enter" ||
+                event.repeat ||
+                event.nativeEvent.isComposing ||
+                event.keyCode === 229
+              ) {
+                return;
+              }
               event.preventDefault();
               void submit();
             }}

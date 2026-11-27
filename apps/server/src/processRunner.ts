@@ -12,8 +12,9 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as WindowsProcessWorker from "./WindowsProcessWorker.ts";
+import * as NodeBuffer from "node:buffer";
 import {
-  collectUint8StreamText,
+  collectUint8StreamChunks,
   decodeUtf8,
   type CollectedUint8StreamText,
 } from "@t3tools/provider-core/server/collectStreamText";
@@ -34,6 +35,7 @@ export interface ProcessRunInput {
   readonly maxOutputBytes?: number | undefined;
   readonly outputMode?: "error" | "truncate" | undefined;
   readonly truncatedMarker?: string | undefined;
+  readonly decodeOutput?: ((bytes: Uint8Array, truncated: boolean) => string) | undefined;
   /** Timed-out results discard partial stdout/stderr. */
   readonly timeoutBehavior?: "error" | "timedOutResult" | undefined;
 }
@@ -152,6 +154,18 @@ const DEFAULT_TIMEOUT = "60 seconds";
 const FORCE_KILL_AFTER = "1 second";
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
+function decodeProcessOutput(
+  bytes: Uint8Array,
+  truncated: boolean,
+  input: Pick<ProcessRunInput, "decodeOutput" | "truncatedMarker">,
+) {
+  const { text, invalidUtf8 } =
+    input.decodeOutput === undefined
+      ? decodeUtf8(bytes)
+      : { text: input.decodeOutput(bytes, truncated), invalidUtf8: !NodeBuffer.isUtf8(bytes) };
+  return { text: truncated ? text + (input.truncatedMarker ?? "") : text, invalidUtf8 };
+}
+
 const collectText = Effect.fnUntraced(function* (input: {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -162,6 +176,7 @@ const collectText = Effect.fnUntraced(function* (input: {
   readonly maxOutputBytes: number;
   readonly outputMode: "error" | "truncate";
   readonly truncatedMarker: string;
+  readonly decodeOutput: ProcessRunInput["decodeOutput"];
 }) {
   const stream = input.stream.pipe(
     Stream.mapError(
@@ -178,11 +193,15 @@ const collectText = Effect.fnUntraced(function* (input: {
   );
 
   if (input.outputMode === "truncate") {
-    return yield* collectUint8StreamText({
+    const { chunks, bytes, truncated } = yield* collectUint8StreamChunks({
       stream,
       maxBytes: input.maxOutputBytes,
-      truncatedMarker: input.truncatedMarker,
     });
+    return {
+      ...decodeProcessOutput(Buffer.concat(chunks, bytes), truncated, input),
+      bytes,
+      truncated,
+    };
   }
 
   return yield* stream.pipe(
@@ -220,7 +239,7 @@ const collectText = Effect.fnUntraced(function* (input: {
       },
     ),
     Effect.map((state): CollectedUint8StreamText => ({
-      ...decodeUtf8(Buffer.concat(state.chunks, state.bytes)),
+      ...decodeProcessOutput(Buffer.concat(state.chunks, state.bytes), false, input),
       bytes: state.bytes,
       truncated: false,
     })),
@@ -357,6 +376,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         maxOutputBytes,
         outputMode,
         truncatedMarker,
+        decodeOutput: input.decodeOutput,
       }),
       collectText({
         command: input.command,
@@ -368,6 +388,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         maxOutputBytes,
         outputMode,
         truncatedMarker,
+        decodeOutput: input.decodeOutput,
       }),
       writeStdin,
     ],
@@ -462,12 +483,11 @@ const runGitInWorker = Effect.fn("processRunner.runProcessCore")(function* (
         });
       }),
     );
-  const stdout = decodeUtf8(output.stdout);
-  const stderr = decodeUtf8(output.stderr);
-  const marker = input.truncatedMarker ?? "";
+  const stdout = decodeProcessOutput(output.stdout, output.stdoutTruncated, input);
+  const stderr = decodeProcessOutput(output.stderr, output.stderrTruncated, input);
   return {
-    stdout: stdout.text + (output.stdoutTruncated ? marker : ""),
-    stderr: stderr.text + (output.stderrTruncated ? marker : ""),
+    stdout: stdout.text,
+    stderr: stderr.text,
     code: output.code === null ? null : ChildProcessSpawner.ExitCode(output.code),
     timedOut: false,
     stdoutTruncated: output.stdoutTruncated,

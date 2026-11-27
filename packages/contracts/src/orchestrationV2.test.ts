@@ -50,38 +50,47 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
-  it.each([{ command: "git status", cwd: "/workspace" }, {}])(
-    "preserves structured approval data through storage and wire codecs: %j",
-    (fields) => {
-      const stored = {
-        id: "approval-item",
-        threadId: "approval-thread",
-        runId: null,
-        nodeId: null,
-        providerThreadId: null,
-        providerTurnId: null,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: 0,
-        status: "waiting",
-        title: null,
-        startedAt: null,
-        completedAt: null,
-        updatedAt: DateTime.formatIso(now),
-        type: "approval_request",
-        requestId: "approval-request",
-        requestKind: "command",
-        prompt: "Inspect the repository",
-        reason: "Needs approval",
-        ...fields,
-      };
-      const item = decodeOrchestrationV2TurnItemJson(stored);
-      expect(encodeOrchestrationV2TurnItemJson(item)).toEqual(stored);
-      const wire = encodeOrchestrationV2TurnItemWire(item);
-      expect(wire).toEqual(stored);
-      expect(decodeOrchestrationV2TurnItemJson(wire)).toEqual(item);
+  it.each([
+    { command: "git status", cwd: "/workspace" },
+    {
+      command: "git push",
+      cwd: "/workspace",
+      pushHooks: {
+        branch: "feature",
+        files: [".git/hooks/pre-push"],
+        commands: [{ name: "pre-push", command: "validate" }],
+      },
     },
-  );
+    {},
+  ])("preserves structured approval data through storage and wire codecs: %j", (fields) => {
+    const stored = {
+      id: "approval-item",
+      threadId: "approval-thread",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "waiting",
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.formatIso(now),
+      type: "approval_request",
+      requestId: "approval-request",
+      requestKind: "command",
+      prompt: "Inspect the repository",
+      reason: "Needs approval",
+      ...fields,
+    };
+    const item = decodeOrchestrationV2TurnItemJson(stored);
+    expect(encodeOrchestrationV2TurnItemJson(item)).toEqual(stored);
+    const wire = encodeOrchestrationV2TurnItemWire(item);
+    expect(wire).toEqual(stored);
+    expect(decodeOrchestrationV2TurnItemJson(wire)).toEqual(item);
+  });
 
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(

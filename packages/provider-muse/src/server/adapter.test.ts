@@ -390,10 +390,11 @@ vi.mock("node:fs/promises", { spy: true });
 
 describe("MuseAdapterV2", () => {
   it.effect.each([true, false])(
-    "connects MCP and conditions issue instructions on capability: %s",
+    "connects MCP on native start and resume with issue tools available: %s",
     (issueToolsAvailable) =>
       Effect.gen(function* () {
-        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = {
           environmentId: EnvironmentId.make("test-environment"),
           threadId: THREAD_ID,
           providerSessionId: "test-session",
@@ -402,8 +403,9 @@ describe("MuseAdapterV2", () => {
           authorizationHeader: "Bearer thread-scoped-test-token",
           browserToolsAvailable: true,
           capabilities: new Set(issueToolsAvailable ? ["issues"] : []),
-        });
+        };
         for (const nativeId of [undefined, "saved-native-session"]) {
+          yield* sessions.set(config);
           const fake = yield* makeFakeMuse();
           fake.host.initializeResult.grantedCapabilities.push("sessionMcp");
           const harness = yield* makeHarness(fake, INSTANCE_ID, nativeId);
@@ -418,16 +420,19 @@ describe("MuseAdapterV2", () => {
               },
             },
           });
-          yield* harness.runtime.startTurn(yield* turnInput(harness.providerThread));
+          yield* sessions.clear(THREAD_ID);
+          const projectInstructions = "Follow the project review process.";
+          yield* harness.runtime.startTurn({
+            ...(yield* turnInput(harness.providerThread, 1, harness.policy)),
+            agentFeedback: "auto",
+            projectInstructions,
+          });
           const admitted = yield* fake.takeCall("turn/start");
           const parts = yield* decodeTextInput(admitted.params.input);
-          assert.strictEqual(parts[0]?.text.includes("<issue_linking>"), issueToolsAvailable);
-          if (issueToolsAvailable) {
-            assert.include(
-              parts[0]!.text,
-              "attach that issue to the current thread before starting work",
-            );
-          }
+          const instructions = parts[0]?.text;
+          assert.include(instructions, "t3_feedback");
+          assert.strictEqual(instructions?.includes("<issue_linking>"), issueToolsAvailable);
+          assert.isTrue(instructions?.endsWith(projectInstructions));
         }
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
@@ -1517,6 +1522,13 @@ describe("MuseAdapterV2", () => {
       const harness = yield* makeHarness(fake, INSTANCE_ID, "saved-session");
       const resumed = yield* fake.takeCall("session/resume");
       assert.strictEqual(resumed.params.sessionId, "saved-session");
+      // Loading the saved session is reported while Muse answers, then cleared.
+      const phases: Array<string | null> = [];
+      for (let index = 0; index < 2; index += 1) {
+        const update = yield* harness.takeEvent("provider_session.updated");
+        phases.push(update.providerSession.startupPhase ?? null);
+      }
+      assert.deepStrictEqual(phases, ["resume", null]);
       assert.strictEqual(resumed.params.excludeItems, true);
       assert.isFalse(fake.calls.some((call) => call.method === "session/start"));
       assert.strictEqual(harness.providerThread.nativeThreadRef?.nativeId, "saved-session");

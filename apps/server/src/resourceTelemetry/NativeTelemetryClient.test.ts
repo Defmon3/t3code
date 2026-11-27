@@ -6,6 +6,8 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
@@ -18,6 +20,7 @@ import {
   clearProcessDiscoveryRequest,
   type PendingDiscoveryRequest,
   type NativeTelemetryClientError,
+  requestProcessTable,
   commitCollectionControlUpdate,
   synchronizeCollectionControlOnStart,
 } from "./NativeTelemetryClient.ts";
@@ -330,3 +333,19 @@ describe("appendProcessDiscoveryChunk", () => {
     expect(appendProcessDiscoveryChunk([], discoveryChunk(true, []))).toEqual([]);
   });
 });
+
+it.effect("bounds a process-table write that outlasts the deadline", () =>
+  Effect.gen(function* () {
+    const response = yield* Deferred.make<void>();
+    const writing = yield* Deferred.make<void>();
+    const fiber = yield* requestProcessTable(
+      Deferred.succeed(writing, undefined).pipe(Effect.andThen(Effect.sleep(300))),
+      response,
+      Duration.millis(250),
+    ).pipe(Effect.flip, Effect.forkChild);
+    yield* Deferred.await(writing);
+    yield* TestClock.adjust(250);
+    expect(fiber.pollUnsafe()?._tag).toBe("Success");
+    expect((yield* Fiber.join(fiber)).timeoutMs).toBe(250);
+  }),
+);

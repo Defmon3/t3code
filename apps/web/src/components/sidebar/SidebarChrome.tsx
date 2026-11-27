@@ -26,7 +26,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { readIssueListPreferences } from "../issue/issueListPreferences";
 import { IssueGlyph } from "../issue/issuePresentation";
@@ -36,6 +35,7 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -79,33 +79,38 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       <div className="relative z-10 flex min-w-0 flex-1 flex-col items-start justify-center gap-0.5 py-1">
         <SidebarBrand onBackdrop={backdropVariant !== null} />
         {customBuildLabel || pillLabel ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <div
-                  className="ml-3 flex min-w-0 flex-wrap items-center gap-1 rounded-sm outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  data-environment-identification="pill"
-                  tabIndex={0}
-                >
-                  {(customBuildLabel ?? pillLabel)?.split(" · ").map((label) => (
-                    <Badge key={label} size="sm" variant="secondary">
-                      {label}
-                    </Badge>
-                  ))}
-                </div>
-              }
-            />
-            <TooltipPopup variant="code" className="max-w-none whitespace-pre-line" side="bottom">
-              {customBuildLabel ?? pillLabel}
-              {APP_IS_CUSTOM_BUILD ? "\n" + gt("Version {version}", { version: APP_VERSION }) : ""}
-              {APP_IS_CUSTOM_BUILD && APP_BUILD_TIME
-                ? "\n" + gt("Built {time}", { time: APP_BUILD_TIME })
-                : ""}
-              {APP_IS_CUSTOM_BUILD && APP_COMMIT_HASH
-                ? "\n" + gt("Commit {hash}", { hash: APP_COMMIT_HASH })
-                : ""}
-            </TooltipPopup>
-          </Tooltip>
+          <SharedTooltipTrigger
+            render={
+              <div
+                className="ml-3 flex min-w-0 flex-wrap items-center gap-1 rounded-sm outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                data-environment-identification="pill"
+                tabIndex={0}
+              />
+            }
+            variant="code"
+            className="max-w-none whitespace-pre-line"
+            side="bottom"
+            label={
+              <>
+                {customBuildLabel ?? pillLabel}
+                {APP_IS_CUSTOM_BUILD
+                  ? "\n" + gt("Version {version}", { version: APP_VERSION })
+                  : ""}
+                {APP_IS_CUSTOM_BUILD && APP_BUILD_TIME
+                  ? "\n" + gt("Built {time}", { time: APP_BUILD_TIME })
+                  : ""}
+                {APP_IS_CUSTOM_BUILD && APP_COMMIT_HASH
+                  ? "\n" + gt("Commit {hash}", { hash: APP_COMMIT_HASH })
+                  : ""}
+              </>
+            }
+          >
+            {(customBuildLabel ?? pillLabel)?.split(" · ").map((label) => (
+              <Badge key={label} size="sm" variant="secondary">
+                {label}
+              </Badge>
+            ))}
+          </SharedTooltipTrigger>
         ) : null}
       </div>
     </div>
@@ -180,16 +185,14 @@ function SidebarUtilityItem({
 }) {
   return (
     <SidebarMenuItem className="shrink-0">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
-              {icon}
-            </SidebarMenuButton>
-          }
-        />
-        <TooltipPopup side="top">{label}</TooltipPopup>
-      </Tooltip>
+      <SharedTooltipTrigger
+        render={
+          <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            {icon}
+          </SidebarMenuButton>
+        }
+        label={label}
+      />
     </SidebarMenuItem>
   );
 }

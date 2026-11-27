@@ -1,14 +1,19 @@
 import {
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
+  PUSH_HOOKS_APPROVAL_LABEL,
+  PUSH_HOOKS_APPROVAL_QUESTION,
 } from "@t3tools/client-runtime/state/thread-requests";
+import { T, useGT, useMessages } from "gt-react";
 import { memo } from "react";
 import { hookApprovalBypassSteps } from "@t3tools/client-runtime/state/hook-approvals";
 import { ShieldIcon, ShieldAlertIcon } from "lucide-react";
 import { type PendingApproval } from "../../session-logic";
 import { InlineButton } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { ApprovalText } from "./ApprovalText";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import { PushHooksApprovalDetails } from "./PushHooksApprovalDetails";
 import { cn } from "~/lib/utils";
 
 interface ComposerPendingApprovalPanelProps {
@@ -26,31 +31,35 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   commandExpanded = false,
   commandDetailId,
 }: ComposerPendingApprovalPanelProps) {
-  const Detail = approval.requestKind === "mcp-elicitation" ? "span" : "code";
-  const fallbackLabel = approval.bypass
-    ? "BYPASS ATTEMPT"
-    : approval.requestKind === "mcp-elicitation"
-      ? "App access approval"
-      : approval.requestKind === "command"
-        ? "Command approval"
-        : approval.requestKind === "file-read"
-          ? "File read approval"
-          : approval.requestKind === "permission"
-            ? "App permission approval"
-            : "File change approval";
+  const m = useMessages();
+  const gt = useGT();
+  const { bypass, pushHooks } = approval;
+  const fallbackLabel = pushHooks
+    ? m(PUSH_HOOKS_APPROVAL_LABEL)
+    : bypass
+      ? gt("BYPASS ATTEMPT")
+      : approval.requestKind === "mcp-elicitation"
+        ? gt("App access approval")
+        : approval.requestKind === "command"
+          ? gt("Command approval")
+          : approval.requestKind === "file-read"
+            ? gt("File read approval")
+            : approval.requestKind === "permission"
+              ? gt("App permission approval")
+              : gt("File change approval");
   const detailAriaLabel =
     approval.requestKind === "mcp-elicitation"
-      ? "App access request"
+      ? gt("App access request")
       : approval.requestKind === "command"
-        ? "Command"
+        ? gt("Command", { $context: "noun, shell command awaiting approval" })
         : approval.requestKind === "file-read"
-          ? "File to read"
+          ? gt("File to read")
           : approval.requestKind === "permission"
-            ? "Permission request"
-            : "File change";
+            ? gt("Permission request")
+            : gt("File change");
 
   return (
-    <span
+    <div
       aria-label={fallbackLabel}
       className={cn("flex min-w-0 flex-1 flex-col items-start gap-1", className)}
       role="group"
@@ -73,20 +82,22 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         >
           {fallbackLabel}
         </span>
-        {approval.appName ? <span className="min-w-0 truncate">{approval.appName}</span> : null}
+        {approval.appName && !pushHooks ? (
+          <span className="min-w-0 truncate">{approval.appName}</span>
+        ) : null}
         {approval.fullAccessOverride ? (
           <Popover>
             <PopoverTrigger openOnHover render={<InlineButton tone="muted" />}>
-              {FULL_ACCESS_OVERRIDE_QUESTION}
+              {m(FULL_ACCESS_OVERRIDE_QUESTION)}
             </PopoverTrigger>
             <PopoverPopup
               {...composerFloatingLayerProps}
-              aria-label={FULL_ACCESS_OVERRIDE_QUESTION}
+              aria-label={m(FULL_ACCESS_OVERRIDE_QUESTION)}
               tooltipStyle
               side="top"
               className="max-w-[min(22rem,calc(100vw-2rem))] whitespace-normal"
             >
-              {fullAccessOverrideExplanation(approval.fullAccessOverride)}
+              {fullAccessOverrideExplanation(approval.fullAccessOverride, m)}
             </PopoverPopup>
           </Popover>
         ) : null}
@@ -94,72 +105,96 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           <span className="ml-auto shrink-0 tabular-nums">1/{pendingCount}</span>
         ) : null}
       </span>
-      {approval.bypass ? (
+      {bypass ? (
         <span className="flex w-full min-w-0 flex-col gap-1 text-sm wrap-anywhere">
-          <span className="font-semibold text-destructive">Rule: {approval.bypass.rule}</span>
-          <span>
-            Technique: {approval.bypass.technique} · Tier {approval.bypass.tier}
+          <span className="font-semibold text-destructive">
+            {gt("Rule: {rule}", { rule: bypass.rule })}
           </span>
-          <span className="whitespace-pre-wrap">{approval.bypass.reasoning}</span>
+          <span>
+            {gt("Technique: {technique} · Tier {tier}", {
+              technique: bypass.technique,
+              tier: bypass.tier,
+            })}
+          </span>
+          <span className="whitespace-pre-wrap">{bypass.reasoning}</span>
         </span>
       ) : null}
-      <Detail
-        id={commandDetailId}
-        aria-label={detailAriaLabel}
-        className={cn(
-          "block w-full min-w-0 overflow-auto text-xs text-foreground [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5",
-          approval.requestKind === "command"
-            ? cn(
-                "whitespace-pre-wrap rounded-md border border-border bg-background/50 p-3 font-mono text-sm leading-relaxed wrap-anywhere",
-                commandExpanded ? "max-h-96" : "max-h-24",
-                approval.bypass && "border-destructive bg-destructive/10",
-              )
-            : approval.requestKind === "mcp-elicitation"
-              ? "max-h-20 whitespace-pre-wrap font-sans wrap-break-word"
-              : "max-h-40 whitespace-pre-wrap font-mono wrap-anywhere",
-        )}
-        data-approval-detail="complete"
-        tabIndex={0}
-      >
-        {approval.responseCapability === "not_resumable"
-          ? "Provider process is gone. Interrupt or restart the run to respond."
-          : approval.bypass
-            ? hookApprovalBypassSteps(approval.bypass).map((step, index) => (
-                <span
-                  key={step.key}
-                  className={cn(
-                    "block whitespace-pre-wrap wrap-anywhere",
-                    step.triggered && "bg-destructive/10 font-semibold text-destructive",
-                  )}
-                >
-                  <span className="font-sans">
-                    Step {index + 1}
-                    {step.triggered ? " · TRIGGERED" : ""}:{" "}
-                  </span>
-                  {step.command}
+      <div id={commandDetailId} className="w-full min-w-0 text-xs">
+        {approval.responseCapability === "not_resumable" ? (
+          <span>
+            <T>Provider process is gone. Interrupt or restart the run to respond.</T>
+          </span>
+        ) : pushHooks ? (
+          <>
+            <span className="block text-foreground">{m(PUSH_HOOKS_APPROVAL_QUESTION)}</span>
+            <PushHooksApprovalDetails pushHooks={pushHooks} />
+          </>
+        ) : bypass ? (
+          <div
+            aria-label={detailAriaLabel}
+            className={cn(
+              "overflow-auto rounded-md border border-destructive bg-destructive/10 p-3 [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+              commandExpanded ? "max-h-96" : "max-h-24",
+            )}
+            tabIndex={0}
+          >
+            {hookApprovalBypassSteps(bypass).map((step, index) => (
+              <div
+                key={step.key}
+                className={cn(step.triggered && "bg-destructive/10 font-semibold text-destructive")}
+              >
+                <span>
+                  {step.triggered
+                    ? gt("Step {step} · TRIGGERED:", { step: index + 1 })
+                    : gt("Step {step}:", { step: index + 1 })}
                 </span>
-              ))
-            : (approval.command ?? approval.detail ?? fallbackLabel)}
-      </Detail>
-      {approval.bypass ? (
+                <ApprovalText text={step.command} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <ApprovalText
+            text={approval.command ?? approval.detail ?? fallbackLabel}
+            label={detailAriaLabel}
+            className={
+              approval.requestKind === "command"
+                ? cn(
+                    "rounded-md border border-border bg-background/50 p-3 text-sm leading-relaxed",
+                    commandExpanded ? "max-h-96" : "max-h-24",
+                  )
+                : approval.requestKind === "mcp-elicitation"
+                  ? "max-h-20 font-sans wrap-break-word"
+                  : "max-h-40"
+            }
+          />
+        )}
+      </div>
+      {bypass ? (
         <span className="flex w-full min-w-0 flex-col gap-1 text-xs wrap-anywhere">
           <span>
-            Runtime: {approval.bypass.runtime} · Model: {approval.bypass.model}
+            {gt("Runtime: {runtime} · Model: {model}", {
+              runtime: bypass.runtime,
+              model: bypass.model,
+            })}
           </span>
           {commandExpanded ? (
             <>
-              <span>Session: {approval.bypass.sessionId}</span>
-              <span>Thread: {approval.bypass.threadTitle}</span>
-              <span>Thread ID: {approval.bypass.threadId}</span>
+              <span>{gt("Session: {value}", { value: bypass.sessionId })}</span>
+              <span>{gt("Thread: {value}", { value: bypass.threadTitle })}</span>
+              <span>{gt("Thread ID: {value}", { value: bypass.threadId })}</span>
             </>
           ) : (
-            <span className="text-muted-foreground">Expand to see session and thread details.</span>
+            <span className="text-muted-foreground">
+              <T>Expand to see session and thread details.</T>
+            </span>
           )}
         </span>
       ) : null}
       {approval.cwd ? (
         <span className="flex w-full min-w-0 flex-wrap gap-x-3 gap-y-1 text-sm">
-          <span className="font-medium">Working directory</span>
+          <span className="font-medium">
+            <T>Working directory</T>
+          </span>
           <code className="min-w-0 wrap-anywhere">{approval.cwd}</code>
         </span>
       ) : null}
@@ -178,6 +213,6 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           {approval.sessionApprovalScope}
         </span>
       ) : null}
-    </span>
+    </div>
   );
 });

@@ -42,6 +42,34 @@ import TurnItemTypeStatusIndex from "./Migrations/088_TurnItemTypeStatusIndex.ts
 import ShellThreadReadIndexes from "./Migrations/089_ShellThreadReadIndexes.ts";
 import AuthConnectDevices from "./Migrations/090_AuthConnectDevices.ts";
 import AuthConnectDeniedRequests from "./Migrations/091_AuthConnectDeniedRequests.ts";
+import QueuedTurnInputIndexJsonValid from "./Migrations/092_QueuedTurnInputIndexJsonValid.ts";
+import ProviderTurnAttemptIndex from "./Migrations/093_ProviderTurnAttemptIndex.ts";
+import TurnItemMessageOrdinalIndex from "./Migrations/094_TurnItemMessageOrdinalIndex.ts";
+import TurnItemInlineWorkOutput from "./Migrations/095_TurnItemInlineWorkOutput.ts";
+import RepairStaleTitleRegeneration from "./Migrations/096_RepairStaleTitleRegeneration.ts";
+import IssueTrackerBindings from "./Migrations/097_IssueTrackerBindings.ts";
+import ActiveShellIndexIndexes from "./Migrations/098_ActiveShellIndexIndexes.ts";
+import BackgroundRecoveryIndexes from "./Migrations/099_BackgroundRecoveryIndexes.ts";
+import TurnStartReadIndexes from "./Migrations/100_TurnStartReadIndexes.ts";
+import DelegatedTaskReadIndexes from "./Migrations/101_DelegatedTaskReadIndexes.ts";
+import ThreadItemCounts from "./Migrations/102_ThreadItemCounts.ts";
+import IssueTrackerAdditionalScopes from "./Migrations/103_IssueTrackerAdditionalScopes.ts";
+import ProjectionProjectsTrackedFolders from "./Migrations/104_ProjectionProjectsTrackedFolders.ts";
+import TaskFolders from "./Migrations/105_TaskFolders.ts";
+import WorktreePathKeyIndex from "./Migrations/106_WorktreePathKeyIndex.ts";
+import DeferredSlashCommandIndex from "./Migrations/107_DeferredSlashCommandIndex.ts";
+import AgentFeedback from "./Migrations/108_AgentFeedback.ts";
+import IssueTrackerAccounts from "./Migrations/109_IssueTrackerAccounts.ts";
+import Workflows from "./Migrations/110_Workflows.ts";
+import SupersededRunAttemptIndex from "./Migrations/111_SupersededRunAttemptIndex.ts";
+import LayoutCommandApprovals from "./Migrations/112_LayoutCommandApprovals.ts";
+import WorkflowSkippedRuns from "./Migrations/113_WorkflowSkippedRuns.ts";
+import WorkflowRunIndexes from "./Migrations/114_WorkflowRunIndexes.ts";
+import WorkflowRunTags from "./Migrations/115_WorkflowRunTags.ts";
+import ForkHistoryMembership from "./Migrations/116_ForkHistoryMembership.ts";
+import WorkflowMailSender from "./Migrations/117_WorkflowMailSender.ts";
+import WorkflowPools from "./Migrations/118_WorkflowPools.ts";
+import WorkflowRunSubject from "./Migrations/119_WorkflowRunSubject.ts";
 import { reconciledV2PreviewHistory } from "./reconcileV2PreviewMigration.ts";
 
 const seedPreview = Effect.gen(function* () {
@@ -92,6 +120,34 @@ const nightlyMigrations = [
   ["ShellThreadReadIndexes", ShellThreadReadIndexes],
   ["AuthConnectDevices", AuthConnectDevices],
   ["AuthConnectDeniedRequests", AuthConnectDeniedRequests],
+  ["QueuedTurnInputIndexJsonValid", QueuedTurnInputIndexJsonValid],
+  ["ProviderTurnAttemptIndex", ProviderTurnAttemptIndex],
+  ["TurnItemMessageOrdinalIndex", TurnItemMessageOrdinalIndex],
+  ["TurnItemInlineWorkOutput", TurnItemInlineWorkOutput],
+  ["RepairStaleTitleRegeneration", RepairStaleTitleRegeneration],
+  ["IssueTrackerBindings", IssueTrackerBindings],
+  ["ActiveShellIndexIndexes", ActiveShellIndexIndexes],
+  ["BackgroundRecoveryIndexes", BackgroundRecoveryIndexes],
+  ["TurnStartReadIndexes", TurnStartReadIndexes],
+  ["DelegatedTaskReadIndexes", DelegatedTaskReadIndexes],
+  ["ThreadItemCounts", ThreadItemCounts],
+  ["IssueTrackerAdditionalScopes", IssueTrackerAdditionalScopes],
+  ["ProjectionProjectsTrackedFolders", ProjectionProjectsTrackedFolders],
+  ["TaskFolders", TaskFolders],
+  ["WorktreePathKeyIndex", WorktreePathKeyIndex],
+  ["DeferredSlashCommandIndex", DeferredSlashCommandIndex],
+  ["AgentFeedback", AgentFeedback],
+  ["IssueTrackerAccounts", IssueTrackerAccounts],
+  ["Workflows", Workflows],
+  ["SupersededRunAttemptIndex", SupersededRunAttemptIndex],
+  ["LayoutCommandApprovals", LayoutCommandApprovals],
+  ["WorkflowSkippedRuns", WorkflowSkippedRuns],
+  ["WorkflowRunIndexes", WorkflowRunIndexes],
+  ["WorkflowRunTags", WorkflowRunTags],
+  ["ForkHistoryMembership", ForkHistoryMembership],
+  ["WorkflowMailSender", WorkflowMailSender],
+  ["WorkflowPools", WorkflowPools],
+  ["WorkflowRunSubject", WorkflowRunSubject],
 ] as const;
 
 const expectedWorkItemLink = (issueUrl: string, pullRequestUrl: string) => ({
@@ -107,106 +163,112 @@ const expectedWorkItemLink = (issueUrl: string, pullRequestUrl: string) => ({
 });
 
 describe("V2 preview upgrade", () => {
-  it.effect.each([2, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])(
-    "rebases a valid nightly migration prefix of length %s",
-    (prefixLength) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 60 });
-        const prefix = nightlyMigrations.slice(0, prefixLength);
-        yield* Migrator.make({})({
-          loader: Migrator.fromRecord(
-            Object.fromEntries(
-              prefix.map(([name, migration], index) => [`${61 + index}_${name}`, migration]),
-            ),
+  it.effect.each([
+    2, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 45, 46, 59,
+  ])("rebases a valid nightly migration prefix of length %s", (prefixLength) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 60 });
+      const prefix = nightlyMigrations.slice(0, prefixLength);
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord(
+          Object.fromEntries(
+            prefix.map(([name, migration], index) => [`${61 + index}_${name}`, migration]),
           ),
-        });
-        yield* sql`INSERT INTO pull_request_review_guides VALUES ('github.com', 'team/repo', 1, '{}')`;
-        const guides = yield* sql`SELECT * FROM pull_request_review_guides`;
-        const installedHistory = yield* sql`
+        ),
+      });
+      yield* sql`INSERT INTO pull_request_review_guides VALUES ('github.com', 'team/repo', 1, '{}')`;
+      const guides = yield* sql`SELECT * FROM pull_request_review_guides`;
+      const installedHistory = yield* sql`
           SELECT * FROM effect_sql_migrations WHERE migration_id <= 60 ORDER BY migration_id`;
-        const recorded = yield* sql<{ readonly id: number; readonly name: string }>`
+      const recorded = yield* sql<{ readonly id: number; readonly name: string }>`
           SELECT migration_id AS id, name FROM effect_sql_migrations ORDER BY migration_id`;
+      const hasRecentNightlyMigrations = prefixLength > 45;
+      const rebasedEnd = prefixLength + (hasRecentNightlyMigrations ? 65 : 63);
+      const rebasedHistory = migrationManifest.filter(([id]) => id <= rebasedEnd);
 
-        assert.deepStrictEqual(
-          reconciledV2PreviewHistory(recorded),
-          migrationManifest
-            .filter(([id]) => id <= 63 + prefixLength)
-            .map(([id, name]) => ({ id, name })),
-        );
+      assert.deepStrictEqual(
+        reconciledV2PreviewHistory(recorded),
+        rebasedHistory.map(([id, name]) => ({ id, name })),
+      );
 
-        const executed = yield* runMigrations();
-        assert.deepStrictEqual(executed.slice(0, 3), [
-          [61, "ProjectSkillShortcuts"],
-          [62, "ProjectionThreadIssues"],
-          [63, "WorkItemLinks"],
-        ]);
-        assert.deepStrictEqual(
-          yield* sql`SELECT migration_id, name FROM effect_sql_migrations
-            WHERE migration_id BETWEEN 61 AND ${63 + prefixLength} ORDER BY migration_id`,
-          [
-            { migration_id: 61, name: "ProjectSkillShortcuts" },
-            { migration_id: 62, name: "ProjectionThreadIssues" },
-            { migration_id: 63, name: "WorkItemLinks" },
-            ...prefix.map(([name], index) => ({
-              migration_id: 64 + index,
-              name,
-            })),
-          ],
-        );
-        assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
-        assert.deepStrictEqual(
-          yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 60 ORDER BY migration_id`,
-          installedHistory,
-        );
-        assert.deepStrictEqual(yield* runMigrations(), []);
-      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [61, "ProjectSkillShortcuts"],
+        [62, "ProjectionThreadIssues"],
+        [63, "WorkItemLinks"],
+        ...(hasRecentNightlyMigrations
+          ? ([
+              [109, "CanonicalizeLegacyThreadIssueLinks"],
+              [110, "WorkItemLinkDisplayKeys"],
+            ] as const)
+          : []),
+        ...migrationManifest.filter(([id]) => id > rebasedEnd),
+      ]);
+      assert.deepStrictEqual(
+        yield* sql`SELECT migration_id, name FROM effect_sql_migrations
+            WHERE migration_id >= 61 ORDER BY migration_id`,
+        migrationManifest
+          .filter(([id]) => id >= 61)
+          .map(([id, name]) => ({ migration_id: id, name })),
+      );
+      assert.deepStrictEqual(yield* sql`SELECT * FROM pull_request_review_guides`, guides);
+      assert.deepStrictEqual(
+        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 60 ORDER BY migration_id`,
+        installedHistory,
+      );
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([70, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94])(
-    "appends nightly migrations without rewriting fork history through %s",
-    (installedId) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: installedId });
-        const installedHistory =
-          yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+  it.effect.each([
+    70, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 108, 109, 110,
+  ])("appends nightly migrations without rewriting fork history through %s", (installedId) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: installedId });
+      const installedHistory =
+        yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+      if (installedId < 110) {
         yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
+      } else {
+        yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', '#1', 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
+      }
 
-        assert.deepStrictEqual(
-          yield* runMigrations(),
-          migrationManifest.filter(([id]) => id > installedId),
-        );
-        assert.deepStrictEqual(
-          yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${installedId} ORDER BY migration_id`,
-          installedHistory,
-        );
-        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, [
-          expectedWorkItemLink("issue", "pr"),
-        ]);
-        assert.deepStrictEqual(
-          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id > installedId),
+      );
+      assert.deepStrictEqual(
+        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${installedId} ORDER BY migration_id`,
+        installedHistory,
+      );
+      assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, [
+        expectedWorkItemLink("issue", "pr"),
+      ]);
+      assert.deepStrictEqual(
+        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
             AND name = 'orchestration_v2_projection_turn_items_stop_request_idx'`,
-          [{ name: "orchestration_v2_projection_turn_items_stop_request_idx" }],
-        );
-        assert.deepStrictEqual(
-          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+        [{ name: "orchestration_v2_projection_turn_items_stop_request_idx" }],
+      );
+      assert.deepStrictEqual(
+        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
             AND name = 'idx_orch_events_correlation_id'`,
-          [],
-        );
-        assert.deepStrictEqual(
-          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+        [],
+      );
+      assert.deepStrictEqual(
+        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
             AND name IN (
               'orchestration_v2_projection_threads_subagent_result_idx',
               'orchestration_v2_projection_runs_delegated_delivery_idx'
             ) ORDER BY name`,
-          [
-            { name: "orchestration_v2_projection_runs_delegated_delivery_idx" },
-            { name: "orchestration_v2_projection_threads_subagent_result_idx" },
-          ],
-        );
-        assert.deepStrictEqual(yield* runMigrations(), []);
-      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+        [
+          { name: "orchestration_v2_projection_runs_delegated_delivery_idx" },
+          { name: "orchestration_v2_projection_threads_subagent_result_idx" },
+        ],
+      );
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("upgrades official nightly migration 61 without losing review guides", () =>
